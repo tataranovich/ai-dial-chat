@@ -102,15 +102,19 @@ const ResultsView = ({
         />
         {!entities.length && (
           <div className="flex items-center gap-1">
-            <Magnifier height={32} width={32} className="text-secondary" />
-            <span className="text-base">
+            <Magnifier
+              height={32}
+              width={32}
+              className="shrink-0 text-secondary"
+            />
+            <span className="text-sm sm:text-base">
               {t(
                 'No results found in My workspace. Look at suggested results from DIAL Marketplace.',
               )}
             </span>
           </div>
         )}
-        <span className="mt-5 text-xl">
+        <span className="mb-4 mt-5 text-xl md:mt-6 lg:mt-8">
           {t('Suggested results from DIAL Marketplace')}
         </span>
         <CardsList
@@ -404,7 +408,7 @@ export const TabRenderer = ({ screenState }: TabRendererProps) => {
 
   return (
     <>
-      <header className="mb-6" data-qa="marketplace-header">
+      <header className="mb-5 md:mb-4 xl:mb-6" data-qa="marketplace-header">
         <MarketplaceBanner />
         <SearchHeader
           items={displayedEntities.length}
