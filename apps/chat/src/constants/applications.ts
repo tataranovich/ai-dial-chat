@@ -13,8 +13,9 @@ export const FEATURES_ENDPOINTS_NAMES = {
 export const FEATURES_ENDPOINTS_DEFAULT_VALUES = {
   [FEATURES_ENDPOINTS.chat_completion]:
     '/openai/deployments/app/chat/completions',
-  [FEATURES_ENDPOINTS.rate_endpoint]: '/v1/app/rate',
-  [FEATURES_ENDPOINTS.configuration_endpoint]: '',
+  [FEATURES_ENDPOINTS.rate_endpoint]: '/openai/deployments/app/rate',
+  [FEATURES_ENDPOINTS.configuration_endpoint]:
+    '/openai/deployments/app/configure',
 };
 export enum CODEAPPS_REQUIRED_FILES {
   APP = 'app.py',
