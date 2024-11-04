@@ -1,6 +1,7 @@
 import { Editor } from '@monaco-editor/react';
 import {
   IconArrowsMaximize,
+  IconArrowsMinimize,
   IconCheck,
   IconChevronDown,
   IconFile,
@@ -129,6 +130,7 @@ const CodeEditorView = ({
         scrollbar: {
           alwaysConsumeMouseWheel: false,
         },
+        automaticLayout: true,
       }}
       value={fileContent}
       language="python"
@@ -190,6 +192,7 @@ export const CodeEditor = ({
   const [newFileName, setNewFileName] = useState('');
   const [uploadFolderId, setUploadFolderId] = useState<string>();
   const [deletingFileId, setDeletingFileId] = useState<string>();
+  const [isFullScreen, setIsFullScreen] = useState(false);
 
   const { rootFiles, rootFolders } = useMemo(() => {
     if (sourcesFolderId) {
@@ -300,6 +303,11 @@ export const CodeEditor = ({
     }
   }, [dispatch, newFileName, sourcesFolderId]);
 
+  const FullScreenIcon = useMemo(
+    () => (isFullScreen ? IconArrowsMinimize : IconArrowsMaximize),
+    [isFullScreen],
+  );
+
   if (!sourcesFolderId) {
     return null;
   }
@@ -307,9 +315,14 @@ export const CodeEditor = ({
   return (
     <>
       <CodeAppExamples fileNames={rootFileNames} folderId={sourcesFolderId} />
-      <div className="mt-3 grid h-[400px] min-h-[400px] w-full max-w-full grid-cols-[minmax(0,1fr)_2fr] gap-1">
-        <div className="flex max-h-[400px] flex-col gap-0.5 divide-y divide-tertiary rounded border border-tertiary bg-layer-3">
-          <div className="grow overflow-y-auto p-3">
+      <div
+        className={classNames(
+          `flex min-h-[400px] w-full max-w-full gap-1`,
+          isFullScreen ? 'fixed inset-0' : `mt-3 h-[400px]`,
+        )}
+      >
+        <div className="flex max-h-full min-w-0 shrink flex-col gap-0.5 divide-y divide-tertiary rounded border border-tertiary bg-layer-3">
+          <div className="w-[220px] min-w-0 shrink grow overflow-y-auto p-3">
             {rootFolders.map((folder) => {
               return (
                 <Folder
@@ -448,7 +461,7 @@ export const CodeEditor = ({
             </Tooltip>
           </div>
         </div>
-        <div className="flex max-h-[400px] w-full flex-col divide-y divide-tertiary rounded border border-tertiary bg-layer-3">
+        <div className="flex max-h-full min-w-0 shrink grow flex-col divide-y divide-tertiary rounded border border-tertiary bg-layer-3">
           <div className="flex w-full justify-end gap-3 divide-x divide-tertiary">
             <Menu
               onOpenChange={setIsVersionSelectorOpen}
@@ -479,16 +492,17 @@ export const CodeEditor = ({
                 );
               })}
             </Menu>
-            <Tooltip tooltip={t('Full screen')}>
+            <Tooltip tooltip={t(isFullScreen ? 'Minimize' : 'Full screen')}>
               <button
                 type="button"
                 className="px-3 text-secondary hover:text-accent-primary"
+                onClick={() => setIsFullScreen(!isFullScreen)}
               >
-                <IconArrowsMaximize size={18} />
+                <FullScreenIcon size={18} />
               </button>
             </Tooltip>
           </div>
-          <div className="grow p-3">
+          <div className="min-h-0 min-w-0 max-w-full shrink grow p-3">
             <CodeEditorView
               isUploadingContent={isUploadingContent}
               selectedFile={selectedFile}
