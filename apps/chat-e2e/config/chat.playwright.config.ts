@@ -22,15 +22,15 @@ export default defineConfig({
     ],
   ],
   outputDir: `../${ResultFolder.testResults}`,
-  timeout: process.env.PLAYWRIGHT_TIMEOUT ?? 60000,
+  timeout: process.env.PLAYWRIGHT_TIMEOUT ? +process.env.PLAYWRIGHT_TIMEOUT : 60000,
   retries: 1,
   maxFailures: 10,
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     browserName: 'chromium',
     headless: true,
-    navigationTimeout: process.env.PLAYWRIGHT_NAVIGATION_TIMEOUT ?? 20000,
-    actionTimeout: process.env.PLAYWRIGHT_ACTION_TIMEOUT ?? 20000,
+    navigationTimeout: process.env.PLAYWRIGHT_NAVIGATION_TIMEOUT ? +process.env.PLAYWRIGHT_NAVIGATION_TIMEOUT : 20000,
+    actionTimeout: process.env.PLAYWRIGHT_ACTION_TIMEOUT ? +process.env.PLAYWRIGHT_ACTION_TIMEOUT : 20000,
     /* Base URL to use in actions like `await page.goto('/')`. */
     baseURL: process.env.E2E_HOST ?? 'http://localhost:3000',
     video: 'retry-with-video',
@@ -40,7 +40,7 @@ export default defineConfig({
     permissions: ['clipboard-read', 'clipboard-write'],
   },
   expect: {
-    timeout: process.env.PLAYWRIGHT_EXPECT_TIMEOUT ?? 20000,
+    timeout: process.env.PLAYWRIGHT_EXPECT_TIMEOUT ? +process.env.PLAYWRIGHT_EXPECT_TIMEOUT : 20000,
   },
   globalSetup: require.resolve('../src/hooks/global-setup'),
   globalTeardown: require.resolve('../src/hooks/global-teardown'),
