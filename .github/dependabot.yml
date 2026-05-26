@@ -24,11 +24,11 @@ updates:
       ai-dial-ci:
         applies-to: version-updates
         patterns:
-          - "epam/ai-dial-ci/*"
+          - "tataranovich/ai-dial-ci/*"
       github-actions:
         applies-to: version-updates
         patterns:
           - "*"
         exclude-patterns:
-          - "epam/ai-dial-ci/*"
+          - "tataranovich/ai-dial-ci/*"
     open-pull-requests-limit: 10
