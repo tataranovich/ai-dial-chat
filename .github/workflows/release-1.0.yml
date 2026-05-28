@@ -1,4 +1,4 @@
-name: Release Workflow
+name: Release Workflow 1.0
 
 on:
   push:
@@ -43,7 +43,7 @@ jobs:
         with:
           lfs: true
           token: ${{ secrets.ACTIONS_BOT_TOKEN }}      
-      - uses: ./.github/actions/semantic_versioning/action.yml
+      - uses: ./.github/actions/semantic_versioning
         id: semantic_versioning
         with:
           promote: ${{ github.event_name == 'workflow_dispatch' && inputs.promote || false }}
