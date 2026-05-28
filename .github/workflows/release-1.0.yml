@@ -26,6 +26,7 @@ jobs:
   test:
     uses: tataranovich/ai-dial-ci/.github/workflows/node_test.yml@main
     with:
+      ort-enabled: 'false'
       node-version: '24'
 
   calculate_version:
