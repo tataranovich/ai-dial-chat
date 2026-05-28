@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   # registry_package:
   workflow_run:
-    workflows: ["Release Workflow", "Release Workflow 1.0"]
+    workflows: ["Release Workflow"]
     types:
       - completed
 
@@ -22,30 +22,6 @@ jobs:
             gitlab-project-id: "2977"
           - environment-name: "development-overlay"
             gitlab-project-id: "3016"
-
-    name: Deploy to ${{ matrix.environment-name }}
-    uses: tataranovich/ai-dial-ci/.github/workflows/deploy-development.yml@main
-    with:
-      gitlab-project-id: ${{ matrix.gitlab-project-id }}
-      environment-name: ${{ matrix.environment-name }}
-    secrets:
-      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-      DEPLOY_ACCESS_TOKEN: ${{ secrets.DEPLOY_ACCESS_TOKEN }}
-      DEPLOY_TRIGGER_TOKEN: ${{ secrets.DEPLOY_TRIGGER_TOKEN }}
-
-  trigger-ng:
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'development-1.0')
-    # github.event.registry_package.package_version.container_metadata.tag.name == 'development'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - environment-name: "development-ng"
-            gitlab-project-id: "3350"
-          - environment-name: "development-overlay-ng"
-            gitlab-project-id: "3351"
 
     name: Deploy to ${{ matrix.environment-name }}
     uses: tataranovich/ai-dial-ci/.github/workflows/deploy-development.yml@main
