@@ -11,6 +11,7 @@ on:
         description: Promote release to stable (for release-* branches only)
 
 permissions:
+  id-token: write
   contents: write
   packages: write
   security-events: write
