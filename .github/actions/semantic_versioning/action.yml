@@ -48,7 +48,7 @@ runs:
       shell: bash
       run: |
         #!/bin/bash
-        # set -x
+        set -x
 
         function version { echo "$@" | awk -F. '{ printf("%d%03d%03d\n", $1,$2,$3); }'; }
 
