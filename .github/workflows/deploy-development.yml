@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   # registry_package:
   workflow_run:
-    workflows: ["Release Workflow 1.0"]
+    workflows: ["Release Workflow"]
     types:
       - completed
 
