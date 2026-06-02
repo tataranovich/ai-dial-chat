@@ -3,12 +3,6 @@ name: Release Workflow
 on:
   push:
     branches: [development-1.0]
-  workflow_dispatch:
-    inputs:
-      promote:
-        type: boolean
-        description: Promote release to stable (for release-* branches only)
-        default: false
 
 permissions:
   contents: write
