@@ -1,7 +1,7 @@
 {
   "chat": {
     "welcomeText": "Hello World, good day for prompting!",
-    "placeholder": "Type a new prompt or use '/' to select one",
+    "placeholder": "Type a prompt or use '/' to select one",
     "streamError": "Something went wrong while generating the response.",
     "deleteMessageTitle": "Confirm deleting message?",
     "deleteMessageDescription": "Are you sure that you want to delete the message?",
@@ -14,12 +14,15 @@
     "conversationStarters": "Conversation starters",
     "sendMessage": "Send message",
     "stopStreaming": "Stop streaming",
-    "quickReplyButtons": "Quick reply buttons"
+    "quickReplyButtons": "Quick reply buttons",
+    "stoppedGenerating": "You stopped generating the response"
   },
   "navigation": {
     "ariaLabel": "Main navigation",
     "home": "Home",
-    "catalog": "Catalog"
+    "catalog": "Catalog",
+    "openMenu": "Open navigation menu",
+    "closeMenu": "Close navigation menu"
   },
   "catalog": {
     "ariaLabel": "Catalog",
@@ -37,7 +40,9 @@
       "ariaLabel": "Select model",
       "loading": "Loading models…",
       "error": "Failed to load models",
-      "empty": "No models available"
+      "empty": "No models available",
+      "searchPlaceholder": "Search models",
+      "closeLabel": "Close model selector"
     }
   },
   "actions": {
@@ -71,6 +76,26 @@
     "attach": { "label": "Attach file" },
     "attachment": { "remove": "Remove attachment", "retry": "Retry upload" },
     "attachmentTray": { "label": "Attached files" }
+  },
+  "sidebar": {
+    "base": {
+      "toggleOpen": "Open sidebar",
+      "toggleClose": "Close sidebar",
+      "close": "Close"
+    },
+    "sources": {
+      "ariaLabel": "Conversation sources",
+      "sections": {
+        "uploadedFiles": "Uploaded Files",
+        "generatedFiles": "Generated Files",
+        "sources": "Sources"
+      },
+      "empty": {
+        "uploadedFiles": "No uploaded files in this conversation.",
+        "generatedFiles": "No generated files in this conversation.",
+        "sources": "No sources available."
+      }
+    }
   },
   "auth": {
     "signOut": "Sign out",

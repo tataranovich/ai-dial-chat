@@ -2,18 +2,18 @@ import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import { DIAL_ICON_SIZE } from '@epam/ai-dial-ui-kit';
 import { IconArrowNarrowRight } from '@tabler/icons-react';
 import { type FC } from 'react';
-import styles from './Input.module.scss';
+import styles from '../Input.module.scss';
 
 interface Props {
   onSend?: () => void;
-  disabled?: boolean;
+  isDisabled?: boolean;
   /** Accessible label for the send button. */
   ariaLabel?: string;
 }
 
 export const SendButton: FC<Props> = ({
   onSend,
-  disabled = false,
+  isDisabled = false,
   ariaLabel = 'Send message',
 }) => {
   return (
@@ -25,7 +25,7 @@ export const SendButton: FC<Props> = ({
       aria-label={ariaLabel}
       onClick={() => onSend?.()}
       type="button"
-      disabled={disabled}
+      disabled={isDisabled}
     >
       <IconArrowNarrowRight size={DIAL_ICON_SIZE.LG} />
     </button>

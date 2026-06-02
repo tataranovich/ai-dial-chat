@@ -3,6 +3,7 @@ import type {
   MessageRole,
   StarterOption,
 } from '@epam/ai-dial-chat-shared';
+import type { ReactNode } from 'react';
 import type { BubblePosition } from '../types/bubble-position.js';
 import type { MessageActionsProps } from './MessageActions.js';
 
@@ -45,7 +46,7 @@ interface BaseMessageBubbleProps {
   /** Props forwarded to the `MessageActions` bar rendered below the bubble. */
   actions?: MessageActionsProps;
   /** When `true`, the actions bar is always visible instead of appearing only on group hover. */
-  alwaysVisibleActions?: boolean;
+  hasAlwaysVisibleActions?: boolean;
   /** Display attachments associated with the message. Rendered above text for user messages and below text for assistant messages. */
   attachments?: DisplayAttachment[];
 }
@@ -67,6 +68,8 @@ export interface AssistantMessageBubbleProps extends BaseMessageBubbleProps {
   onSelectStarter?: (starter: StarterOption) => void;
   /** Accessible label for the quick-reply buttons list. Defaults to `"Quick reply buttons"`. */
   startersAriaLabel?: string;
+  /** Content rendered between the message body and the actions bar (e.g. a stages panel). */
+  afterContent?: ReactNode;
 }
 
 /** Props accepted by the `MessageBubble` role-switching wrapper. */
@@ -84,4 +87,6 @@ export interface MessageBubbleProps extends BaseMessageBubbleProps {
   onSelectStarter?: (starter: StarterOption) => void;
   /** Accessible label for the quick-reply buttons list. Forwarded to `AssistantMessageBubble`; ignored for user messages. */
   startersAriaLabel?: string;
+  /** Content rendered between the message body and the actions bar. Forwarded to `AssistantMessageBubble`; ignored for user messages. */
+  afterContent?: ReactNode;
 }

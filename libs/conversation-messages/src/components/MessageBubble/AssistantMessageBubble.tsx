@@ -7,6 +7,7 @@ import { AttachmentTray } from '@epam/ai-dial-conversation-input';
 import { DialRoundedButton } from '@epam/ai-dial-ui-kit';
 import { FC } from 'react';
 import type { AssistantMessageBubbleProps } from '../../models/MessageBubble.js';
+import { MDMessageViewer } from '../Markdown/MDMessageViewer.js';
 import { MessageActions } from '../Message/MessageActions.js';
 import styles from './MessageBubble.module.scss';
 
@@ -17,8 +18,9 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
   colors,
   typography,
   actions,
-  alwaysVisibleActions,
+  hasAlwaysVisibleActions,
   attachments,
+  afterContent,
   starters,
   onSelectStarter,
   startersAriaLabel = 'Quick reply buttons',
@@ -43,18 +45,21 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
 
   return (
     <div style={cssVars} className={mergeClasses('flex w-full', className)}>
-      <div className="flex flex-col items-start gap-5">
+      <div className="flex w-full flex-col items-start gap-5">
         <div
           className={mergeClasses(
             'flex w-fit flex-col items-start gap-4',
             bubbleClassName,
           )}
         >
-          <p className={mergeClasses(textClass, 'text-left')}>{text}</p>
+          <div className={mergeClasses(textClass, 'text-left')}>
+            <MDMessageViewer content={text} />
+          </div>
           <AttachmentTray attachments={attachments ?? []} />
+          {afterContent}
           <MessageActions
             {...actions}
-            alwaysVisible={alwaysVisibleActions}
+            isAlwaysVisible={hasAlwaysVisibleActions}
             role={MessageRole.Assistant}
           />
         </div>
@@ -63,14 +68,15 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
             role="list"
             aria-label={startersAriaLabel}
             className={mergeClasses(
-              'flex flex-wrap gap-2 border-t pt-5',
+              'flex w-full flex-wrap gap-2 border-t pt-5',
               styles.startersDivider,
             )}
           >
             {starters.map((starter) => (
-              <div key={starter.const} role="listitem">
+              <div key={starter.const} role="listitem" className="min-w-[40px]">
                 <DialRoundedButton
                   label={starter.title}
+                  className="min-w-[40px]"
                   onClick={() => onSelectStarter(starter)}
                 />
               </div>

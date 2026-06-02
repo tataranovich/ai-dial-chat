@@ -17,6 +17,8 @@ export interface InputColors {
   sendBackground?: string;
   /** Icon/text color of the send button. */
   sendText?: string;
+  /** Icon color of the stop button. Defaults to `--text-secondary` (`#9fa6bd`). */
+  stopColor?: string;
 }
 
 /** Typography overrides for the `Input` component. */
@@ -31,7 +33,7 @@ export interface InputTypography {
   lineHeight?: string;
 }
 
-/** Status labels displayed inside the model selector dropdown. */
+/** Status labels displayed inside the model selector dropdown and mobile bottom-sheet. */
 export interface ModelSelectorLabels {
   /** Accessible label for the selector trigger button (e.g. `"Select model"`). */
   ariaLabel?: string;
@@ -41,6 +43,10 @@ export interface ModelSelectorLabels {
   error?: string;
   /** Shown as a disabled item when the deployments list is empty. */
   empty?: string;
+  /** Placeholder for the search input. Defaults to `'Search'`. */
+  searchPlaceholder?: string;
+  /** Accessible label for the close button in the mobile bottom-sheet. Defaults to `'Close'`. */
+  closeLabel?: string;
 }
 
 /** Props accepted by the `Input` component. */
@@ -86,14 +92,24 @@ export interface InputProps {
   pendingDropFiles?: File[];
   /** Called after `pendingDropFiles` have been consumed so the parent can reset its state. */
   onDropFilesConsumed?: () => void;
-  /** Character count above which a pasted plain-text string is converted to an attachment rather than inserted inline. Defaults to `2000`. Pass `Infinity` to disable. */
+  /** Character count above which a pasted plain-text string is converted to an attachment rather than inserted inline. Defaults to `4000`. Pass `Infinity` to disable. */
   pasteTextThreshold?: number;
   /** List of deployment items to populate the model selector menu. When `undefined`, the selector is not rendered. */
   deployments?: DeploymentItemDto[];
+  /**
+   * Converts a raw `DeploymentItemDto.iconUrl` value to a URL usable in an `<img src>`.
+   * When omitted, the default resolver handles absolute URLs, root-relative paths, and `files/` IDs.
+   * Pass a custom resolver (e.g. from the host app) to also support theme-relative icon names.
+   */
+  resolveDeploymentIconUrl?: (iconUrl: string) => string | undefined;
   /** ID of the currently selected deployment. When `null` or `undefined` and `deployments` is defined, the send button is disabled. */
   selectedDeploymentId?: string | null;
   /** Called when the user selects a different deployment from the dropdown. Receives the selected item's `id`. */
   onDeploymentChange?: (id: string) => void;
   /** Labels shown inside the model selector dropdown for the trigger and various loading states. */
   modelSelectorLabels?: ModelSelectorLabels;
+  /** Heading text shown in the mobile bottom-sheet add-menu. Defaults to `'Menu'`. */
+  menuTitle?: string;
+  /** Accessible label for the bottom-sheet close button. Defaults to `'Close'`. */
+  menuCloseLabel?: string;
 }

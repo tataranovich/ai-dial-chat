@@ -11,7 +11,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   isStreaming = false,
   onAttachmentsChange,
   message,
-  placeholder = 'Type a new prompt or use "/" to select one',
+  placeholder = 'Type a prompt or use "/" to select one',
   welcomeText,
   colors,
   typography,
@@ -23,6 +23,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   selectedDeploymentId,
   onDeploymentChange,
   modelSelectorLabels,
+  resolveDeploymentIconUrl,
   sendLabel,
   stopLabel,
 }) => {
@@ -61,7 +62,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
       {...getRootProps({
         style: cssVars,
         className: mergeClasses(
-          'relative flex w-full flex-col items-center gap-6 p-4',
+          'relative flex w-full flex-col items-center gap-6 py-5 desktop:p-5',
           className,
         ),
       })}
@@ -94,6 +95,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
           selectedDeploymentId={selectedDeploymentId}
           onDeploymentChange={onDeploymentChange}
           modelSelectorLabels={modelSelectorLabels}
+          resolveDeploymentIconUrl={resolveDeploymentIconUrl}
           sendLabel={sendLabel}
           stopLabel={stopLabel}
         />

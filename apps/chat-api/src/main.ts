@@ -9,7 +9,9 @@ import {
   openApiDocumentOptions,
 } from './openapi/openapi.config';
 
-declare const module: any;
+declare const module: {
+  hot?: { accept: () => void; dispose: (cb: () => void) => void };
+};
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -24,7 +26,12 @@ async function bootstrap() {
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: [
+            "'self'",
+            "'unsafe-inline'",
+            'https://fonts.googleapis.com',
+          ],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com'],
           scriptSrc: ["'self'"],
           imgSrc: ["'self'", 'data:', 'https:'],
         },

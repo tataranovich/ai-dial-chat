@@ -15,7 +15,6 @@ import RouteFallback from '../../components/RouteFallback/RouteFallback';
 import StarterButtons from '../../components/StarterButtons/StarterButtons';
 import { getConversationRoute } from '../../constants/routes';
 import {
-  CatalogI18nKeys,
   ChatI18nKeys,
   DeploymentsI18nKeys,
 } from '../../constants/translation-keys';
@@ -72,7 +71,7 @@ const ConversationRoute: FC = () => {
       if (isSending || !selectedItemId) return;
       setIsSending(true);
       try {
-        const attachmentDtos = await attachmentsToDtos(attachments);
+        const attachmentDtos = await attachmentsToDtos(attachments || []);
         const conversation = await apiCreateConversation(
           message,
           selectedItemId,
@@ -100,6 +99,7 @@ const ConversationRoute: FC = () => {
           text,
           selectedItemId,
           [],
+          undefined,
           configurationValue,
         ).then((conversation) => {
           navigate(getConversationRoute(conversation.id));
@@ -115,7 +115,7 @@ const ConversationRoute: FC = () => {
     <div ref={inputRef} className="flex flex-1 flex-col overflow-y-auto">
       <Suspense fallback={<RouteFallback />}>
         <div
-          className="flex h-full flex-col items-center justify-center p-8"
+          className="flex h-full flex-col items-center justify-center p-4 desktop:p-8"
           role="region"
           aria-label={t(ChatI18nKeys.WelcomeScreen)}
         >

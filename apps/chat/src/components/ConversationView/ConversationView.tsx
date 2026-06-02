@@ -1,11 +1,12 @@
 import {
   MessageRole,
   type Attachment,
-  type Message as MessageType,
   type MessageRating,
+  type Message as MessageType,
   type StarterOption,
 } from '@epam/ai-dial-chat-shared';
 import { MessageBubble } from '@epam/ai-dial-conversation-messages';
+import { StagesPanel } from '@epam/ai-dial-conversation-stages';
 import { DialFabButton } from '@epam/ai-dial-ui-kit';
 import {
   FC,
@@ -19,13 +20,14 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  CatalogI18nKeys,
   ActionsI18nKeys,
   ChatI18nKeys,
   DeploymentsI18nKeys,
 } from '../../constants/translation-keys.js';
 import { useDeployments } from '../../context/DeploymentsContext.js';
 import { attachmentDtosToDisplayAttachments } from '../../utils/attachment-dto-to-display.js';
+import { resolveCatalogIconUrl } from '../../utils/icon-path.js';
+import { messageHasStages } from '../../utils/message-utils.js';
 import { buildMessageActions } from './buildMessageActions.js';
 import {
   getMessageStarterProps,
@@ -93,7 +95,7 @@ const ConversationView: FC<Props> = ({
     dislikeResponse: t(ActionsI18nKeys.DislikeResponse),
   };
 
-  const [showScrollButton, setShowScrollButton] = useState(false);
+  const [isScrollButtonVisible, setIsScrollButtonVisible] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -155,7 +157,7 @@ const ConversationView: FC<Props> = ({
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       const isNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
 
-      setShowScrollButton(!isNearBottom);
+      setIsScrollButtonVisible(!isNearBottom);
 
       if (isProgrammaticRef.current) return;
 
@@ -177,7 +179,7 @@ const ConversationView: FC<Props> = ({
 
   return (
     <>
-      <div className="relative flex w-[748px] flex-1 flex-col overflow-hidden">
+      <div className="relative flex w-full max-w-[748px] flex-1 flex-col overflow-hidden">
         <div
           ref={containerRef}
           role="log"
@@ -188,12 +190,13 @@ const ConversationView: FC<Props> = ({
         >
           <div className="flex flex-1 flex-col gap-6">
             {messages.map((msg, index) => {
-              const streaming = isStreamingMessage(
+              const isStreaming = isStreamingMessage(
                 msg.role,
                 index,
                 messages.length,
                 isAssistantTyping,
               );
+              const hasStages = messageHasStages(msg);
               const {
                 starters: activeStarters,
                 onSelectStarter: handleSelectStarter,
@@ -210,10 +213,15 @@ const ConversationView: FC<Props> = ({
                   key={msg.id}
                   role={msg.role}
                   text={msg.content}
+                  colors={
+                    msg.stoppedWithoutContent
+                      ? { text: 'var(--text-secondary, #9FA6BD)' }
+                      : undefined
+                  }
                   attachments={attachmentDtosToDisplayAttachments(
                     msg.custom_content?.attachments,
                   )}
-                  alwaysVisibleActions={!streaming}
+                  hasAlwaysVisibleActions={!isStreaming}
                   actions={buildMessageActions(
                     msg,
                     {
@@ -229,6 +237,14 @@ const ConversationView: FC<Props> = ({
                       ? 'justify-end'
                       : 'justify-start'
                   }
+                  afterContent={
+                    hasStages ? (
+                      <StagesPanel
+                        stages={msg.custom_content?.stages ?? []}
+                        isStreaming={isStreaming}
+                      />
+                    ) : undefined
+                  }
                   starters={activeStarters}
                   onSelectStarter={handleSelectStarter}
                   startersAriaLabel={t(ChatI18nKeys.QuickReplyButtons)}
@@ -239,7 +255,7 @@ const ConversationView: FC<Props> = ({
           <div ref={endRef} />
         </div>
 
-        {showScrollButton && (
+        {isScrollButtonVisible && (
           <DialFabButton
             aria-label={t(ChatI18nKeys.ScrollToBottom)}
             onClick={handleScrollToBottom}
@@ -263,6 +279,7 @@ const ConversationView: FC<Props> = ({
             deployments={items}
             selectedDeploymentId={selectedItemId}
             onDeploymentChange={setSelectedItemId}
+            resolveDeploymentIconUrl={resolveCatalogIconUrl}
             modelSelectorLabels={{
               ariaLabel: t(DeploymentsI18nKeys.SelectorAriaLabel),
               loading: isLoading
@@ -273,6 +290,10 @@ const ConversationView: FC<Props> = ({
                 !isLoading && !error && items.length === 0
                   ? t(DeploymentsI18nKeys.SelectorEmpty)
                   : undefined,
+              searchPlaceholder: t(
+                DeploymentsI18nKeys.SelectorSearchPlaceholder,
+              ),
+              closeLabel: t(DeploymentsI18nKeys.SelectorCloseLabel),
             }}
             sendLabel={t(ChatI18nKeys.SendMessage)}
             stopLabel={t(ChatI18nKeys.StopStreaming)}
