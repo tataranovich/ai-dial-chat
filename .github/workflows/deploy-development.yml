@@ -8,6 +8,8 @@ on:
     types:
       - completed
 
+permissions: {}
+
 jobs:
   trigger:
     if: |
