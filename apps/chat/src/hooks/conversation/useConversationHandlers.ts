@@ -1,11 +1,13 @@
 import {
   type Attachment,
   type Conversation,
+  type DisplayAttachment,
   type MessageCustomContent,
   MessageRating,
   MessageRole,
   type StarterOption,
 } from '@epam/ai-dial-chat-shared';
+import type { ConversationResponseDto } from '@epam/chat-api-client';
 import {
   type Dispatch,
   type MutableRefObject,
@@ -15,6 +17,7 @@ import {
 } from 'react';
 import { type NavigateFunction } from 'react-router-dom';
 import { ROUTES } from '../../constants/routes';
+import { useDeployments } from '../../context/DeploymentsContext';
 import {
   deleteConversation as apiDeleteConversation,
   saveConversation,
@@ -23,7 +26,7 @@ import { rateMessage } from '../../server-api/rate.api';
 import { attachmentsToDtos } from '../../utils/attachment-to-dto';
 import { getConversationPath } from '../../utils/conversation-path';
 import { createMessagePair } from '../../utils/message-factory';
-import { getStarterPopulateText } from '../../utils/starter-option';
+import { getStarterSubmitText } from '../../utils/starter-option';
 
 interface Params {
   conversation: Conversation | null;
@@ -51,11 +54,15 @@ export const useConversationHandlers = ({
   navigate,
 }: Params) => {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [editingMessageIds, setEditingMessageIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [pendingStarterContext, setPendingStarterContext] = useState<{
     starter: StarterOption;
     propertyKey?: string;
     description?: string;
   } | null>(null);
+  const { selectedItemId } = useDeployments();
 
   const handleSend = useCallback(
     async (message: string, attachments: Attachment[]) => {
@@ -63,7 +70,7 @@ export const useConversationHandlers = ({
 
       const attachmentDtos = await attachmentsToDtos(attachments);
       const { userMessage, assistantMessage, assistantMessageId } =
-        createMessagePair(message, attachmentDtos);
+        createMessagePair(message, attachmentDtos, undefined, selectedItemId);
       const conversationPath = getConversationPath(conversationId);
 
       setConversation((prev) => {
@@ -90,6 +97,7 @@ export const useConversationHandlers = ({
       conversation,
       conversationId,
       conversationRef,
+      selectedItemId,
       setConversation,
       startStream,
     ],
@@ -182,7 +190,7 @@ export const useConversationHandlers = ({
 
       const updated = { ...prev, messages: next };
       conversationRef.current = updated;
-      saveConversation(conversationPath, updated);
+      saveConversation(conversationPath, updated as ConversationResponseDto);
       return updated;
     });
   }, [
@@ -226,7 +234,10 @@ export const useConversationHandlers = ({
             modelId: updated.model.id,
             rate: rating,
           });
-          await saveConversation(conversationPath, updated);
+          await saveConversation(
+            conversationPath,
+            updated as ConversationResponseDto,
+          );
         } catch {
           setConversation((prev) => {
             if (!prev) return prev;
@@ -239,7 +250,10 @@ export const useConversationHandlers = ({
           });
         }
       } else {
-        await saveConversation(conversationPath, updated).catch(() => {
+        await saveConversation(
+          conversationPath,
+          updated as ConversationResponseDto,
+        ).catch(() => {
           setConversation((prev) => {
             if (!prev) return prev;
             return {
@@ -259,13 +273,19 @@ export const useConversationHandlers = ({
     (starter: StarterOption, propertyKey?: string, description?: string) => {
       if (!conversationId || !conversation) return;
 
-      const text = description ?? getStarterPopulateText(starter);
+      const displayText = description ?? starter.title;
+      const submitText = getStarterSubmitText(starter, description);
       const configurationValue = propertyKey
         ? { [propertyKey]: starter.const }
         : undefined;
 
       const { userMessage, assistantMessage, assistantMessageId } =
-        createMessagePair(text, undefined, configurationValue);
+        createMessagePair(
+          displayText,
+          undefined,
+          configurationValue,
+          selectedItemId,
+        );
       const conversationPath = getConversationPath(conversationId);
 
       setConversation((prev) => {
@@ -280,7 +300,7 @@ export const useConversationHandlers = ({
 
       startStream(
         conversationPath,
-        text,
+        submitText,
         assistantMessageId,
         conversation.model.id,
         configurationValue ? { form_value: configurationValue } : undefined,
@@ -290,6 +310,7 @@ export const useConversationHandlers = ({
       conversation,
       conversationId,
       conversationRef,
+      selectedItemId,
       setConversation,
       startStream,
     ],
@@ -315,6 +336,105 @@ export const useConversationHandlers = ({
     submitStarter(starter, propertyKey, description);
   }, [pendingStarterContext, submitStarter]);
 
+  const handleStartEdit = useCallback((messageId: string) => {
+    setEditingMessageIds((prev) => new Set([...prev, messageId]));
+  }, []);
+
+  const handleCancelEdit = useCallback((messageId: string) => {
+    setEditingMessageIds((prev) => {
+      const next = new Set(prev);
+      next.delete(messageId);
+      return next;
+    });
+  }, []);
+
+  const handleEditMessage = useCallback(
+    async (
+      messageId: string,
+      text: string,
+      keptDisplayAttachments: DisplayAttachment[],
+      newAttachments: Attachment[],
+    ) => {
+      if (isStreaming || !conversationId || !conversation) return;
+
+      const idx = conversation.messages.findIndex((m) => m.id === messageId);
+      if (idx === -1 || conversation.messages[idx].role !== MessageRole.User)
+        return;
+
+      const originalMessage = conversation.messages[idx];
+      const conversationPath = getConversationPath(conversationId);
+
+      const newDtos = await attachmentsToDtos(newAttachments);
+
+      const keptIds = new Set(keptDisplayAttachments.map((a) => a.id));
+      const keptDtos = (
+        originalMessage.custom_content?.attachments ?? []
+      ).filter((att) => {
+        const id = att.url ?? att.data ?? att.title;
+        return keptIds.has(id);
+      });
+
+      const allAttachments = [...keptDtos, ...(newDtos ?? [])];
+
+      const { attachments: _removed, ...restCustomContent } =
+        originalMessage.custom_content ?? {};
+      const updatedCustomContent =
+        allAttachments.length > 0
+          ? { ...restCustomContent, attachments: allAttachments }
+          : Object.keys(restCustomContent).length > 0
+            ? restCustomContent
+            : undefined;
+
+      const updatedUserMessage = {
+        ...originalMessage,
+        content: text,
+        custom_content: updatedCustomContent,
+      };
+
+      const now = Date.now();
+      const assistantMessageId = `stream_${now}`;
+      const assistantMessage = {
+        id: assistantMessageId,
+        role: MessageRole.Assistant,
+        content: '',
+        timestamp: new Date(now).toISOString(),
+      };
+
+      const updatedMessages = [
+        ...conversation.messages.slice(0, idx),
+        updatedUserMessage,
+        assistantMessage,
+      ];
+
+      const updated = { ...conversation, messages: updatedMessages };
+
+      setConversation(() => {
+        conversationRef.current = updated;
+        return updated;
+      });
+
+      saveConversation(conversationPath, updated as ConversationResponseDto);
+
+      startStream(
+        conversationPath,
+        text,
+        assistantMessageId,
+        conversation.model.id,
+        allAttachments.length > 0 ? { attachments: allAttachments } : undefined,
+      );
+
+      setEditingMessageIds(new Set());
+    },
+    [
+      conversation,
+      conversationId,
+      conversationRef,
+      isStreaming,
+      setConversation,
+      startStream,
+    ],
+  );
+
   return {
     handleSend,
     handleRegenerateMessage,
@@ -323,6 +443,10 @@ export const useConversationHandlers = ({
     handleRateMessage,
     handleButtonSelect,
     handleConfirmStarter,
+    handleStartEdit,
+    handleCancelEdit,
+    handleEditMessage,
+    editingMessageIds,
     pendingDeleteId,
     setPendingDeleteId,
     pendingStarterContext,
