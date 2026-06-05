@@ -1,5 +1,13 @@
-import type { Attachment } from '@epam/ai-dial-chat-shared';
-import type { InputColors, InputTypography } from './Input.js';
+import type {
+  Attachment,
+  DeploymentItem,
+  DisplayAttachment,
+} from '@epam/ai-dial-chat-shared';
+import type {
+  InputColors,
+  InputTypography,
+  ModelSelectorLabels,
+} from './Input.js';
 
 /** CSS custom-property overrides for the `ConversationInput` component. */
 export interface ConversationInputColors {
@@ -23,8 +31,59 @@ export interface ConversationInputTypography {
   welcomeFontWeight?: string | number;
   /** Line height of the welcome heading. Ignored when `welcomeClassName` is set. */
   welcomeLineHeight?: string | number;
+  /** Tailwind (or custom) class applied to the drop-overlay label. Defaults to `'dial-tiny-text'`. */
+  dropLabelClassName?: string;
   /** Typography overrides forwarded to the inner `Input` component. */
   input?: InputTypography;
+}
+
+/** Combined color and typography overrides for the `ConversationInput` component. */
+export interface ConversationInputStyles {
+  /** Color overrides applied as CSS custom properties. */
+  colors?: ConversationInputColors;
+  /** Typography overrides for the welcome heading and input. */
+  typography?: ConversationInputTypography;
+}
+
+/** Props accepted by the `EditMessageInput` component. */
+export interface EditMessageInputProps {
+  /** Initial message text pre-populated in the textarea. */
+  message?: string;
+  /** Pre-existing attachments from the original message, shown in the attachment tray. */
+  initialAttachments?: DisplayAttachment[];
+  /** Called when the user clicks the Cancel button. */
+  onCancel: () => void;
+  /**
+   * Called when the user clicks Save & Submit.
+   * @param message - The edited message text.
+   * @param keptAttachments - Pre-existing attachments the user did not remove.
+   * @param newAttachments - New attachments added during editing.
+   */
+  onSave: (
+    message: string,
+    keptAttachments: DisplayAttachment[],
+    newAttachments: Attachment[],
+  ) => void;
+  /** Label for the Cancel button. Defaults to `'Cancel'`. */
+  cancelLabel?: string;
+  /** Label for the Save & Submit button. Defaults to `'Save & Submit'`. */
+  saveLabel?: string;
+  /** `aria-label` applied to the textarea. */
+  ariaLabel?: string;
+  /** Accessible label for each attachment card's remove button. */
+  removeLabel?: string;
+  /** Accessible label for each attachment card's retry button (error state only). */
+  retryLabel?: string;
+  /** Accessible label for the add-menu trigger button. */
+  addMenuLabel?: string;
+  /** Label for the attach-file menu item. */
+  attachLabel?: string;
+  /** Heading text shown in the mobile bottom-sheet add-menu. Defaults to `'Menu'`. */
+  menuTitle?: string;
+  /** Accessible label for the bottom-sheet close button. Defaults to `'Close'`. */
+  menuCloseLabel?: string;
+  /** Extra class name(s) merged onto the root wrapper element. */
+  className?: string;
 }
 
 /** Props accepted by the `ConversationInput` component. */
@@ -46,10 +105,31 @@ export interface ConversationInputProps {
   isStreaming?: boolean;
   /** Called whenever the attachment list changes. */
   onAttachmentsChange?: (attachments: Attachment[]) => void;
-  /** Color overrides applied as CSS custom properties. */
-  colors?: ConversationInputColors;
-  /** Typography overrides for the welcome heading and input. */
-  typography?: ConversationInputTypography;
+  /** Color and typography overrides applied as CSS custom properties. */
+  styles?: ConversationInputStyles;
   /** Extra class name(s) merged onto the root wrapper element. */
   className?: string;
+  /** Text displayed inside the drag-over overlay. Defaults to `"Drop files here"`. */
+  dropLabel?: string;
+  /** Tailwind (or custom) class applied to the drag-over overlay container. Defaults to `'rounded'`. */
+  dropOverlayClassName?: string;
+  /** Character count above which a pasted plain-text string is converted to an attachment rather than inserted inline. Defaults to `4000`. Pass `Infinity` to disable. */
+  pasteTextThreshold?: number;
+  /**
+   * List of deployment items to populate the model selector menu. When `undefined`, the selector is not rendered.
+   * `iconUrl` on each item must already be a fully resolved URL usable in `<img src>`.
+   */
+  deployments?: DeploymentItem[];
+  /** ID of the currently selected deployment. When `null` or `undefined` and `deployments` is defined, the send button is disabled. */
+  selectedDeploymentId?: string | null;
+  /** Called when the user selects a different deployment from the dropdown. Receives the selected item's `id`. */
+  onDeploymentChange?: (id: string) => void;
+  /** Labels shown inside the model selector dropdown for the trigger and various loading states. */
+  modelSelectorLabels?: ModelSelectorLabels;
+  /** Accessible label for the send button. */
+  sendLabel?: string;
+  /** Accessible label for the stop button. */
+  stopLabel?: string;
+  /** When `true`, blocks all text input, send, attach, and drop interactions. Starter/action buttons remain usable. Defaults to `false`. */
+  isInputDisabled?: boolean;
 }

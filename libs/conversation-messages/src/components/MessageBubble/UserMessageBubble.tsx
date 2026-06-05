@@ -1,42 +1,42 @@
-import { mergeClasses, MessageRole } from '@epam/ai-dial-chat-shared';
+import {
+  buildCssVars,
+  mergeClasses,
+  MessageRole,
+} from '@epam/ai-dial-chat-shared';
 import { AttachmentTray } from '@epam/ai-dial-conversation-input';
-import { CSSProperties, FC } from 'react';
+import { FC } from 'react';
 import type { UserMessageBubbleProps } from '../../models/MessageBubble.js';
 import { BubblePosition } from '../../types/bubble-position.js';
 import { MessageActions } from '../Message/MessageActions.js';
 import styles from './MessageBubble.module.scss';
 
+/** User-authored message bubble, right-aligned with configurable radius based on group position. */
 export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
   text,
   position = BubblePosition.Bottom,
   className,
   bubbleClassName,
-  colors,
-  typography,
+  styles: bubbleStyles,
   actions,
-  alwaysVisibleActions,
+  hasAlwaysVisibleActions,
   attachments,
 }) => {
-  const cssVars = {
-    ...(colors?.userBackground && {
-      '--cm-bubble-user-bg': colors.userBackground,
-    }),
-    ...(colors?.text && { '--cm-bubble-text': colors.text }),
-    ...(!typography?.fontClassName &&
-      typography?.fontFamily && {
-        '--cm-bubble-font-family': typography.fontFamily,
-      }),
-    ...(!typography?.fontClassName &&
-      typography?.fontSize && { '--cm-bubble-font-size': typography.fontSize }),
-    ...(!typography?.fontClassName &&
-      typography?.fontWeight && {
-        '--cm-bubble-font-weight': String(typography.fontWeight),
-      }),
-    ...(!typography?.fontClassName &&
-      typography?.lineHeight && {
-        '--cm-bubble-line-height': typography.lineHeight,
-      }),
-  } as CSSProperties;
+  const { colors, typography } = bubbleStyles ?? {};
+  const noCustomClass = !typography?.fontClassName;
+  const cssVars = buildCssVars({
+    '--cm-bubble-user-bg': colors?.userBackground,
+    '--cm-bubble-text': colors?.text,
+    '--cm-bubble-font-family': noCustomClass
+      ? typography?.fontFamily
+      : undefined,
+    '--cm-bubble-font-size': noCustomClass ? typography?.fontSize : undefined,
+    '--cm-bubble-font-weight': noCustomClass
+      ? typography?.fontWeight
+      : undefined,
+    '--cm-bubble-line-height': noCustomClass
+      ? typography?.lineHeight
+      : undefined,
+  });
 
   const positionRadius =
     position === BubblePosition.Top ? 'rounded-br-[24px]' : 'rounded-tr-[24px]';
@@ -46,19 +46,21 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
     <div style={cssVars} className={mergeClasses('flex w-full', className)}>
       <div className="flex w-fit flex-col items-end gap-2">
         <AttachmentTray attachments={attachments ?? []} />
-        <div
-          className={mergeClasses(
-            styles.userBubble,
-            'flex w-fit items-center justify-end rounded-bl-[16px] rounded-tl-[16px] px-6 py-4',
-            positionRadius,
-            bubbleClassName,
-          )}
-        >
-          <p className={mergeClasses(textClass, 'text-right')}>{text}</p>
-        </div>
+        {text && (
+          <div
+            className={mergeClasses(
+              styles.userBubble,
+              'flex w-fit items-center justify-end rounded-bl-[16px] rounded-tl-[16px] px-6 py-4',
+              positionRadius,
+              bubbleClassName,
+            )}
+          >
+            <p className={mergeClasses(textClass, 'text-right')}>{text}</p>
+          </div>
+        )}
         <MessageActions
           {...actions}
-          alwaysVisible={alwaysVisibleActions}
+          isAlwaysVisible={hasAlwaysVisibleActions}
           role={MessageRole.User}
         />
       </div>

@@ -1,0 +1,175 @@
+import type { DeploymentConfigurationSchema } from '@epam/ai-dial-chat-shared';
+import {
+  ListDeploymentsInterfaceTypeEnum,
+  type ApplicationSchemaSummaryDto,
+  type DeploymentItemDto,
+} from '@epam/chat-api-client';
+import {
+  createContext,
+  ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { getApplicationSchemas } from '../server-api/application-schemas';
+import { getDeploymentConfiguration } from '../server-api/deployments';
+import { getDeployments } from '../server-api/deployments.api';
+
+export interface DeploymentsContextType {
+  /** Full list of deployment items from the API, enriched with schema icon fallback. */
+  items: DeploymentItemDto[];
+  /** ID of the currently selected deployment, or null if none. */
+  selectedItemId: string | null;
+  /** Updates the selected deployment. */
+  setSelectedItemId: (id: string) => void;
+  /** JSON Schema configuration for the currently selected deployment, or null if none selected or unsupported. */
+  selectedDeploymentConfiguration: DeploymentConfigurationSchema | null;
+  /** True while deployments are being fetched. */
+  isLoading: boolean;
+  /** Non-null if the deployments fetch failed. */
+  error: Error | null;
+}
+
+export const DeploymentsContext = createContext<
+  DeploymentsContextType | undefined
+>(undefined);
+
+export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
+  const [rawDeployments, setRawDeployments] = useState<DeploymentItemDto[]>([]);
+  const [schemas, setSchemas] = useState<ApplicationSchemaSummaryDto[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedDeploymentConfiguration, setSelectedDeploymentConfiguration] =
+    useState<DeploymentConfigurationSchema | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const loadDeployments = useCallback(
+    async (signal: { isCancelled: boolean }) => {
+      setIsLoading(true);
+      setError(null);
+      setSchemas([]);
+
+      const [deploymentsResult, schemasResult] = await Promise.allSettled([
+        getDeployments([ListDeploymentsInterfaceTypeEnum.Chat]),
+        getApplicationSchemas(),
+      ]);
+
+      if (signal.isCancelled) return;
+
+      if (deploymentsResult.status === 'rejected') {
+        const err = deploymentsResult.reason;
+        setError(err instanceof Error ? err : new Error(String(err)));
+        setIsLoading(false);
+        return;
+      }
+
+      if (schemasResult.status === 'rejected') {
+        console.warn(
+          '[DeploymentsContext] Failed to load application schemas; schema icon fallback unavailable.',
+          schemasResult.reason,
+        );
+      } else {
+        setSchemas(schemasResult.value.schemas ?? []);
+      }
+
+      const deployments = deploymentsResult.value.deployments ?? [];
+      setRawDeployments(deployments);
+      setSelectedItemId((prev) => {
+        if (prev !== null && deployments.some((d) => d.id === prev)) {
+          return prev;
+        }
+        return deployments[0]?.id ?? null;
+      });
+      setIsLoading(false);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const signal = { isCancelled: false };
+    loadDeployments(signal);
+    return () => {
+      signal.isCancelled = true;
+    };
+  }, [loadDeployments]);
+
+  const items = useMemo<DeploymentItemDto[]>(() => {
+    if (schemas.length === 0) return rawDeployments;
+    const schemaById = new Map(schemas.map((s) => [s.id, s]));
+    return rawDeployments.map((item) => {
+      if (
+        item.type === 'application' &&
+        !item.iconUrl &&
+        item.applicationTypeSchemaId
+      ) {
+        const match = schemaById.get(item.applicationTypeSchemaId);
+        if (match?.iconUrl) {
+          return { ...item, iconUrl: match.iconUrl };
+        }
+      }
+      return item;
+    });
+  }, [rawDeployments, schemas]);
+
+  useEffect(() => {
+    if (!selectedItemId) {
+      setSelectedDeploymentConfiguration(null);
+      return;
+    }
+
+    const signal = { isCancelled: false };
+
+    const loadConfiguration = async () => {
+      try {
+        const configuration = await getDeploymentConfiguration(selectedItemId);
+        if (!signal.isCancelled) {
+          setSelectedDeploymentConfiguration(configuration);
+        }
+      } catch {
+        if (!signal.isCancelled) {
+          setSelectedDeploymentConfiguration(null);
+        }
+      }
+    };
+
+    loadConfiguration();
+
+    return () => {
+      signal.isCancelled = true;
+    };
+  }, [selectedItemId]);
+
+  return (
+    <DeploymentsContext.Provider
+      value={useMemo(
+        () => ({
+          items,
+          selectedItemId,
+          setSelectedItemId,
+          selectedDeploymentConfiguration,
+          isLoading,
+          error,
+        }),
+        [
+          items,
+          selectedItemId,
+          selectedDeploymentConfiguration,
+          isLoading,
+          error,
+        ],
+      )}
+    >
+      {children}
+    </DeploymentsContext.Provider>
+  );
+};
+
+export const useDeployments = (): DeploymentsContextType => {
+  const context = useContext(DeploymentsContext);
+  if (!context) {
+    throw new Error('useDeployments must be used within a DeploymentsProvider');
+  }
+  return context;
+};

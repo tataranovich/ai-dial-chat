@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { BubblePosition } from '../../types/bubble-position.js';
 import { AssistantMessageBubble } from './AssistantMessageBubble.js';
 import { MessageBubble } from './MessageBubble.js';
+import { StatusMessageBubble } from './StatusMessageBubble.js';
 import { UserMessageBubble } from './UserMessageBubble.js';
 
 const ATTACHMENT: DisplayAttachment = {
@@ -92,7 +93,7 @@ describe('MessageBubble', () => {
       <MessageBubble
         text="msg"
         role={MessageRole.Assistant}
-        actions={{ role: MessageRole.Assistant }}
+        actions={{ role: MessageRole.Assistant, onRegenerate: vi.fn() }}
       />,
     );
     expect(
@@ -100,9 +101,13 @@ describe('MessageBubble', () => {
     ).toBeTruthy();
   });
 
-  it('makes actions always visible when alwaysVisible is true', () => {
+  it('makes actions always visible when hasAlwaysVisibleActions is true', () => {
     const { container } = render(
-      <MessageBubble text="msg" role={MessageRole.User} alwaysVisibleActions />,
+      <MessageBubble
+        text="msg"
+        role={MessageRole.User}
+        hasAlwaysVisibleActions
+      />,
     );
     const actionsWrapper = container.querySelector('[class*="gap-1"]');
     expect(actionsWrapper?.className).not.toContain('opacity-0');
@@ -198,5 +203,54 @@ describe('AssistantMessageBubble — attachments', () => {
       />,
     );
     expect(screen.queryByRole('button', { name: /remove/i })).toBeNull();
+  });
+});
+
+describe('AssistantMessageBubble — deployment icon', () => {
+  it('renders an img when deploymentIconUrl is provided', () => {
+    const { container } = render(
+      <AssistantMessageBubble
+        text="Hello"
+        deploymentIconUrl="https://example.com/icon.png"
+        deploymentDisplayName="GPT-4"
+      />,
+    );
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe('https://example.com/icon.png');
+  });
+
+  it('renders no icon header when neither deploymentIconUrl nor deploymentDisplayName is provided', () => {
+    const { container } = render(<AssistantMessageBubble text="Hello" />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.queryByText(/GPT/)).toBeNull();
+  });
+});
+
+describe('StatusMessageBubble', () => {
+  it('renders bodyText', () => {
+    render(
+      <StatusMessageBubble bodyText="The model has been switched from A to B." />,
+    );
+    expect(
+      screen.getByText('The model has been switched from A to B.'),
+    ).toBeTruthy();
+  });
+
+  it('renders default titleText when titleText prop is omitted', () => {
+    render(<StatusMessageBubble bodyText="Changed." />);
+    expect(screen.getByText('Model switched.')).toBeTruthy();
+  });
+
+  it('renders custom titleText when provided', () => {
+    render(
+      <StatusMessageBubble titleText="Agent updated." bodyText="Changed." />,
+    );
+    expect(screen.getByText('Agent updated.')).toBeTruthy();
+  });
+
+  it('renders an svg icon (IconInfoCircleFilled)', () => {
+    const { container } = render(<StatusMessageBubble bodyText="Changed." />);
+    expect(container.querySelector('svg')).not.toBeNull();
   });
 });

@@ -3,6 +3,130 @@
 /**
  *
  * @export
+ * @interface ApplicationDto
+ */
+export interface ApplicationDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationDto
+   */
+  object: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationDto
+   */
+  displayName?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationDto
+   */
+  displayVersion?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationDto
+   */
+  iconUrl?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof ApplicationDto
+   */
+  inputAttachmentTypes?: Array<string>;
+  /**
+   *
+   * @type {number}
+   * @memberof ApplicationDto
+   */
+  maxInputAttachments?: number;
+}
+/**
+ *
+ * @export
+ * @interface ApplicationSchemaSummaryDto
+ */
+export interface ApplicationSchemaSummaryDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationSchemaSummaryDto
+   */
+  id?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationSchemaSummaryDto
+   */
+  displayName?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationSchemaSummaryDto
+   */
+  viewerUrl?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationSchemaSummaryDto
+   */
+  editorUrl?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationSchemaSummaryDto
+   */
+  schemaEndpoint?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationSchemaSummaryDto
+   */
+  iconUrl?: string;
+}
+/**
+ *
+ * @export
+ * @interface ApplicationSchemasResponseDto
+ */
+export interface ApplicationSchemasResponseDto {
+  /**
+   *
+   * @type {Array<ApplicationSchemaSummaryDto>}
+   * @memberof ApplicationSchemasResponseDto
+   */
+  schemas: Array<ApplicationSchemaSummaryDto>;
+}
+/**
+ *
+ * @export
+ * @interface ApplicationsResponseDto
+ */
+export interface ApplicationsResponseDto {
+  /**
+   *
+   * @type {Array<ApplicationDto>}
+   * @memberof ApplicationsResponseDto
+   */
+  data: Array<ApplicationDto>;
+}
+/**
+ *
+ * @export
  * @interface AttachmentDto
  */
 export interface AttachmentDto {
@@ -161,6 +285,62 @@ export interface Check200Response {
    * @memberof Check200Response
    */
   version?: string;
+}
+/**
+ *
+ * @export
+ * @interface ConversationListItemDto
+ */
+export interface ConversationListItemDto {
+  /**
+   * Full DIAL Core resource URL used as the stable conversation identifier.
+   * @type {string}
+   * @memberof ConversationListItemDto
+   */
+  id: string;
+  /**
+   * Human-readable conversation title (the resource `name` from DIAL Core).
+   * @type {string}
+   * @memberof ConversationListItemDto
+   */
+  title: string;
+  /**
+   * Unix epoch milliseconds of the last update.
+   * @type {number}
+   * @memberof ConversationListItemDto
+   */
+  updatedAt: number;
+  /**
+   * True when this conversation was shared with the current user by another user.
+   * @type {boolean}
+   * @memberof ConversationListItemDto
+   */
+  sharedWithMe: boolean;
+  /**
+   * True when this conversation was published to the organisation and is visible to the current user.
+   * @type {boolean}
+   * @memberof ConversationListItemDto
+   */
+  publishedWithMe: boolean;
+}
+/**
+ *
+ * @export
+ * @interface ConversationListResponseDto
+ */
+export interface ConversationListResponseDto {
+  /**
+   *
+   * @type {Array<ConversationListItemDto>}
+   * @memberof ConversationListResponseDto
+   */
+  items: Array<ConversationListItemDto>;
+  /**
+   * Cursor for the next page. Present only when more results exist. Pass as `nextToken` in the next request.
+   * @type {string}
+   * @memberof ConversationListResponseDto
+   */
+  nextToken?: string;
 }
 /**
  *
@@ -370,42 +550,134 @@ export interface ConversationResponseDto {
  */
 export interface CreateConversationDto {
   /**
-   * The first message to start the conversation
+   * The first message to start the conversation. May be empty when custom_content carries attachments, form_value, or configuration_value.
    * @type {string}
    * @memberof CreateConversationDto
    */
   firstMessage: string;
   /**
-   * DIAL API attachments to include with the first user message
-   * @type {Array<AttachmentDto>}
+   * ID of the catalog item (model or application) to use for this conversation
+   * @type {string}
    * @memberof CreateConversationDto
    */
-  attachments?: Array<AttachmentDto>;
+  deploymentId: string;
+  /**
+   * Extra DIAL payload attached to the first user message
+   * @type {MessageCustomContentDto}
+   * @memberof CreateConversationDto
+   */
+  customContent?: MessageCustomContentDto;
 }
 /**
  *
  * @export
- * @interface DialDeploymentDto
+ * @interface DeploymentConfigurationDto
  */
-export interface DialDeploymentDto {
+export interface DeploymentConfigurationDto {
   /**
-   *
+   * JSON Schema type (typically "object")
    * @type {string}
-   * @memberof DialDeploymentDto
+   * @memberof DeploymentConfigurationDto
+   */
+  type?: string;
+  /**
+   * Human-readable schema title
+   * @type {string}
+   * @memberof DeploymentConfigurationDto
+   */
+  title?: string;
+  /**
+   * Named configuration properties supported by this deployment
+   * @type {{ [key: string]: unknown }}
+   * @memberof DeploymentConfigurationDto
+   */
+  properties?: { [key: string]: unknown };
+  /**
+   * Whether additional properties are allowed
+   * @type {object}
+   * @memberof DeploymentConfigurationDto
+   */
+  additionalProperties?: object;
+  /**
+   * When true, the application does not accept free-form text input; users interact only via form/action buttons.
+   * @type {boolean}
+   * @memberof DeploymentConfigurationDto
+   */
+  isChatMessageInputDisabled?: boolean;
+}
+/**
+ *
+ * @export
+ * @interface DeploymentItemDto
+ */
+export interface DeploymentItemDto {
+  /**
+   * Unique stable identifier from DIAL Core
+   * @type {string}
+   * @memberof DeploymentItemDto
    */
   id: string;
   /**
-   *
+   * Display name, falls back to id when absent
    * @type {string}
-   * @memberof DialDeploymentDto
+   * @memberof DeploymentItemDto
    */
-  name?: string;
+  displayName: string;
   /**
    *
    * @type {string}
-   * @memberof DialDeploymentDto
+   * @memberof DeploymentItemDto
    */
-  type?: string;
+  type: DeploymentItemDtoTypeEnum;
+  /**
+   * Icon URL from DIAL Core
+   * @type {string}
+   * @memberof DeploymentItemDto
+   */
+  iconUrl?: string;
+  /**
+   * Description from DIAL Core
+   * @type {string}
+   * @memberof DeploymentItemDto
+   */
+  description?: string;
+  /**
+   * Interface types supported by this deployment
+   * @type {Array<string>}
+   * @memberof DeploymentItemDto
+   */
+  interfaces?: Array<string>;
+  /**
+   * Application type schema id from DIAL Core (present only for application deployments)
+   * @type {string}
+   * @memberof DeploymentItemDto
+   */
+  applicationTypeSchemaId?: string;
+}
+
+/**
+ * @export
+ */
+export const DeploymentItemDtoTypeEnum = {
+  Model: 'model',
+  Application: 'application',
+  Toolset: 'toolset',
+} as const;
+export type DeploymentItemDtoTypeEnum =
+  (typeof DeploymentItemDtoTypeEnum)[keyof typeof DeploymentItemDtoTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface DeploymentsResponseDto
+ */
+export interface DeploymentsResponseDto {
+  /**
+   *
+   * @type {Array<DeploymentItemDto>}
+   * @memberof DeploymentsResponseDto
+   */
+  deployments: Array<DeploymentItemDto>;
 }
 /**
  *
@@ -782,9 +1054,53 @@ export interface DialModelPricingDto {
 /**
  *
  * @export
+ * @interface FileUploadResponseDto
+ */
+export interface FileUploadResponseDto {
+  /**
+   * DIAL Core URL of the uploaded file
+   * @type {string}
+   * @memberof FileUploadResponseDto
+   */
+  url: string;
+}
+/**
+ *
+ * @export
+ * @interface MessageCustomContentDto
+ */
+export interface MessageCustomContentDto {
+  /**
+   * DIAL API attachments to include with the message
+   * @type {Array<AttachmentDto>}
+   * @memberof MessageCustomContentDto
+   */
+  attachments?: Array<AttachmentDto>;
+  /**
+   * Form/button submission value (e.g. `{ button: 1 }`).
+   * @type {object}
+   * @memberof MessageCustomContentDto
+   */
+  configurationValue?: object;
+  /**
+   * Key-value map of form field values submitted via an embedded form widget.
+   * @type {object}
+   * @memberof MessageCustomContentDto
+   */
+  formValue?: object;
+}
+/**
+ *
+ * @export
  * @interface MessageDto
  */
 export interface MessageDto {
+  /**
+   * Unique message identifier
+   * @type {string}
+   * @memberof MessageDto
+   */
+  id?: string;
   /**
    * Message author role
    * @type {string}
@@ -797,6 +1113,18 @@ export interface MessageDto {
    * @memberof MessageDto
    */
   content: string;
+  /**
+   * ISO-8601 timestamp of when the message was created
+   * @type {string}
+   * @memberof MessageDto
+   */
+  timestamp?: string;
+  /**
+   * Extra DIAL payload attached to the message
+   * @type {MessageCustomContentDto}
+   * @memberof MessageDto
+   */
+  customContent?: MessageCustomContentDto;
 }
 
 /**
@@ -897,13 +1225,13 @@ export interface SaveConversationBodyDto {
  */
 export interface SendCompletionDto {
   /**
-   * Conversation path (uuid__name). May contain slashes.
+   * Conversation path ({deploymentId}__{name}__{uuid}). May contain slashes.
    * @type {string}
    * @memberof SendCompletionDto
    */
   path: string;
   /**
-   * The new user message to send
+   * The new user message to send. May be empty when custom_content carries attachments, form_value, or configuration_value.
    * @type {string}
    * @memberof SendCompletionDto
    */
@@ -915,11 +1243,11 @@ export interface SendCompletionDto {
    */
   model: string;
   /**
-   * DIAL API attachments to include with the user message
-   * @type {Array<AttachmentDto>}
+   * Extra DIAL payload attached to the user message
+   * @type {MessageCustomContentDto}
    * @memberof SendCompletionDto
    */
-  attachments?: Array<AttachmentDto>;
+  customContent?: MessageCustomContentDto;
 }
 /**
  *

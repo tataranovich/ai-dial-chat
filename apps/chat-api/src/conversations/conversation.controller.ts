@@ -20,14 +20,19 @@ import {
   ConversationResponseDto,
 } from '../openapi/openapi-response.dto';
 import { ConversationService } from './conversation.service';
+import { ConversationListResponseDto } from './dto/conversation-list.dto';
 import { ConversationPathDto } from './dto/conversation-path.dto';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { GetConversationMetadataDto } from './dto/get-conversation-metadata.dto';
+import { ListConversationsQueryDto } from './dto/list-conversations-query.dto';
 import {
   SaveConversationBodyDto,
   SaveConversationQueryDto,
 } from './dto/save-conversation.dto';
 import { SendCompletionDto } from './dto/send-completion.dto';
+
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
+const SSE_KEEPALIVE_PAYLOAD = ': keepalive\n\n';
 
 @ApiTags('conversations')
 @Controller({ path: 'conversations', version: '1' })
@@ -51,7 +56,8 @@ export class ConversationController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Invalid request body — firstMessage missing or out of range',
+    description:
+      'Invalid request body — firstMessage or deploymentId missing or out of range',
   })
   @ApiResponse({
     status: 500,
@@ -63,7 +69,37 @@ export class ConversationController {
       dto.firstMessage,
       at,
       bucket,
-      dto.attachments,
+      dto.deploymentId,
+      dto.custom_content,
+    );
+  }
+
+  @Get('list')
+  @ApiOperation({
+    summary: 'List conversations',
+    description:
+      'Returns a flat, paginated list of all conversations for the authenticated user by calling the DIAL Core metadata endpoint with `recursive=true` on the root path.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of conversation metadata',
+    type: ConversationListResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid query params' })
+  @ApiResponse({ status: 401, description: 'Not authenticated' })
+  @ApiResponse({ status: 502, description: 'DIAL Core error' })
+  @ApiResponse({ status: 503, description: 'DIAL Core unreachable' })
+  listConversations(
+    @Req() req: Request,
+    @Query() query: ListConversationsQueryDto,
+  ) {
+    const { at, bucket } = req.user as SessionUser;
+    return this.conversationService.listConversations(
+      at,
+      bucket,
+      query.limit,
+      query.nextToken,
+      query.path,
     );
   }
 
@@ -131,13 +167,13 @@ export class ConversationController {
       query.path,
       at,
       bucket,
-      body.conversation as never,
+      body.conversation,
     );
   }
 
   @Post('completions')
   @HttpCode(200)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @Throttle({ default: { limit: 100, ttl: 60000 } })
   @ApiOperation({
     summary: 'Stream a chat completion',
     description:
@@ -166,7 +202,7 @@ export class ConversationController {
       bucket,
       dto.message,
       dto.model,
-      dto.attachments,
+      dto.custom_content,
     );
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -175,18 +211,51 @@ export class ConversationController {
     res.flushHeaders();
 
     const reader = stream.getReader();
+
+    let isClientAborted = false;
+    let isReaderReleased = false;
+    let isCancelRequested = false;
+
+    const handleClose = () => {
+      isClientAborted = true;
+      if (isReaderReleased || isCancelRequested) {
+        return;
+      }
+
+      isCancelRequested = true;
+      void reader.cancel().catch(() => undefined);
+    };
+
+    res.on('close', handleClose);
+
+    let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
     try {
+      keepaliveTimer = setInterval(() => {
+        if (!isClientAborted && !res.writableEnded) {
+          res.write(SSE_KEEPALIVE_PAYLOAD);
+        }
+      }, SSE_KEEPALIVE_INTERVAL_MS);
+
       while (true) {
+        if (isClientAborted) break;
+
         const { done, value } = await reader.read();
         if (done) break;
 
         res.write(value);
       }
     } catch (err) {
-      this.logger.error('Error while streaming completion to client', err);
+      if (!isClientAborted) {
+        this.logger.error('Error while streaming completion to client', err);
+      }
     } finally {
+      if (keepaliveTimer) clearInterval(keepaliveTimer);
+      res.off('close', handleClose);
+      isReaderReleased = true;
       reader.releaseLock();
-      res.end();
+      if (!res.writableEnded) {
+        res.end();
+      }
     }
   }
 

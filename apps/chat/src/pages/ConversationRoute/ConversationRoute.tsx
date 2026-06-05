@@ -1,7 +1,12 @@
-import type { Attachment, StarterOption } from '@epam/ai-dial-chat-shared';
+import type {
+  Attachment,
+  DeploymentItem,
+  StarterOption,
+} from '@epam/ai-dial-chat-shared';
 import {
   FC,
   lazy,
+  memo,
   Suspense,
   useCallback,
   useEffect,
@@ -14,11 +19,18 @@ import { useNavigate } from 'react-router-dom';
 import RouteFallback from '../../components/RouteFallback/RouteFallback';
 import StarterButtons from '../../components/StarterButtons/StarterButtons';
 import { getConversationRoute } from '../../constants/routes';
-import { ChatI18nKeys } from '../../constants/translation-keys';
-import { useModels } from '../../context/ModelsContext';
+import {
+  ChatI18nKeys,
+  DeploymentsI18nKeys,
+} from '../../constants/translation-keys';
+import { useDeployments } from '../../context/DeploymentsContext';
 import { createConversation as apiCreateConversation } from '../../server-api/conversations.api';
 import { attachmentsToDtos } from '../../utils/attachment-to-dto';
-import { getStarterPopulateText } from '../../utils/starter-option';
+import { resolveCatalogIconUrl } from '../../utils/icon-path';
+import {
+  getStarterPopulateText,
+  getStartersFromSchema,
+} from '../../utils/starter-option';
 
 const ConversationInput = lazy(async () => {
   const module = await import('@epam/ai-dial-conversation-input');
@@ -33,14 +45,50 @@ const ConversationRoute: FC = () => {
   const [isSending, setIsSending] = useState(false);
   const [inputMessage, setInputMessage] = useState<string | undefined>();
   const inputRef = useRef<HTMLDivElement>(null);
-  const { selectedModelConfiguration } = useModels();
+  const {
+    items,
+    selectedItemId,
+    setSelectedItemId,
+    selectedDeploymentConfiguration,
+    isLoading,
+    error,
+  } = useDeployments();
 
-  const starters = useMemo<StarterOption[]>(() => {
-    const oneOf = selectedModelConfiguration?.properties?.starter?.oneOf;
+  const deploymentItems: DeploymentItem[] = useMemo(
+    () =>
+      items.map(({ id, displayName, iconUrl, type }) => ({
+        id,
+        displayName,
+        iconUrl: iconUrl ? resolveCatalogIconUrl(iconUrl) : undefined,
+        type,
+      })),
+    [items],
+  );
 
-    if (!Array.isArray(oneOf)) return [];
-    return oneOf as StarterOption[];
-  }, [selectedModelConfiguration]);
+  const { starters, propertyKey, description } = useMemo(
+    () => getStartersFromSchema(selectedDeploymentConfiguration),
+    [selectedDeploymentConfiguration],
+  );
+
+  const isInputDisabled = useMemo(
+    () => !!selectedDeploymentConfiguration?.isChatMessageInputDisabled,
+    [selectedDeploymentConfiguration],
+  );
+
+  const modelSelectorLabels = useMemo(
+    () => ({
+      ariaLabel: t(DeploymentsI18nKeys.SelectorAriaLabel),
+      loading: isLoading ? t(DeploymentsI18nKeys.SelectorLoading) : undefined,
+      error: error ? t(DeploymentsI18nKeys.SelectorError) : undefined,
+      empty:
+        !isLoading && !error && items.length === 0
+          ? t(DeploymentsI18nKeys.SelectorEmpty)
+          : undefined,
+      searchPlaceholder: t(DeploymentsI18nKeys.SelectorSearchPlaceholder),
+      closeLabel: t(DeploymentsI18nKeys.SelectorCloseLabel),
+    }),
+    [t, isLoading, error, items.length],
+  );
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -57,12 +105,13 @@ const ConversationRoute: FC = () => {
 
   const handleSend = useCallback(
     async (message: string, attachments: Attachment[]) => {
-      if (isSending) return;
+      if (isSending || !selectedItemId) return;
       setIsSending(true);
       try {
-        const attachmentDtos = await attachmentsToDtos(attachments);
+        const attachmentDtos = await attachmentsToDtos(attachments || []);
         const conversation = await apiCreateConversation(
           message,
+          selectedItemId,
           attachmentDtos,
         );
         navigate(getConversationRoute(conversation.id));
@@ -70,35 +119,60 @@ const ConversationRoute: FC = () => {
         setIsSending(false);
       }
     },
-    [navigate, isSending],
+    [navigate, isSending, selectedItemId],
   );
 
   const handleStarterSelect = useCallback(
     (starter: StarterOption) => {
-      const text = getStarterPopulateText(starter);
       if (starter['dial:widgetOptions'].submit) {
-        void handleSend(text, []);
+        const text = description ?? getStarterPopulateText(starter);
+        if (!selectedItemId) {
+          return;
+        }
+
+        const configurationValue = propertyKey
+          ? { [propertyKey]: starter.const }
+          : undefined;
+        const createAndNavigate = async () => {
+          const conversation = await apiCreateConversation(
+            text,
+            selectedItemId,
+            [],
+            configurationValue,
+          );
+          navigate(getConversationRoute(conversation.id));
+        };
+
+        void createAndNavigate();
       } else {
+        const text = description ?? getStarterPopulateText(starter);
         setInputMessage(text);
       }
     },
-    [handleSend],
+    [description, propertyKey, selectedItemId, navigate],
   );
 
   return (
     <div ref={inputRef} className="flex flex-1 flex-col overflow-y-auto">
       <Suspense fallback={<RouteFallback />}>
         <div
-          className="flex h-full flex-col items-center justify-center p-8"
+          className="flex h-full flex-col items-center justify-center p-4 desktop:p-8"
           role="region"
-          aria-label="Welcome screen"
+          aria-label={t(ChatI18nKeys.WelcomeScreen)}
         >
           <ConversationInput
             onSend={handleSend}
             message={inputMessage}
             welcomeText={t(ChatI18nKeys.WelcomeText)}
             placeholder={t(ChatI18nKeys.Placeholder)}
-            typography={{ welcomeClassName: 'dial-display2-text' }}
+            styles={{ typography: { welcomeClassName: 'dial-display2-text' } }}
+            deployments={deploymentItems}
+            selectedDeploymentId={selectedItemId}
+            onDeploymentChange={setSelectedItemId}
+            isInputDisabled={isInputDisabled}
+            modelSelectorLabels={modelSelectorLabels}
+            sendLabel={t(ChatI18nKeys.SendMessage)}
+            stopLabel={t(ChatI18nKeys.StopStreaming)}
           />
           <StarterButtons starters={starters} onSelect={handleStarterSelect} />
         </div>
@@ -107,4 +181,4 @@ const ConversationRoute: FC = () => {
   );
 };
 
-export default ConversationRoute;
+export default memo(ConversationRoute);

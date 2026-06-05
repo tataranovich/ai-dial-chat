@@ -1,4 +1,5 @@
-import type { Attachment } from '@epam/ai-dial-chat-shared';
+import type { Attachment, DeploymentItem } from '@epam/ai-dial-chat-shared';
+import type { ReactNode } from 'react';
 
 /** CSS custom-property overrides for the `Input` component. */
 export interface InputColors {
@@ -16,6 +17,8 @@ export interface InputColors {
   sendBackground?: string;
   /** Icon/text color of the send button. */
   sendText?: string;
+  /** Icon color of the stop button. Defaults to `--text-secondary` (`#9fa6bd`). */
+  stopColor?: string;
 }
 
 /** Typography overrides for the `Input` component. */
@@ -28,6 +31,22 @@ export interface InputTypography {
   fontWeight?: string | number;
   /** Line height applied to the textarea (CSS value, e.g. `'1.5'`). */
   lineHeight?: string;
+}
+
+/** Status labels displayed inside the model selector dropdown and mobile bottom-sheet. */
+export interface ModelSelectorLabels {
+  /** Accessible label for the selector trigger button (e.g. `"Select model"`). */
+  ariaLabel?: string;
+  /** Shown as a disabled item while deployments are loading. */
+  loading?: string;
+  /** Shown as a disabled item when the deployments fetch failed. */
+  error?: string;
+  /** Shown as a disabled item when the deployments list is empty. */
+  empty?: string;
+  /** Placeholder for the search input. Defaults to `'Search'`. */
+  searchPlaceholder?: string;
+  /** Accessible label for the close button in the mobile bottom-sheet. Defaults to `'Close'`. */
+  closeLabel?: string;
 }
 
 /** Props accepted by the `Input` component. */
@@ -63,6 +82,66 @@ export interface InputProps {
   removeLabel?: string;
   /** Accessible label for each attachment card's retry button (error state only). */
   retryLabel?: string;
+  /** Accessible label for the send button. */
+  sendLabel?: string;
+  /** Accessible label for the stop button. */
+  stopLabel?: string;
   /** Extra class name(s) merged onto the root wrapper element. */
   className?: string;
+  /** Files dropped onto the parent that should be processed as attachments. Reset to `[]` after processing. */
+  pendingDropFiles?: File[];
+  /** Called after `pendingDropFiles` have been consumed so the parent can reset its state. */
+  onDropFilesConsumed?: () => void;
+  /** Character count above which a pasted plain-text string is converted to an attachment rather than inserted inline. Defaults to `4000`. Pass `Infinity` to disable. */
+  pasteTextThreshold?: number;
+  /**
+   * List of deployment items to populate the model selector menu. When `undefined`, the selector is not rendered.
+   * `iconUrl` on each item must already be a fully resolved URL usable in `<img src>` — the host app
+   * resolves DIAL file IDs, theme-relative names, etc. before passing the list.
+   */
+  deployments?: DeploymentItem[];
+  /** ID of the currently selected deployment. When `null` or `undefined` and `deployments` is defined, the send button is disabled. */
+  selectedDeploymentId?: string | null;
+  /** Called when the user selects a different deployment from the dropdown. Receives the selected item's `id`. */
+  onDeploymentChange?: (id: string) => void;
+  /** Labels shown inside the model selector dropdown for the trigger and various loading states. */
+  modelSelectorLabels?: ModelSelectorLabels;
+  /** Heading text shown in the mobile bottom-sheet add-menu. Defaults to `'Menu'`. */
+  menuTitle?: string;
+  /** Accessible label for the bottom-sheet close button. Defaults to `'Close'`. */
+  menuCloseLabel?: string;
+  /** Attachments pre-populated in the tray on mount (e.g. when editing an existing message). */
+  initialAttachments?: Attachment[];
+  /**
+   * When `true`, the textarea always renders on its own row above the action bar
+   * (attach button on the left, footer actions on the right), instead of the
+   * compact single-row layout used when no attachments are present. Used by the
+   * edit-message UI, which always wants the stacked layout.
+   */
+  isStacked?: boolean;
+  /**
+   * When `true`, the attach (+) button and its associated hidden file input are
+   * not rendered. Use this when the caller manages file picking outside the
+   * component (e.g. `EditMessageInput` renders the `+` button outside the
+   * bordered box and feeds files back via `pendingDropFiles`).
+   */
+  hideAddButton?: boolean;
+  /**
+   * When `true`, the entire action bar row (attach button, send/stop button,
+   * model selector, and any `renderFooterActions` content) is not rendered.
+   * The bordered box contains only the attachment tray and textarea. Use in
+   * `EditMessageInput` where the action row lives outside the bordered box.
+   */
+  hideActionBar?: boolean;
+  /**
+   * When provided, replaces the default send/stop/model-selector area with custom content.
+   * Receives `canSend` (textarea has non-empty trimmed content) and `onSend` (triggers the
+   * same internal send flow as the default send button).
+   */
+  renderFooterActions?: (helpers: {
+    canSend: boolean;
+    onSend: () => void;
+  }) => ReactNode;
+  /** When `true`, blocks all text input, send, attach, and drop interactions. Starter/action buttons remain usable. Defaults to `false`. */
+  isInputDisabled?: boolean;
 }

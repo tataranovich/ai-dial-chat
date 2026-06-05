@@ -2,7 +2,7 @@ import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { EnvironmentVariables } from './environment.config';
 
-export function validate(config: Record<string, unknown>) {
+export const validate = (config: Record<string, unknown>) => {
   const validatedConfig = plainToInstance(EnvironmentVariables, config, {
     enableImplicitConversion: true,
   });
@@ -19,5 +19,10 @@ export function validate(config: Record<string, unknown>) {
     );
   }
 
+  console.info(
+    '[Config] Environment validated. DIAL_CORE_URL=%s',
+    validatedConfig.DIAL_CORE_URL,
+  );
+
   return validatedConfig;
-}
+};

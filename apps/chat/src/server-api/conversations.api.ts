@@ -6,12 +6,26 @@ import { conversationsApi } from './api-client';
 
 export const createConversation = (
   firstMessage: string,
+  deploymentId: string,
   attachments?: AttachmentDto[],
+  configurationValue?: Record<string, unknown>,
+  formValue?: Record<string, unknown>,
 ) =>
   conversationsApi.createConversation({
     createConversationDto: {
       firstMessage,
-      ...(attachments?.length ? { attachments } : {}),
+      deploymentId,
+      ...(attachments?.length || configurationValue || formValue
+        ? {
+            custom_content: {
+              ...(attachments?.length ? { attachments } : {}),
+              ...(configurationValue
+                ? { configuration_value: configurationValue }
+                : {}),
+              ...(formValue ? { form_value: formValue } : {}),
+            },
+          }
+        : {}),
     },
   });
 
@@ -37,4 +51,15 @@ export const getConversationMetadata = (
   conversationsApi.getConversationMetadata({
     path: conversationPath,
     permissions: options?.permissions,
+  });
+
+export const listConversations = (params?: {
+  limit?: number;
+  nextToken?: string;
+  path?: string;
+}) =>
+  conversationsApi.listConversations({
+    limit: params?.limit,
+    nextToken: params?.nextToken,
+    path: params?.path,
   });

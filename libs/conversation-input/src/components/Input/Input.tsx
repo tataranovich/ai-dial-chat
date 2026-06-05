@@ -2,28 +2,29 @@ import type { Attachment } from '@epam/ai-dial-chat-shared';
 import {
   AttachmentType,
   RequestStatus,
+  buildCssVars,
   mergeClasses,
 } from '@epam/ai-dial-chat-shared';
 import {
-  BASE_ICON_SIZE,
-  DialDropdown,
-  DialGhostIconButton,
-} from '@epam/ai-dial-ui-kit';
-import { IconPaperclip, IconPlus } from '@tabler/icons-react';
-import classNames from 'classnames';
-import {
-  CSSProperties,
+  ChangeEvent,
   type FC,
   KeyboardEvent,
+  useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
+import { useClipboardPaste } from '../../hooks/useClipboardPaste.js';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import type { InputProps } from '../../models/Input.js';
+import { generateAttachmentId } from '../../utils/generateAttachmentId.js';
+import { AddAttachmentButton } from '../AddAttachmentButton/AddAttachmentButton.js';
 import { AttachmentTray } from '../AttachmentTray/AttachmentTray.js';
+import { SendButton } from './Buttons/SendButton.js';
+import { StopButton } from './Buttons/StopButton.js';
 import styles from './Input.module.scss';
-import { SendButton } from './SendButton.js';
-import { StopButton } from './StopButton.js';
+import { ModelSelectorControl } from './ModelSelectorControl.js';
 
 export const Input: FC<InputProps> = ({
   message: messageProp = '',
@@ -36,34 +37,52 @@ export const Input: FC<InputProps> = ({
   ariaLabel,
   attachLabel = 'Attach file',
   addMenuLabel = 'Add',
+  menuTitle = 'Menu',
+  menuCloseLabel = 'Close',
   removeLabel,
   retryLabel,
+  sendLabel,
+  stopLabel,
   colors,
   typography,
   className,
+  pendingDropFiles = [],
+  onDropFilesConsumed,
+  pasteTextThreshold = 4000,
+  deployments,
+  selectedDeploymentId,
+  onDeploymentChange,
+  modelSelectorLabels,
+  initialAttachments = [],
+  isStacked = false,
+  hideAddButton = false,
+  hideActionBar = false,
+  renderFooterActions,
+  isInputDisabled = false,
 }) => {
-  const cssVars = {
-    ...(colors?.background && { '--ci-bg': colors.background }),
-    ...(colors?.text && { '--ci-text': colors.text }),
-    ...(colors?.border && { '--ci-border': colors.border }),
-    ...(colors?.borderFocus && { '--ci-border-focus': colors.borderFocus }),
-    ...(colors?.placeholder && { '--ci-placeholder': colors.placeholder }),
-    ...(colors?.sendBackground && { '--ci-send-bg': colors.sendBackground }),
-    ...(colors?.sendText && { '--ci-send-text': colors.sendText }),
-    ...(typography?.fontFamily && {
-      '--ci-font-family': typography.fontFamily,
-    }),
-    ...(typography?.fontSize && { '--ci-font-size': typography.fontSize }),
-    ...(typography?.fontWeight && {
-      '--ci-font-weight': String(typography.fontWeight),
-    }),
-    ...(typography?.lineHeight && {
-      '--ci-line-height': typography.lineHeight,
-    }),
-  } as CSSProperties;
+  const isMobile = useIsMobile();
+  const cssVars = useMemo(
+    () =>
+      buildCssVars({
+        '--ci-bg': colors?.background,
+        '--ci-text': colors?.text,
+        '--ci-border': colors?.border,
+        '--ci-border-focus': colors?.borderFocus,
+        '--ci-placeholder': colors?.placeholder,
+        '--ci-send-bg': colors?.sendBackground,
+        '--ci-send-text': colors?.sendText,
+        '--ci-stop-color': colors?.stopColor,
+        '--ci-font-family': typography?.fontFamily,
+        '--ci-font-size': typography?.fontSize,
+        '--ci-font-weight': typography?.fontWeight?.toString(),
+        '--ci-line-height': typography?.lineHeight,
+      }),
+    [colors, typography],
+  );
 
   const [message, setMessage] = useState(messageProp);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] =
+    useState<Attachment[]>(initialAttachments);
 
   useEffect(() => {
     if (messageProp) {
@@ -80,9 +99,51 @@ export const Input: FC<InputProps> = ({
     };
   }, []);
 
-  const canSend = message.trim().length > 0;
+  const buildAttachments = useCallback((files: File[]): Attachment[] => {
+    return files.map((file) => {
+      const isImage = file.type.startsWith('image/');
+      const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
+      return {
+        id: generateAttachmentId(),
+        name: file.name,
+        contentType: file.type,
+        file,
+        type: isImage ? AttachmentType.Image : AttachmentType.File,
+        status: RequestStatus.Idle,
+        previewUrl,
+      };
+    });
+  }, []);
+
+  const addAttachments = useCallback(
+    (newAttachments: Attachment[]) => {
+      setAttachments((prev) => {
+        const updated = [...prev, ...newAttachments];
+        onAttachmentsChange?.(updated);
+        return updated;
+      });
+    },
+    [onAttachmentsChange],
+  );
+
+  useEffect(() => {
+    if (pendingDropFiles.length === 0) return;
+    const built = buildAttachments(pendingDropFiles);
+    addAttachments(built);
+    onDropFilesConsumed?.();
+  }, [pendingDropFiles]); // intentionally omit buildAttachments/addAttachments/onDropFilesConsumed — stable refs
+
+  const { handlePaste } = useClipboardPaste(addAttachments, pasteTextThreshold);
+
+  const canSend = message.trim().length > 0 || attachments.length > 0;
+  // Stacked layout: textarea on its own row above the action bar. Used when the
+  // caller opts in (edit mode) or whenever attachments are present.
+  const isStackedLayout = isStacked || attachments.length > 0;
+  const hasModelSelected =
+    deployments === undefined || selectedDeploymentId != null;
 
   const handleSend = () => {
+    if (isInputDisabled) return;
     onSend?.(message, attachments);
     setMessage('');
     attachments.forEach((a) => {
@@ -95,55 +156,53 @@ export const Input: FC<InputProps> = ({
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (!isStreaming && canSend) {
+      if (!isStreaming && canSend && hasModelSelected) {
         handleSend();
       }
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
 
-    const newAttachments: Attachment[] = files.map((file) => {
-      const isImage = file.type.startsWith('image/');
-      const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
-      return {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        name: file.name,
-        contentType: file.type,
-        file,
-        type: isImage ? AttachmentType.Image : AttachmentType.File,
-        status: RequestStatus.Idle,
-        previewUrl,
-      };
-    });
+    const newAttachments = buildAttachments(files);
 
     // Reset so the same file can be picked again
     e.target.value = '';
 
-    setAttachments((prev) => {
-      const updated = [...prev, ...newAttachments];
-      onAttachmentsChange?.(updated);
-      return updated;
-    });
+    addAttachments(newAttachments);
   };
 
-  const handleRemove = (id: string) => {
-    setAttachments((prev) => {
-      const target = prev.find((a) => a.id === id);
-      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
-      const updated = prev.filter((a) => a.id !== id);
-      onAttachmentsChange?.(updated);
-      return updated;
-    });
-  };
+  const handleRemove = useCallback(
+    (id: string) => {
+      setAttachments((prev) => {
+        const target = prev.find((a) => a.id === id);
+        if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+        const updated = prev.filter((a) => a.id !== id);
+        onAttachmentsChange?.(updated);
+        return updated;
+      });
+    },
+    [onAttachmentsChange],
+  );
+
+  const handleExpand = useCallback(
+    async (id: string) => {
+      const target = attachments.find((a) => a.id === id);
+      if (!target || target.type !== AttachmentType.Pasted) return;
+      const text = await target.file.text();
+      setMessage((prev) => (prev ? `${prev}\n${text}` : text));
+      handleRemove(id);
+    },
+    [attachments, handleRemove],
+  );
 
   const textarea = (
     <textarea
       className={mergeClasses(
         styles.textarea,
-        'flex-1 resize-none bg-transparent outline-none',
+        'max-h-[272px] w-full resize-none overflow-y-auto border-0 bg-transparent outline-none [field-sizing:content]',
       )}
       value={message}
       onChange={(e) => {
@@ -151,8 +210,10 @@ export const Input: FC<InputProps> = ({
         onChange?.(e.target.value);
       }}
       onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
       placeholder={placeholder}
       aria-label={ariaLabel}
+      disabled={isInputDisabled}
       rows={1}
     />
   );
@@ -166,62 +227,94 @@ export const Input: FC<InputProps> = ({
       )}
     >
       {attachments.length > 0 && (
-        <>
-          <AttachmentTray
-            attachments={attachments}
-            onRemove={handleRemove}
-            removeLabel={removeLabel}
-            retryLabel={retryLabel}
-          />
-          {textarea}
-        </>
+        <AttachmentTray
+          attachments={attachments}
+          onRemove={handleRemove}
+          onExpand={handleExpand}
+          removeLabel={removeLabel}
+          retryLabel={retryLabel}
+        />
       )}
+      {isStackedLayout && textarea}
 
-      <div
-        className={classNames(
-          'flex items-center gap-2',
-          attachments.length > 0 && 'justify-between',
-        )}
-      >
-        <div className="flex">
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="sr-only"
-            aria-hidden
-            tabIndex={-1}
-            onChange={handleFileChange}
-          />
-          <DialDropdown
-            matchReferenceWidth={false}
-            placement="bottom-start"
-            listClassName="!w-[240px]"
-            menu={{
-              items: [
-                {
-                  key: 'attach',
-                  label: attachLabel,
-                  icon: <IconPaperclip size={BASE_ICON_SIZE} aria-hidden />,
-                  onClick: () => fileInputRef.current?.click(),
-                },
-              ],
-            }}
+      {!hideActionBar && (
+        <div
+          className={mergeClasses(
+            'flex items-center gap-2',
+            isStackedLayout
+              ? hideAddButton
+                ? 'justify-end'
+                : 'justify-between'
+              : 'flex-wrap desktop:flex-nowrap',
+          )}
+        >
+          {!hideAddButton && (
+            <div
+              className={mergeClasses(
+                'flex',
+                !isStackedLayout && 'order-2 desktop:order-1',
+              )}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="sr-only"
+                aria-hidden
+                tabIndex={-1}
+                onChange={handleFileChange}
+              />
+              <AddAttachmentButton
+                onAttachClick={() => fileInputRef.current?.click()}
+                attachLabel={attachLabel}
+                addMenuLabel={addMenuLabel}
+                menuTitle={menuTitle}
+                menuCloseLabel={menuCloseLabel}
+                style={cssVars}
+                isDisabled={isInputDisabled}
+              />
+            </div>
+          )}
+          {!isStackedLayout && (
+            <div className="order-1 flex w-full min-w-0 items-center self-stretch desktop:order-2 desktop:w-auto desktop:flex-1">
+              {textarea}
+            </div>
+          )}
+          <div
+            className={mergeClasses(
+              'flex flex-shrink-0 items-center gap-2',
+              !isStackedLayout && 'order-3 ml-auto desktop:ml-0',
+            )}
           >
-            <DialGhostIconButton
-              icon={<IconPlus size={BASE_ICON_SIZE} aria-hidden />}
-              aria-label={addMenuLabel}
-              className="size-10 flex-shrink-0"
-            />
-          </DialDropdown>
+            {renderFooterActions ? (
+              renderFooterActions({ canSend, onSend: handleSend })
+            ) : (
+              <>
+                <ModelSelectorControl
+                  deployments={deployments}
+                  selectedDeploymentId={selectedDeploymentId}
+                  onDeploymentChange={onDeploymentChange}
+                  modelSelectorLabels={modelSelectorLabels}
+                  isStreaming={isStreaming}
+                  isMobile={isMobile}
+                  style={cssVars}
+                />
+                {isStreaming ? (
+                  <StopButton onStop={onStop} ariaLabel={stopLabel} />
+                ) : (
+                  canSend && (
+                    <SendButton
+                      onSend={handleSend}
+                      isDisabled={isInputDisabled || !hasModelSelected}
+                      ariaLabel={sendLabel}
+                    />
+                  )
+                )}
+              </>
+            )}
+          </div>
         </div>
-        {attachments.length === 0 && textarea}
-        {isStreaming ? (
-          <StopButton onStop={onStop} />
-        ) : (
-          canSend && <SendButton onSend={handleSend} />
-        )}
-      </div>
+      )}
     </div>
   );
 };

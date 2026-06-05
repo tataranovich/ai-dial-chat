@@ -1,5 +1,6 @@
 import { AttachmentType } from '../types/attachment.js';
 import { MIMEType } from '../types/mime-type.js';
+import type { DeploymentConfigurationSchema } from './deployment-configuration.js';
 
 /** Metadata returned by the DIAL file/conversation listing API for a single resource node. */
 export interface ConversationMetadata {
@@ -31,6 +32,8 @@ export interface ConversationMetadata {
 export enum MessageRole {
   User = 'user',
   Assistant = 'assistant',
+  /** In-conversation system event; never sent to DIAL Core. */
+  Status = 'status',
 }
 
 /** A user-submitted thumbs-up or thumbs-down rating for an assistant message.
@@ -39,6 +42,61 @@ export enum MessageRole {
 export enum MessageRating {
   Like = 1,
   Dislike = -1,
+}
+
+/** Status of a single agent stage. */
+export enum StageStatus {
+  /** The stage completed successfully. */
+  Completed = 'completed',
+  /** The stage encountered an error. */
+  Failed = 'failed',
+}
+
+/** Permitted scalar/array types for a single form field value. */
+export type MessageFormValueType = number | string | boolean | string[];
+
+/**
+ * A key-value map submitted from a form widget embedded in a message.
+ * Keys are field identifiers; values are typed form field values (or `undefined` for unset fields).
+ */
+export type MessageFormValue = Record<string, MessageFormValueType | undefined>;
+
+/** Discriminator values for `StatusMessageCustomContent.event_type`. */
+export enum StatusEvent {
+  ModelChanged = 'model_changed',
+}
+
+/**
+ * Extra payload attached to a `MessageRole.Status` message.
+ * Discriminated by `event_type`; forward-compatible with future event types.
+ */
+export interface StatusMessageCustomContent {
+  /** Machine-readable event discriminator. */
+  event_type: StatusEvent;
+  /** ID of the deployment that was active before the change, or `null` for the first selection. */
+  previous_deployment_id: string | null;
+  /** ID of the deployment selected after the change. */
+  new_deployment_id: string;
+}
+
+/** Extra DIAL API payload attached to a message. */
+export interface MessageCustomContent {
+  /** Files or media items associated with this message. */
+  attachments?: MessageAttachment[];
+  /** Form field values submitted via an embedded form widget. */
+  form_value?: MessageFormValue;
+  /**
+   * JSON Schema for a button/form widget embedded in an assistant response.
+   * Populated from the streaming delta's `custom_content.form_schema`.
+   */
+  form_schema?: DeploymentConfigurationSchema;
+  /**
+   * Configuration value submitted with the next user turn when a button is selected.
+   * Keys match the `propertyKey` from the `form_schema` (e.g. `{ button: 3 }`).
+   */
+  configuration_value?: Record<string, unknown>;
+  /** Accumulated agent execution stages streamed via `custom_content.stages`. */
+  stages?: Stage[];
 }
 
 /** A single message in a conversation. */
@@ -56,12 +114,49 @@ export interface Message {
    * Present on both user requests (uploaded files) and assistant responses
    * (generated/referenced files).
    */
-  custom_content?: {
-    /** Files or media items associated with this message. */
-    attachments?: MessageAttachment[];
-  };
+  custom_content?: MessageCustomContent;
   /** User-submitted rating for this message. Only meaningful for assistant messages. Stored in-memory only; not persisted. */
   rating?: MessageRating;
+  /**
+   * ID of the deployment that generated this message.
+   * Set on `MessageRole.Assistant` and `MessageRole.Status` messages.
+   * Used to render the deployment icon next to assistant responses.
+   */
+  deploymentId?: string;
+  /** Allows extra SDK-level properties to pass through when serializing to DIAL Core. */
+  [key: string]: unknown;
+}
+
+/**
+ * An in-conversation system event message produced by the client (never forwarded to DIAL Core).
+ * Discriminated from `Message` by `role: MessageRole.Status`.
+ * Defined as a standalone interface rather than extending `Message` because
+ * `custom_content` has an incompatible type (`StatusMessageCustomContent` vs
+ * `MessageCustomContent`), which prevents structural subtyping.
+ */
+export interface StatusMessage extends Omit<
+  Message,
+  'role' | 'custom_content'
+> {
+  /** Always `MessageRole.Status` for status messages. */
+  role: MessageRole.Status;
+  /** Status event payload. */
+  custom_content?: StatusMessageCustomContent;
+}
+
+/**
+ * A single stage entry produced by an agent during a streaming response.
+ * Stages are delivered incrementally via `StreamChunkDelta.custom_content.stages`.
+ */
+export interface Stage {
+  /** Zero-based ordering key; used to merge/upsert incoming stage updates. */
+  index: number;
+  /** Human-readable label for this stage (e.g. `"Lookup available terms"`). */
+  name: string;
+  /** `null` while the stage is running; a `StageStatus` value when it has settled. */
+  status: StageStatus | null;
+  /** Additional text content for this stage, accumulated from streaming chunks. */
+  content?: string;
 }
 
 /** Incremental content delta inside a streaming SSE chunk. */
@@ -70,6 +165,18 @@ export interface StreamChunkDelta {
   content?: string;
   /** Role field — only present in the first chunk of a response. */
   role?: string;
+  /**
+   * Partial custom content carried in this chunk.
+   * `form_schema`, `attachments`, and `stages` may arrive in separate chunks or together in the final chunk.
+   */
+  custom_content?: {
+    /** Incremental stage updates; merge by `index` into the accumulating stage list. */
+    stages?: Stage[];
+    /** JSON Schema for a button/form widget; arrives once the model decides to embed a form. */
+    form_schema?: DeploymentConfigurationSchema;
+    /** AI-generated files produced by the model; typically present in the final chunk. */
+    attachments?: MessageAttachment[];
+  };
 }
 
 /** A single server-sent event chunk from the streaming completions endpoint. */
