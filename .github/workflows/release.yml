@@ -10,14 +10,15 @@ on:
         default: false
         description: Promote release to stable (for release-* branches only)
 
-permissions:
-  contents: write
-  packages: write
-  security-events: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: write
+  packages: write
+  security-events: write
 
 jobs:
   release:

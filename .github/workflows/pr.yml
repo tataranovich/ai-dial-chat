@@ -2,15 +2,15 @@ name: PR Workflow
 
 on:
   pull_request:
-    branches: [development, development-1.0, release-*]
-
-permissions:
-  contents: read
-  security-events: write
+    branches: [development, release-*]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
 
 jobs:
   run_tests:

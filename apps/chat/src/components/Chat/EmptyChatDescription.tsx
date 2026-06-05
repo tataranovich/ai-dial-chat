@@ -84,6 +84,7 @@ const EmptyChatDescriptionView = ({
   const enabledFeatures = useAppSelector(
     SettingsSelectors.selectEnabledFeatures,
   );
+  const isIsolatedView = useAppSelector(SettingsSelectors.selectIsIsolatedView);
 
   const screenState = useScreenState();
 
@@ -219,7 +220,7 @@ const EmptyChatDescriptionView = ({
               <div className="flex items-center justify-center gap-2">
                 <ModelVersionSelect
                   className="h-max w-fit self-center"
-                  entities={versions}
+                  entities={isIsolatedView ? [model] : versions}
                   onSelect={handleSelectVersion}
                   currentEntity={model}
                   showVersionPrefix
@@ -244,7 +245,7 @@ const EmptyChatDescriptionView = ({
         </div>
       </div>
       {(!isReadOnly || !isExternal) && (
-        <div className="flex gap-3 divide-x divide-primary leading-4">
+        <div className="flex gap-3 divide-x divide-primary leading-4 rtl:divide-x-reverse">
           {!isEmptyChatChangeAgentHidden && (
             <DialLinkButton
               data-qa="change-agent"

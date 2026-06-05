@@ -35,6 +35,7 @@ export enum AttributeValues {
   change = 'Change',
   copyLink = 'copy-link',
   close = 'Close dialog',
+  checkbox = 'checkbox',
   removeFile = 'remove-file',
   mixed = 'mixed',
   truncate = 'truncate',
@@ -46,4 +47,5 @@ export enum AttributeValues {
   maxWFull = 'max-w-full',
   password = 'password',
   text = 'text',
+  textEllipsis = 'text-ellipsis',
 }

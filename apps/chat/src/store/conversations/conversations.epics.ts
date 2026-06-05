@@ -78,7 +78,10 @@ import {
   mergeMessages,
   parseStreamMessages,
 } from '@/src/utils/app/merge-streams';
-import { isTabletScreen } from '@/src/utils/app/mobile';
+import {
+  isTabletScreen,
+  shouldAutoHideChatbarOnConversationChange,
+} from '@/src/utils/app/mobile';
 import {
   doesModelAllowSystemPrompt,
   doesModelAllowTemperature,
@@ -2305,7 +2308,7 @@ const saveFoldersEpic: AppEpic = (action$, state$) =>
     ignoreElements(),
   );
 
-const hideChatbarEpic: AppEpic = (action$) =>
+const hideChatbarEpic: AppEpic = (action$, state$) =>
   action$.pipe(
     ofType(
       ConversationsActions.createNewConversations.type,
@@ -2329,7 +2332,12 @@ const hideChatbarEpic: AppEpic = (action$) =>
       return true;
     }),
     switchMap(() =>
-      isTabletScreen() ? of(UIActions.setShowChatbar(false)) : EMPTY,
+      shouldAutoHideChatbarOnConversationChange(
+        SettingsSelectors.selectIsOverlay(state$.value),
+        SettingsSelectors.selectIsMdSidebarOverlayBreakpoint(state$.value),
+      )
+        ? of(UIActions.setShowChatbar(false))
+        : EMPTY,
     ),
   );
 

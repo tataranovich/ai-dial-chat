@@ -252,13 +252,9 @@ export const AgentsAndToolsetsField: FC<AgentsAndToolsetsFieldProps> = ({
     [allEntitiesMap, dispatch, getValues, resetField, setValue],
   );
 
-  const handleOpenDetails = useCallback(
-    (entity: MarketplaceEntity) => {
-      setSelectedEntityId(entity.id);
-      onAutoSave();
-    },
-    [onAutoSave],
-  );
+  const handleOpenDetails = useCallback((entity: MarketplaceEntity) => {
+    setSelectedEntityId(entity.id);
+  }, []);
 
   const handleCloseDetails = useCallback(() => {
     setSelectedEntityId(null);
@@ -346,7 +342,8 @@ export const AgentsAndToolsetsField: FC<AgentsAndToolsetsFieldProps> = ({
       setValue(
         'agentsAndToolsets',
         agentsAndToolsetsOptions.map((option) =>
-          option[AgentOrToolsetSchemaKeys.id] === toolset.deployment_id
+          option[AgentOrToolsetSchemaKeys.tool]?.deployment_id ===
+          toolset.deployment_id
             ? {
                 ...option,
                 [AgentOrToolsetSchemaKeys.tool]: toolset,
@@ -366,6 +363,7 @@ export const AgentsAndToolsetsField: FC<AgentsAndToolsetsFieldProps> = ({
         control={control}
         render={({ field }) => (
           <div
+            data-qa="agents-and-toolsets-json-view"
             className={classNames('relative', {
               hidden: !isJsonView,
             })}
@@ -410,6 +408,7 @@ export const AgentsAndToolsetsField: FC<AgentsAndToolsetsFieldProps> = ({
           return (
             <>
               <div
+                data-qa="agents-and-toolsets-marketplace-view"
                 className={classNames({
                   'invisible h-0 overflow-hidden': isJsonView,
                 })}
@@ -426,29 +425,31 @@ export const AgentsAndToolsetsField: FC<AgentsAndToolsetsFieldProps> = ({
                   onConfigureClick={handleConfigureClick}
                 />
               </div>
-              {detailedViewEntity &&
-                isDialAiEntityModel(detailedViewEntity) && (
-                  <ApplicationDetails
-                    entity={detailedViewEntity}
-                    allEntities={allModels}
-                    FooterComponent={SimpleApplicationDetailsFooter}
-                    {...commonDetailsProps}
-                  />
-                )}
-
-              {detailedViewEntity &&
-                isToolsetEntityModel(detailedViewEntity) && (
-                  <ToolsetDetails
-                    entity={detailedViewEntity}
-                    allEntities={allToolsets}
-                    FooterComponent={SimpleToolsetDetailsFooter}
-                    {...commonDetailsProps}
-                  />
-                )}
             </>
           );
         }}
       />
+
+      {detailedViewEntity && (
+        <div data-qa="entity-details-panel">
+          {isDialAiEntityModel(detailedViewEntity) && (
+            <ApplicationDetails
+              entity={detailedViewEntity}
+              allEntities={allModels}
+              FooterComponent={SimpleApplicationDetailsFooter}
+              {...commonDetailsProps}
+            />
+          )}
+          {isToolsetEntityModel(detailedViewEntity) && (
+            <ToolsetDetails
+              entity={detailedViewEntity}
+              allEntities={allToolsets}
+              FooterComponent={SimpleToolsetDetailsFooter}
+              {...commonDetailsProps}
+            />
+          )}
+        </div>
+      )}
 
       <DialConfirmationPopup
         variant={ConfirmationPopupVariant.Danger}
