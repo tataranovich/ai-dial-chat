@@ -17,6 +17,7 @@ import {
   ActionsI18nKeys,
   ChatI18nKeys,
 } from '../../constants/translation-keys';
+import { useUser } from '../../context/auth/UserContext';
 import { useDeployments } from '../../context/DeploymentsContext.js';
 import { useSourcesSidebar } from '../../context/SourcesSidebarContext.js';
 import { useConversationHandlers } from '../../hooks/conversation/useConversationHandlers';
@@ -36,9 +37,12 @@ export const ConversationPage: FC = () => {
   const conversationRef = useRef<Conversation | null>(null);
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { setSelectedItemId } = useDeployments();
+  const { setSelectedItemId, isLoading: isDeploymentsLoading } =
+    useDeployments();
   const { handleClose: handleCloseSourcesSidebar, setMessages } =
     useSourcesSidebar();
+  const { user } = useUser();
+  const bucket = user?.bucket ?? '';
 
   useEffect(() => {
     setMessages(conversation?.messages ?? []);
@@ -67,7 +71,8 @@ export const ConversationPage: FC = () => {
     [conversationId],
   );
 
-  const isConversationLoaded = !isFetching && !!conversation;
+  const isConversationLoaded =
+    !isFetching && !!conversation && !isDeploymentsLoading;
   useDeploymentChangeEffect(
     conversationId,
     addStatusMessage,
@@ -80,6 +85,7 @@ export const ConversationPage: FC = () => {
     setConversation,
     conversationRef,
   });
+
   useEffect(() => {
     if (!conversationId) {
       setIsFetching(false);
@@ -102,10 +108,7 @@ export const ConversationPage: FC = () => {
         const lastMsg = result.messages[result.messages.length - 1];
 
         if (lastMsg?.role === MessageRole.User) {
-          // Unanswered user message on load — add placeholder and auto-stream.
-          const assistantMessageId = `stream_${Date.now()}`;
           const assistantPlaceholder: Message = {
-            id: assistantMessageId,
             role: MessageRole.Assistant,
             content: '',
             timestamp: new Date().toISOString(),
@@ -119,8 +122,8 @@ export const ConversationPage: FC = () => {
           startStream(
             conversationPath,
             lastMsg.content,
-            assistantMessageId,
-            result.model.id,
+            withPlaceholder.messages.length - 1,
+            lastDeploymentId ?? result.model.id,
             lastMsg.custom_content,
           );
         } else {
@@ -133,6 +136,7 @@ export const ConversationPage: FC = () => {
 
   const {
     handleSend,
+    handleUploadAttachment,
     handleRegenerateMessage,
     handleDeleteMessage,
     handleConfirmDelete,
@@ -142,14 +146,15 @@ export const ConversationPage: FC = () => {
     handleStartEdit,
     handleCancelEdit,
     handleEditMessage,
-    editingMessageIds,
-    pendingDeleteId,
-    setPendingDeleteId,
+    editingMessageIndexes,
+    pendingDeleteIndex,
+    setPendingDeleteIndex,
     pendingStarterContext,
     setPendingStarterContext,
   } = useConversationHandlers({
     conversation,
     conversationId,
+    bucket,
     isStreaming,
     startStream,
     conversationRef,
@@ -171,6 +176,7 @@ export const ConversationPage: FC = () => {
           messages={conversation.messages}
           initialModelId={conversation.assistantModelId}
           onSend={handleSend}
+          onUploadAttachment={handleUploadAttachment}
           onStop={handleStop}
           onDeleteMessage={handleDeleteMessage}
           onRegenerateMessage={handleRegenerateMessage}
@@ -178,7 +184,7 @@ export const ConversationPage: FC = () => {
           onStartEdit={handleStartEdit}
           onCancelEdit={handleCancelEdit}
           onEditMessage={handleEditMessage}
-          editingMessageIds={editingMessageIds}
+          editingMessageIndexes={editingMessageIndexes}
           isAssistantTyping={isStreaming}
           placeholder={t(ChatI18nKeys.Placeholder)}
           onSelectStarter={handleButtonSelect}
@@ -187,18 +193,18 @@ export const ConversationPage: FC = () => {
       </div>
 
       <DialConfirmationPopup
-        open={!!pendingDeleteId}
+        open={pendingDeleteIndex != null}
         header={t(ChatI18nKeys.DeleteMessageTitle)}
         description={t(ChatI18nKeys.DeleteMessageDescription)}
         confirmLabel={t(ActionsI18nKeys.Delete)}
         cancelLabel={t(ActionsI18nKeys.Cancel)}
         variant={ConfirmationPopupVariant.Danger}
         onConfirm={handleConfirmDelete}
-        onClose={() => setPendingDeleteId(null)}
+        onClose={() => setPendingDeleteIndex(null)}
       />
 
       <DialConfirmationPopup
-        open={!!pendingStarterContext}
+        open={pendingStarterContext != null}
         header={t(ChatI18nKeys.StarterConfirmTitle)}
         description={
           pendingStarterContext?.starter['dial:widgetOptions']

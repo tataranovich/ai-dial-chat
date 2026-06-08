@@ -79,9 +79,12 @@ On success the endpoint returns HTTP 200 with `ConversationListResponseDto`:
 
 ```ts
 class ConversationListItemDto {
-  id: string;        // Full DIAL Core resource URL (e.g. "conversations/bucket/model__title__uuid")
-  title: string;     // Human-readable conversation title extracted from the resource name
-  updatedAt: number; // Unix epoch milliseconds of the last update
+  id: string;               // Full DIAL Core resource URL (e.g. "conversations/bucket/model__title__uuid")
+  title: string;            // Human-readable conversation title extracted from the resource name
+  updatedAt: number;        // Unix epoch milliseconds of the last update
+  sharedWithMe: boolean;    // True when another user shared this conversation with the current user
+  publishedWithMe: boolean; // True when this conversation is published to the organisation
+  isPinned: boolean;        // True when the user has pinned this conversation
 }
 
 class ConversationListResponseDto {
@@ -89,6 +92,8 @@ class ConversationListResponseDto {
   nextToken?: string; // Cursor for the next page; absent when no more results
 }
 ```
+
+`isPinned` is populated by calling `UserConfigService.getPinnedIds` in parallel with the metadata call (`Promise.all`). That service reads `user-config.json` from the user's DIAL Core bucket; see the [user-config-api spec](../user-config-api/spec.md) for the full file format. The read falls back to `[]` on any error so a missing file never breaks the list response.
 
 The service calls `client.getConversationMetadata(bucket, path ?? '', { query: { recursive: true, limit, token: nextToken } })` and filters out items with `nodeType === 'FOLDER'`.
 
@@ -150,3 +155,87 @@ Integration tests SHALL cover key endpoints using supertest in `apps/chat-api/sr
 
 - **WHEN** `GET /api/v1/conversations/list?path=work` is called
 - **THEN** the service is called with `path: 'work'` forwarded as the DIAL Core folder argument
+
+---
+
+### Requirement: DELETE /api/v1/conversations cleans up pin state
+
+When a conversation is deleted, `deleteConversation` fires a fire-and-forget call to `userConfigService.updatePin(id, false, ...)` to remove the deleted id from `user-config.json`. The cleanup is non-fatal — errors are logged but do not affect the 204 response to the client. The conversation id for cleanup is reconstructed as `conversations/${bucket}/${conversationPath}`.
+
+See the [user-config-api spec](../user-config-api/spec.md) for `updatePin` semantics.
+
+#### Scenario: Deleting a pinned conversation removes it from the pins list
+
+- **WHEN** `DELETE /api/v1/conversations?path=...` is called for a pinned conversation
+- **THEN** the conversation is deleted from DIAL Core and its id is removed from `user-config.json`
+
+---
+
+### Requirement: PATCH /api/v1/conversations renames a conversation by moving it to a new DIAL Core path
+
+The backend SHALL expose `PATCH /api/v1/conversations` in `apps/chat-api/src/conversations/conversation.controller.ts`. The endpoint accepts query parameter `path` (validated by `RenameConversationDto` — `@IsString @MinLength(1) @MaxLength(512)`) and a JSON body `RenameConversationBodyDto`:
+
+```ts
+class RenameConversationBodyDto {
+  @IsString()
+  @MinLength(1)
+  @MaxUtf8ByteLength(255)
+  newTitle: string;
+}
+```
+
+The service method `renameConversation(path, newTitle, at, bucket)` SHALL:
+1. Sanitise `newTitle` through `prepareEntityName` to strip disallowed characters and truncate to 255 UTF-8 bytes.
+2. Construct `sourceUrl` as the full DIAL Core resource URL for the given `path` and `bucket`.
+3. Replace the title segment (middle `__`-delimited part) of the filename to produce `destinationUrl`.
+4. Call `client.moveResource({ sourceUrl, destinationUrl, overwrite: false })`.
+5. Return `{ newPath: string }` — the relative path portion of `destinationUrl` (i.e., the part after the bucket prefix), which the frontend uses to update its local conversation id.
+
+Response body (200 OK):
+
+```ts
+class RenameConversationResponseDto {
+  newPath: string;
+}
+```
+
+Rate limiting: `@Throttle({ default: { limit: 20, ttl: 60000 } })` on the handler.
+
+Generated-client impact:
+- OpenAPI operationId: `renameConversation`
+- SDK method: `ConversationsApi.renameConversation({ path, renameConversationBodyDto })`
+- Response type: `RenameConversationResponseDto`
+- Frontend callers use the normal (non-Raw) generated method via `apps/chat/src/server-api/conversations.api.ts`
+
+Error codes:
+- `400 Bad Request` — `path` or `newTitle` fails DTO validation
+- `401 Unauthorized` — missing or invalid bearer token
+- `404 Not Found` — source conversation does not exist in DIAL Core
+- `409 Conflict` — destination path already exists (DIAL Core 4xx when `overwrite=false`)
+- `502 Bad Gateway` — DIAL Core returned an unexpected error
+- `503 Service Unavailable` — DIAL Core unreachable
+
+#### Scenario: Valid request returns 200 with newPath
+
+- **WHEN** `PATCH /api/v1/conversations?path=model__Old+Title__uuid` is called with body `{ "newTitle": "New Title" }`
+- **THEN** the response status is 200 and the body contains `{ "newPath": "conversations/bucket/model__New Title__uuid" }`
+
+#### Scenario: Empty newTitle returns 400
+
+- **WHEN** `PATCH /api/v1/conversations?path=...` is called with body `{ "newTitle": "" }`
+- **THEN** the response status is 400
+
+#### Scenario: newTitle exceeding 255 UTF-8 bytes returns 400
+
+- **WHEN** `PATCH /api/v1/conversations?path=...` is called with `newTitle` of 256 UTF-8 bytes
+- **THEN** the response status is 400
+
+#### Scenario: Non-existent source path returns 404
+
+- **WHEN** DIAL Core returns a 4xx for `moveResource` indicating the source does not exist
+- **THEN** the response status is 404
+
+#### Scenario: Integration test covers PATCH 200 and 400 paths
+
+- **WHEN** the integration test suite for `ConversationController` runs
+- **THEN** it covers: 200 with valid path and newTitle, 400 with empty newTitle, 400 with missing path

@@ -15,6 +15,11 @@ export enum ChatI18nKeys {
   StopStreaming = 'chat.stopStreaming',
   QuickReplyButtons = 'chat.quickReplyButtons',
   StoppedGenerating = 'chat.stoppedGenerating',
+  Thinking = 'chat.thinking',
+  ShowMore = 'chat.showMore',
+  ShowLess = 'chat.showLess',
+  ShowMoreUserMessage = 'chat.showMoreUserMessage',
+  ShowLessUserMessage = 'chat.showLessUserMessage',
 }
 
 export enum ActionsI18nKeys {
@@ -35,6 +40,7 @@ export enum ActionsI18nKeys {
   CopyAsMarkdown = 'actions.copyAsMarkdown',
   LikeResponse = 'actions.likeResponse',
   DislikeResponse = 'actions.dislikeResponse',
+  Save = 'actions.save',
 }
 
 export enum NavigationI18nKeys {
@@ -101,6 +107,18 @@ export enum ConversationHistoryI18nKeys {
   FilterOrganization = 'conversationHistory.filterOrganization',
   PinnedSection = 'conversationHistory.pinnedSection',
   MyChatsSection = 'conversationHistory.myChatsSection',
+  ActionsLabel = 'conversationHistory.actionsLabel',
+  PinLabel = 'conversationHistory.pinLabel',
+  UnpinLabel = 'conversationHistory.unpinLabel',
+  DeleteLabel = 'conversationHistory.deleteLabel',
+  DeleteConfirmTitle = 'conversationHistory.deleteConfirmTitle',
+  DeleteConfirmDescription = 'conversationHistory.deleteConfirmDescription',
+  DeleteError = 'conversationHistory.deleteError',
+  RenameTitle = 'conversationHistory.renameTitle',
+  RenameLabel = 'conversationHistory.renameLabel',
+  RenameInputPlaceholder = 'conversationHistory.renameInputPlaceholder',
+  RenameError = 'conversationHistory.renameError',
+  RenameTitleTooLong = 'conversationHistory.renameTitleTooLong',
 }
 
 export enum SidebarI18nKeys {

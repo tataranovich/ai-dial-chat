@@ -15,11 +15,16 @@
     "sendMessage": "Send message",
     "stopStreaming": "Stop streaming",
     "quickReplyButtons": "Quick reply buttons",
-    "stoppedGenerating": "You stopped generating the response"
+    "stoppedGenerating": "You stopped generating the response",
+    "thinking": "Thinking",
+    "showMore": "Show more",
+    "showLess": "Show less",
+    "showMoreUserMessage": "Show full user message",
+    "showLessUserMessage": "Collapse user message"
   },
   "navigation": {
     "ariaLabel": "Main navigation",
-    "home": "Home",
+    "home": "Conversations",
     "catalog": "Catalog",
     "openMenu": "Open navigation menu",
     "closeMenu": "Close navigation menu"
@@ -63,7 +68,8 @@
     "copyResponse": "Copy response",
     "copyAsMarkdown": "Copy as markdown",
     "likeResponse": "Like response",
-    "dislikeResponse": "Dislike response"
+    "dislikeResponse": "Dislike response",
+    "save": "Save"
   },
   "errors": {
     "generic": "Something went wrong",
@@ -117,7 +123,19 @@
     "filterShared": "Shared",
     "filterOrganization": "Organization",
     "pinnedSection": "Pinned",
-    "myChatsSection": "My chats"
+    "myChatsSection": "My chats",
+    "actionsLabel": "More actions",
+    "pinLabel": "Pin",
+    "unpinLabel": "Unpin",
+    "deleteLabel": "Delete",
+    "deleteConfirmTitle": "Confirm Deleting Chat",
+    "deleteConfirmDescription": "Are you sure you want to delete",
+    "deleteError": "Failed to delete the conversation. Please try again.",
+    "renameTitle": "Rename Chat",
+    "renameLabel": "Rename",
+    "renameInputPlaceholder": "Chat name",
+    "renameError": "Failed to rename. Please try again.",
+    "renameTitleTooLong": "The name is too long. Please shorten it and try again."
   },
   "auth": {
     "signOut": "Sign out",

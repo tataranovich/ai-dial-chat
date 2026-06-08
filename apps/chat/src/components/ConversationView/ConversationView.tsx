@@ -42,25 +42,26 @@ const ConversationInput = lazy(async () => {
 interface Props {
   messages: MessageType[];
   onSend: (message: string, attachments: Attachment[]) => void;
+  onUploadAttachment?: (attachment: Attachment) => Promise<string>;
   onStop?: () => void;
-  onDeleteMessage?: (messageId: string) => void;
-  onRegenerateMessage?: (messageId: string) => void;
-  onRateMessage?: (messageId: string, rating: MessageRating | null) => void;
+  onDeleteMessage?: (messageIndex: number) => void;
+  onRegenerateMessage?: (messageIndex: number) => void;
+  onRateMessage?: (messageIndex: number, rating: MessageRating | null) => void;
   onAttachmentsChange?: (attachments: Attachment[]) => void;
   onSelectStarter?: (
     starter: StarterOption,
     propertyKey?: string,
     description?: string,
   ) => void;
-  onStartEdit?: (messageId: string) => void;
-  onCancelEdit?: (messageId: string) => void;
+  onStartEdit?: (messageIndex: number) => void;
+  onCancelEdit?: (messageIndex: number) => void;
   onEditMessage?: (
-    messageId: string,
+    messageIndex: number,
     text: string,
     keptAttachments: DisplayAttachment[],
     newAttachments: Attachment[],
   ) => void;
-  editingMessageIds?: Set<string>;
+  editingMessageIndexes?: Set<number>;
   placeholder: string;
   isAssistantTyping?: boolean;
   initialModelId: string;
@@ -72,6 +73,7 @@ const NEAR_BOTTOM_THRESHOLD = 80;
 const ConversationView: FC<Props> = ({
   messages,
   onSend,
+  onUploadAttachment,
   onStop,
   onDeleteMessage,
   onRegenerateMessage,
@@ -81,7 +83,7 @@ const ConversationView: FC<Props> = ({
   onStartEdit,
   onCancelEdit,
   onEditMessage,
-  editingMessageIds,
+  editingMessageIndexes,
   placeholder,
   isAssistantTyping = false,
   initialModelId,
@@ -302,12 +304,12 @@ const ConversationView: FC<Props> = ({
             {messages.map((msg, index) => {
               return (
                 <ConversationMessageItem
-                  key={msg.id}
+                  key={index.toString()}
                   msg={msg}
                   index={index}
                   totalCount={messages.length}
                   isAssistantTyping={isAssistantTyping}
-                  editingMessageIds={editingMessageIds}
+                  editingMessageIndexes={editingMessageIndexes}
                   onSelectStarter={onSelectStarter}
                   onStartEdit={onStartEdit}
                   onDeleteMessage={onDeleteMessage}
@@ -315,6 +317,7 @@ const ConversationView: FC<Props> = ({
                   onRateMessage={onRateMessage}
                   onCancelEdit={onCancelEdit}
                   onEditMessage={onEditMessage}
+                  onUploadAttachment={onUploadAttachment}
                   deploymentLookup={deploymentLookup}
                   effectiveDeploymentId={effectiveDeploymentIds[index]}
                   tooltips={tooltips}
@@ -323,11 +326,20 @@ const ConversationView: FC<Props> = ({
                   saveLabel={t(ActionsI18nKeys.SaveAndSubmit)}
                   editMessageAriaLabel={t(ActionsI18nKeys.EditMessage)}
                   quickReplyButtonsAriaLabel={t(ChatI18nKeys.QuickReplyButtons)}
+                  showMoreLabel={t(ChatI18nKeys.ShowMore)}
+                  showLessLabel={t(ChatI18nKeys.ShowLess)}
+                  showMoreUserMessageAriaLabel={t(
+                    ChatI18nKeys.ShowMoreUserMessage,
+                  )}
+                  showLessUserMessageAriaLabel={t(
+                    ChatI18nKeys.ShowLessUserMessage,
+                  )}
                   statusModelChangedTitle={t(
                     ConversationI18nKeys.StatusModelChangedTitle,
                   )}
                   formatStatusModelChangedBody={formatStatusModelChangedBody}
                   streamErrorText={streamErrorText}
+                  thinkingLabel={t(ChatI18nKeys.Thinking)}
                 />
               );
             })}
@@ -352,6 +364,7 @@ const ConversationView: FC<Props> = ({
         <Suspense fallback={null}>
           <ConversationInput
             onSend={onSend}
+            onUploadAttachment={onUploadAttachment}
             onStop={onStop}
             isStreaming={isAssistantTyping}
             onAttachmentsChange={onAttachmentsChange}

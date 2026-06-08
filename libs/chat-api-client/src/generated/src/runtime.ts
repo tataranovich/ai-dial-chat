@@ -183,7 +183,7 @@ export class BaseAPI {
       context.headers,
     );
     Object.keys(headers).forEach((key) =>
-      headers[key] === undefined ? delete headers[key] : {},
+      headers[key] == null ? delete headers[key] : {},
     );
 
     const initOverrideFn =
@@ -434,7 +434,7 @@ function querystringSingleKey(
 
 export function exists(json: any, key: string) {
   const value = json[key];
-  return value !== null && value !== undefined;
+  return value != null;
 }
 
 export function canConsumeForm(consumes: Consume[]): boolean {

@@ -8,6 +8,7 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { StorageKey } from '../constants/storage';
 import { useFavicon } from '../hooks/favicon/useFavicon';
 import { ApiEndpoints, get } from '../server-api/base';
 import { applyThemeColors } from '../utils/apply-theme-colors';
@@ -78,7 +79,9 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     const storedTheme =
-      typeof window !== 'undefined' ? getFromLocalStorage('theme') : null;
+      typeof window !== 'undefined'
+        ? getFromLocalStorage(StorageKey.Theme)
+        : null;
     const configuredTheme = storedTheme || config?.themes?.[0].id;
     if (configuredTheme) {
       updateTheme(configuredTheme);

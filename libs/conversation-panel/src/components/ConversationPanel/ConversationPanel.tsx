@@ -30,6 +30,8 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
     styles: panelStyles,
     className,
     onBackdropClick,
+    getActions,
+    actionsLabel,
   }) => {
     const { colors, typography } = panelStyles ?? {};
     const [searchQuery, setSearchQuery] = useState('');
@@ -135,7 +137,7 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
           />
 
           {/* Conversation list */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 py-1">
             {isEmpty ? (
               <EmptyState
                 label={emptyLabel}
@@ -148,8 +150,9 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
                   items={pinnedItems}
                   activeConversationId={activeConversationId}
                   onSelectConversation={onSelectConversation}
+                  getActions={getActions}
+                  actionsLabel={actionsLabel}
                   groupHeaderClassName={typography?.groupHeaderClassName}
-                  itemIconClassName={typography?.itemIconClassName}
                   itemTitleClassName={typography?.itemTitleClassName}
                 />
                 <ConversationGroup
@@ -157,8 +160,9 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
                   items={myChatsItems}
                   activeConversationId={activeConversationId}
                   onSelectConversation={onSelectConversation}
+                  getActions={getActions}
+                  actionsLabel={actionsLabel}
                   groupHeaderClassName={typography?.groupHeaderClassName}
-                  itemIconClassName={typography?.itemIconClassName}
                   itemTitleClassName={typography?.itemTitleClassName}
                 />
               </>

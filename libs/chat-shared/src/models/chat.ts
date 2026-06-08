@@ -101,14 +101,14 @@ export interface MessageCustomContent {
 
 /** A single message in a conversation. */
 export interface Message {
-  /** Unique message identifier. */
-  id: string;
   /** Who authored the message. */
   role: MessageRole;
   /** Plain-text (or Markdown) message body. */
   content: string;
   /** ISO-8601 timestamp of when the message was created. */
   timestamp: string;
+
+  responseId?: string;
   /**
    * Extra DIAL API payload attached to the message.
    * Present on both user requests (uploaded files) and assistant responses
@@ -230,6 +230,8 @@ export interface DisplayAttachment {
   status: RequestStatus;
   /** Object URL for image preview; only set when `type === AttachmentType.Image`. */
   previewUrl?: string;
+  /** Remote URL for an attachment that has already been uploaded. */
+  url?: string;
 }
 
 /** Attachment selected locally by the user before it is sent to the backend. */

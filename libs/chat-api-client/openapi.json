@@ -751,6 +751,63 @@
         "summary": "Save (overwrite) a conversation by path",
         "tags": ["conversations"]
       },
+      "patch": {
+        "operationId": "renameConversation",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Conversation path (uuid__name). May contain slashes.",
+            "schema": {
+              "example": "gpt-4o__My Conversation__UUID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameConversationBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Conversation renamed — new path returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameConversationResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid path or newTitle"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "404": {
+            "description": "Conversation not found"
+          },
+          "409": {
+            "description": "Destination path already exists"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core unreachable"
+          }
+        },
+        "summary": "Rename a conversation by path",
+        "tags": ["conversations"]
+      },
       "delete": {
         "operationId": "deleteConversation",
         "parameters": [
@@ -955,6 +1012,51 @@
         },
         "summary": "Stream a chat completion",
         "tags": ["conversations"]
+      }
+    },
+    "/api/v1/user-config": {
+      "get": {
+        "operationId": "getConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "User configuration"
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "summary": "Get current user configuration",
+        "tags": ["user-config"]
+      }
+    },
+    "/api/v1/user-config/pins": {
+      "patch": {
+        "operationId": "updatePin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePinsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Pin state updated"
+          },
+          "400": {
+            "description": "Missing or invalid body"
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "summary": "Pin or unpin a conversation",
+        "tags": ["user-config"]
       }
     },
     "/api/v1/files": {
@@ -1984,6 +2086,11 @@
             "type": "boolean",
             "description": "True when this conversation was published to the organisation and is visible to the current user.",
             "example": false
+          },
+          "isPinned": {
+            "type": "boolean",
+            "description": "True when the user has pinned this conversation.",
+            "example": false
           }
         },
         "required": [
@@ -1991,7 +2098,8 @@
           "title",
           "updatedAt",
           "sharedWithMe",
-          "publishedWithMe"
+          "publishedWithMe",
+          "isPinned"
         ]
       },
       "ConversationListResponseDto": {
@@ -2114,6 +2222,44 @@
           }
         },
         "required": ["path", "message", "model"]
+      },
+      "RenameConversationBodyDto": {
+        "type": "object",
+        "properties": {
+          "newTitle": {
+            "type": "string",
+            "description": "New title for the conversation",
+            "example": "My renamed chat"
+          }
+        },
+        "required": ["newTitle"]
+      },
+      "RenameConversationResponseDto": {
+        "type": "object",
+        "properties": {
+          "newPath": {
+            "type": "string",
+            "description": "New relative path of the renamed conversation",
+            "example": "conversations/bucket/gpt-4o__My renamed chat__uuid"
+          }
+        },
+        "required": ["newPath"]
+      },
+      "UpdatePinsDto": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Full DIAL Core resource URL of the conversation to pin or unpin (matches `id` in `ConversationListItemDto`).",
+            "example": "conversations/default-bucket/gpt-4__My chat__cfeaf733-4ecd-4898-ad3b-d6835c0b5fc8"
+          },
+          "isPinned": {
+            "type": "boolean",
+            "description": "Pass `true` to pin the conversation, `false` to unpin.",
+            "example": true
+          }
+        },
+        "required": ["path", "isPinned"]
       },
       "FileUploadResponseDto": {
         "type": "object",

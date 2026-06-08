@@ -2,6 +2,8 @@ import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import { type FC, memo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useStreamedMarkdownContent } from '../../hooks/useStreamedMarkdownContent.js';
+import styles from './MarkdownRenderer.module.scss';
 
 /** Per-element className overrides passed to {@link MarkdownRenderer}. */
 export interface MarkdownRendererClassNames {
@@ -48,9 +50,13 @@ export interface MarkdownRendererClassNames {
 }
 
 /** Props for {@link MarkdownRenderer}. */
-interface MarkdownRendererProps {
+export interface MarkdownRendererProps {
   /** Raw markdown string to render. */
   content: string;
+  /** When true, appended content is revealed gradually for smoother streaming updates. */
+  isStreaming?: boolean;
+  /** Reveal speed used while `isStreaming` is true. Defaults to 120 characters per second. */
+  streamCharactersPerSecond?: number;
   /** Per-element styling classes. Merged with structural base classes inside the component. */
   classNames?: MarkdownRendererClassNames;
   /**
@@ -58,6 +64,11 @@ interface MarkdownRendererProps {
    * Use for elements not covered by `classNames`.
    */
   components?: Components;
+  /**
+   * Label shown with a shimmer animation while `isStreaming` is true and no content has arrived yet.
+   * Defaults to `'Thinking'`. Pass a translated string from the consuming app.
+   */
+  thinkingLabel?: string;
 }
 
 /** GFM remark plugins list, shared across all markdown instances. */
@@ -69,7 +80,7 @@ export const remarkPlugins = [remarkGfm];
  * explicit `components` overrides, so consumers can still override them.
  */
 export const defaultMarkdownComponents: Components = {
-  li: ({ children }) => <li className="mb-0.5">{children}</li>,
+  li: ({ children }) => <li className="mb-2">{children}</li>,
 };
 
 const buildMarkdownComponents = (
@@ -80,27 +91,33 @@ const buildMarkdownComponents = (
   h3: ({ children }) => <h3 className={cn.h3}>{children}</h3>,
   p: ({ children }) => <p className={cn.p}>{children}</p>,
   ul: ({ children }) => (
-    <ul className={mergeClasses('list-disc pl-5', cn.ul)}>{children}</ul>
+    <ul className={mergeClasses('list-disc ps-5', cn.ul)}>{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className={mergeClasses('list-decimal pl-5', cn.ol)}>{children}</ol>
+    <ol className={mergeClasses('list-decimal ps-5', cn.ol)}>{children}</ol>
   ),
   strong: ({ children }) => (
     <strong className={cn.strong ?? 'font-semibold'}>{children}</strong>
   ),
   em: ({ children }) => <em className={cn.em ?? 'italic'}>{children}</em>,
+  pre: ({ children }) => (
+    <pre
+      className={mergeClasses(
+        'overflow-x-auto rounded p-3',
+        cn.codeBlockFont ?? 'text-sm',
+        cn.codeBlock,
+      )}
+    >
+      {children}
+    </pre>
+  ),
   code: ({ children, className }) => {
-    const isBlock = className?.includes('language-');
+    const isBlock =
+      className?.includes('language-') || String(children).includes('\n');
     return isBlock ? (
-      <pre
-        className={mergeClasses(
-          'overflow-x-auto rounded p-3',
-          cn.codeBlockFont ?? 'text-sm',
-          cn.codeBlock,
-        )}
-      >
-        <code className={cn.codeFont ?? 'font-mono'}>{children}</code>
-      </pre>
+      <code className={mergeClasses(cn.codeFont ?? 'font-mono', className)}>
+        {children}
+      </code>
     ) : (
       <code
         className={mergeClasses(
@@ -115,7 +132,7 @@ const buildMarkdownComponents = (
   },
   blockquote: ({ children }) => (
     <blockquote
-      className={mergeClasses('border-l-4 pl-3 opacity-80', cn.blockquote)}
+      className={mergeClasses('border-s-4 ps-3 opacity-80', cn.blockquote)}
     >
       {children}
     </blockquote>
@@ -148,7 +165,7 @@ const buildMarkdownComponents = (
   th: ({ children }) => (
     <th
       className={mergeClasses(
-        'border px-3 py-1.5 text-left',
+        'border px-3 py-1.5 text-start',
         cn.tableHeaderFont ?? 'font-semibold',
         cn.tableCell,
         cn.tableHeader,
@@ -166,16 +183,35 @@ const buildMarkdownComponents = (
 
 /** Markdown renderer with GFM support. Styling is driven by `classNames`; structural overrides via `components`. */
 export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
-  ({ content, classNames = {}, components }) => (
-    <ReactMarkdown
-      remarkPlugins={remarkPlugins}
-      components={{
-        ...buildMarkdownComponents(classNames),
-        ...defaultMarkdownComponents,
-        ...components,
-      }}
-    >
-      {content}
-    </ReactMarkdown>
-  ),
+  ({
+    content,
+    isStreaming,
+    streamCharactersPerSecond,
+    classNames = {},
+    components,
+    thinkingLabel = 'Thinking',
+  }) => {
+    const displayedContent = useStreamedMarkdownContent(
+      content,
+      isStreaming,
+      streamCharactersPerSecond,
+    );
+
+    if (isStreaming && !displayedContent) {
+      return <span className={styles.thinking}>{thinkingLabel}</span>;
+    }
+
+    return (
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        components={{
+          ...buildMarkdownComponents(classNames),
+          ...defaultMarkdownComponents,
+          ...components,
+        }}
+      >
+        {displayedContent}
+      </ReactMarkdown>
+    );
+  },
 );

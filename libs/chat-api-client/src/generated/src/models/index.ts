@@ -322,6 +322,12 @@ export interface ConversationListItemDto {
    * @memberof ConversationListItemDto
    */
   publishedWithMe: boolean;
+  /**
+   * True when the user has pinned this conversation.
+   * @type {boolean}
+   * @memberof ConversationListItemDto
+   */
+  isPinned: boolean;
 }
 /**
  *
@@ -348,12 +354,6 @@ export interface ConversationListResponseDto {
  * @interface ConversationMessageDto
  */
 export interface ConversationMessageDto {
-  /**
-   *
-   * @type {string}
-   * @memberof ConversationMessageDto
-   */
-  id: string;
   /**
    *
    * @type {string}
@@ -1208,6 +1208,32 @@ export type RateMessageDtoRateEnum =
 /**
  *
  * @export
+ * @interface RenameConversationBodyDto
+ */
+export interface RenameConversationBodyDto {
+  /**
+   * New title for the conversation
+   * @type {string}
+   * @memberof RenameConversationBodyDto
+   */
+  newTitle: string;
+}
+/**
+ *
+ * @export
+ * @interface RenameConversationResponseDto
+ */
+export interface RenameConversationResponseDto {
+  /**
+   * New relative path of the renamed conversation
+   * @type {string}
+   * @memberof RenameConversationResponseDto
+   */
+  newPath: string;
+}
+/**
+ *
+ * @export
  * @interface SaveConversationBodyDto
  */
 export interface SaveConversationBodyDto {
@@ -1286,6 +1312,25 @@ export interface ThemeDto {
    * @memberof ThemeDto
    */
   icon?: string;
+}
+/**
+ *
+ * @export
+ * @interface UpdatePinsDto
+ */
+export interface UpdatePinsDto {
+  /**
+   * Full DIAL Core resource URL of the conversation to pin or unpin (matches `id` in `ConversationListItemDto`).
+   * @type {string}
+   * @memberof UpdatePinsDto
+   */
+  path: string;
+  /**
+   * Pass `true` to pin the conversation, `false` to unpin.
+   * @type {boolean}
+   * @memberof UpdatePinsDto
+   */
+  isPinned: boolean;
 }
 /**
  *
