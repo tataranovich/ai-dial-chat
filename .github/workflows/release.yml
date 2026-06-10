@@ -2,7 +2,7 @@ name: Release Workflow
 
 on:
   push:
-    branches: [development-1.0]
+    branches: [development-1.0, release-1.*]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
