@@ -28,4 +28,6 @@ jobs:
       node-version: 24
       maximize-build-space: true
       draft-stable-releases: true
+      filter-version: '0\.[0-9]+'
+      publish-enabled: false
     secrets: inherit
