@@ -2,13 +2,13 @@ name: Release Workflow
 
 on:
   push:
-    branches: [development-1.0, release-1.*]
+    branches: [development, development-1.0, release-*]
   workflow_dispatch:
     inputs:
       promote:
         type: boolean
         default: false
-        description: Promote release to stable (for release-1.* branches only)
+        description: Promote release to stable (for release-* branches only)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
