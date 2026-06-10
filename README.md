@@ -13,6 +13,7 @@
     </a>
 </h4>
 
+- [Dummy changelog](#dummy-changelog)
 - [Overview](#overview)
 - [Documentations 📄](#documentations-)
 - [Development 🛠️](#development-️)
@@ -24,6 +25,10 @@
     - [Dry Mode](#dry-mode)
 
 ---
+
+## Dummy changelog
+
+- feature 1
 
 ## Overview
 
