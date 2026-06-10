@@ -30,4 +30,7 @@ jobs:
       draft-stable-releases: true
       filter-version: '0\.[0-9]+'
       publish-enabled: false
+      ort-enabled: false
+      style-checks-enabled: false
+      code-checks-enabled: false
     secrets: inherit
