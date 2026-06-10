@@ -3,6 +3,12 @@ name: Release Workflow
 on:
   push:
     branches: [development-1.0, release-1.*]
+  workflow_dispatch:
+    inputs:
+      promote:
+        type: boolean
+        default: false
+        description: Promote release to stable (for release-1.* branches only)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,7 +24,7 @@ jobs:
   release:
     uses: tataranovich/ai-dial-ci/.github/workflows/node_release.yml@main
     with:
-      promote: false
+      promote: ${{ github.event_name == 'workflow_dispatch' && inputs.promote }}
       node-version: 24
       # maximize-build-space: true
       draft-stable-releases: true
