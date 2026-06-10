@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Input } from '../Input.js';
+import { Input } from '../Input';
 
 type MenuItems = Array<{
   key: string;
-  label: string;
+  label?: ReactNode;
+  icon?: ReactNode;
   disabled?: boolean;
   onClick?: () => void;
 }>;
@@ -37,6 +38,7 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
     ),
     DialDropdownIcon: ({
       ariaLabel,
+      icon,
       items,
     }: {
       ariaLabel: string;
@@ -44,7 +46,9 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
       items?: MenuItems;
     }) => (
       <div>
-        <button type="button" aria-label={ariaLabel} />
+        <button type="button" aria-label={ariaLabel}>
+          {items?.[0]?.key.startsWith('__loading-') ? icon : null}
+        </button>
         {items?.map((item) => (
           <button
             key={item.key}
@@ -52,10 +56,14 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
             onClick={item.onClick}
             disabled={item.disabled}
           >
+            {item.key.startsWith('__loading-') ? item.icon : null}
             {item.label}
           </button>
         ))}
       </div>
+    ),
+    DialSkeleton: ({ variant }: { variant: string }) => (
+      <span data-variant={variant} />
     ),
   };
 });
@@ -266,6 +274,30 @@ describe('Input', () => {
       expect.arrayContaining([expect.objectContaining({ name: 'doc.pdf' })]),
     );
   });
+
+  it('should show mic button when isTranscriptionSupported and message is empty', () => {
+    render(<Input isTranscriptionSupported micLabel="Record voice message" />);
+    expect(screen.getByLabelText('Record voice message')).toBeTruthy();
+  });
+
+  it('should hide mic button when message is not empty', () => {
+    const { container } = render(
+      <Input isTranscriptionSupported micLabel="Record voice message" />,
+    );
+    const textarea = container.querySelector('textarea')!;
+    fireEvent.change(textarea, { target: { value: 'Hello' } });
+    expect(screen.queryByLabelText('Record voice message')).toBeNull();
+  });
+
+  it('should hide mic button when isTranscriptionSupported is false', () => {
+    render(
+      <Input
+        isTranscriptionSupported={false}
+        micLabel="Record voice message"
+      />,
+    );
+    expect(screen.queryByLabelText('Record voice message')).toBeNull();
+  });
 });
 
 const mockItems = [
@@ -310,8 +342,8 @@ describe('Input — model selector', () => {
     expect(onDeploymentChange).toHaveBeenCalledWith('my-app');
   });
 
-  it('shows loading label as disabled item when deployments is empty', () => {
-    render(
+  it('shows seven skeleton rows and a circular trigger skeleton while deployments load', () => {
+    const { container } = render(
       <Input
         deployments={[]}
         selectedDeploymentId={null}
@@ -321,7 +353,20 @@ describe('Input — model selector', () => {
     );
     const loadingItem = screen.getByText('Loading models…');
     expect(loadingItem).toBeTruthy();
-    expect((loadingItem as HTMLButtonElement).disabled).toBe(true);
+    const skeletons = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-variant]'),
+    );
+    expect(
+      skeletons.filter((skeleton) => skeleton.dataset.variant === 'circular'),
+    ).toHaveLength(8);
+    expect(
+      skeletons.filter((skeleton) => skeleton.dataset.variant === 'text'),
+    ).toHaveLength(7);
+    expect(
+      screen
+        .getAllByRole('button')
+        .filter((button) => (button as HTMLButtonElement).disabled),
+    ).toHaveLength(7);
   });
 
   it('shows error label as disabled item when deployments is empty', () => {

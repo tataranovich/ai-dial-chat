@@ -1,8 +1,8 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import { useCallback, useState, type FC } from 'react';
 import { useDropzone } from 'react-dropzone';
-import type { ConversationInputProps } from '../../models/ConversationInput.js';
-import { Input } from '../Input/Input.js';
+import type { ConversationInputProps } from '../../models/ConversationInput';
+import { Input } from '../Input/Input';
 import styles from './ConversationInput.module.scss';
 
 export const ConversationInput: FC<ConversationInputProps> = ({
@@ -26,6 +26,10 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   sendLabel,
   stopLabel,
   isInputDisabled = false,
+  isTranscriptionSupported,
+  onUploadAudio,
+  onTranscribeAudio,
+  micLabel,
 }) => {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
@@ -106,6 +110,10 @@ export const ConversationInput: FC<ConversationInputProps> = ({
           sendLabel={sendLabel}
           stopLabel={stopLabel}
           isInputDisabled={isInputDisabled}
+          isTranscriptionSupported={isTranscriptionSupported}
+          onUploadAudio={onUploadAudio}
+          onTranscribeAudio={onTranscribeAudio}
+          micLabel={micLabel}
         />
         {isDragActive && (
           <div

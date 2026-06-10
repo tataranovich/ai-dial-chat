@@ -11,10 +11,10 @@ import {
 } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconChevronUp } from '@tabler/icons-react';
 import { FC } from 'react';
-import { useCollapsedText } from '../../hooks/useCollapsedText.js';
-import type { UserMessageBubbleProps } from '../../models/MessageBubble.js';
-import { BubblePosition } from '../../types/bubble-position.js';
-import { MessageActions } from '../Message/MessageActions.js';
+import { useCollapsedText } from '../../hooks/useCollapsedText';
+import type { UserMessageBubbleProps } from '../../models/MessageBubble';
+import { BubblePosition } from '../../types/bubble-position';
+import { MessageActions } from '../Message/MessageActions';
 import styles from './MessageBubble.module.scss';
 
 const DEFAULT_COLLAPSED_LINE_COUNT = 10;
@@ -37,6 +37,17 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
 }) => {
   const { colors, typography } = bubbleStyles ?? {};
   const noCustomClass = !typography?.fontClassName;
+
+  const {
+    textRef,
+    isTextCollapsed,
+    isOverflowing,
+    collapsedMaxHeight,
+    expandedMaxHeight,
+    isCollapsed,
+    toggleCollapsed,
+  } = useCollapsedText({ text, collapsedLineCount });
+
   const cssVars = buildCssVars({
     '--cm-bubble-user-bg': colors?.userBackground,
     '--cm-bubble-text': colors?.text,
@@ -50,16 +61,13 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
     '--cm-bubble-line-height': noCustomClass
       ? typography?.lineHeight
       : undefined,
+    '--cm-bubble-collapsed-height': isOverflowing
+      ? `${collapsedMaxHeight}px`
+      : undefined,
+    '--cm-bubble-expanded-height': isOverflowing
+      ? `${expandedMaxHeight}px`
+      : undefined,
   });
-
-  const {
-    textRef,
-    isTextCollapsed,
-    isOverflowing,
-    collapsedMaxHeight,
-    isCollapsed,
-    toggleCollapsed,
-  } = useCollapsedText({ text, collapsedLineCount });
 
   const positionRadius =
     position === BubblePosition.Top ? 'rounded-ee-[24px]' : 'rounded-se-[24px]';
@@ -70,10 +78,9 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
   const toggleLabel = isCollapsed ? showMoreLabel : showLessLabel;
   const toggleAriaLabel = isCollapsed ? expandAriaLabel : collapseAriaLabel;
   const ToggleIcon = isCollapsed ? IconChevronDown : IconChevronUp;
-
   return (
     <div style={cssVars} className={mergeClasses('flex w-full', className)}>
-      <div className="flex w-fit flex-col items-end gap-2">
+      <div className="ms-auto flex w-fit flex-col items-end gap-4">
         <AttachmentTray attachments={attachments ?? []} />
         {text && (
           <div
@@ -87,14 +94,11 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
             <div className="flex min-w-0 flex-col items-start">
               <div
                 className={mergeClasses(
-                  'relative overflow-hidden transition-[max-height] duration-200 ease-out',
+                  'relative overflow-hidden',
+                  isOverflowing && styles.collapsibleText,
+                  isOverflowing && !isCollapsed && styles.expandedText,
                   isTextCollapsed && styles.collapsedText,
                 )}
-                style={
-                  isTextCollapsed
-                    ? { maxHeight: `${collapsedMaxHeight}px` }
-                    : undefined
-                }
               >
                 <p
                   ref={textRef}

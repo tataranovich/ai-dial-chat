@@ -12,11 +12,11 @@ import {
   waitFor,
 } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BubblePosition } from '../../types/bubble-position.js';
-import { AssistantMessageBubble } from './AssistantMessageBubble.js';
-import { MessageBubble } from './MessageBubble.js';
-import { StatusMessageBubble } from './StatusMessageBubble.js';
-import { UserMessageBubble } from './UserMessageBubble.js';
+import { BubblePosition } from '../../types/bubble-position';
+import { AssistantMessageBubble } from './AssistantMessageBubble';
+import { MessageBubble } from './MessageBubble';
+import { StatusMessageBubble } from './StatusMessageBubble';
+import { UserMessageBubble } from './UserMessageBubble';
 
 const ATTACHMENT: DisplayAttachment = {
   id: 'report.pdf',
@@ -202,7 +202,7 @@ describe('UserMessageBubble — collapsed text', () => {
     const textWrapper = getMessageTextWrapper(longMessage);
 
     expect(button).toBeTruthy();
-    expect(textWrapper.style.maxHeight).toBe('48px');
+    expect(textWrapper.style.maxHeight).toBe('');
   });
 
   it('expands and collapses a long user message', async () => {
@@ -226,7 +226,7 @@ describe('UserMessageBubble — collapsed text', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Show more' })).toBeTruthy();
     });
-    expect(textWrapper.style.maxHeight).toBe('48px');
+    expect(textWrapper.style.maxHeight).toBe('');
   });
 
   it('does not show the toggle button for short user messages', async () => {

@@ -88,9 +88,47 @@ describe('ConversationService', () => {
     vi.spyOn(service['client'], 'saveConversation').mockResolvedValue({
       data: {},
     } as never);
+    // Default: empty bucket so fetchAllUserTitles returns an empty set.
+    // Individual createConversation tests override this when needed.
+    vi.spyOn(service['client'], 'getConversationMetadata').mockResolvedValue({
+      data: { items: [] },
+    } as never);
   });
 
   describe('createConversation', () => {
+    it('saves the conversation using the expected Core resource name', async () => {
+      const saveConversationSpy = vi.spyOn(
+        service['client'],
+        'saveConversation',
+      );
+
+      await service.createConversation(
+        'What do you want to do?',
+        'test-token',
+        'test-bucket',
+        'form-example',
+      );
+
+      expect(saveConversationSpy).toHaveBeenCalledWith(
+        'test-bucket',
+        'form-example__What%20do%20you%20want%20to%20do%3F',
+        expect.any(Object),
+      );
+    });
+
+    it('uses a non-empty fallback name for conversations without message text', async () => {
+      const result = await service.createConversation(
+        '',
+        'test-token',
+        'test-bucket',
+        'form-example',
+        { form_value: { answer: 'yes' } },
+      );
+
+      expect(result.name).toBe('New chat');
+      expect(result.id).toBe('test-bucket/form-example__New chat');
+    });
+
     it('returns a conversation with a UUID-format id', async () => {
       const result = await service.createConversation(
         'Hello',
@@ -159,25 +197,179 @@ describe('ConversationService', () => {
       expect(result.model.id).toBe('my-catalog-item');
       expect(result.assistantModelId).toBe('my-catalog-item');
     });
+
+    it('uses the base name when no conversation with that title exists', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockResolvedValue({
+        data: { items: [] },
+      } as never);
+
+      const result = await service.createConversation(
+        'What is AI?',
+        'test-token',
+        'test-bucket',
+        'gpt-4o',
+      );
+
+      expect(result.name).toBe('What is AI?');
+    });
+
+    it('appends _1 when a conversation with the same title already exists', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockResolvedValue({
+        data: {
+          items: [
+            { name: 'gpt-4o__What is AI?__existing-uuid', nodeType: 'FILE' },
+          ],
+        },
+      } as never);
+
+      const result = await service.createConversation(
+        'What is AI?',
+        'test-token',
+        'test-bucket',
+        'gpt-4o',
+      );
+
+      expect(result.name).toBe('What is AI? 1');
+    });
+
+    it('appends _2 when both the base name and _1 variant already exist', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockResolvedValue({
+        data: {
+          items: [
+            { name: 'gpt-4o__What is AI?__uuid1', nodeType: 'FILE' },
+            { name: 'gpt-4o__What is AI? 1__uuid2', nodeType: 'FILE' },
+          ],
+        },
+      } as never);
+
+      const result = await service.createConversation(
+        'What is AI?',
+        'test-token',
+        'test-bucket',
+        'gpt-4o',
+      );
+
+      expect(result.name).toBe('What is AI? 2');
+    });
+
+    it('uses base name when fetching existing titles fails', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockRejectedValue(
+        new Error('DIAL Core unreachable'),
+      );
+
+      const result = await service.createConversation(
+        'What is AI?',
+        'test-token',
+        'test-bucket',
+        'gpt-4o',
+      );
+
+      expect(result.name).toBe('What is AI?');
+    });
+
+    it('passes each nextToken to the following metadata request', async () => {
+      const getMetadataSpy = vi
+        .spyOn(service['client'], 'getConversationMetadata')
+        .mockImplementation((_bucket, _path, init) => {
+          const token = init?.params?.query?.token;
+          if (token === 'page-2') {
+            return Promise.resolve({
+              data: {
+                items: [
+                  {
+                    name: 'gpt-4o__What is AI? 1',
+                    nodeType: 'FILE',
+                  },
+                ],
+              },
+            } as never);
+          }
+
+          return Promise.resolve({
+            data: {
+              items: [
+                {
+                  name: 'gpt-4o__What is AI?',
+                  nodeType: 'FILE',
+                },
+              ],
+              nextToken: 'page-2',
+            },
+          } as never);
+        });
+
+      const result = await service.createConversation(
+        'What is AI?',
+        'test-token',
+        'test-bucket',
+        'gpt-4o',
+      );
+
+      expect(getMetadataSpy).toHaveBeenNthCalledWith(
+        2,
+        'test-bucket',
+        '',
+        expect.objectContaining({
+          params: {
+            query: expect.objectContaining({ token: 'page-2' }),
+          },
+        }),
+      );
+      expect(result.name).toBe('What is AI? 2');
+    });
   });
 
   describe('getConversation', () => {
-    it('encodes reserved URL characters in the DIAL Core conversation path', async () => {
-      const getConversationSpy = vi
+    it('uses session bucket and encodes reserved URL characters for a flat path', async () => {
+      const spy = vi
         .spyOn(service['client'], 'getConversation')
-        .mockResolvedValue({
-          data: TEST_CONVERSATION,
-        } as never);
+        .mockResolvedValue({ data: TEST_CONVERSATION } as never);
 
       await service.getConversation(
-        'folder/statgpt-sample__What datasets are available?__uuid',
+        'statgpt-sample__What datasets are available?__uuid',
         'test-token',
         'test-bucket',
       );
 
-      expect(getConversationSpy).toHaveBeenCalledWith(
+      expect(spy).toHaveBeenCalledWith(
         'test-bucket',
-        'folder/statgpt-sample__What%20datasets%20are%20available%3F__uuid',
+        'statgpt-sample__What%20datasets%20are%20available%3F__uuid',
+        expect.any(Object),
+      );
+    });
+
+    it('extracts bucket from the first path segment when a slash is present', async () => {
+      const spy = vi
+        .spyOn(service['client'], 'getConversation')
+        .mockResolvedValue({ data: TEST_CONVERSATION } as never);
+
+      await service.getConversation(
+        'public/gpt-4o__My chat__uuid',
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(spy).toHaveBeenCalledWith(
+        'public',
+        'gpt-4o__My%20chat__uuid',
+        expect.any(Object),
+      );
+    });
+
+    it('uses session bucket for a path with no slash', async () => {
+      const spy = vi
+        .spyOn(service['client'], 'getConversation')
+        .mockResolvedValue({ data: TEST_CONVERSATION } as never);
+
+      await service.getConversation(
+        'gpt-4o__My chat__uuid',
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(spy).toHaveBeenCalledWith(
+        'test-bucket',
+        'gpt-4o__My%20chat__uuid',
         expect.any(Object),
       );
     });
@@ -543,16 +735,61 @@ describe('ConversationService', () => {
     });
   });
 
-  describe('listConversations with pins', () => {
-    it('sets isPinned: true on items whose id is in the pins list', async () => {
-      vi.spyOn(service['client'], 'getConversationMetadata').mockResolvedValue({
-        data: {
-          items: [
-            { url: 'conversations/bucket/conv-1', nodeType: 'FILE' },
-            { url: 'conversations/bucket/conv-2', nodeType: 'FILE' },
-          ],
+  describe('listConversations', () => {
+    type MetadataItem = { url: string; nodeType: string; updatedAt?: number };
+
+    const mockMetadata = (
+      userItems: MetadataItem[],
+      publicItems: MetadataItem[] = [],
+    ) => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockImplementation(
+        (bucket: string) => {
+          if (bucket === 'test-bucket') {
+            return Promise.resolve({ data: { items: userItems } }) as never;
+          }
+          return Promise.resolve({ data: { items: publicItems } }) as never;
         },
+      );
+      vi.spyOn(service['client'], 'getSharedResources').mockResolvedValue({
+        data: { resources: [] },
       } as never);
+    };
+
+    it('passes pagination through SDK params.query', async () => {
+      const getMetadataSpy = vi
+        .spyOn(service['client'], 'getConversationMetadata')
+        .mockResolvedValue({ data: { items: [] } } as never);
+      vi.spyOn(service['client'], 'getSharedResources').mockResolvedValue({
+        data: { resources: [] },
+      } as never);
+
+      await service.listConversations(
+        'test-token',
+        'test-bucket',
+        50,
+        'user-cursor',
+      );
+
+      expect(getMetadataSpy).toHaveBeenCalledWith(
+        'test-bucket',
+        '',
+        expect.objectContaining({
+          params: {
+            query: {
+              recursive: true,
+              limit: 50,
+              token: 'user-cursor',
+            },
+          },
+        }),
+      );
+    });
+
+    it('sets isPinned: true on items whose id is in the pins list', async () => {
+      mockMetadata([
+        { url: 'conversations/bucket/conv-1', nodeType: 'FILE' },
+        { url: 'conversations/bucket/conv-2', nodeType: 'FILE' },
+      ]);
       mockUserConfigService.getPinnedIds.mockResolvedValue([
         'conversations/bucket/conv-1',
       ]);
@@ -577,14 +814,10 @@ describe('ConversationService', () => {
     });
 
     it('sets isPinned: false on items not in the pins list', async () => {
-      vi.spyOn(service['client'], 'getConversationMetadata').mockResolvedValue({
-        data: {
-          items: [
-            { url: 'conversations/bucket/conv-3', nodeType: 'FILE' },
-            { url: 'conversations/bucket/conv-4', nodeType: 'FILE' },
-          ],
-        },
-      } as never);
+      mockMetadata([
+        { url: 'conversations/bucket/conv-3', nodeType: 'FILE' },
+        { url: 'conversations/bucket/conv-4', nodeType: 'FILE' },
+      ]);
       mockUserConfigService.getPinnedIds.mockResolvedValue([
         'conversations/bucket/conv-5',
       ]);
@@ -598,11 +831,99 @@ describe('ConversationService', () => {
     });
 
     it('sets isPinned: false on all items when getPinnedIds returns empty', async () => {
-      vi.spyOn(service['client'], 'getConversationMetadata').mockResolvedValue({
+      mockMetadata([
+        { url: 'conversations/bucket/conv-a', nodeType: 'FILE' },
+        { url: 'conversations/bucket/conv-b', nodeType: 'FILE' },
+      ]);
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.items.every((item) => item.isPinned === false)).toBe(true);
+    });
+
+    it('merges items from user and public buckets', async () => {
+      mockMetadata(
+        [
+          {
+            url: 'conversations/test-bucket/user-conv',
+            nodeType: 'FILE',
+            updatedAt: 2000,
+          },
+        ],
+        [
+          {
+            url: 'conversations/public/pub-conv',
+            nodeType: 'FILE',
+            updatedAt: 1000,
+          },
+        ],
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.items).toHaveLength(2);
+      expect(result.items.map((i) => i.id)).toContain(
+        'conversations/test-bucket/user-conv',
+      );
+      expect(result.items.map((i) => i.id)).toContain(
+        'conversations/public/pub-conv',
+      );
+    });
+
+    it('sets publishedWithMe: true on all items from the public bucket', async () => {
+      mockMetadata(
+        [
+          {
+            url: 'conversations/test-bucket/user-conv',
+            nodeType: 'FILE',
+            updatedAt: 2000,
+          },
+        ],
+        [
+          {
+            url: 'conversations/public/pub-conv',
+            nodeType: 'FILE',
+            updatedAt: 1000,
+          },
+        ],
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      const userItem = result.items.find(
+        (i) => i.id === 'conversations/test-bucket/user-conv',
+      );
+      const pubItem = result.items.find(
+        (i) => i.id === 'conversations/public/pub-conv',
+      );
+      expect(userItem?.publishedWithMe).toBe(false);
+      expect(pubItem?.publishedWithMe).toBe(true);
+    });
+
+    it('merges items from getSharedResources and sets sharedWithMe: true', async () => {
+      mockMetadata([
+        {
+          url: 'conversations/test-bucket/user-conv',
+          nodeType: 'FILE',
+          updatedAt: 3000,
+        },
+      ]);
+      vi.spyOn(service['client'], 'getSharedResources').mockResolvedValue({
         data: {
-          items: [
-            { url: 'conversations/bucket/conv-a', nodeType: 'FILE' },
-            { url: 'conversations/bucket/conv-b', nodeType: 'FILE' },
+          resources: [
+            { url: 'conversations/other-bucket/shared-conv', nodeType: 'FILE' },
           ],
         },
       } as never);
@@ -613,7 +934,419 @@ describe('ConversationService', () => {
         'test-bucket',
       );
 
-      expect(result.items.every((item) => item.isPinned === false)).toBe(true);
+      expect(result.items).toHaveLength(2);
+      const sharedItem = result.items.find(
+        (i) => i.id === 'conversations/other-bucket/shared-conv',
+      );
+      expect(sharedItem?.sharedWithMe).toBe(true);
+      expect(sharedItem?.publishedWithMe).toBe(false);
+    });
+
+    it('calls getSharedResources with resourceTypes CONVERSATION and with me', async () => {
+      mockMetadata([]);
+      const spy = vi
+        .spyOn(service['client'], 'getSharedResources')
+        .mockResolvedValue({
+          data: { resources: [] },
+        } as never);
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      await service.listConversations('test-token', 'test-bucket');
+
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: { resourceTypes: ['CONVERSATION'], with: 'me' },
+        }),
+      );
+    });
+
+    it('returns user and public items when getSharedResources fails', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockImplementation(
+        (bucket: string) => {
+          if (bucket === 'test-bucket') {
+            return Promise.resolve({
+              data: {
+                items: [
+                  {
+                    url: 'conversations/test-bucket/user-conv',
+                    nodeType: 'FILE',
+                  },
+                ],
+              },
+            }) as never;
+          }
+          return Promise.resolve({
+            data: {
+              items: [
+                { url: 'conversations/public/pub-conv', nodeType: 'FILE' },
+              ],
+            },
+          }) as never;
+        },
+      );
+      vi.spyOn(service['client'], 'getSharedResources').mockRejectedValue(
+        new Error('share service unreachable'),
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.items).toHaveLength(2);
+      expect(result.items.map((i) => i.id)).toContain(
+        'conversations/test-bucket/user-conv',
+      );
+      expect(result.items.map((i) => i.id)).toContain(
+        'conversations/public/pub-conv',
+      );
+    });
+
+    it('sorts merged items by updatedAt descending', async () => {
+      mockMetadata(
+        [
+          {
+            url: 'conversations/test-bucket/older',
+            nodeType: 'FILE',
+            updatedAt: 1000,
+          },
+        ],
+        [
+          {
+            url: 'conversations/public/newer',
+            nodeType: 'FILE',
+            updatedAt: 3000,
+          },
+        ],
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.items[0].id).toBe('conversations/public/newer');
+      expect(result.items[1].id).toBe('conversations/test-bucket/older');
+    });
+
+    it('returns only user items when public bucket request fails', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockImplementation(
+        (bucket: string) => {
+          if (bucket === 'test-bucket') {
+            return Promise.resolve({
+              data: {
+                items: [
+                  {
+                    url: 'conversations/test-bucket/user-conv',
+                    nodeType: 'FILE',
+                  },
+                ],
+              },
+            }) as never;
+          }
+          return Promise.reject(new Error('public bucket unreachable'));
+        },
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].id).toBe('conversations/test-bucket/user-conv');
+    });
+
+    it('encodes a compound nextToken when both user and public buckets have more results', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockImplementation(
+        (bucket: string) => {
+          if (bucket === 'test-bucket') {
+            return Promise.resolve({
+              data: { items: [], nextToken: 'user-cursor' },
+            }) as never;
+          }
+          return Promise.resolve({
+            data: { items: [], nextToken: 'pub-cursor' },
+          }) as never;
+        },
+      );
+      vi.spyOn(service['client'], 'getSharedResources').mockResolvedValue({
+        data: { resources: [] },
+      } as never);
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.nextToken).toBeDefined();
+      const decoded = JSON.parse(
+        Buffer.from(
+          result.nextToken!.slice('ct1.'.length),
+          'base64url',
+        ).toString('utf-8'),
+      ) as { u?: string; p?: string };
+      expect(decoded.u).toBe('user-cursor');
+      expect(decoded.p).toBe('pub-cursor');
+    });
+
+    it('passes decoded user and public cursors as separate token params', async () => {
+      const spy = vi
+        .spyOn(service['client'], 'getConversationMetadata')
+        .mockImplementation(
+          () => Promise.resolve({ data: { items: [] } }) as never,
+        );
+      vi.spyOn(service['client'], 'getSharedResources').mockResolvedValue({
+        data: { resources: [] },
+      } as never);
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const compoundToken =
+        'ct1.' +
+        Buffer.from(
+          JSON.stringify({ u: 'user-cursor', p: 'pub-cursor' }),
+        ).toString('base64url');
+
+      await service.listConversations(
+        'test-token',
+        'test-bucket',
+        20,
+        compoundToken,
+      );
+
+      const userCall = spy.mock.calls.find(
+        ([bucket]) => bucket === 'test-bucket',
+      );
+      const publicCall = spy.mock.calls.find(([bucket]) => bucket === 'public');
+
+      expect(
+        (userCall?.[2] as { params?: { query?: { token?: string } } })?.params
+          ?.query?.token,
+      ).toBe('user-cursor');
+      expect(
+        (publicCall?.[2] as { params?: { query?: { token?: string } } })?.params
+          ?.query?.token,
+      ).toBe('pub-cursor');
+    });
+
+    it('treats a legacy (non-compound) nextToken as a user-bucket cursor', async () => {
+      const spy = vi
+        .spyOn(service['client'], 'getConversationMetadata')
+        .mockImplementation(
+          () => Promise.resolve({ data: { items: [] } }) as never,
+        );
+      vi.spyOn(service['client'], 'getSharedResources').mockResolvedValue({
+        data: { resources: [] },
+      } as never);
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      await service.listConversations(
+        'test-token',
+        'test-bucket',
+        20,
+        'legacy-opaque-token',
+      );
+
+      const userCall = spy.mock.calls.find(
+        ([bucket]) => bucket === 'test-bucket',
+      );
+      const publicCall = spy.mock.calls.find(([bucket]) => bucket === 'public');
+
+      expect(
+        (userCall?.[2] as { params?: { query?: { token?: string } } })?.params
+          ?.query?.token,
+      ).toBe('legacy-opaque-token');
+      expect(
+        (publicCall?.[2] as { params?: { query?: { token?: string } } })?.params
+          ?.query?.token,
+      ).toBeUndefined();
+    });
+
+    it('returns undefined nextToken when neither bucket has a cursor', async () => {
+      mockMetadata([]);
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.nextToken).toBeUndefined();
+    });
+
+    it('encodes a compound nextToken with only u when only user bucket has a cursor', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockImplementation(
+        (bucket: string) => {
+          if (bucket === 'test-bucket') {
+            return Promise.resolve({
+              data: { items: [], nextToken: 'user-cursor' },
+            }) as never;
+          }
+          return Promise.resolve({ data: { items: [] } }) as never;
+        },
+      );
+      vi.spyOn(service['client'], 'getSharedResources').mockResolvedValue({
+        data: { resources: [] },
+      } as never);
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.nextToken).toBeDefined();
+      const decoded = JSON.parse(
+        Buffer.from(
+          result.nextToken!.slice('ct1.'.length),
+          'base64url',
+        ).toString('utf-8'),
+      ) as { u?: string; p?: string };
+      expect(decoded.u).toBe('user-cursor');
+      expect(decoded.p).toBeUndefined();
+    });
+
+    it('forwards the path to user and public bucket calls', async () => {
+      const spy = vi
+        .spyOn(service['client'], 'getConversationMetadata')
+        .mockImplementation(
+          () => Promise.resolve({ data: { items: [] } }) as never,
+        );
+      vi.spyOn(service['client'], 'getSharedResources').mockResolvedValue({
+        data: { resources: [] },
+      } as never);
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      await service.listConversations(
+        'test-token',
+        'test-bucket',
+        20,
+        undefined,
+        'work/project-x',
+      );
+
+      const userCall = spy.mock.calls.find(
+        ([bucket]) => bucket === 'test-bucket',
+      );
+      const publicCall = spy.mock.calls.find(([bucket]) => bucket === 'public');
+
+      expect(userCall?.[1]).toBe('work/project-x');
+      expect(publicCall?.[1]).toBe('work/project-x');
+    });
+
+    it('filters out FOLDER node types from both buckets', async () => {
+      mockMetadata(
+        [
+          { url: 'conversations/test-bucket/folder', nodeType: 'FOLDER' },
+          { url: 'conversations/test-bucket/file', nodeType: 'FILE' },
+        ],
+        [
+          { url: 'conversations/public/pub-folder', nodeType: 'FOLDER' },
+          { url: 'conversations/public/pub-file', nodeType: 'FILE' },
+        ],
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.items.map((i) => i.id)).toEqual(
+        expect.not.arrayContaining([
+          'conversations/test-bucket/folder',
+          'conversations/public/pub-folder',
+        ]),
+      );
+      expect(result.items.map((i) => i.id)).toEqual(
+        expect.arrayContaining([
+          'conversations/test-bucket/file',
+          'conversations/public/pub-file',
+        ]),
+      );
+    });
+
+    it('preserves sharedWithMe from user bucket items', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockImplementation(
+        (bucket: string) => {
+          if (bucket === 'test-bucket') {
+            return Promise.resolve({
+              data: {
+                items: [
+                  {
+                    url: 'conversations/test-bucket/shared',
+                    nodeType: 'FILE',
+                    sharedWithMe: true,
+                  },
+                ],
+              },
+            }) as never;
+          }
+          return Promise.resolve({ data: { items: [] } }) as never;
+        },
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.items[0].sharedWithMe).toBe(true);
+    });
+
+    it('calls handleDialError when the user bucket returns a response-level error', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockImplementation(
+        (bucket: string) => {
+          if (bucket === 'test-bucket') {
+            return Promise.resolve({ error: { status: 502 } }) as never;
+          }
+          return Promise.resolve({ data: { items: [] } }) as never;
+        },
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+      vi.mocked(handleDialError).mockImplementation(() => {
+        throw new Error('mapped DIAL error');
+      });
+
+      await expect(
+        service.listConversations('test-token', 'test-bucket'),
+      ).rejects.toThrow('mapped DIAL error');
+
+      expect(handleDialError).toHaveBeenCalledWith({ status: 502 });
+    });
+
+    it('returns only user items when public bucket returns a response-level error', async () => {
+      vi.spyOn(service['client'], 'getConversationMetadata').mockImplementation(
+        (bucket: string) => {
+          if (bucket === 'test-bucket') {
+            return Promise.resolve({
+              data: {
+                items: [
+                  {
+                    url: 'conversations/test-bucket/user-conv',
+                    nodeType: 'FILE',
+                  },
+                ],
+              },
+            }) as never;
+          }
+          return Promise.resolve({ error: { status: 403 } }) as never;
+        },
+      );
+      mockUserConfigService.getPinnedIds.mockResolvedValue([]);
+
+      const result = await service.listConversations(
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].id).toBe('conversations/test-bucket/user-conv');
     });
   });
 });

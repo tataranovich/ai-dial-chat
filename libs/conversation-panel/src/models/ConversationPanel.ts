@@ -124,8 +124,10 @@ export interface ConversationPanelProps {
   activeConversationId?: string;
   /** Panel heading text (e.g. `"Chats"`). */
   title: string;
-  /** Message shown when `conversations` is empty or no items match the current filter. */
+  /** Message shown when `conversations` is empty. */
   emptyLabel: string;
+  /** Message shown when conversations exist but none match the active filter. */
+  noResultsLabel: string;
   /** Called when the New chat button is clicked. */
   onNewChat: () => void;
   /** Label for the New chat button (e.g. `"New chat"`). */
@@ -140,16 +142,15 @@ export interface ConversationPanelProps {
     pinned?: string;
     /** Heading for the My chats section. Defaults to `"My chats"`. */
     myChats?: string;
+    /** Heading for the Shared section. Defaults to `"Shared"`. */
+    shared?: string;
+    /** Heading for the Organization section. Defaults to `"Organization"`. */
+    organization?: string;
   };
   /** Color and typography overrides applied as CSS custom properties. */
   styles?: ConversationPanelStyles;
   /** Extra class name(s) merged onto the panel root element. */
   className?: string;
-  /**
-   * When provided and `isOpen` is `true`, a backdrop overlay is rendered behind the panel.
-   * Clicking the backdrop calls this callback (used for mobile drawer close).
-   */
-  onBackdropClick?: () => void;
   /**
    * Builds the dropdown menu items for a conversation row.
    * Receives the full item so actions can reflect per-item state (e.g. `isPinned` toggle).
@@ -158,4 +159,12 @@ export interface ConversationPanelProps {
   getActions?: (item: ConversationHistoryItem) => DropdownItem[];
   /** Accessible label for the row actions trigger button. Defaults to `"More actions"`. */
   actionsLabel?: string;
+  /**
+   * Called when the mobile sidebar toggle icon in the panel header is clicked.
+   * When provided, the toggle button becomes visible on mobile screens.
+   * The parent is responsible for managing `isOpen` state in response to this callback.
+   */
+  onToggle?: () => void;
+  /** Accessible label for the sidebar toggle icon button. Required when `onToggle` is provided. */
+  closeAriaLabel?: string;
 }

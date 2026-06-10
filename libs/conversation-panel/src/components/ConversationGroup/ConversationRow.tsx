@@ -11,8 +11,8 @@ import {
 } from '@epam/ai-dial-ui-kit';
 import { IconDotsVertical } from '@tabler/icons-react';
 import { useState, type FC } from 'react';
-import type { ConversationHistoryItem } from '../../models/ConversationPanel.js';
-import { getButtonPaddingEnd } from '../../utils/conversation-row.utils.js';
+import type { ConversationHistoryItem } from '../../models/ConversationPanel';
+import { getButtonPaddingEnd } from '../../utils/conversation-row.utils';
 import styles from '../ConversationPanel/ConversationPanel.module.scss';
 
 export interface ConversationRowProps {
@@ -60,10 +60,11 @@ export const ConversationRow: FC<ConversationRowProps> = ({
         aria-current={isActive ? 'page' : undefined}
         onClick={() => onSelectConversation(item.id)}
         className={mergeClasses(
-          'h-8 w-full justify-start gap-2 ps-3',
+          'h-8 w-full justify-start gap-2 rounded-b rounded-t border-l-2 border-transparent ps-3',
           buttonPaddingRight,
           styles.item,
           isActive && styles.itemActive,
+          isMenuOpen && styles.itemActive,
         )}
       />
 
@@ -78,7 +79,7 @@ export const ConversationRow: FC<ConversationRowProps> = ({
             items={menuItems}
             onOpenChange={setIsMenuOpen}
             matchReferenceWidth={false}
-            listClassName="w-[140px]"
+            listClassName="w-[140px] shadow-md"
           >
             <DialIconButton
               icon={
@@ -93,7 +94,7 @@ export const ConversationRow: FC<ConversationRowProps> = ({
               className={mergeClasses(
                 'flex items-center justify-center rounded',
                 styles.trigger,
-                isActive && styles.triggerActive,
+                isMenuOpen && styles.triggerActive,
               )}
             />
           </DialDropdown>

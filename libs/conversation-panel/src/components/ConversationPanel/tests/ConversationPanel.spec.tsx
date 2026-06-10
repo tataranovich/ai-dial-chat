@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ConversationSource,
   type ConversationHistoryItem,
-} from '../../../models/ConversationPanel.js';
-import { ConversationPanel } from '../ConversationPanel.js';
+} from '../../../models/ConversationPanel';
+import { ConversationPanel } from '../ConversationPanel';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
   DIAL_ICON_SIZE: { SM: 16, LG: 24 },
@@ -64,7 +64,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     </button>
   ),
   DialEllipsisTooltip: ({ text }: { text: string }) => <span>{text}</span>,
-  ElementSize: { Small: 'small', Standard: 'standard' },
+  ElementSize: { Small: 'small', Standard: 'standard', Large: 'large' },
 }));
 
 vi.mock('@tabler/icons-react', () => ({
@@ -73,6 +73,8 @@ vi.mock('@tabler/icons-react', () => ({
   IconChevronRight: () => <span>chevron-right</span>,
   IconCaretDownFilled: () => <span>caret-down-filled</span>,
   IconCaretRightFilled: () => <span>caret-right-filled</span>,
+  IconMessageCircle: () => <span>message-circle</span>,
+  IconSearchOff: () => <span>search-off</span>,
 }));
 
 const FILTER_LABELS = {
@@ -88,6 +90,7 @@ const BASE_PROPS = {
   onNewChat: vi.fn(),
   title: 'Chats',
   emptyLabel: 'No conversations yet',
+  noResultsLabel: 'No results found',
   newChatLabel: 'New chat',
   searchPlaceholder: 'Search chat…',
   filterLabels: FILTER_LABELS,
@@ -176,29 +179,9 @@ describe('ConversationPanel', () => {
     expect(aside.getAttribute('aria-hidden')).toBe('true');
   });
 
-  it('calls onBackdropClick when the backdrop is clicked', () => {
-    const onBackdropClick = vi.fn();
-    render(
-      <ConversationPanel
-        {...BASE_PROPS}
-        conversations={[]}
-        onBackdropClick={onBackdropClick}
-      />,
-    );
-    const backdrop = document.querySelector('div[aria-hidden="true"]');
-    expect(backdrop).toBeTruthy();
-    fireEvent.click(backdrop!);
-    expect(onBackdropClick).toHaveBeenCalledTimes(1);
-  });
-
   it('does not render backdrop when isOpen is false', () => {
     render(
-      <ConversationPanel
-        {...BASE_PROPS}
-        conversations={[]}
-        isOpen={false}
-        onBackdropClick={vi.fn()}
-      />,
+      <ConversationPanel {...BASE_PROPS} conversations={[]} isOpen={false} />,
     );
     expect(document.querySelector('div[aria-hidden="true"]')).toBeNull();
   });
@@ -228,7 +211,7 @@ describe('ConversationPanel', () => {
     render(<ConversationPanel {...BASE_PROPS} conversations={items} />);
     const input = screen.getByPlaceholderText('Search chat…');
     fireEvent.change(input, { target: { value: 'zzznomatch' } });
-    expect(screen.getByText('No conversations yet')).toBeTruthy();
+    expect(screen.getByText('No results found')).toBeTruthy();
   });
 
   it('filters by Shared tab', () => {

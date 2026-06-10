@@ -11,7 +11,13 @@ import type {
   MessageActionAriaLabels,
   MessageActionTooltips,
 } from '@epam/ai-dial-conversation-messages';
-import { DialFabButton } from '@epam/ai-dial-ui-kit';
+import {
+  DialFabButton,
+  DialNeutralButton,
+  DialNotification,
+  NotificationVariant,
+} from '@epam/ai-dial-ui-kit';
+import { IconCopy } from '@tabler/icons-react';
 import {
   FC,
   lazy,
@@ -26,13 +32,16 @@ import {
 import { useTranslation } from 'react-i18next';
 import {
   ActionsI18nKeys,
+  BasicI18nKeys,
+  ButtonsI18nKeys,
   ChatI18nKeys,
+  ConversationHistoryI18nKeys,
   ConversationI18nKeys,
   DeploymentsI18nKeys,
-} from '../../constants/translation-keys.js';
-import { useDeployments } from '../../context/DeploymentsContext.js';
-import { resolveCatalogIconUrl } from '../../utils/icon-path.js';
-import ConversationMessageItem from './ConversationMessageItem.js';
+} from '../../constants/translation-keys';
+import { useDeployments } from '../../context/DeploymentsContext';
+import { resolveCatalogIconUrl } from '../../utils/icon-path';
+import ConversationMessageItem from './ConversationMessageItem';
 
 const ConversationInput = lazy(async () => {
   const module = await import('@epam/ai-dial-conversation-input');
@@ -66,6 +75,12 @@ interface Props {
   isAssistantTyping?: boolean;
   initialModelId: string;
   streamErrorText: string;
+  isReadOnly?: boolean;
+  onDuplicateConversation?: () => void;
+  duplicateError?: string;
+  isTranscriptionSupported?: boolean;
+  onUploadAudio?: (file: File, contentType: string) => Promise<string>;
+  onTranscribeAudio?: (audioUrl: string) => Promise<string>;
 }
 
 const NEAR_BOTTOM_THRESHOLD = 80;
@@ -88,6 +103,12 @@ const ConversationView: FC<Props> = ({
   isAssistantTyping = false,
   initialModelId,
   streamErrorText,
+  isReadOnly = false,
+  onDuplicateConversation,
+  duplicateError,
+  isTranscriptionSupported = false,
+  onUploadAudio,
+  onTranscribeAudio,
 }) => {
   const { t } = useTranslation();
   const {
@@ -146,11 +167,12 @@ const ConversationView: FC<Props> = ({
 
   const deploymentItems = useMemo(
     () =>
-      items.map(({ id, displayName, iconUrl, type }) => ({
+      items.map(({ id, displayName, iconUrl, type, inputAttachmentTypes }) => ({
         id,
         displayName,
         iconUrl: iconUrl ? resolveCatalogIconUrl(iconUrl) : undefined,
         type,
+        inputAttachmentTypes,
       })),
     [items],
   );
@@ -192,7 +214,7 @@ const ConversationView: FC<Props> = ({
         !isLoading && !error && items.length === 0
           ? t(DeploymentsI18nKeys.SelectorEmpty)
           : undefined,
-      searchPlaceholder: t(DeploymentsI18nKeys.SelectorSearchPlaceholder),
+      searchPlaceholder: t(BasicI18nKeys.SearchPlaceholder),
       closeLabel: t(DeploymentsI18nKeys.SelectorCloseLabel),
     }),
     [t, isLoading, error, items.length],
@@ -326,8 +348,8 @@ const ConversationView: FC<Props> = ({
                   saveLabel={t(ActionsI18nKeys.SaveAndSubmit)}
                   editMessageAriaLabel={t(ActionsI18nKeys.EditMessage)}
                   quickReplyButtonsAriaLabel={t(ChatI18nKeys.QuickReplyButtons)}
-                  showMoreLabel={t(ChatI18nKeys.ShowMore)}
-                  showLessLabel={t(ChatI18nKeys.ShowLess)}
+                  showMoreLabel={t(ButtonsI18nKeys.ShowMore)}
+                  showLessLabel={t(ButtonsI18nKeys.ShowLess)}
                   showMoreUserMessageAriaLabel={t(
                     ChatI18nKeys.ShowMoreUserMessage,
                   )}
@@ -361,23 +383,44 @@ const ConversationView: FC<Props> = ({
         aria-label={t(ChatI18nKeys.MessageInput)}
         className="w-full"
       >
-        <Suspense fallback={null}>
-          <ConversationInput
-            onSend={onSend}
-            onUploadAttachment={onUploadAttachment}
-            onStop={onStop}
-            isStreaming={isAssistantTyping}
-            onAttachmentsChange={onAttachmentsChange}
-            placeholder={placeholder}
-            deployments={deploymentItems}
-            selectedDeploymentId={selectedItemId}
-            onDeploymentChange={setSelectedItemId}
-            isInputDisabled={isInputDisabled}
-            modelSelectorLabels={modelSelectorLabels}
-            sendLabel={t(ChatI18nKeys.SendMessage)}
-            stopLabel={t(ChatI18nKeys.StopStreaming)}
-          />
-        </Suspense>
+        {isReadOnly ? (
+          <div className="flex flex-col items-center justify-center gap-2 p-4">
+            {duplicateError && (
+              <DialNotification
+                variant={NotificationVariant.Error}
+                message={duplicateError}
+              />
+            )}
+            <DialNeutralButton
+              label={t(
+                ConversationHistoryI18nKeys.DuplicateReadOnlyDescription,
+              )}
+              iconBefore={<IconCopy />}
+              onClick={onDuplicateConversation}
+            />
+          </div>
+        ) : (
+          <Suspense fallback={null}>
+            <ConversationInput
+              onSend={onSend}
+              onUploadAttachment={onUploadAttachment}
+              onStop={onStop}
+              isStreaming={isAssistantTyping}
+              onAttachmentsChange={onAttachmentsChange}
+              placeholder={placeholder}
+              deployments={deploymentItems}
+              selectedDeploymentId={selectedItemId}
+              onDeploymentChange={setSelectedItemId}
+              isInputDisabled={isInputDisabled}
+              modelSelectorLabels={modelSelectorLabels}
+              sendLabel={t(ChatI18nKeys.SendMessage)}
+              stopLabel={t(ChatI18nKeys.StopStreaming)}
+              isTranscriptionSupported={isTranscriptionSupported}
+              onUploadAudio={onUploadAudio}
+              onTranscribeAudio={onTranscribeAudio}
+            />
+          </Suspense>
+        )}
       </div>
     </>
   );

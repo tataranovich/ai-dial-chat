@@ -1,10 +1,7 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import { DialTag } from '@epam/ai-dial-ui-kit';
 import { type FC, memo } from 'react';
-import {
-  FilterTab,
-  type FilterLabels,
-} from '../../models/ConversationPanel.js';
+import { FilterTab, type FilterLabels } from '../../models/ConversationPanel';
 import panelStyles from '../ConversationPanel/ConversationPanel.module.scss';
 
 /** Props for `FilterTabs`. */
@@ -50,7 +47,7 @@ export const FilterTabs: FC<FilterTabsProps> = memo(
           selected={activeTab === value}
           onClick={() => onChange(value)}
           className={mergeClasses(
-            'border border-primary px-2 py-1',
+            'box-border border border-primary px-[7px] py-1',
             tabClassName,
             tabColorClassName,
             activeTab === value &&

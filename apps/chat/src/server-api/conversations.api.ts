@@ -59,7 +59,7 @@ export const listConversations = (params?: {
   path?: string;
 }) =>
   conversationsApi.listConversations({
-    limit: params?.limit,
+    limit: params?.limit ?? 1000,
     nextToken: params?.nextToken,
     path: params?.path,
   });
@@ -69,3 +69,6 @@ export const renameConversation = (path: string, newTitle: string) =>
     path,
     renameConversationBodyDto: { newTitle },
   });
+
+export const duplicateConversation = (conversationPath: string) =>
+  conversationsApi.duplicateConversation({ path: conversationPath });

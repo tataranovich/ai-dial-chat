@@ -1,6 +1,8 @@
 import {
-  type Conversation,
-  type Message,
+  Attachment,
+  isAudioTranscriptionSupported,
+  Conversation,
+  Message,
   MessageRole,
 } from '@epam/ai-dial-chat-shared';
 import {
@@ -8,26 +10,35 @@ import {
   DialConfirmationPopup,
 } from '@epam/ai-dial-ui-kit';
 import type { ConversationResponseDto } from '@epam/chat-api-client';
-import { FC, useCallback, useEffect, useRef, useState } from 'react';
+import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import ConversationView from '../../components/ConversationView/ConversationView';
-import { ROUTES } from '../../constants/routes';
+import { getConversationRoute, ROUTES } from '../../constants/routes';
 import {
   ActionsI18nKeys,
   ChatI18nKeys,
+  ConversationHistoryI18nKeys,
 } from '../../constants/translation-keys';
+import { useAppConfig } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
-import { useDeployments } from '../../context/DeploymentsContext.js';
-import { useSourcesSidebar } from '../../context/SourcesSidebarContext.js';
+import { useConversations } from '../../context/ConversationsContext';
+import { useDeployments } from '../../context/DeploymentsContext';
+import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
 import { useConversationHandlers } from '../../hooks/conversation/useConversationHandlers';
 import { useConversationStream } from '../../hooks/conversation/useConversationStream';
-import { useDeploymentChangeEffect } from '../../hooks/useDeploymentChangeEffect.js';
+import { useDeploymentChangeEffect } from '../../hooks/useDeploymentChangeEffect';
+import {
+  transcribeAudio,
+  transcribeAudioWithAsrModel,
+} from '../../server-api/chat.api';
 import {
   getConversation as apiGetConversation,
   saveConversation,
 } from '../../server-api/conversations.api';
-import { getConversationPath } from '../../utils/conversation-path';
+import { uploadFile } from '../../server-api/files.api';
+import { buildUploadPath } from '../../utils/build-upload-path';
+import { decodeConversationId } from '../../utils/conversation-path';
 import { getLastDeploymentId } from '../../utils/message-utils';
 
 export const ConversationPage: FC = () => {
@@ -37,12 +48,86 @@ export const ConversationPage: FC = () => {
   const conversationRef = useRef<Conversation | null>(null);
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { setSelectedItemId, isLoading: isDeploymentsLoading } =
-    useDeployments();
+  const { asrModelId, transcribeSizeLimitBytes } = useAppConfig();
+  const {
+    items: deploymentItems,
+    setSelectedItemId,
+    selectedItemId: currentSelectedItemId,
+    isLoading: isDeploymentsLoading,
+  } = useDeployments();
   const { handleClose: handleCloseSourcesSidebar, setMessages } =
     useSourcesSidebar();
   const { user } = useUser();
   const bucket = user?.bucket ?? '';
+  const { duplicateConversation } = useConversations();
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+
+  const isTranscriptionSupported = useMemo(() => {
+    if (asrModelId != null) return true;
+    const selected = deploymentItems.find(
+      (item) => item.id === currentSelectedItemId,
+    );
+    return isAudioTranscriptionSupported(selected?.inputAttachmentTypes);
+  }, [asrModelId, deploymentItems, currentSelectedItemId]);
+
+  const lastAudioMimeTypeRef = useRef<string>('audio/webm');
+
+  const handleUploadAudio = useCallback(
+    async (file: File, contentType: string): Promise<string> => {
+      if (!bucket) {
+        throw new Error('User bucket is not available');
+      }
+      if (file.size > transcribeSizeLimitBytes) {
+        throw new Error(
+          `Audio file exceeds the ${transcribeSizeLimitBytes} byte limit`,
+        );
+      }
+      lastAudioMimeTypeRef.current = contentType;
+      const response = await uploadFile(
+        bucket,
+        buildUploadPath({ name: file.name } as Attachment),
+        file,
+      );
+      return response.url;
+    },
+    [bucket, transcribeSizeLimitBytes],
+  );
+
+  const handleTranscribeAudio = useCallback(
+    async (audioUrl: string): Promise<string> => {
+      const mimeType = lastAudioMimeTypeRef.current;
+      if (asrModelId != null) {
+        return transcribeAudioWithAsrModel({ audioUrl, mimeType });
+      }
+      if (!currentSelectedItemId) {
+        throw new Error('No model selected');
+      }
+      return transcribeAudio({
+        audioUrl,
+        mimeType,
+        deployment: currentSelectedItemId,
+      });
+    },
+    [asrModelId, currentSelectedItemId],
+  );
+
+  const isReadOnly = useMemo(() => {
+    if (!conversationId || !bucket) return false;
+    const decoded = decodeConversationId(conversationId);
+    const slashIndex = decoded.indexOf('/');
+    return slashIndex !== -1 && decoded.slice(0, slashIndex) !== bucket;
+  }, [conversationId, bucket]);
+
+  const handleDuplicateConversation = useCallback(async () => {
+    if (!conversationId) return;
+    setDuplicateError(null);
+    try {
+      const newPath = await duplicateConversation(conversationId);
+      navigate(getConversationRoute(newPath));
+    } catch {
+      setDuplicateError(t(ConversationHistoryI18nKeys.DuplicateError));
+    }
+  }, [conversationId, duplicateConversation, navigate, t]);
 
   useEffect(() => {
     setMessages(conversation?.messages ?? []);
@@ -52,9 +137,8 @@ export const ConversationPage: FC = () => {
   const addStatusMessage = useCallback(
     (msg: Message) => {
       if (!conversationId) return;
-      const conversationPath = conversationId.substring(
-        conversationId.indexOf('/') + 1,
-      );
+      const decoded = decodeConversationId(conversationId);
+      const conversationPath = decoded.substring(decoded.indexOf('/') + 1);
       setConversation((prev) => {
         if (!prev) return prev;
         const next = { ...prev, messages: [...prev.messages, msg] };
@@ -86,24 +170,22 @@ export const ConversationPage: FC = () => {
     conversationRef,
   });
 
-  useEffect(() => {
-    if (!conversationId) {
-      setIsFetching(false);
-      return;
-    }
+  const loadConversation = useCallback(
+    async (id: string) => {
+      const decodedConversationId = decodeConversationId(id);
+      const conversationPath = decodedConversationId.substring(
+        decodedConversationId.indexOf('/') + 1,
+      );
 
-    const conversationPath = getConversationPath(conversationId);
-    setIsFetching(true);
-    apiGetConversation(conversationPath)
-      .then((dto) => {
-        const result = dto as unknown as Conversation;
+      setIsFetching(true);
+      try {
+        const dto = await apiGetConversation(decodedConversationId);
+        const result = dto as Conversation; // adapt if API response shape differs
 
         // Restore the last selected agent from the conversation's change history
         // so the deployment selector reflects what was active, not the default.
         const lastDeploymentId = getLastDeploymentId(result.messages);
-        if (lastDeploymentId) {
-          setSelectedItemId(lastDeploymentId);
-        }
+        setSelectedItemId(lastDeploymentId ?? result.assistantModelId);
 
         const lastMsg = result.messages[result.messages.length - 1];
 
@@ -129,10 +211,22 @@ export const ConversationPage: FC = () => {
         } else {
           setConversation(result);
         }
-      })
-      .catch(() => navigate(ROUTES.ROOT))
-      .finally(() => setIsFetching(false));
-  }, [conversationId, navigate, setSelectedItemId, startStream]);
+      } catch {
+        navigate(ROUTES.ROOT);
+      } finally {
+        setIsFetching(false);
+      }
+    },
+    [navigate, setSelectedItemId, startStream],
+  );
+
+  useEffect(() => {
+    if (!conversationId) {
+      setIsFetching(false);
+      return;
+    }
+    void loadConversation(conversationId);
+  }, [conversationId, loadConversation]);
 
   const {
     handleSend,
@@ -189,6 +283,12 @@ export const ConversationPage: FC = () => {
           placeholder={t(ChatI18nKeys.Placeholder)}
           onSelectStarter={handleButtonSelect}
           streamErrorText={t(ChatI18nKeys.StreamError)}
+          isReadOnly={isReadOnly}
+          onDuplicateConversation={handleDuplicateConversation}
+          duplicateError={duplicateError ?? undefined}
+          isTranscriptionSupported={isTranscriptionSupported}
+          onUploadAudio={handleUploadAudio}
+          onTranscribeAudio={handleTranscribeAudio}
         />
       </div>
 

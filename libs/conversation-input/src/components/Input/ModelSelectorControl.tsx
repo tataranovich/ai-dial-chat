@@ -3,12 +3,13 @@ import {
   DIAL_ICON_SIZE,
   DialDropdownIcon,
   DialGhostIconButton,
+  ElementSize,
 } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown } from '@tabler/icons-react';
 import { type CSSProperties, type FC, useState } from 'react';
-import { useModelSelector } from '../../hooks/useModelSelector.js';
-import type { InputProps } from '../../models/Input.js';
-import { ModelSelectorBottomSheet } from '../ModelSelectorBottomSheet/ModelSelectorBottomSheet.js';
+import { useModelSelector } from '../../hooks/useModelSelector';
+import type { InputProps } from '../../models/Input';
+import { ModelSelectorBottomSheet } from '../ModelSelectorBottomSheet/ModelSelectorBottomSheet';
 import styles from './Input.module.scss';
 
 interface Props {
@@ -93,8 +94,9 @@ export const ModelSelectorControl: FC<Props> = ({
       menuHeader={menuHeader}
       placement="bottom-end"
       matchReferenceWidth={false}
-      listClassName="!w-[240px] !max-h-80"
+      listClassName="!w-[240px] !max-h-80 shadow-md"
       onOpenChange={handleModelSelectorOpenChange}
+      size={ElementSize.Standard}
       caretIcon={
         <div
           className={mergeClasses(
@@ -107,6 +109,7 @@ export const ModelSelectorControl: FC<Props> = ({
       }
       iconClassName={isInputDisabled ? disabledIconClassName : undefined}
       buttonClassName={mergeClasses(
+        'bg-transparent',
         styles.modelSelectorButton,
         isInputDisabled &&
           disabledIconClassName &&

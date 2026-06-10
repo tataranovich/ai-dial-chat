@@ -16,10 +16,17 @@ export enum ChatI18nKeys {
   QuickReplyButtons = 'chat.quickReplyButtons',
   StoppedGenerating = 'chat.stoppedGenerating',
   Thinking = 'chat.thinking',
-  ShowMore = 'chat.showMore',
-  ShowLess = 'chat.showLess',
   ShowMoreUserMessage = 'chat.showMoreUserMessage',
   ShowLessUserMessage = 'chat.showLessUserMessage',
+}
+
+export enum ButtonsI18nKeys {
+  ShowMore = 'buttons.showMore',
+  ShowLess = 'buttons.showLess',
+}
+
+export enum BasicI18nKeys {
+  SearchPlaceholder = 'basic.searchPlaceholder',
 }
 
 export enum ActionsI18nKeys {
@@ -64,7 +71,6 @@ export enum DeploymentsI18nKeys {
   SelectorLoading = 'deployments.selector.loading',
   SelectorError = 'deployments.selector.error',
   SelectorEmpty = 'deployments.selector.empty',
-  SelectorSearchPlaceholder = 'deployments.selector.searchPlaceholder',
   SelectorCloseLabel = 'deployments.selector.closeLabel',
 }
 
@@ -99,6 +105,7 @@ export enum ConversationHistoryI18nKeys {
   Title = 'conversationHistory.title',
   ToggleAriaLabel = 'conversationHistory.toggleAriaLabel',
   Empty = 'conversationHistory.empty',
+  NoResults = 'conversationHistory.noResults',
   NewChat = 'conversationHistory.newChat',
   SearchPlaceholder = 'conversationHistory.searchPlaceholder',
   FilterAll = 'conversationHistory.filterAll',
@@ -119,6 +126,9 @@ export enum ConversationHistoryI18nKeys {
   RenameInputPlaceholder = 'conversationHistory.renameInputPlaceholder',
   RenameError = 'conversationHistory.renameError',
   RenameTitleTooLong = 'conversationHistory.renameTitleTooLong',
+  DuplicateLabel = 'conversationHistory.duplicateLabel',
+  DuplicateReadOnlyDescription = 'conversationHistory.duplicateReadOnlyDescription',
+  DuplicateError = 'conversationHistory.duplicateError',
 }
 
 export enum SidebarI18nKeys {
@@ -128,10 +138,10 @@ export enum SidebarI18nKeys {
   AriaLabel = 'sidebar.sources.ariaLabel',
   Search = 'sidebar.sources.search',
   DownloadAll = 'sidebar.sources.downloadAll',
+  NoResults = 'sidebar.sources.noResults',
   SectionUploadedFiles = 'sidebar.sources.sections.uploadedFiles',
   SectionGeneratedFiles = 'sidebar.sources.sections.generatedFiles',
   SectionSources = 'sidebar.sources.sections.sources',
-  EmptyUploadedFiles = 'sidebar.sources.empty.uploadedFiles',
-  EmptyGeneratedFiles = 'sidebar.sources.empty.generatedFiles',
-  EmptySources = 'sidebar.sources.empty.sources',
+  Empty = 'sidebar.sources.noData',
+  AttachmentDownloadLabel = 'sidebar.sources.attachment.downloadLabel',
 }

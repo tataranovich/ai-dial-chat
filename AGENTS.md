@@ -63,6 +63,13 @@ Default behavior:
 - Before changing anything under `libs/*`, explicitly check the library isolation rule: host/external contracts are adapted by apps, not embedded in libs.
 - UI work is mobile-first by default. The project's named Tailwind breakpoints (`mobile`, `small_tablet`, `large_tablet`, `desktop`, `large_desktop`) live in `tailwind.config.js`; do not introduce `sm:`/`md:`/`lg:`/`xl:` defaults. When a component must branch in JS, use `useBreakpoint` / `useIsMobile` from `apps/chat/src/hooks/breakpoint/useBreakpoint.ts` rather than reading `window.innerWidth`.
 
+## TypeScript module imports
+
+- In `.ts` and `.tsx` source files, omit `.js`, `.jsx`, `.ts`, and `.tsx` from relative module specifiers. Write `./Component` or `../models/Message`, not `./Component.js`.
+- Keep extensions that identify non-code resources such as `.css`, `.scss`, `.json`, and image files, and preserve package subpaths whose published API explicitly includes an extension.
+- Vite-built apps and libraries must use `moduleResolution: "bundler"` with an ES module mode such as `module: "esnext"`. Do not switch frontend code to `node16`/`nodenext` resolution to make `.js` source specifiers compile.
+- Native Node ESM packages that are executed without a bundler are a separate case: use a Node-compatible build strategy instead of introducing `.js` specifiers into shared frontend source.
+
 ## RTL and Arabic language support
 
 All apps and libs must support Arabic (`ar`) and any other right-to-left locale. Arabic changes the visual direction of the entire UI.
@@ -75,15 +82,15 @@ The `<html>` element's `dir` attribute must be set dynamically at runtime. When 
 
 Replace every physical-direction Tailwind class with its logical equivalent so that layout flips automatically when `dir="rtl"` is on an ancestor:
 
-| Physical (forbidden for directional use) | Logical (required) |
-|---|---|
-| `ml-*` / `mr-*` | `ms-*` / `me-*` |
-| `pl-*` / `pr-*` | `ps-*` / `pe-*` |
-| `text-left` / `text-right` | `text-start` / `text-end` |
-| `left-*` / `right-*` | `start-*` / `end-*` |
-| `border-l-*` / `border-r-*` | `border-s-*` / `border-e-*` |
-| `rounded-l-*` / `rounded-r-*` | `rounded-s-*` / `rounded-e-*` |
-| `inset-x-*` one-sided | `inset-inline-start-*` / `inset-inline-end-*` |
+| Physical (forbidden for directional use) | Logical (required)                            |
+| ---------------------------------------- | --------------------------------------------- |
+| `ml-*` / `mr-*`                          | `ms-*` / `me-*`                               |
+| `pl-*` / `pr-*`                          | `ps-*` / `pe-*`                               |
+| `text-left` / `text-right`               | `text-start` / `text-end`                     |
+| `left-*` / `right-*`                     | `start-*` / `end-*`                           |
+| `border-l-*` / `border-r-*`              | `border-s-*` / `border-e-*`                   |
+| `rounded-l-*` / `rounded-r-*`            | `rounded-s-*` / `rounded-e-*`                 |
+| `inset-x-*` one-sided                    | `inset-inline-start-*` / `inset-inline-end-*` |
 
 In CSS/SCSS files use CSS logical properties: `margin-inline-start/end`, `padding-inline-start/end`, `inset-inline-start/end`, `border-inline-start/end`.
 

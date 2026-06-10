@@ -1,6 +1,6 @@
-import { AttachmentType } from '../types/attachment.js';
-import { MIMEType } from '../types/mime-type.js';
-import type { DeploymentConfigurationSchema } from './deployment-configuration.js';
+import { AttachmentType } from '../types/attachment';
+import { MIMEType } from '../types/mime-type';
+import type { DeploymentConfigurationSchema } from './deployment-configuration';
 
 /** Metadata returned by the DIAL file/conversation listing API for a single resource node. */
 export interface ConversationMetadata {
@@ -157,6 +157,8 @@ export interface Stage {
   status: StageStatus | null;
   /** Additional text content for this stage, accumulated from streaming chunks. */
   content?: string;
+  /** File or content attachments associated with this stage. */
+  attachments?: MessageAttachment[];
 }
 
 /** Incremental content delta inside a streaming SSE chunk. */

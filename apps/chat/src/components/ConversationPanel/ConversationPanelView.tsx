@@ -6,9 +6,12 @@ import {
   ConfirmationPopupVariant,
   DIAL_ICON_SIZE,
   DialConfirmationPopup,
+  DialNotification,
+  NotificationVariant,
   type DropdownItem,
 } from '@epam/ai-dial-ui-kit';
 import {
+  IconCopy,
   IconPencilMinus,
   IconPin,
   IconPinnedFilled,
@@ -24,18 +27,22 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { normalizeConversationId, ROUTES } from '../../constants/routes.js';
+import {
+  getConversationRoute,
+  normalizeConversationId,
+  ROUTES,
+} from '../../constants/routes';
 import {
   ActionsI18nKeys,
   ConversationHistoryI18nKeys,
-} from '../../constants/translation-keys.js';
-import { useConversations } from '../../context/ConversationsContext.js';
-import { useDeployments } from '../../context/DeploymentsContext.js';
-import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint.js';
-import { getModelIdFromConversationId } from '../../utils/get-model-id-from-conversation-id.js';
-import { resolveCatalogIconUrl } from '../../utils/icon-path.js';
-import RenameConversationPopup from '../RenameConversationPopup/RenameConversationPopup.js';
-import { getConversationSource } from './get-conversation-source.js';
+} from '../../constants/translation-keys';
+import { useConversations } from '../../context/ConversationsContext';
+import { useDeployments } from '../../context/DeploymentsContext';
+import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
+import { getModelIdFromConversationId } from '../../utils/get-model-id-from-conversation-id';
+import { resolveCatalogIconUrl } from '../../utils/icon-path';
+import RenameConversationPopup from '../RenameConversationPopup/RenameConversationPopup';
+import { getConversationSource } from './get-conversation-source';
 
 interface Props {
   isOpen: boolean;
@@ -60,6 +67,7 @@ const ConversationPanelView: FC<Props> = ({
     pinConversation,
     deleteConversation,
     renameConversation,
+    duplicateConversation,
     refreshConversations,
   } = useConversations();
 
@@ -93,6 +101,7 @@ const ConversationPanelView: FC<Props> = ({
   } | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
   /** Map panel id → context id for reverse lookup */
   const panelToContextId = useMemo(
@@ -153,6 +162,8 @@ const ConversationPanelView: FC<Props> = ({
     () => ({
       pinned: t(ConversationHistoryI18nKeys.PinnedSection),
       myChats: t(ConversationHistoryI18nKeys.MyChatsSection),
+      shared: t(ConversationHistoryI18nKeys.FilterShared),
+      organization: t(ConversationHistoryI18nKeys.FilterOrganization),
     }),
     [t],
   );
@@ -191,6 +202,22 @@ const ConversationPanelView: FC<Props> = ({
             setPendingRenameItem({ id: contextId, title: panelItem.title }),
         },
         {
+          key: 'duplicate',
+          label: t(ConversationHistoryI18nKeys.DuplicateLabel),
+          icon: (
+            <IconCopy size={DIAL_ICON_SIZE.SM} className="text-secondary" />
+          ),
+          onClick: async () => {
+            setDuplicateError(null);
+            try {
+              const newPath = await duplicateConversation(contextId);
+              navigate(getConversationRoute(newPath));
+            } catch {
+              setDuplicateError(t(ConversationHistoryI18nKeys.DuplicateError));
+            }
+          },
+        },
+        {
           key: 'delete',
           label: t(ConversationHistoryI18nKeys.DeleteLabel),
           icon: (
@@ -200,7 +227,14 @@ const ConversationPanelView: FC<Props> = ({
         },
       ];
     },
-    [panelToContextId, pinConversation, t],
+    [
+      panelToContextId,
+      pinConversation,
+      duplicateConversation,
+      navigate,
+      t,
+      setDuplicateError,
+    ],
   );
 
   const pendingDeleteTitle = useMemo(() => {
@@ -250,8 +284,9 @@ const ConversationPanelView: FC<Props> = ({
 
       setIsRenaming(true);
       setRenameError(null);
+      let newPath: string;
       try {
-        await renameConversation(id, newTitle);
+        newPath = await renameConversation(id, newTitle);
       } catch {
         setRenameError(t(ConversationHistoryI18nKeys.RenameError));
         setIsRenaming(false);
@@ -259,8 +294,20 @@ const ConversationPanelView: FC<Props> = ({
       }
       setIsRenaming(false);
       setPendingRenameItem(null);
+
+      const activeContextId = activeConversationId
+        ? panelToContextId.get(activeConversationId)
+        : undefined;
+      if (activeContextId === id) navigate(getConversationRoute(newPath));
     },
-    [pendingRenameItem, renameConversation, t],
+    [
+      pendingRenameItem,
+      renameConversation,
+      activeConversationId,
+      panelToContextId,
+      navigate,
+      t,
+    ],
   );
 
   const handleCloseRenameDialog = useCallback(() => {
@@ -278,6 +325,7 @@ const ConversationPanelView: FC<Props> = ({
         activeConversationId={activeConversationId}
         title={t(ConversationHistoryI18nKeys.Title)}
         emptyLabel={t(ConversationHistoryI18nKeys.Empty)}
+        noResultsLabel={t(ConversationHistoryI18nKeys.NoResults)}
         onNewChat={onNewChat}
         newChatLabel={t(ConversationHistoryI18nKeys.NewChat)}
         searchPlaceholder={t(ConversationHistoryI18nKeys.SearchPlaceholder)}
@@ -285,10 +333,10 @@ const ConversationPanelView: FC<Props> = ({
         groupLabels={groupLabels}
         getActions={getActions}
         actionsLabel={t(ConversationHistoryI18nKeys.ActionsLabel)}
-        onBackdropClick={isMobile ? onClose : undefined}
-        className={
-          isMobile ? 'fixed inset-y-0 start-0 z-50 w-[320px]' : undefined
-        }
+        onToggle={isMobile ? onClose : undefined}
+        closeAriaLabel={t(ConversationHistoryI18nKeys.ToggleAriaLabel)}
+        className={isMobile ? 'inset-y-0 start-0 z-50' : undefined}
+        styles={{ typography: { fontClassName: 'dial-body-text' } }}
       />
 
       <DialConfirmationPopup
@@ -325,6 +373,16 @@ const ConversationPanelView: FC<Props> = ({
         onSave={handleConfirmRename}
         onCancel={handleCloseRenameDialog}
       />
+
+      {duplicateError && (
+        <DialNotification
+          variant={NotificationVariant.Error}
+          message={duplicateError}
+          closable
+          onClose={() => setDuplicateError(null)}
+          className="fixed bottom-4 start-4 z-50 max-w-sm"
+        />
+      )}
     </>
   );
 };

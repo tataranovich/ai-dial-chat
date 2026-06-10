@@ -1,7 +1,8 @@
 import type { DeploymentItemDto } from '@epam/chat-api-client';
 import { act, renderHook } from '@testing-library/react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { useModelSelector } from '../useModelSelector.js';
+import { useModelSelector } from '../useModelSelector';
 
 const mockDeployments = [
   { id: 'gpt-4o', displayName: 'GPT-4o', type: 'model' as const },
@@ -73,16 +74,17 @@ describe('useModelSelector — menuItems', () => {
     expect(result.current.menuItems).toEqual([]);
   });
 
-  it('returns disabled state item when deployments is empty and loading label is set', () => {
+  it('returns seven disabled skeleton items when deployments are loading', () => {
     const { result } = renderHook(() =>
       useModelSelector({
         deployments: [],
         modelSelectorLabels: { loading: 'Loading…' },
       }),
     );
-    expect(result.current.menuItems).toEqual([
-      { key: '__state', label: 'Loading…', disabled: true },
-    ]);
+    expect(result.current.menuItems).toHaveLength(7);
+    expect(result.current.menuItems.every((item) => item.disabled)).toBe(true);
+    expect(result.current.menuItems.every((item) => item.icon)).toBe(true);
+    expect(result.current.menuItems.every((item) => item.label)).toBe(true);
   });
 
   it('prefers loading label over error and empty labels', () => {
@@ -96,7 +98,18 @@ describe('useModelSelector — menuItems', () => {
         },
       }),
     );
-    expect(result.current.menuItems[0].label).toBe('Loading…');
+    expect(result.current.menuItems).toHaveLength(7);
+  });
+
+  it('shows skeleton items during a reload even when deployments already exist', () => {
+    const { result } = renderHook(() =>
+      useModelSelector({
+        deployments: mockDeployments,
+        modelSelectorLabels: { loading: 'Loading…' },
+      }),
+    );
+    expect(result.current.menuItems).toHaveLength(7);
+    expect(result.current.menuHeader).toBeUndefined();
   });
 
   it('falls back to error label when loading is absent', () => {
@@ -130,6 +143,29 @@ describe('useModelSelector — menuItems', () => {
     });
   });
 
+  it('updates the active item when selectedDeploymentId changes', () => {
+    const { result, rerender } = renderHook(
+      ({ selectedDeploymentId }) =>
+        useModelSelector({
+          deployments: mockDeployments,
+          selectedDeploymentId,
+        }),
+      { initialProps: { selectedDeploymentId: 'gpt-4o' } },
+    );
+
+    expect(result.current.menuItems[0].className).toBe(
+      'bg-accent-primary-alpha',
+    );
+    expect(result.current.menuItems[1].className).toBeUndefined();
+
+    rerender({ selectedDeploymentId: 'claude-3' });
+
+    expect(result.current.menuItems[0].className).toBeUndefined();
+    expect(result.current.menuItems[1].className).toBe(
+      'bg-accent-primary-alpha',
+    );
+  });
+
   it('item onClick calls onDeploymentChange with item id', () => {
     const onDeploymentChange = vi.fn();
     const { result } = renderHook(() =>
@@ -140,7 +176,7 @@ describe('useModelSelector — menuItems', () => {
     );
     result.current.menuItems[2].onClick?.({
       key: 'my-app',
-      domEvent: {} as MouseEvent,
+      domEvent: {} as ReactMouseEvent,
     });
     expect(onDeploymentChange).toHaveBeenCalledWith('my-app');
   });

@@ -1,7 +1,14 @@
 {
+  "basic": {
+    "searchPlaceholder": "Search..."
+  },
+  "buttons": {
+    "showMore": "Show more",
+    "showLess": "Show less"
+  },
   "chat": {
     "welcomeText": "Hello World, good day for prompting!",
-    "placeholder": "Type a prompt or use '/' to select one",
+    "placeholder": "Ask anything...",
     "streamError": "Something went wrong while generating the response.",
     "deleteMessageTitle": "Confirm deleting message?",
     "deleteMessageDescription": "Are you sure that you want to delete the message?",
@@ -17,8 +24,6 @@
     "quickReplyButtons": "Quick reply buttons",
     "stoppedGenerating": "You stopped generating the response",
     "thinking": "Thinking",
-    "showMore": "Show more",
-    "showLess": "Show less",
     "showMoreUserMessage": "Show full user message",
     "showLessUserMessage": "Collapse user message"
   },
@@ -46,7 +51,6 @@
       "loading": "Loading models…",
       "error": "Failed to load models",
       "empty": "No models available",
-      "searchPlaceholder": "Search...",
       "closeLabel": "Close model selector"
     }
   },
@@ -92,17 +96,17 @@
     },
     "sources": {
       "ariaLabel": "Conversation sources",
-      "search": "Search",
+      "search": "Search...",
       "downloadAll": "Download all",
+      "noResults": "No results found",
       "sections": {
         "uploadedFiles": "Uploaded Files",
         "generatedFiles": "Generated Files",
         "sources": "Sources"
       },
-      "empty": {
-        "uploadedFiles": "No uploaded files in this conversation.",
-        "generatedFiles": "No generated files in this conversation.",
-        "sources": "No sources available."
+      "noData": "No data",
+      "attachment": {
+        "downloadLabel": "Download file"
       }
     }
   },
@@ -116,6 +120,7 @@
     "title": "Chats",
     "toggleAriaLabel": "Conversation panel",
     "empty": "No conversations yet",
+    "noResults": "No results found",
     "newChat": "New chat",
     "searchPlaceholder": "Search chat…",
     "filterAll": "All",
@@ -135,7 +140,10 @@
     "renameLabel": "Rename",
     "renameInputPlaceholder": "Chat name",
     "renameError": "Failed to rename. Please try again.",
-    "renameTitleTooLong": "The name is too long. Please shorten it and try again."
+    "renameTitleTooLong": "The name is too long. Please shorten it and try again.",
+    "duplicateLabel": "Duplicate",
+    "duplicateReadOnlyDescription": "Duplicate the conversation to be able to edit it",
+    "duplicateError": "Failed to duplicate the conversation. Please try again."
   },
   "auth": {
     "signOut": "Sign out",

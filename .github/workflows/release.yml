@@ -43,7 +43,7 @@ jobs:
       - uses: ./.github/actions/semantic_versioning
         id: semantic_versioning
         with:
-          promote: ${{ github.event_name == 'workflow_dispatch' && inputs.promote || false }}
+          promote: false
   release:
     runs-on: ubuntu-24.04
     permissions:

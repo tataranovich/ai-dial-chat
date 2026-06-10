@@ -37,8 +37,10 @@ export const UserMenu = memo(() => {
   const textColor = readableColor(bg);
 
   const shortName = useMemo(() => {
-    const nameClaim = user?.claims?.['name'] as string | undefined;
-    const [part1, part2] = (nameClaim as string)?.split(' ') ?? [];
+    const nameClaim = (user?.claims?.['name'] as string) || '';
+    const [part1, part2] = nameClaim.includes(' ')
+      ? nameClaim.split(' ')
+      : [nameClaim[0], nameClaim[1]];
     if (part1 && part2) {
       return `${part1[0]}${part2[0]}`;
     }
@@ -99,6 +101,7 @@ export const UserMenu = memo(() => {
           placement="top-end"
           matchReferenceWidth={false}
           items={menuItems}
+          listClassName="shadow-md"
         >
           <button
             className="flex size-[44px] items-center justify-center rounded-full border border-transparent focus-within:border-focus hover:bg-accent-primary-alpha focus:border-transparent"
