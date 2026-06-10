@@ -29,6 +29,8 @@ jobs:
       maximize-build-space: true
       draft-stable-releases: true
       filter-version: '0\.[0-9]+'
+      # Disable long running parts
+      docker-build-enabled: false
       publish-enabled: false
       ort-enabled: false
       style-checks-enabled: false
