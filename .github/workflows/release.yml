@@ -23,4 +23,7 @@ jobs:
       maximize-build-space: true
       draft-stable-releases: true
       publish-enabled: false
+      ort-enabled: false
+      style-checks-enabled: false
+      code-checks-enabled: false
     secrets: inherit
