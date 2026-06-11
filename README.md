@@ -29,6 +29,7 @@
 ## Dummy changelog
 
 - feature 1
+- feature 2
 
 ## Overview
 
