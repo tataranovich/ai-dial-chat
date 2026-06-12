@@ -7,6 +7,7 @@ A modern full-stack chat application built with Nx monorepo, featuring a React f
 - dummy feature 1
 - dummy feature 2
 - dummy feature 3
+- dummy feature 4
 
 ## 📚 Table of Contents
 
