@@ -29,10 +29,11 @@ jobs:
       filter-version: '1\.[0-9]+'
       primary-branch-pattern: '^development-1\.0$'
       release-branch-pattern: '^release-1\.[0-9]+$'
+      docker-development-tag: 'development-1.0'
       # maximize-build-space: true
       draft-stable-releases: true
       # Disable long running parts
-      docker-build-enabled: false
+      docker-build-enabled: true
       publish-enabled: false
       ort-enabled: false
       style-checks-enabled: false
