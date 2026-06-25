@@ -30,7 +30,7 @@ jobs:
       draft-stable-releases: true
       filter-version: '0\.[0-9]+'
       # Disable long running parts
-      docker-build-enabled: false
+      docker-build-enabled: true
       publish-enabled: false
       ort-enabled: false
       style-checks-enabled: false
