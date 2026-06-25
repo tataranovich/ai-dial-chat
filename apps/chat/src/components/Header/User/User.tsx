@@ -1,5 +1,3 @@
-import { FC } from 'react';
-
 import classNames from 'classnames';
 
 import { SettingsSelectors } from '@/src/store/settings/settings.selectors';
@@ -15,7 +13,9 @@ interface Props {
   className?: string;
 }
 
-const UserView: FC<Props> = ({ className }) => {
+const view = withRenderWhen(
+  (state) => !SettingsSelectors.isFeatureEnabled(state, Feature.HideUserMenu),
+)(({ className }: Props) => {
   return (
     <div
       className={classNames(
@@ -27,13 +27,11 @@ const UserView: FC<Props> = ({ className }) => {
         <ProfileButton />
       </div>
 
-      <div className="hidden size-full border-r border-secondary md:block">
+      <div className="hidden size-full border-e border-secondary md:block">
         <UserDesktop />
       </div>
     </div>
   );
-};
+});
 
-export const User = withRenderWhen(
-  (state) => !SettingsSelectors.isFeatureEnabled(state, Feature.HideUserMenu),
-)(UserView);
+export const User = view;

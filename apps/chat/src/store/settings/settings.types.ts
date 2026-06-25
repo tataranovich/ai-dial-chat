@@ -20,6 +20,7 @@ export interface SettingsState {
   codeWarning: string;
   announcement: string;
   defaultModelReference: string | undefined;
+  isOptimisticLoadEnabled: boolean;
   overlayDefaultModelReference?: string | undefined;
   defaultRecentModelsIds: string[];
   storageType: StorageType;
@@ -55,4 +56,5 @@ export interface SettingsState {
   };
   stageContentLimit: number;
   resourceMaxSegmentBytes: number;
+  availableLocales: string[];
 }

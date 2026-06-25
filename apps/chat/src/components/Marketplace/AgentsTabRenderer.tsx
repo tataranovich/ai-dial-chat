@@ -2,6 +2,8 @@ import React, { useCallback } from 'react';
 
 import { useMarketplaceDisplayedEntities } from '@/src/hooks/useMarketplaceDisplayedEntities';
 
+import { isMyApplication } from '@/src/utils/app/id';
+
 import { DialAIEntityModel } from '@/src/types/models';
 
 import { MarketplaceActions, ModelsActions } from '@/src/store/actions';
@@ -14,8 +16,6 @@ import {
   MarketplaceEntitiesTabs,
   MarketplaceTabs,
 } from '@/src/constants/marketplace';
-
-import { ConnectToolsetModal } from '@/src/components/Marketplace/ConnectToolsetModal';
 
 import { ApplicationDetails } from './ApplicationDetails/ApplicationDetails';
 import { ResultsView, ResultsViewProps } from './TabResults';
@@ -55,6 +55,7 @@ export function AgentsTabRenderer() {
       allModels,
       installedModelIds,
       selectedFilters,
+      isMyApplication,
     );
 
   const handleSetDetailsModel = useCallback(
@@ -142,8 +143,6 @@ export function AgentsTabRenderer() {
           isSuggested={detailsModel?.isSuggested}
         />
       )}
-
-      <ConnectToolsetModal />
     </>
   );
 }

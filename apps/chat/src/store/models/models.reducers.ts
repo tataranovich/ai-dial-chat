@@ -6,6 +6,7 @@ import {
   deleteFromMarketplaceEntitiesMap,
   getGroupMarketplaceEntityKey,
 } from '@/src/utils/app/marketplace';
+import { translateErrorMessage } from '@/src/utils/app/translateErrorMessage';
 import { translate } from '@/src/utils/app/translation';
 
 import { ApplicationStatus } from '@/src/types/applications';
@@ -16,7 +17,6 @@ import {
   InstalledModel,
   PublishRequestDialAIEntityModel,
 } from '@/src/types/models';
-import { Translation } from '@/src/types/translation';
 
 import { DEFAULT_AGENT, RECENT_MODELS_COUNT } from '@/src/constants/chat';
 import { errorsMessages } from '@/src/constants/errors';
@@ -112,6 +112,19 @@ export const modelsSlice = createSlice({
         ...payload.models,
       );
     },
+    getDefaultModelSuccess: (
+      state,
+      { payload }: PayloadAction<{ model: DialAIEntityModel }>,
+    ) => {
+      if (state.status === UploadStatus.LOADED) return;
+      state.modelsMap = addToMarketplaceEntitiesMap(
+        state.modelsMap,
+        payload.model,
+      );
+      if (!state.models.some((m) => m.reference === payload.model.reference)) {
+        state.models = [...state.models, payload.model];
+      }
+    },
     getModelsFail: (
       state,
       {
@@ -126,11 +139,7 @@ export const modelsSlice = createSlice({
         code: payload.error.status?.toString() ?? 'unknown',
         messageLines: payload.error.statusText
           ? [payload.error.statusText]
-          : [
-              translate(errorsMessages.generalServer, {
-                ns: Translation.Common,
-              }),
-            ],
+          : [translateErrorMessage(errorsMessages.generalServer)],
       } as ErrorMessage;
     },
 
@@ -313,6 +322,12 @@ export const modelsSlice = createSlice({
       if (targetModel && targetModel.functionStatus) {
         const updatedModel = cloneDeep(targetModel);
         updatedModel.functionStatus = payload.status;
+        if (
+          payload.status === ApplicationStatus.DEPLOYED &&
+          updatedModel.features
+        ) {
+          updatedModel.features.chat_completion = true;
+        }
 
         state.models = state.models.map((model) =>
           model.reference === targetModel.reference ? updatedModel : model,

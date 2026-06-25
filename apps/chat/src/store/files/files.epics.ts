@@ -43,8 +43,12 @@ import {
   getFileRootId,
   stripTrailingSlashForSelectedPath,
 } from '@/src/utils/app/id';
+import { applyUploadReplaceActions } from '@/src/utils/app/prepare-files-for-upload';
 import { splitEntityId } from '@/src/utils/app/shared-utils';
-import { translate } from '@/src/utils/app/translation';
+import {
+  ensureLocaleNamespaceFromStaticFiles,
+  translate,
+} from '@/src/utils/app/translation';
 import { ApiUtils } from '@/src/utils/server/api';
 
 import { FeatureType } from '@/src/types/common';
@@ -139,7 +143,7 @@ const uploadFileEpic: AppEpic = (action$) =>
         formData,
         payload.relativePath,
         payload.name,
-        undefined,
+        payload.httpMethod,
         payload.bucket,
       ).pipe(
         filter(
@@ -212,6 +216,9 @@ const reuploadFileEpic: AppEpic = (action$, state$) =>
           id: payload.fileId,
           relativePath: file.relativePath,
           name: file.name,
+          ...(file.isFromDeviceAttachment && {
+            isFromDeviceAttachment: true,
+          }),
         }),
       );
     }),
@@ -562,13 +569,11 @@ const unselectFilesEpic: AppEpic = (action$, state$) =>
     ofType(FilesActions.unselectFiles.type),
     switchMap(({ payload }) => {
       const files = FilesSelectors.selectFilesByIds(state$.value, payload.ids);
-      const cancelFileActions = files
-        .filter(
-          (file) => !file.serverSynced && file.status === UploadStatus.LOADING,
-        )
-        .map((file) => of(FilesActions.uploadFileCancel({ id: file.id })));
+      const deleteActions = files
+        .filter((file) => file.isFromDeviceAttachment)
+        .map((file) => of(FilesActions.deleteFile({ fileId: file.id })));
 
-      return concat(...cancelFileActions);
+      return concat(...deleteActions);
     }),
   );
 
@@ -990,177 +995,217 @@ const copyMoveFilesResultToastEpic: AppEpic = (action$, state$, { router }) =>
       FilesActions.copyFilesSuccess.type,
       FilesActions.moveFilesSuccess.type,
     ),
-    map((action) => {
-      const { result, request } = action.payload;
+    switchMap((action) => {
+      const locale = router?.locale ?? 'en';
 
-      const isRenaming = request.sourceFolder === request.destinationFolder;
-      if (isRenaming) {
-        return null;
-      }
+      return from(
+        ensureLocaleNamespaceFromStaticFiles(locale, Translation.Files),
+      ).pipe(
+        map(() => {
+          const { result, request } = action.payload;
 
-      const { errors } = result;
-      const items = request.files;
-      const isCopy = FilesActions.copyFilesSuccess.match(action);
-      const verbPast = isCopy ? 'copied' : 'moved';
-      const reviewBucket = getCurrentReviewBucket(state$.value, router);
+          const isRenaming = request.sourceFolder === request.destinationFolder;
+          if (isRenaming) {
+            return null;
+          }
 
-      if (items.length > 0) {
-        const destinationUrl = action.payload.request.destinationFolder;
-        const path = items[0].destinationUrl;
-        const { name, bucket } = splitEntityId(path);
-        const folderPlaceholder = destinationUrl.replace(
-          `files/${bucket}`,
-          bucket === reviewBucket
-            ? translate(ChatI18nKeys.ReviewFiles, { ns: Translation.Chat })
-            : getRootFolderPlaceholderName(bucket),
-        );
-        if (items.length === 1) {
-          return UIActions.showToast({
-            type: ToastType.Success,
-            title: translate(CommonI18nKeys.ItemVerbSuccessfully, {
-              ns: Translation.Common,
-              verb: verbPast,
-            }),
-            message: translate(FilesI18nKeys.FileNameVerbToFolder, {
-              ns: Translation.Files,
-              fileName: name,
-              folder: folderPlaceholder,
-              verb: verbPast,
-            }),
-          });
-        }
+          const { errors } = result;
+          const items = request.files;
+          const isCopy = FilesActions.copyFilesSuccess.match(action);
+          const verbPast = translate(
+            isCopy ? FilesI18nKeys.VerbCopied : FilesI18nKeys.VerbMoved,
+            { ns: Translation.Files, lng: locale },
+          );
+          const verbGerund = translate(
+            isCopy ? FilesI18nKeys.VerbCopying : FilesI18nKeys.VerbMoving,
+            { ns: Translation.Files, lng: locale },
+          );
+          const reviewBucket = getCurrentReviewBucket(state$.value, router);
 
-        return UIActions.showToast({
-          type: ToastType.Success,
-          title: translate(CommonI18nKeys.ItemVerbSuccessfully, {
-            ns: Translation.Common,
-            verb: verbPast,
-          }),
-          message: translate(FilesI18nKeys.ItemsVerbToFolder, {
-            ns: Translation.Files,
-            count: items.length,
-            folder: folderPlaceholder,
-            verb: verbPast,
-          }),
-        });
-      }
+          if (items.length > 0) {
+            const destinationUrl = action.payload.request.destinationFolder;
+            const path = items[0].destinationUrl;
+            const { name, bucket } = splitEntityId(path);
+            const folderPlaceholder = destinationUrl.replace(
+              `files/${bucket}`,
+              bucket === reviewBucket
+                ? translate(ChatI18nKeys.ReviewFiles, { ns: Translation.Chat })
+                : getRootFolderPlaceholderName(bucket),
+            );
+            if (items.length === 1) {
+              return UIActions.showToast({
+                type: ToastType.Success,
+                title: translate(CommonI18nKeys.ItemVerbSuccessfully, {
+                  ns: Translation.Common,
+                  verb: verbPast,
+                }),
+                message: translate(FilesI18nKeys.FileNameVerbToFolder, {
+                  ns: Translation.Files,
+                  fileName: name,
+                  folder: folderPlaceholder,
+                  verb: verbPast,
+                }),
+              });
+            }
 
-      if (errors && errors.length > 0) {
-        const visibleErrors = errors.slice(0, MAX_VISIBLE_NOTIFICATION_ITEMS);
-        const hiddenCount = errors.length - visibleErrors.length;
-
-        const fileNames = visibleErrors
-          .map((e) => splitEntityId(e.data.destinationUrl).name)
-          .join(', ');
-
-        const restText =
-          hiddenCount > 0
-            ? translate(FilesI18nKeys.AndOtherItems, {
+            return UIActions.showToast({
+              type: ToastType.Success,
+              title: translate(CommonI18nKeys.ItemVerbSuccessfully, {
+                ns: Translation.Common,
+                verb: verbPast,
+              }),
+              message: translate(FilesI18nKeys.ItemsVerbToFolder, {
                 ns: Translation.Files,
-                count: hiddenCount,
-              })
-            : '';
+                count: items.length,
+                folder: folderPlaceholder,
+                verb: verbPast,
+              }),
+            });
+          }
 
-        return UIActions.showToast({
-          type: ToastType.Error,
-          title: translate(CommonI18nKeys.ItemsDeletingFailed, {
-            ns: Translation.Common,
-            verb: isCopy ? 'copying' : 'moving',
-          }),
-          message: translate(FilesI18nKeys.SomeItemsNotSomething, {
-            ns: Translation.Files,
-            files: fileNames,
-            rest: restText,
-            verb: verbPast,
-          }),
-        });
-      }
+          if (errors && errors.length > 0) {
+            const visibleErrors = errors.slice(
+              0,
+              MAX_VISIBLE_NOTIFICATION_ITEMS,
+            );
+            const hiddenCount = errors.length - visibleErrors.length;
 
-      return null;
+            const fileNames = visibleErrors
+              .map((e) => splitEntityId(e.data.destinationUrl).name)
+              .join(', ');
+
+            const restText =
+              hiddenCount > 0
+                ? translate(FilesI18nKeys.AndOtherItems, {
+                    ns: Translation.Files,
+                    count: hiddenCount,
+                  })
+                : '';
+
+            return UIActions.showToast({
+              type: ToastType.Error,
+              title: translate(CommonI18nKeys.ItemsDeletingFailed, {
+                ns: Translation.Common,
+                verb: verbGerund,
+              }),
+              message: translate(FilesI18nKeys.SomeItemsNotSomething, {
+                ns: Translation.Files,
+                files: fileNames,
+                rest: restText,
+                verb: verbPast,
+              }),
+            });
+          }
+
+          return null;
+        }),
+      );
     }),
     filter(Boolean),
   );
 
-const deleteFilesResultToastEpic: AppEpic = (action$) =>
+const deleteFilesResultToastEpic: AppEpic = (action$, state$, { router }) =>
   action$.pipe(
     ofType(FilesActions.deleteFilesSuccess.type),
-    map(({ payload }) => {
-      const { result, request } = payload;
-      const { errors } = result;
-      const items = request.files;
-      const verbPast = 'deleted';
+    switchMap((action) => {
+      const locale = router?.locale ?? 'en';
 
-      if (items.length > 0) {
-        const destinationUrl = payload.request.folderUrl;
-        const path = items[0].sourceUrl;
-        const { name, bucket } = splitEntityId(path);
-        const folderPlaceholder = destinationUrl.replace(
-          `files/${bucket}`,
-          getRootFolderPlaceholderName(bucket),
-        );
-
-        if (items.length === 1) {
-          return UIActions.showToast({
-            type: ToastType.Success,
-            title: translate(CommonI18nKeys.ItemVerbSuccessfully, {
-              ns: Translation.Common,
-              verb: verbPast,
-            }),
-            message: translate(FilesI18nKeys.FileNameVerbFromFolder, {
-              ns: Translation.Files,
-              fileName: name,
-              folder: folderPlaceholder,
-              verb: verbPast,
-            }),
+      return from(
+        ensureLocaleNamespaceFromStaticFiles(locale, Translation.Files),
+      ).pipe(
+        map(() => {
+          const { payload } = action;
+          const { result, request } = payload;
+          const { errors } = result;
+          const items = request.files;
+          const verbPast = translate(FilesI18nKeys.VerbDeleted, {
+            ns: Translation.Files,
+            lng: locale,
           });
-        }
 
-        return UIActions.showToast({
-          type: ToastType.Success,
-          title: translate(CommonI18nKeys.ItemsVerbSuccessfully, {
-            ns: Translation.Common,
-            verb: verbPast,
-          }),
-          message: translate(FilesI18nKeys.ItemsVerbFromFolder, {
-            ns: Translation.Files,
-            count: items.length,
-            folder: folderPlaceholder,
-            verb: verbPast,
-          }),
-        });
-      }
+          if (items.length > 0) {
+            const destinationUrl = payload.request.folderUrl;
+            const path = items[0].sourceUrl;
+            const { name, bucket } = splitEntityId(path);
+            const folderPlaceholder = destinationUrl.replace(
+              `files/${bucket}`,
+              getRootFolderPlaceholderName(bucket),
+            );
 
-      if (errors && errors.length > 0) {
-        const visibleErrors = errors.slice(0, MAX_VISIBLE_NOTIFICATION_ITEMS);
-        const hiddenCount = errors.length - visibleErrors.length;
+            if (items.length === 1) {
+              return UIActions.showToast({
+                type: ToastType.Success,
+                title: translate(CommonI18nKeys.ItemVerbSuccessfully, {
+                  ns: Translation.Common,
+                  verb: verbPast,
+                  lng: locale,
+                }),
+                message: translate(FilesI18nKeys.FileNameVerbFromFolder, {
+                  ns: Translation.Files,
+                  fileName: name,
+                  folder: folderPlaceholder,
+                  verb: verbPast,
+                  lng: locale,
+                }),
+              });
+            }
 
-        const fileNames = visibleErrors
-          .map((e) => splitEntityId(e.data).name)
-          .join(', ');
-
-        const restText =
-          hiddenCount > 0
-            ? translate(FilesI18nKeys.AndOtherItems, {
+            return UIActions.showToast({
+              type: ToastType.Success,
+              title: translate(CommonI18nKeys.ItemsVerbSuccessfully, {
+                ns: Translation.Common,
+                verb: verbPast,
+                lng: locale,
+              }),
+              message: translate(FilesI18nKeys.ItemsVerbFromFolder, {
                 ns: Translation.Files,
-                count: hiddenCount,
-              })
-            : '';
+                count: items.length,
+                folder: folderPlaceholder,
+                verb: verbPast,
+                lng: locale,
+              }),
+            });
+          }
 
-        return UIActions.showToast({
-          type: ToastType.Error,
-          title: translate(CommonI18nKeys.ItemsDeletingFailed, {
-            ns: Translation.Common,
-          }),
-          message: translate(FilesI18nKeys.SomeItemsNotSomething, {
-            ns: Translation.Files,
-            files: fileNames,
-            rest: restText,
-            verb: verbPast,
-          }),
-        });
-      }
+          if (errors && errors.length > 0) {
+            const visibleErrors = errors.slice(
+              0,
+              MAX_VISIBLE_NOTIFICATION_ITEMS,
+            );
+            const hiddenCount = errors.length - visibleErrors.length;
 
-      return null;
+            const fileNames = visibleErrors
+              .map((e) => splitEntityId(e.data).name)
+              .join(', ');
+
+            const restText =
+              hiddenCount > 0
+                ? translate(FilesI18nKeys.AndOtherItems, {
+                    ns: Translation.Files,
+                    count: hiddenCount,
+                    lng: locale,
+                  })
+                : '';
+
+            return UIActions.showToast({
+              type: ToastType.Error,
+              title: translate(CommonI18nKeys.ItemsDeletingFailed, {
+                ns: Translation.Common,
+                lng: locale,
+              }),
+              message: translate(FilesI18nKeys.SomeItemsNotSomething, {
+                ns: Translation.Files,
+                files: fileNames,
+                rest: restText,
+                verb: verbPast,
+                lng: locale,
+              }),
+            });
+          }
+
+          return null;
+        }),
+      );
     }),
     filter(Boolean),
   );
@@ -1198,6 +1243,66 @@ const createNewFolderEpic: AppEpic = (action$) =>
     }),
   );
 
+const continueUploadReplaceDialogEpic: AppEpic = (action$, state$) =>
+  action$.pipe(
+    ofType(FilesActions.continueUploadReplaceDialog.type),
+    switchMap(({ payload }) => {
+      const dialog = FilesSelectors.selectUploadReplaceDialog(state$.value);
+
+      if (!dialog) {
+        return EMPTY;
+      }
+
+      const existingFiles = FilesSelectors.selectFiles(state$.value);
+      const resolvedFiles = applyUploadReplaceActions({
+        duplicatedFiles: dialog.duplicatedFiles,
+        nonDuplicatedFiles: dialog.nonDuplicatedFiles,
+        mappedActions: payload.mappedActions,
+        existingFiles,
+        folderId: dialog.folderId,
+        bucket: dialog.bucket,
+      });
+
+      const actions: AppAction[] = [
+        FilesActions.clearUploadReplaceDialog(),
+        ...resolvedFiles.map((file, index) =>
+          FilesActions.uploadFile({
+            fileContent: file.fileContent,
+            id: file.id,
+            relativePath: dialog.folderPath,
+            name: file.name,
+            ...(dialog.bucket && { bucket: dialog.bucket }),
+            ...(file.httpMethod && { httpMethod: file.httpMethod }),
+            ...(dialog.showSuccessMessage && {
+              showSuccessMessage: index === resolvedFiles.length - 1,
+            }),
+            ...(dialog.isFromDeviceAttachment && {
+              isFromDeviceAttachment: true,
+            }),
+          }),
+        ),
+      ];
+
+      if (dialog.selectFileIds && resolvedFiles.length) {
+        actions.push(
+          FilesActions.selectFiles({
+            ids: resolvedFiles.map(({ id }) => id),
+          }),
+        );
+      }
+
+      if (resolvedFiles.length) {
+        actions.push(
+          FilesActions.setResolvedUploadIds({
+            ids: resolvedFiles.map(({ id }) => id),
+          }),
+        );
+      }
+
+      return from(actions);
+    }),
+  );
+
 export const FilesEpics = combineEpics(
   initEpic,
   initFileSizeCacheEpic,
@@ -1230,4 +1335,5 @@ export const FilesEpics = combineEpics(
   uploadArchiveEpic,
   copyMoveFilesResultToastEpic,
   deleteFilesResultToastEpic,
+  continueUploadReplaceDialogEpic,
 );

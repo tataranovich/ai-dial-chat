@@ -1,5 +1,7 @@
 import { useCallback, useMemo } from 'react';
 
+import { useRouter } from 'next/router';
+
 import classNames from 'classnames';
 
 import { useScreenState } from '@/src/hooks/useScreenState';
@@ -15,6 +17,10 @@ import {
 import { isEntityIdExternal } from '@/src/utils/app/id';
 import { getGroupMarketplaceEntityKey } from '@/src/utils/app/marketplace';
 import { isEntityReadOnly } from '@/src/utils/app/permissions';
+import {
+  translatePlaybackLabel,
+  translateReplayAsIsLabel,
+} from '@/src/utils/app/translateConversationDisplayName';
 
 import { Conversation } from '@/src/types/chat';
 import { ScreenState } from '@/src/types/common';
@@ -50,13 +56,15 @@ interface EmptyChatDescriptionViewProps {
 const getModelName = (
   conversation: Conversation,
   model: DialAIEntityModel | undefined,
+  locale: string | undefined,
+  t: (key: string) => string,
 ) => {
   if (isPlaybackConversation(conversation)) {
-    return 'Playback';
+    return translatePlaybackLabel(locale, t);
   }
 
   if (isReplayAsIsConversation(conversation)) {
-    return 'Replay as is';
+    return translateReplayAsIsLabel(locale, t);
   }
 
   if (model) {
@@ -73,6 +81,7 @@ const EmptyChatDescriptionView = ({
   isApplicationPreviewChat,
 }: EmptyChatDescriptionViewProps) => {
   const dispatch = useAppDispatch();
+  const router = useRouter();
 
   const { t } = useTranslation(Translation.Chat);
 
@@ -85,6 +94,9 @@ const EmptyChatDescriptionView = ({
     SettingsSelectors.selectEnabledFeatures,
   );
   const isIsolatedView = useAppSelector(SettingsSelectors.selectIsIsolatedView);
+  const isOptimisticDefaultModelLoad = useAppSelector(
+    SettingsSelectors.selectIsOptimisticDefaultModelLoad,
+  );
 
   const screenState = useScreenState();
 
@@ -125,7 +137,10 @@ const EmptyChatDescriptionView = ({
     [conversation.id, dispatch],
   );
 
-  if (models.length === 0) {
+  // On the optimistic fast path the models listing may not be loaded yet;
+  // render the description using the known default model reference instead of
+  // blocking on a spinner.
+  if (models.length === 0 && !isOptimisticDefaultModelLoad) {
     return (
       <div className="flex w-full items-center justify-center rounded-t p-4">
         <Spinner size={DEFAULT_ICON_SIZES.SMALL} className="mx-auto" />
@@ -135,6 +150,7 @@ const EmptyChatDescriptionView = ({
 
   const isReplayAsIs = isReplayAsIsConversation(conversation);
   const isPlayback = isPlaybackConversation(conversation);
+  const modelName = getModelName(conversation, model, router.locale, t);
   const isEmptyChatChangeAgentHidden =
     enabledFeatures.has(Feature.HideEmptyChatChangeAgent) ||
     isApplicationPreviewChat;
@@ -186,7 +202,7 @@ const EmptyChatDescriptionView = ({
                     'text-secondary',
                 )}
               >
-                {getModelName(conversation, model)}
+                {modelName}
               </span>
             </div>
           </div>

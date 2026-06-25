@@ -406,6 +406,8 @@ export const AddToolsetSettingsFormSelector = {
   allowedToolsLabel: '[data-qa="allowed-tools-label"]',
   allowedToolsLabelSubtitle: '[data-qa="allowed-tools-subtitle"]',
   copyUrlButton: 'Copy URL',
+  connectToolsetLabel: '[data-qa="connect-toolset-label"]',
+  connectToolsetHint: '[data-qa="copy-section"] > label',
 };
 
 export const InformationModalSelectors = {
@@ -426,8 +428,10 @@ export const ReplaceConfirmationModalSelectors = {
   modalContainer: '[data-qa="replace-confirmation-modal"]',
   mainFolderTree: '[data-qa="main-folder-tree"]',
   allItemsSelector: '[data-qa="all-items-selector"]',
-  cancelButton: '[data-qa="cancel-import"]',
-  continueButton: '[data-qa="continue-import"]',
+  cancelButton: '[data-qa="cancel-import"], [data-qa="cancel-upload"]',
+  continueButton: '[data-qa="continue-import"], [data-qa="continue-upload"]',
+  title: 'h2',
+  description: 'p.text-secondary',
   dropdownTrigger: '[data-qa="dropdown-trigger"]',
   dropdownMenu: '[data-qa="dropdown-menu"]',
   menuItem: '[data-qa="menu-item"]',

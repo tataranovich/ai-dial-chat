@@ -34,6 +34,7 @@ import {
 } from '@/src/utils/app/form-schema';
 import { isFolderId } from '@/src/utils/app/id';
 import { isEntityReadOnly } from '@/src/utils/app/permissions';
+import { ResolvedUploadFile } from '@/src/utils/app/prepare-files-for-upload';
 import { getEntitiesFromTemplateMapping } from '@/src/utils/app/prompts';
 import { ApiUtils } from '@/src/utils/server/api';
 
@@ -359,11 +360,16 @@ const AssistantMessageEditor = memo(function AssistantMessageEditor({
 
   const handleUnselectFile = useCallback(
     (fileId: string) => {
-      dispatch(FilesActions.uploadFileCancel({ id: fileId }));
       const fid = isFolderId(fileId) ? fileId.slice(0, -1) : fileId;
+      const file = files.find((f) => f.id === fid);
+      if (file?.isFromDeviceAttachment) {
+        dispatch(FilesActions.deleteFile({ fileId: fid }));
+      } else {
+        dispatch(FilesActions.uploadFileCancel({ id: fileId }));
+      }
       setNewEditableAttachmentsIds((ids) => ids.filter((id) => id !== fid));
     },
-    [dispatch],
+    [dispatch, files],
   );
 
   const handleRetry = useCallback(
@@ -380,33 +386,22 @@ const AssistantMessageEditor = memo(function AssistantMessageEditor({
     );
   }, []);
 
+  const { uploadFiles: uploadPastedFiles, dispatchPreparedFiles } =
+    useChatUploadFiles({
+      selectedAttachmentsAmount: newEditableAttachments.length,
+      skipSelect: true,
+    });
+
   const handleUploadFromDevice = useCallback(
-    (
-      selectedFiles: Required<Pick<DialFile, 'fileContent' | 'id' | 'name'>>[],
-      folderPath: string | undefined,
-    ) => {
-      selectedFiles.forEach((file) => {
-        dispatch(
-          FilesActions.uploadFile({
-            fileContent: file.fileContent,
-            id: file.id,
-            relativePath: folderPath,
-            name: file.name,
-          }),
-        );
+    (selectedFiles: ResolvedUploadFile[], folderPath: string | undefined) => {
+      const ids = dispatchPreparedFiles(selectedFiles, folderPath, {
+        isFromDeviceAttachment: true,
       });
 
-      setNewEditableAttachmentsIds((ids) =>
-        uniq(ids.concat(selectedFiles.map(({ id }) => id))),
-      );
+      setNewEditableAttachmentsIds((prevIds) => uniq(prevIds.concat(ids)));
     },
-    [dispatch],
+    [dispatchPreparedFiles],
   );
-
-  const uploadPastedFiles = useChatUploadFiles({
-    selectedAttachmentsAmount: newEditableAttachments.length,
-    skipSelect: true,
-  });
 
   const handleUploadPastedFiles = useCallback(
     (
@@ -455,6 +450,16 @@ const AssistantMessageEditor = memo(function AssistantMessageEditor({
   useEffect(() => {
     setNewEditableAttachmentsIds(mappedEditableAttachmentsIds);
   }, [mappedEditableAttachmentsIds]);
+
+  const resolvedUploadIds = useAppSelector(
+    FilesSelectors.selectResolvedUploadIds,
+  );
+
+  useEffect(() => {
+    if (!resolvedUploadIds?.length) return;
+    setNewEditableAttachmentsIds((ids) => uniq(ids.concat(resolvedUploadIds)));
+    dispatch(FilesActions.clearResolvedUploadIds());
+  }, [resolvedUploadIds, dispatch]);
 
   useEffect(() => {
     if (shouldScroll) {

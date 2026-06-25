@@ -55,7 +55,10 @@ import { DefaultsService } from '@/src/utils/app/data/defaults-service';
 import { FileService } from '@/src/utils/app/data/file-service';
 import { getOrUploadConversation } from '@/src/utils/app/data/storages/api/conversation-api-storage';
 import { parseApiError } from '@/src/utils/app/epics-helpers/common.epic-helpers';
-import { notAllowedSymbolsRegex } from '@/src/utils/app/file';
+import {
+  isAllowedMimeType,
+  notAllowedSymbolsRegex,
+} from '@/src/utils/app/file';
 import {
   addGeneratedFolderId,
   fitFolderNameToStorageLimits,
@@ -101,6 +104,7 @@ import { parseEntityApiKey } from '@/src/utils/server/api';
 import { ChatBody, Conversation, RateBody } from '@/src/types/chat';
 import { EntityType, FeatureType, PartialBy } from '@/src/types/common';
 import { HTTPMethod } from '@/src/types/http';
+import { DialAIEntityModel } from '@/src/types/models';
 import { AppAction, AppEpic, RootState } from '@/src/types/store';
 import { Translation } from '@/src/types/translation';
 
@@ -447,7 +451,15 @@ const createNewConversationsEpic: AppEpic = (action$, state$) =>
       ({ payload: { names, modelReference, folderId, headerCreateNew } }) => {
         return state$.pipe(
           startWith(state$.value),
-          filter(ModelsSelectors.selectIsRecentModelsLoaded),
+          filter(
+            (state) =>
+              ModelsSelectors.selectIsRecentModelsLoaded(state) ||
+              // Optimistic fast path (gated by ENABLE_OPTIMISTIC_LOAD): skip
+              // wait when settings default model is known and we don't need
+              // isolated-model resolution from the models list.
+              (!SettingsSelectors.selectIsIsolatedView(state) &&
+                SettingsSelectors.selectIsOptimisticDefaultModelLoad(state)),
+          ),
           map((state) => {
             const isIsolatedView =
               SettingsSelectors.selectIsIsolatedView(state);
@@ -463,6 +475,16 @@ const createNewConversationsEpic: AppEpic = (action$, state$) =>
 
             if (modelReference) {
               return modelReference;
+            }
+
+            // Optimistic fast path: models not loaded yet but default is known.
+            if (
+              !ModelsSelectors.selectIsRecentModelsLoaded(state) &&
+              SettingsSelectors.selectIsOptimisticDefaultModelLoad(state)
+            ) {
+              const settingsDefault =
+                SettingsSelectors.selectDefaultModelReference(state);
+              if (settingsDefault) return settingsDefault;
             }
 
             const modelReferences = ModelsSelectors.selectModels(state).map(
@@ -1189,9 +1211,14 @@ const rateMessageEpic: AppEpic = (action$, state$) =>
         );
       }
 
+      const model = ModelsSelectors.selectModelById(
+        state,
+        conversation.model.id,
+      );
+
       const rateBody: RateBody = {
         responseId: message.responseId,
-        modelId: conversation.model.id,
+        modelId: model?.id ?? conversation.model.id,
         id: conversation.id,
         reference: conversation.reference,
         value: payload.rate > 0,
@@ -1655,8 +1682,20 @@ const streamMessageEpic: AppEpic = (action$, state$) =>
     ofType(ConversationsActions.streamMessage.type),
     map(({ payload }) => {
       const modelsMap = ModelsSelectors.selectModelsMap(state$.value);
-      const lastModel = modelsMap[payload.conversation.model.id];
-      const conversationModelType = lastModel?.type ?? EntityType.Model;
+      const isOptimisticLoadEnabled =
+        SettingsSelectors.selectIsOptimisticLoadEnabled(state$.value);
+      // On the optimistic fast path the models listing may not have resolved
+      // yet; fall back to a minimal reference from the conversation so the API
+      // call is valid. Only active when ENABLE_OPTIMISTIC_LOAD is set.
+      const model: DialAIEntityModel | undefined =
+        modelsMap[payload.conversation.model.id] ??
+        (isOptimisticLoadEnabled
+          ? ({
+              id: payload.conversation.model.id,
+              reference: payload.conversation.model.id,
+            } as DialAIEntityModel)
+          : undefined);
+      const conversationModelType = model?.type ?? EntityType.Model;
       const isOverlay = SettingsSelectors.selectIsOverlay(state$.value);
       const overlayTemperature = OverlaySelectors.selectOverlayTemperature(
         state$.value,
@@ -1666,10 +1705,10 @@ const streamMessageEpic: AppEpic = (action$, state$) =>
       > = {};
 
       if (conversationModelType === EntityType.Model) {
-        if (doesModelAllowSystemPrompt(lastModel)) {
+        if (doesModelAllowSystemPrompt(model)) {
           modelAdditionalSettings.prompt = payload.conversation.prompt;
         }
-        if (doesModelAllowTemperature(lastModel)) {
+        if (doesModelAllowTemperature(model)) {
           modelAdditionalSettings.temperature =
             isOverlay && overlayTemperature != null
               ? overlayTemperature
@@ -1678,7 +1717,7 @@ const streamMessageEpic: AppEpic = (action$, state$) =>
       }
 
       const chatBody: ChatBody = {
-        model: modelsMap[payload.conversation.model.id],
+        model,
         messages: payload.conversation.messages
           .filter(
             (message, index) =>
@@ -1696,7 +1735,13 @@ const streamMessageEpic: AppEpic = (action$, state$) =>
               message.custom_content?.configuration_value) && {
               custom_content: {
                 state: message.custom_content?.state,
-                attachments: message.custom_content?.attachments,
+                attachments: message.custom_content?.attachments?.filter(
+                  (attachment) =>
+                    isAllowedMimeType(
+                      model?.inputAttachmentTypes ?? [],
+                      attachment.type,
+                    ),
+                ),
                 form_value: message.custom_content?.form_value,
                 form_schema: message.custom_content?.form_schema,
                 configuration_value:
@@ -3274,6 +3319,32 @@ const uploadConversationsFromMultipleFoldersEpic: AppEpic = (action$, state$) =>
                     ],
                   }),
                 ),
+              ),
+            );
+          }
+
+          const emptySharedFolderIds =
+            payload.cleanUpEmptySharedFolderPaths?.filter(
+              (requestedPath) =>
+                !conversations.some((conv) =>
+                  conv.id.startsWith(`${requestedPath}/`),
+                ),
+            ) ?? [];
+
+          if (emptySharedFolderIds.length) {
+            const currentFolders = ConversationsSelectors.selectFolders(
+              state$.value,
+            );
+            actions.push(
+              of(
+                ConversationsActions.setFolders({
+                  folders: currentFolders.filter(
+                    (f) =>
+                      !emptySharedFolderIds.some(
+                        (id) => f.id === id || f.id.startsWith(`${id}/`),
+                      ),
+                  ),
+                }),
               ),
             );
           }

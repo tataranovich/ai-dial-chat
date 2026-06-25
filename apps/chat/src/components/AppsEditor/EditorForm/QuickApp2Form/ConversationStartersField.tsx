@@ -1,5 +1,5 @@
 import { IconTrashX } from '@tabler/icons-react';
-import { FC } from 'react';
+import { FC, FocusEvent } from 'react';
 
 import { useTranslation } from 'next-i18next';
 
@@ -22,12 +22,14 @@ interface StarterWithId extends ConversationStarter {
 interface ConversationStartersListProps {
   value: StarterWithId[];
   onChange: (value: StarterWithId[]) => void;
+  onBlur?: () => void;
   disabled?: boolean;
 }
 
 export const ConversationStartersList: FC<ConversationStartersListProps> = ({
   value,
   onChange,
+  onBlur,
   disabled,
 }) => {
   const { t } = useTranslation(Translation.Marketplace);
@@ -50,8 +52,15 @@ export const ConversationStartersList: FC<ConversationStartersListProps> = ({
     }
   };
 
+  const handleContainerBlur = (e: FocusEvent<HTMLDivElement>) => {
+    if (!onBlur) return;
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      onBlur();
+    }
+  };
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2" onBlur={handleContainerBlur}>
       {value.map((item, index) => {
         const isLastRow = index === value.length - 1;
 
@@ -79,9 +88,11 @@ export const ConversationStartersList: FC<ConversationStartersListProps> = ({
                   className={classNames(isLastRow && 'opacity-0')}
                 />
               }
-              onClick={() =>
-                !isLastRow && onChange(value.filter((_, i) => i !== index))
-              }
+              onClick={() => {
+                if (isLastRow) return;
+                onChange(value.filter((_, i) => i !== index));
+                onBlur?.();
+              }}
               className={classNames(
                 'shrink-0 px-2',
                 isLastRow ? 'pointer-events-none' : 'hover:text-error',

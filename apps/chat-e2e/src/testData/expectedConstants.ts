@@ -5,6 +5,7 @@ import { EntityType } from '@/chat/types/common';
 import { ServerSlugs } from '@/chat/types/slugs-types';
 import { ItemUtil } from '@/src/utils';
 import { ThemesUtil } from '@/src/utils/themesUtil';
+import { Toolset } from '@epam/ai-dial-shared';
 import path from 'path';
 
 export const ExpectedConstants = {
@@ -386,6 +387,11 @@ export const ExpectedConstants = {
     `Item deleted successfully.\n“${filename}” deleted from ${path}`,
   replaceAttachmentConfirmationTitle: 'Replace Or Duplicate Item',
   replaceGroupAttachmentConfirmationTitle: 'Replace Or Duplicate Items',
+  uploadDuplicateNamesModalTitle:
+    'Some files failed to upload due to duplicate names',
+  uploadDuplicateNamesModalDescription:
+    'Add a postfix, ignore or replace existing files with uploading ones.',
+  continueUploadButtonLabel: 'Continue upload',
   replaceAttachmentConfirmationMessage: (filename: string) =>
     `Item with the name "${filename}" already exists in this destination.ReplaceDuplicate`,
   duplicatedFileName: (name: string, index = 1) => {
@@ -408,6 +414,12 @@ export const ExpectedConstants = {
     name: string,
     version: string,
   ) => `Not available ${entityType}.${name}v. ${version}`,
+  loginToOrgSuccessfulMessage: (name: string, version: string) =>
+    `Successful login\nYou have successfully logged into the "${name}" version ${version} with credentials to entire organization.`,
+  personalLoginSuccessfulMessage: (name: string, version: string) =>
+    `Successful login\nYou have successfully logged into the "${name}" version ${version} with personal credentials.`,
+  copyToolsetUrlPattern: (toolset: Toolset) =>
+    new RegExp(`/v1/toolset/${toolset.id ?? toolset.name}/mcp$`),
 };
 
 export const withTraceId = (message: string): RegExp => {
@@ -454,6 +466,7 @@ export enum MenuOptions {
   removeAccess = 'Remove access',
   loginWithMyCreds = 'Login with my creds',
   login = 'Log in',
+  connect = 'Connect',
 }
 
 export enum FilterMenuOptions {
@@ -815,6 +828,12 @@ export enum SignInButtonTitles {
   logOut = 'Log out',
 }
 
+export enum ManageCredsModalText {
+  title = 'Manage credentials',
+  personalCredsText = 'Log in with personal credentials.',
+  orgCredsText = 'Log in with credentials that will be available to other users in the organization.',
+}
+
 export const ExpectedConfirmationPopupData = {
   deleteItemHeader: 'Confirm Deleting Item',
   deleteItemsHeader: 'Confirm Deleting Items',
@@ -822,4 +841,16 @@ export const ExpectedConfirmationPopupData = {
     `Are you sure you want to delete “${item}”?`,
   deleteItemsContent: (count: number) =>
     `Do you want to delete the following ${count} items?`,
+};
+
+export const ExpectedConnectToolsetModalData = {
+  header: 'Connect toolset',
+};
+
+export const ExpectedDeleteToolsetModalData = {
+  title: 'Confirm deleting toolset',
+  message: (name: string, version: string) =>
+    `Are you sure you want to delete the ${name} (version ${version})?`,
+  cancelButton: 'Cancel',
+  confirmButton: 'Delete',
 };

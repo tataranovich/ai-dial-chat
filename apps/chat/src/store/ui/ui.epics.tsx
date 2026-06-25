@@ -21,6 +21,8 @@ import {
   isTabletScreenOrMobile,
   shouldShowConversationsSectionByDefault,
 } from '@/src/utils/app/mobile';
+import { isRtlLocale } from '@/src/utils/app/rtl';
+import { translateErrorMessage } from '@/src/utils/app/translateErrorMessage';
 
 import { FeatureType } from '@/src/types/common';
 import { AppAction, AppEpic } from '@/src/types/store';
@@ -267,6 +269,18 @@ const saveThemeEpic: AppEpic = (action$) =>
     ignoreElements(),
   );
 
+const setLocaleEpic: AppEpic = (action$) =>
+  action$.pipe(
+    ofType(UIActions.setLocale.type),
+    tap(({ payload }) => {
+      const dir = isRtlLocale(payload) ? 'rtl' : 'ltr';
+
+      document.documentElement.lang = payload;
+      document.documentElement.dir = dir;
+    }),
+    ignoreElements(),
+  );
+
 const saveEnterTypeEpic: AppEpic = (action$) =>
   action$.pipe(
     ofType(UIActions.setEnterType.type),
@@ -356,7 +370,9 @@ const showToastEpic: AppEpic = (action$) =>
       });
     }),
     tap(({ payload, responseMessage }) => {
-      let message = payload.message ?? errorsMessages.generalServer;
+      let message = translateErrorMessage(
+        payload.message ?? errorsMessages.generalServer,
+      );
       if (
         payload.response &&
         responseMessage &&
@@ -537,6 +553,7 @@ export const UIEpics = combineEpics(
   applyShowConversationsSectionByDefaultEpic,
   initThemeEpic,
   saveThemeEpic,
+  setLocaleEpic,
   saveEnterTypeEpic,
   saveShowChatbarEpic,
   saveShowPromptbarEpic,

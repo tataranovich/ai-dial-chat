@@ -14,11 +14,13 @@ import { ApiUtils, parseEntityApiKey } from '@/src/utils/server/api';
 
 import { CustomApplicationModel } from '@/src/types/applications';
 import {
+  DialAppToolset,
   DialDeploymentSimpleTool,
   MCPToolset,
   QuickApp2Config,
   UnknownToolset,
   isCodeInterpreterToolset,
+  isDialAppToolset,
   isDialDeploymentToolset,
   isMcpToolset,
 } from '@/src/types/quick-apps';
@@ -37,13 +39,14 @@ import { ChatI18nKeys } from '@/src/constants/i18n';
 import { AgentAndToolsetChip } from '@/src/components/Common/AgentAndToolsetSelector/AgentAndToolsetChip';
 import {
   DialMarkdownEditor,
-  EditorThemes,
+  EditorTheme,
 } from '@/src/components/Common/MarkdownEditor/MarkdownEditor';
 
 import { MarketplaceEntityInfoRow } from '../MarketplaceEntityInfoRow';
 import { DocumentField } from './DocumentField';
 
 import { Feature } from '@epam/ai-dial-shared';
+import { DialEllipsisTooltip } from '@epam/ai-dial-ui-kit';
 import groupBy from 'lodash-es/groupBy';
 
 interface ReviewQuickApp2SectionViewProps {
@@ -65,7 +68,9 @@ const ReviewQuickApp2SectionView = ({
   const { agents, toolsets, unknownToolsets, isCodeInterpreter } = useMemo(
     () =>
       (config.tool_sets ?? []).reduce<{
-        agents: (DialDeploymentSimpleTool & { name: string })[];
+        agents: ((DialAppToolset | DialDeploymentSimpleTool) & {
+          name: string;
+        })[];
         toolsets: (MCPToolset & { name: string })[];
         unknownToolsets: (UnknownToolset & { name: string })[];
         isCodeInterpreter: boolean;
@@ -79,16 +84,23 @@ const ReviewQuickApp2SectionView = ({
                   ? 'appTools'
                   : 'otherTools',
             );
-            acc.agents = appTools.map((tool) => ({
-              ...tool,
-              name: getQuickAppItemNameFromConfig(tool),
-            }));
+            acc.agents.push(
+              ...appTools.map((tool) => ({
+                ...tool,
+                name: getQuickAppItemNameFromConfig(tool),
+              })),
+            );
             acc.unknownToolsets.push(
               ...otherTools.map((tool) => ({
                 ...tool,
                 name: getQuickAppItemNameFromConfig(tool),
               })),
             );
+          } else if (isDialAppToolset(toolset)) {
+            acc.agents.push({
+              ...toolset,
+              name: getQuickAppItemNameFromConfig(toolset),
+            });
           } else if (isMcpToolset(toolset)) {
             acc.toolsets.push({
               ...toolset,
@@ -132,16 +144,38 @@ const ReviewQuickApp2SectionView = ({
         )
       : config.orchestrator.deployment.deployment_id;
   const hasToolsets = toolsets.length > 0 || unknownToolsets.length > 0;
+  const timeAwareness =
+    'timestamp' in (config?.features ?? {})
+      ? !!config?.features?.timestamp
+      : true;
+  const skills = useMemo(
+    () =>
+      (config?.skills ?? []).map(({ url }) => ({
+        name: ApiUtils.decodeApiUrl(
+          parseEntityApiKey(splitEntityId(url).name, { parseVersion: true })
+            .name,
+        ),
+        url,
+      })),
+    [config.skills],
+  );
 
   return (
     <>
-      {isCodeInterpreterEnabled && isCodeInterpreter && (
+      {isCodeInterpreterEnabled && (
         <MarketplaceEntityInfoRow
           label={t(ChatI18nKeys.CodeInterpreter)}
-          value={t(ChatI18nKeys.On)}
+          value={t(isCodeInterpreter ? ChatI18nKeys.On : ChatI18nKeys.Off)}
           valueClassName="max-w-[414px] break-all text-primary"
         />
       )}
+
+      <MarketplaceEntityInfoRow
+        label={t(ChatI18nKeys.TimeAwareness)}
+        value={t(timeAwareness ? ChatI18nKeys.On : ChatI18nKeys.Off)}
+        valueClassName="max-w-[414px] break-all text-primary"
+      />
+
       <MarketplaceEntityInfoRow
         label={t(ChatI18nKeys.Model)}
         value={orchestratorName}
@@ -175,7 +209,7 @@ const ReviewQuickApp2SectionView = ({
           <DialMarkdownEditor
             value={config.orchestrator.system_prompt.content}
             height={200}
-            theme={theme as EditorThemes}
+            theme={theme as EditorTheme}
             preview="preview"
             commands={[]}
             className="rounded-[5px]"
@@ -232,6 +266,23 @@ const ReviewQuickApp2SectionView = ({
         }
         valueClassName=""
       />
+      {!!skills.length && (
+        <MarketplaceEntityInfoRow
+          label={t(ChatI18nKeys.AgentSkills)}
+          value={
+            <div className="flex flex-wrap items-center gap-2 truncate">
+              {skills.map(({ name, url }) => (
+                <span
+                  key={url}
+                  className="max-w-[300px] truncate rounded border border-primary bg-controls-disable px-2 py-1 text-primary"
+                >
+                  <DialEllipsisTooltip text={name} />
+                </span>
+              ))}
+            </div>
+          }
+        />
+      )}
     </>
   );
 };

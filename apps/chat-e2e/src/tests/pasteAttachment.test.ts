@@ -48,6 +48,7 @@ dialTest(
     chatMessages,
     editMessageInputAttachmentsAssertions,
     customApplicationPublishingUtil,
+    replaceConfirmationModal,
   }) => {
     setTestIds(
       'EPMRTC-6227',
@@ -185,7 +186,17 @@ dialTest(
         );
         await dialHomePage.triggerPasteFilesEvent([Attachment.fileToCopyName], {
           pasteToElement: sendMessage.messageInput,
+          isHttpMethodTriggered: false,
         });
+        await baseAssertion.assertElementText(
+          replaceConfirmationModal.title,
+          ExpectedConstants.uploadDuplicateNamesModalTitle,
+        );
+        await baseAssertion.assertElementText(
+          replaceConfirmationModal.description,
+          ExpectedConstants.uploadDuplicateNamesModalDescription,
+        );
+        await replaceConfirmationModal.confirmUploadDuplicates();
         await sendMessageInputAttachmentsAssertions.assertFileIsAttached(
           expectedDuplicatedFilename,
           'visible',
@@ -242,6 +253,7 @@ dialTest(
         ];
         await dialHomePage.triggerPasteFilesEvent(filesToPaste, {
           pasteToElement: sendMessage.messageInput,
+          isHttpMethodTriggered: false,
         });
         for (const fileToPaste of filesToPaste) {
           await sendMessageInputAttachmentsAssertions.assertFileIsAttached(

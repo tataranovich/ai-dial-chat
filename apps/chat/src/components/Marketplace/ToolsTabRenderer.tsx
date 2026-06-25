@@ -2,6 +2,8 @@ import React, { useCallback } from 'react';
 
 import { useMarketplaceDisplayedEntities } from '@/src/hooks/useMarketplaceDisplayedEntities';
 
+import { isMyToolset } from '@/src/utils/app/id';
+
 import { ToolsetModel } from '@/src/types/toolsets';
 
 import { MarketplaceActions, ToolsetActions } from '@/src/store/actions';
@@ -14,8 +16,6 @@ import {
   MarketplaceEntitiesTabs,
   MarketplaceTabs,
 } from '@/src/constants/marketplace';
-
-import { ConnectToolsetModal } from '@/src/components/Marketplace/ConnectToolsetModal';
 
 import { ResultsView, ResultsViewProps } from './TabResults';
 import { ToolsetDetails } from './ToolsetsDetails/ToolsetDetails';
@@ -62,6 +62,7 @@ export function ToolsTabRenderer() {
     allToolsets,
     installedToolsetsSet,
     selectedFilters,
+    isMyToolset,
   );
 
   const handleSetDetailsToolset = useCallback(
@@ -145,8 +146,6 @@ export function ToolsTabRenderer() {
           isSuggested={detailsToolset?.isSuggested}
         />
       )}
-
-      <ConnectToolsetModal />
     </>
   );
 }

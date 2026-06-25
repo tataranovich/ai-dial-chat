@@ -9,6 +9,8 @@ import {
   useState,
 } from 'react';
 
+import { useRouter } from 'next/router';
+
 import { useCopy } from '@/src/hooks/useCopy';
 import { useTranslation } from '@/src/hooks/useTranslation';
 
@@ -16,13 +18,14 @@ import { isQuickApp2 } from '@/src/utils/app/application';
 import { constructPath } from '@/src/utils/app/file';
 import { isEntityIdPublic } from '@/src/utils/app/publications';
 import { getShareType } from '@/src/utils/app/share';
+import { translateConversationDisplayName } from '@/src/utils/app/translateConversationDisplayName';
 
 import { FeatureType } from '@/src/types/common';
 import { ModalState } from '@/src/types/modal';
 import { QuickApp2Config } from '@/src/types/quick-apps';
 import { Translation } from '@/src/types/translation';
 
-import { ApplicationActions, ShareActions } from '@/src/store/actions';
+import { ShareActions } from '@/src/store/actions';
 import { useAppDispatch, useAppSelector } from '@/src/store/hooks';
 import {
   ApplicationSelectors,
@@ -30,7 +33,7 @@ import {
   ShareSelectors,
 } from '@/src/store/selectors';
 
-import { SideBarI18nKeys } from '@/src/constants/i18n';
+import { ChatI18nKeys, SideBarI18nKeys } from '@/src/constants/i18n';
 import { DEFAULT_ICON_SIZES } from '@/src/constants/icons';
 import { OUTSIDE_PRESS_AND_MOUSE_EVENT } from '@/src/constants/modal';
 
@@ -74,7 +77,7 @@ function ShareAccessOption({
         size={18}
         className="invisible absolute text-accent-primary peer-checked:visible"
       />
-      <span className="ml-2 whitespace-nowrap text-sm">{filterValue}</span>
+      <span className="ms-2 whitespace-nowrap text-sm">{filterValue}</span>
     </label>
   );
 }
@@ -107,7 +110,9 @@ function ShareAccessSection({
 }
 
 function ShareModalView() {
+  const router = useRouter();
   const { t } = useTranslation(Translation.SideBar);
+  const { t: tChat } = useTranslation(Translation.Chat);
 
   const dispatch = useAppDispatch();
 
@@ -140,12 +145,6 @@ function ShareModalView() {
   const sharingType = useMemo(() => {
     return getShareType(shareFeatureType, isFolder);
   }, [shareFeatureType, isFolder]);
-
-  useEffect(() => {
-    if (entity && isQuickApp2(entity) && shareResourceId) {
-      dispatch(ApplicationActions.get({ applicationId: shareResourceId }));
-    }
-  }, [shareResourceId, entity, dispatch]);
 
   const hasPrivateSkills = useMemo(() => {
     if (!entity || !isQuickApp2(entity)) return false;
@@ -216,6 +215,19 @@ function ShareModalView() {
     dispatch(ShareActions.setUnshareResourceId(shareResourceId));
   }, [dispatch, handleClose, shareResourceId]);
 
+  const displayResourceName = useMemo(() => {
+    const name = shareResourceName?.trim();
+    if (!name) {
+      return name;
+    }
+
+    if (shareFeatureType === FeatureType.Chat) {
+      return translateConversationDisplayName(name, router.locale, tChat);
+    }
+
+    return name;
+  }, [router.locale, shareFeatureType, shareResourceName, tChat]);
+
   return (
     <Modal
       portalId="theme-main"
@@ -228,17 +240,20 @@ function ShareModalView() {
       <div className="flex min-h-0 flex-1 flex-col px-3 py-4 md:p-6">
         <h4 className="mb-2 max-h-[50px] whitespace-pre-wrap text-start text-base font-semibold">
           <div
-            className="flex w-full items-center gap-2 pr-6"
+            className="flex w-full items-center gap-2 pe-6"
             data-qa="modal-entity-name"
           >
             <p>{t(SideBarI18nKeys.Share)}:</p>
-            <DialEllipsisTooltip text={shareResourceName?.trim()} />
+            <DialEllipsisTooltip text={displayResourceName} />
           </div>
         </h4>
 
         <div className="flex flex-col justify-between gap-2 overflow-auto">
           {entity?.version && (
-            <span data-qa="entity-version">Version: {entity.version}</span>
+            <span data-qa="entity-version">
+              {tChat(ChatI18nKeys.VersionColon)}
+              {entity.version}
+            </span>
           )}
 
           {hasPrivateSkills && (
@@ -277,13 +292,13 @@ function ShareModalView() {
               <input
                 type="text"
                 readOnly
-                className="w-full gap-2 truncate rounded border border-primary bg-layer-3 p-3 pr-10 outline-none"
+                className="w-full gap-2 truncate rounded border border-primary bg-layer-3 p-3 pe-10 outline-none"
                 onCopyCapture={handleCopy}
                 value={url}
                 data-qa="share-link"
               />
             </Tooltip>
-            <div className="absolute right-3 top-3">
+            <div className="absolute end-3 top-3">
               {urlCopied ? (
                 <Tooltip tooltip={t(SideBarI18nKeys.CopiedSideBar)}>
                   <IconCheck size={20} className="text-secondary" />

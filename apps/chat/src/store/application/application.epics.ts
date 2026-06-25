@@ -45,6 +45,7 @@ import {
 } from '@/src/utils/app/id';
 import { isMarketplaceEditorStep } from '@/src/utils/app/marketplace';
 import { mergeFeatures } from '@/src/utils/app/models';
+import { translateErrorMessage } from '@/src/utils/app/translateErrorMessage';
 import { translate } from '@/src/utils/app/translation';
 import { parseEntityApiKey } from '@/src/utils/server/api';
 
@@ -54,6 +55,7 @@ import {
   CustomApplicationModel,
 } from '@/src/types/applications';
 import { MarketplaceEditorSteps } from '@/src/types/marketplace';
+import { DialAIEntityFeatures } from '@/src/types/models';
 import { AppAction, AppEpic } from '@/src/types/store';
 import { Translation } from '@/src/types/translation';
 
@@ -136,11 +138,19 @@ const createApplicationEpic: AppEpic = (action$) =>
         schema,
       ).pipe(
         switchMap((application) =>
-          ApplicationService.get(application.id).pipe(
-            switchMap((retrievedApplication) => {
+          forkJoin({
+            retrievedApplication: ApplicationService.get(application.id),
+            dialEntity: ApplicationService.getDialEntity(application.id),
+          }).pipe(
+            switchMap(({ retrievedApplication, dialEntity }) => {
               if (retrievedApplication) {
-                const featuresRecord: Record<string, boolean | undefined> = {
-                  ...(retrievedApplication.features || {}),
+                const featuresRecord = {
+                  ...(dialEntity?.features ??
+                    retrievedApplication.features ??
+                    {}),
+                  ...(!!retrievedApplication.function && {
+                    chat_completion: true,
+                  }),
                 };
 
                 const modelData = {
@@ -210,7 +220,7 @@ const createFailEpic: AppEpic = (action$) =>
     switchMap(() =>
       of(
         UIActions.showErrorToast({
-          message: translate(errorsMessages.createFailed, {
+          message: translateErrorMessage(errorsMessages.createFailed, {
             entity: 'application',
           }),
         }),
@@ -242,7 +252,7 @@ const deleteApplicationEpic: AppEpic = (action$) =>
     ),
   );
 
-const updateApplicationEpic: AppEpic = (action$) =>
+const updateApplicationEpic: AppEpic = (action$, state$) =>
   action$.pipe(
     ofType(ApplicationActions.update.type),
     switchMap(({ payload }) => {
@@ -368,9 +378,10 @@ const updateApplicationEpic: AppEpic = (action$) =>
               payload.schema,
             ).pipe(
               switchMap(() => {
-                const featuresRecord: Record<string, boolean | undefined> = {
-                  ...(updatedCustomApplication.features || {}),
-                };
+                const modelsMap = ModelsSelectors.selectModelsMap(state$.value);
+                const model = modelsMap[updatedCustomApplication.id];
+                const featuresRecord =
+                  model?.features ?? updatedCustomApplication.features ?? {};
 
                 const modelData = {
                   ...updatedCustomApplication,
@@ -470,7 +481,7 @@ const updateApplicationEpic: AppEpic = (action$) =>
     }),
   );
 
-const editApplicationEpic: AppEpic = (action$) =>
+const editApplicationEpic: AppEpic = (action$, state$) =>
   action$.pipe(
     ofType(ApplicationActions.edit.type),
     switchMap(({ payload }) => {
@@ -483,9 +494,10 @@ const editApplicationEpic: AppEpic = (action$) =>
         payload.schema,
       ).pipe(
         switchMap(() => {
-          const featuresRecord: Record<string, boolean | undefined> = {
-            ...(payload.updatedApplication.features || {}),
-          };
+          const modelsMap = ModelsSelectors.selectModelsMap(state$.value);
+          const model = modelsMap[payload.updatedApplication.id];
+          const featuresRecord =
+            model?.features ?? payload.updatedApplication.features ?? {};
 
           const modelData = {
             ...payload.updatedApplication,
@@ -556,12 +568,21 @@ const getApplicationEpic: AppEpic = (action$, state$) =>
           actions.push(of(successAction));
 
           if (!modelFromState) {
+            const isQuickApp2 =
+              application.applicationTypeSchemaId ===
+              DEFAULT_QUICK_APPS_SCHEMA_2_ID;
             actions.push(
               of(
                 ModelsActions.addModels({
                   models: [
                     {
                       ...application,
+                      ...(isQuickApp2 && {
+                        features: {
+                          ...application.features,
+                          configuration: true,
+                        } as DialAIEntityFeatures,
+                      }),
                       sharedWithMe: acceptSharedWithMe,
                       permissions: payload.acceptSharePermissions,
                     },

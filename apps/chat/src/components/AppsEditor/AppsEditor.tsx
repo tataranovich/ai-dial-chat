@@ -108,7 +108,9 @@ export const AppsEditor = () => {
   const appDetails = useAppSelector(
     ApplicationSelectors.selectApplicationDetail,
   );
-  const models = useAppSelector(ModelsSelectors.selectModels);
+  const models = useAppSelector((state) =>
+    ModelsSelectors.selectModels(state, true),
+  );
   const modelsMap = useAppSelector(ModelsSelectors.selectModelsMap);
   const toolsetsMap = useAppSelector(ToolsetSelectors.selectToolsetsMap);
   const editorStep = useAppSelector(ApplicationSelectors.selectEditorStep);
@@ -307,12 +309,19 @@ export const AppsEditor = () => {
   );
 
   const handleSubmit = useCallback(
-    async (cb?: () => void, forceSave = false, skipValidation = false) => {
+    async (
+      cb?: () => void,
+      forceSave = false,
+      skipValidation = false,
+      ignoreDirty = false,
+    ) => {
       const isValid = await (skipValidation
         ? Promise.resolve(true)
         : formMethods.trigger());
 
-      if ((!isValid || skipValidation) && isDirty) {
+      const isFormDirty = ignoreDirty || formMethods.formState.isDirty;
+
+      if ((!isValid || skipValidation) && isFormDirty) {
         if (!forceSave) {
           changeEditorTabRef.current = null;
         } else {
@@ -328,7 +337,7 @@ export const AppsEditor = () => {
         return;
       }
 
-      if (isDirty || !appDetails) {
+      if (isFormDirty || !appDetails) {
         void formMethods
           .handleSubmit(submitHandler)()
           .then(() => cb?.());
@@ -338,7 +347,7 @@ export const AppsEditor = () => {
         cb?.();
       }
     },
-    [formMethods, isDirty, submitHandler, appDetails],
+    [formMethods, submitHandler, appDetails],
   );
 
   const handleSaveAndExit = useCallback(
@@ -402,14 +411,14 @@ export const AppsEditor = () => {
   }, [isAppPublic, isDirty, appDetails, dispatch, handleSubmit]);
 
   const handleAutoSave = useCallback(
-    (isSimpleViewSwitch?: boolean) => {
+    (isSimpleViewSwitch?: boolean, ignoreDirty?: boolean) => {
       if (editorStep === MarketplaceEditorSteps.General || isAppPublic) return;
       if (isSimpleViewSwitch) {
         isSimpleViewSwitchRef.current = true;
       } else if (onlyQuickAppJsonChanged) {
         return;
       }
-      void handleSubmit(undefined, true, true);
+      void handleSubmit(undefined, true, true, ignoreDirty);
     },
     [editorStep, handleSubmit, isAppPublic, onlyQuickAppJsonChanged],
   );

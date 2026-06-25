@@ -62,6 +62,16 @@ export class EntityDetailsModal extends BaseElement {
     MarketplaceDetailsModal.logoutButton,
     this.rootLocator,
   );
+  public manageCredsButton = new Button(
+    this.page,
+    MarketplaceDetailsModal.manageCredsButton,
+    this.rootLocator,
+  );
+  public loginWithMyCredsButton = new Button(
+    this.page,
+    MarketplaceDetailsModal.loginWithMyCredsButton,
+    this.rootLocator,
+  );
   public arrowIcon = this.getChildElementBySelector(
     MarketplaceEntitySelectors.arrowIcon,
   ).getChildElementBySelector(Tags.svg);
@@ -129,6 +139,11 @@ export class EntityDetailsModal extends BaseElement {
     );
   public credsLabel = this.getChildElementBySelector(
     MarketplaceDetailsModal.credsLabel,
+  );
+  public connectButton = new Button(
+    this.page,
+    MarketplaceDetailsModal.connectButton,
+    this.rootLocator,
   );
 
   public async clickUseButton({

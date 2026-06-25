@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { FeatureType } from '@/src/types/common';
+import { FeatureType, ReplaceOptions } from '@/src/types/common';
 import { DialFile, FileFolderInterface } from '@/src/types/files';
 
 import { FilesActions, filesSlice } from '../files.reducers';
@@ -306,5 +306,170 @@ describe('files.reducers deleteFilesSuccess', () => {
     expect(nextState.folders.map((f) => f.id).sort()).toEqual(
       [nestedFolderId, zipRoot].sort(),
     );
+  });
+});
+
+describe('files.reducers uploadReplaceDialog', () => {
+  const folderId = 'files/test-bucket/uploads';
+  const file = new File(['content'], 'sun.jpg', { type: 'image/jpeg' });
+
+  it('opens dialog with duplicated and non-duplicated files', () => {
+    const duplicatedFile = makeFile({
+      id: `${folderId}/sun.jpg`,
+      name: 'sun.jpg',
+      folderId,
+    });
+
+    const nextState = filesSlice.reducer(
+      filesSlice.getInitialState(),
+      FilesActions.showUploadReplaceDialog({
+        duplicatedFiles: [{ ...duplicatedFile, fileContent: file }],
+        nonDuplicatedFiles: [],
+        folderId,
+        folderPath: 'uploads',
+        bucket: 'test-bucket',
+        showSuccessMessage: true,
+        selectFileIds: true,
+      }),
+    );
+
+    expect(nextState.uploadReplaceDialog?.isOpen).toBe(true);
+    expect(nextState.uploadReplaceDialog?.duplicatedFiles).toHaveLength(1);
+  });
+
+  it('clears dialog on cancel', () => {
+    const state = {
+      ...filesSlice.getInitialState(),
+      uploadReplaceDialog: {
+        isOpen: true,
+        duplicatedFiles: [],
+        nonDuplicatedFiles: [],
+        folderId,
+        showSuccessMessage: false,
+        selectFileIds: false,
+      },
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.cancelUploadReplaceDialog(),
+    );
+
+    expect(nextState.uploadReplaceDialog).toBeNull();
+  });
+
+  it('stores mapped actions and closes dialog on continue', () => {
+    const state = {
+      ...filesSlice.getInitialState(),
+      uploadReplaceDialog: {
+        isOpen: true,
+        duplicatedFiles: [],
+        nonDuplicatedFiles: [],
+        folderId,
+        showSuccessMessage: false,
+        selectFileIds: false,
+      },
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.continueUploadReplaceDialog({
+        mappedActions: { [`${folderId}/sun.jpg`]: ReplaceOptions.Postfix },
+      }),
+    );
+
+    expect(nextState.uploadReplaceDialog?.isOpen).toBe(false);
+    expect(nextState.uploadReplaceDialog?.mappedActions).toEqual({
+      [`${folderId}/sun.jpg`]: ReplaceOptions.Postfix,
+    });
+  });
+});
+
+describe('files.reducers quick attachments', () => {
+  const fileId = 'files/test/uploads/2025-01/attachment.txt';
+  const fileContent = new File(['content'], 'attachment.txt', {
+    type: 'text/plain',
+  });
+
+  it('uploadFile sets isFromDeviceAttachment when flag is passed', () => {
+    const state = filesSlice.getInitialState();
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.uploadFile({
+        fileContent,
+        id: fileId,
+        name: 'attachment.txt',
+        relativePath: 'uploads/2025-01',
+        isFromDeviceAttachment: true,
+      }),
+    );
+
+    expect(nextState.files).toHaveLength(1);
+    expect(nextState.files[0].isFromDeviceAttachment).toBe(true);
+    expect(nextState.files[0].status).toBe(UploadStatus.LOADING);
+  });
+
+  it('uploadFile does not set isFromDeviceAttachment without flag', () => {
+    const state = filesSlice.getInitialState();
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.uploadFile({
+        fileContent,
+        id: fileId,
+        name: 'attachment.txt',
+        relativePath: 'uploads/2025-01',
+      }),
+    );
+
+    expect(nextState.files[0].isFromDeviceAttachment).toBeUndefined();
+  });
+
+  it('uploadFileSuccess preserves isFromDeviceAttachment', () => {
+    const state = {
+      ...filesSlice.getInitialState(),
+      files: [
+        makeFile({
+          id: fileId,
+          status: UploadStatus.LOADING,
+          isFromDeviceAttachment: true,
+        }),
+      ],
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.uploadFileSuccess({
+        apiResult: makeFile({
+          id: fileId,
+          serverSynced: true,
+        }),
+      }),
+    );
+
+    expect(nextState.files[0].isFromDeviceAttachment).toBe(true);
+    expect(nextState.files[0].serverSynced).toBe(true);
+  });
+
+  it('unselectFiles removes ids from selectedFilesIds only', () => {
+    const state = {
+      ...filesSlice.getInitialState(),
+      selectedFilesIds: [fileId, 'files/test/other.txt'],
+      files: [
+        makeFile({
+          id: fileId,
+          isFromDeviceAttachment: true,
+        }),
+      ],
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.unselectFiles({ ids: [fileId] }),
+    );
+
+    expect(nextState.selectedFilesIds).toEqual(['files/test/other.txt']);
+    expect(nextState.files).toHaveLength(1);
   });
 });

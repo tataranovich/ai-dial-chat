@@ -20,6 +20,7 @@ const initialState: SettingsState = {
   codeWarning: '',
   announcement: '',
   defaultModelReference: undefined,
+  isOptimisticLoadEnabled: false,
   defaultRecentModelsIds: [],
   storageType: StorageType.BrowserStorage,
   themesHostDefined: false,
@@ -37,6 +38,7 @@ const initialState: SettingsState = {
   },
   stageContentLimit: 40,
   resourceMaxSegmentBytes: DEFAULT_RESOURCE_MAX_SEGMENT_BYTES,
+  availableLocales: ['en'],
 };
 
 export const settingsSlice = createSlice({

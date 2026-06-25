@@ -241,6 +241,11 @@ const selectIsMovingFiles = createSelector(
   (state) => state.isMovingFiles,
 );
 
+const selectIsDeletingFiles = createSelector(
+  [rootSelector],
+  (state) => state.isDeletingFiles,
+);
+
 const selectLoadingFileMetadata = (state: RootState) =>
   rootSelector(state).loadingFileMetadata;
 
@@ -317,6 +322,18 @@ const selectSearchResultsForFolder = createSelector(
 const selectSharedWithMeFilesAndFoldersIds = (state: RootState) =>
   rootSelector(state).sharedWithMeFilesAndFoldersIds;
 
+const selectUploadReplaceDialog = (state: RootState) =>
+  rootSelector(state).uploadReplaceDialog;
+
+const selectIsShowUploadReplaceDialog = (state: RootState) =>
+  !!rootSelector(state).uploadReplaceDialog?.isOpen;
+
+const selectDuplicatedUploadFiles = (state: RootState) =>
+  rootSelector(state).uploadReplaceDialog?.duplicatedFiles ?? [];
+
+const selectResolvedUploadIds = (state: RootState) =>
+  rootSelector(state).resolvedUploadIds;
+
 export const FilesSelectors = {
   selectFiles,
   selectReviewBucketFiles,
@@ -354,5 +371,10 @@ export const FilesSelectors = {
   selectIsMovingFiles,
   selectIsCopyingFiles,
   selectIsUploadingFiles,
+  selectIsDeletingFiles,
   selectSharedWithMeFilesAndFoldersIds,
+  selectUploadReplaceDialog,
+  selectIsShowUploadReplaceDialog,
+  selectDuplicatedUploadFiles,
+  selectResolvedUploadIds,
 };

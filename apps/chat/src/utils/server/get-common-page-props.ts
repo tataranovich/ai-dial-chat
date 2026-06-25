@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { serverSideTranslations } from 'next-i18next/serverSideTranslations';
 
 import { parseCommaSeparatedList } from '@/src/utils/app/common';
+import { resolveAvailableLocales } from '@/src/utils/app/resolveAvailableLocales';
 import { authOptions } from '@/src/utils/auth/auth-options';
 import { pages } from '@/src/utils/auth/auth-pages';
 import { isAuthDisabled } from '@/src/utils/auth/auth-providers';
@@ -126,6 +127,7 @@ export const getCommonPageProps: GetServerSideProps = async ({
       process.env.RECENT_MODELS_IDS,
     ),
     defaultModelReference: DEFAULT_MODEL_ID,
+    isOptimisticLoadEnabled: process.env.ENABLE_OPTIMISTIC_LOAD === 'true',
     codeEditorPythonVersions: parseCommaSeparatedList(
       process.env.CODE_EDITOR_PYTHON_VERSIONS,
       ['python3.9', 'python3.10', 'python3.11', 'python3.12'],
@@ -159,6 +161,7 @@ export const getCommonPageProps: GetServerSideProps = async ({
       : StorageType.API,
     announcement: process.env.ANNOUNCEMENT_HTML_MESSAGE || '',
     themesHostDefined: !!process.env.THEMES_CONFIG_HOST,
+    availableLocales: resolveAvailableLocales(),
     customRenderers: customRenderers || [],
     applicationVisualizers: applicationVisualizers || {},
     allowVisualizerSendMessages: !!process.env.ALLOW_VISUALIZER_SEND_MESSAGES,

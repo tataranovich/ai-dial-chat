@@ -11,6 +11,7 @@ import {
   isExternalApp,
   isMarketplaceEntityPublic,
 } from '@/src/utils/app/application';
+import { doesAgentHaveChatCompletion } from '@/src/utils/app/models';
 
 import {
   ApplicationStatus,
@@ -39,6 +40,7 @@ export const useApplicationDeployment = (entity: DialAIEntityModel) => {
 
   const isExecutable = isExecutableApp(entity);
   const isPublicApp = isMarketplaceEntityPublic(entity);
+  const doesSupportChatCompletion = doesAgentHaveChatCompletion(entity);
 
   const hasDeployAccess = useHasDeployAccess(entity);
   const isAdmin = useAppSelector(AuthSelectors.selectIsAdmin);
@@ -47,17 +49,21 @@ export const useApplicationDeployment = (entity: DialAIEntityModel) => {
     !isUndeploying &&
     (isDeployed || isUpdating || wasDeployClicked || !hasDeployAccess);
 
-  const isButtonDisabled =
-    isExecutable &&
-    ((!isDeployed && isPublicApp && !isAdmin) ||
+  const isButtonDisabled = isExecutable
+    ? (!isDeployed && isPublicApp && !isAdmin) ||
+      (isDeployed && !doesSupportChatCompletion) ||
       (!isDeployed && !hasDeployAccess) ||
       isUpdating ||
       isUndeploying ||
-      (wasDeployClicked && !isDeployed));
+      (wasDeployClicked && !isDeployed)
+    : !doesSupportChatCompletion;
 
   const DeployIcon = showAsUseButton ? IconPlayerPlay : IconCloudUpload;
 
   const buttonTooltip = useMemo(() => {
+    if ((isDeployed || !isExecutable) && !doesSupportChatCompletion) {
+      return t(MarketplaceI18nKeys.AbsentChatCompletionDisabledMessage);
+    }
     if (!isExecutable) {
       return;
     }
@@ -88,6 +94,7 @@ export const useApplicationDeployment = (entity: DialAIEntityModel) => {
     entity.functionStatus,
     isPublicApp,
     isAdmin,
+    doesSupportChatCompletion,
   ]);
 
   const createButtonClickHandler = useCallback(
