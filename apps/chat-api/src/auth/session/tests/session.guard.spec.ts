@@ -159,6 +159,25 @@ describe('SessionGuard', () => {
     );
   });
 
+  it('keeps the CSRF token stable when refreshing the session', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const payload = makePayload({ at_exp: now + 30 });
+    const refreshed = makePayload({
+      at_exp: now + 3600,
+      rt_exp: now + 86400,
+      csrf: payload.csrf,
+    });
+
+    sessionService.decryptFromRequest.mockResolvedValue(payload);
+    refreshService.refresh.mockResolvedValue(refreshed);
+
+    const { context, req, res } = makeContext({ cookieValue: 'valid-token' });
+    await guard.canActivate(context);
+
+    expect((req.user as { csrf: string }).csrf).toBe(payload.csrf);
+    expect(res.setHeader).toHaveBeenCalledWith('X-CSRF-Token', payload.csrf);
+  });
+
   describe('lazy bucket resolution', () => {
     it('fetches bucket and updates session cookie when payload.bucket is empty', async () => {
       const payload = makePayload({ bucket: '' });

@@ -1,16 +1,14 @@
 import {
   buildCssVars,
+  DeploymentIcon,
+  MDMessageViewer,
   mergeClasses,
   MessageRole,
 } from '@epam/ai-dial-chat-shared';
-import {
-  AttachmentTray,
-  DeploymentIcon,
-} from '@epam/ai-dial-conversation-input';
+import { AttachmentTray } from '@epam/ai-dial-conversation-input';
 import { DialRoundedButton } from '@epam/ai-dial-ui-kit';
 import { FC } from 'react';
 import type { AssistantMessageBubbleProps } from '../../models/MessageBubble';
-import { MDMessageViewer } from '../Markdown/MDMessageViewer';
 import { MessageActions } from '../Message/MessageActions';
 import styles from './MessageBubble.module.scss';
 
@@ -31,6 +29,12 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
   deploymentIconUrl,
   deploymentDisplayName,
   thinkingLabel,
+  markdownComponents,
+  onAttachmentClick,
+  attachmentClickLabel,
+  codeBlockCopyLabel,
+  codeBlockCopiedLabel,
+  codeBlockTheme,
 }) => {
   const { colors, typography } = bubbleStyles ?? {};
   const noCustomClass = !typography?.fontClassName;
@@ -63,12 +67,13 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
           src={deploymentIconUrl}
           size={28}
           badgeClassName={styles.agentIconBadge}
+          tooltip={deploymentDisplayName}
         />
       )}
       <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-5">
         <div
           className={mergeClasses(
-            'flex w-fit min-w-0 max-w-full flex-col items-start gap-4',
+            'flex w-full min-w-0 max-w-full flex-col items-start gap-4',
             bubbleClassName,
           )}
         >
@@ -83,10 +88,18 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
                 content={text}
                 isStreaming={isStreaming}
                 thinkingLabel={thinkingLabel}
+                components={markdownComponents}
+                codeBlockCopyLabel={codeBlockCopyLabel}
+                codeBlockCopiedLabel={codeBlockCopiedLabel}
+                codeBlockTheme={codeBlockTheme}
               />
             </div>
           )}
-          <AttachmentTray attachments={attachments ?? []} />
+          <AttachmentTray
+            attachments={attachments ?? []}
+            onAttachmentClick={onAttachmentClick}
+            clickLabel={attachmentClickLabel}
+          />
           {afterContent}
           <MessageActions
             {...actions}

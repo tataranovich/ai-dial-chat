@@ -52,6 +52,26 @@ export default defineConfig(() => ({
         __dirname,
         '../../libs/sidebar/src/index.ts',
       ),
+      '@epam/ai-dial-starter-buttons': path.resolve(
+        __dirname,
+        '../../libs/starter-buttons/src/index.ts',
+      ),
+      '@epam/ai-dial-catalog': path.resolve(
+        __dirname,
+        '../../libs/catalog/src/index.ts',
+      ),
+      '@epam/ai-dial-source-panel': path.resolve(
+        __dirname,
+        '../../libs/source-panel/src/index.ts',
+      ),
+      '@epam/ai-dial-attachment-canvas': path.resolve(
+        __dirname,
+        '../../libs/attachment-canvas/src/index.ts',
+      ),
+      '@epam/ai-dial-attachment-input': path.resolve(
+        __dirname,
+        '../../libs/attachment-input/src/index.ts',
+      ),
     },
   },
   build: {
@@ -66,10 +86,8 @@ export default defineConfig(() => ({
         manualChunks: (id) => {
           if (id.includes('classnames') || id.includes('tailwind-merge'))
             return 'vendor-utils';
-          if (id.includes('@tabler/icons-react'))
-            return 'tabler-icons';
-          if (id.includes('@epam/ai-dial-ui-kit'))
-            return 'ui-kit';
+          if (id.includes('@tabler/icons-react')) return 'tabler-icons';
+          if (id.includes('@epam/ai-dial-ui-kit')) return 'ui-kit';
           return undefined;
         },
       },

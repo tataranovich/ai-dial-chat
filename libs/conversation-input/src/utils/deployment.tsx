@@ -1,7 +1,7 @@
-import type { DeploymentItem } from '@epam/ai-dial-chat-shared';
+import { type DeploymentItem, DeploymentIcon } from '@epam/ai-dial-chat-shared';
+import { DialTooltip } from '@epam/ai-dial-ui-kit';
 import type { ReactNode } from 'react';
 import FallbackEntityIcon from '../assets/fallback-entity-icon.svg?react';
-import { DeploymentIcon } from '../components/Input/Icon/DeploymentIcon';
 
 /** Returns the human-readable label for a deployment, falling back to its id. */
 export const getDeploymentLabel = (item: DeploymentItem): string =>
@@ -31,9 +31,19 @@ export const buildDeploymentIcon = (
   resolvedIconUrl: string | undefined,
   type: string | undefined,
   size = 18,
+  tooltip?: string,
 ): ReactNode => {
   if (resolvedIconUrl) {
-    return <DeploymentIcon src={resolvedIconUrl} size={size} />;
+    return (
+      <DeploymentIcon src={resolvedIconUrl} size={size} tooltip={tooltip} />
+    );
+  }
+  if (tooltip) {
+    return (
+      <DialTooltip tooltip={tooltip} triggerClassName="flex shrink-0">
+        <FallbackEntityIcon width={size} height={size} aria-hidden />
+      </DialTooltip>
+    );
   }
   return <FallbackEntityIcon width={size} height={size} aria-hidden />;
 };

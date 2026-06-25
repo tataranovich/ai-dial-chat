@@ -8,14 +8,18 @@ import { AttachmentType, RequestStatus } from '@epam/ai-dial-chat-shared';
 export const toDisplayAttachment = (
   attachment: MessageAttachment,
   index: number,
-): DisplayAttachment => ({
-  id: attachment.url ?? attachment.title ?? String(index),
-  name: attachment.title,
-  contentType: attachment.type,
-  type: attachment.type.startsWith('image/')
-    ? AttachmentType.Image
-    : AttachmentType.File,
-  status: RequestStatus.Idle,
-  url: attachment.url,
-  previewUrl: attachment.type.startsWith('image/') ? attachment.url : undefined,
-});
+): DisplayAttachment => {
+  const isImage = attachment.type?.startsWith('image/') ?? false;
+
+  return {
+    id: attachment.url ?? attachment.title ?? String(index),
+    name: attachment.title,
+    contentType: attachment.type ?? '',
+    type: isImage ? AttachmentType.Image : AttachmentType.File,
+    status: RequestStatus.Idle,
+    url: attachment.url,
+    referenceUrl: attachment.reference_url,
+    previewUrl: isImage ? attachment.url : undefined,
+    data: attachment.data,
+  };
+};

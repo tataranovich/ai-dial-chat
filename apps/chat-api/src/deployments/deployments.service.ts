@@ -9,11 +9,15 @@ import {
   mapDialHttpStatus,
 } from '../common/utils/dial-fetch-error';
 import type { EnvironmentVariables } from '../config/environment.config';
+import { HIDDEN_FILE } from '../constants/dial.constants';
+import { UserConfigService } from '../user-config/user-config.service';
 import type { DeploymentConfigurationDto } from './dto/deployment-configuration.dto';
 import type {
   DeploymentItemDto,
   DeploymentsResponseDto,
 } from './dto/deployment-item.dto';
+import type { DeploymentInterfaceType } from './dto/deployments-query.dto';
+import { RawDeploymentDto } from './dto/raw-deployment.dto';
 
 const isRecord = (val: unknown): val is Record<string, unknown> =>
   val != null && typeof val === 'object' && !Array.isArray(val);
@@ -26,19 +30,15 @@ const toAdditionalProperties = (
   return undefined;
 };
 
-type RawDeployment = {
-  id?: string;
-  display_name?: string;
-  object?: string;
-  toolset?: string;
-  icon_url?: string;
-  description?: string;
-  interfaces?: string | string[];
-  application_type_schema_id?: string;
-  input_attachment_types?: string[];
+type RawDeploymentWithFeatures = RawDeploymentDto & {
+  features?: { system_prompt?: boolean; temperature?: boolean };
 };
 
-const mapToDeploymentItem = (raw: RawDeployment): DeploymentItemDto | null => {
+const mapToDeploymentItem = (
+  raw: RawDeploymentWithFeatures,
+  featuredIds: Set<string>,
+  hiddenTags: Set<string>,
+): DeploymentItemDto | null => {
   if (!raw.id) return null;
 
   let type: 'model' | 'application' | 'toolset';
@@ -59,12 +59,18 @@ const mapToDeploymentItem = (raw: RawDeployment): DeploymentItemDto | null => {
     }
   }
 
+  const topics = raw.description_keywords || [];
+
   return {
     id: raw.id,
     displayName: raw.display_name ?? raw.id,
     type,
     iconUrl: raw.icon_url,
     description: raw.description,
+    displayVersion: raw.display_version,
+    isFeatured: featuredIds.has(raw.id || raw.reference || ''),
+    isHidden: topics.some((tag) => hiddenTags.has(tag)),
+    updatedAt: raw.updated_at,
     interfaces,
     applicationTypeSchemaId:
       type === 'application' && raw.application_type_schema_id
@@ -73,27 +79,63 @@ const mapToDeploymentItem = (raw: RawDeployment): DeploymentItemDto | null => {
     inputAttachmentTypes: Array.isArray(raw.input_attachment_types)
       ? raw.input_attachment_types
       : undefined,
+    features: raw.features
+      ? {
+          systemPrompt: raw.features.system_prompt ?? false,
+          temperature: raw.features.temperature ?? false,
+        }
+      : undefined,
+    maxInputAttachments:
+      typeof raw.max_input_attachments === 'number'
+        ? raw.max_input_attachments
+        : undefined,
+    topics,
+    owner: raw.owner,
+    applicationFolder:
+      type === 'application' && raw.id.includes('/')
+        ? raw.id.substring(0, raw.id.lastIndexOf('/'))
+        : undefined,
   };
 };
 
 @Injectable()
 export class DeploymentsService extends AppService {
   protected override readonly logger = new Logger(DeploymentsService.name);
+  private readonly featuredIds: Set<string>;
+  private readonly hiddenTags: Set<string>;
 
   constructor(
     configService: ConfigService<EnvironmentVariables>,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly userConfigService: UserConfigService,
   ) {
     super(configService);
+    this.featuredIds = new Set(
+      this.configService.get<string[]>('FEATURED_MODEL_IDS') ?? [],
+    );
+
+    this.hiddenTags = new Set(
+      this.configService.get<string[]>('HIDDEN_ENTITY_TAGS') ?? [],
+    );
   }
 
   async listDeployments(
     userSub: string,
     accessToken: string,
-    interfaceType?: string[],
+    bucket: string,
+    interfaceType?: DeploymentInterfaceType[],
   ): Promise<DeploymentsResponseDto> {
-    const cacheKey = `deployments:list:${userSub}`;
-    const cached = await this.cacheManager.get<DeploymentItemDto[]>(cacheKey);
+    const baseCacheKey = `deployments:list:${userSub}`;
+    const interfaceFilter =
+      interfaceType && interfaceType.length > 0 ? interfaceType : undefined;
+    const cacheKey = interfaceFilter
+      ? `${baseCacheKey}:interface:${interfaceFilter.join(',')}`
+      : baseCacheKey;
+    const cached =
+      (await this.cacheManager.get<DeploymentItemDto[]>(cacheKey)) ??
+      (interfaceFilter
+        ? await this.cacheManager.get<DeploymentItemDto[]>(baseCacheKey)
+        : undefined);
 
     let allItems: DeploymentItemDto[];
     if (cached) {
@@ -103,6 +145,9 @@ export class DeploymentsService extends AppService {
       try {
         const result = await this.client.getDeploymentsByInterfaceType({
           headers: getBearerAuthHeaders(accessToken),
+          params: interfaceFilter
+            ? { query: { interface_type: interfaceFilter } }
+            : undefined,
         });
         if (result.error) {
           return mapDialHttpStatus(
@@ -113,25 +158,47 @@ export class DeploymentsService extends AppService {
         }
         const rawData = result.data as unknown;
         const rawItems = Array.isArray(rawData)
-          ? (rawData as RawDeployment[])
-          : ((rawData as { deployments?: RawDeployment[] }).deployments ?? []);
+          ? (rawData as RawDeploymentDto[])
+          : ((rawData as { deployments?: RawDeploymentDto[] }).deployments ??
+            []);
+
         allItems = rawItems
-          .map(mapToDeploymentItem)
+          .filter((item) => item.id && !item.id.includes(HIDDEN_FILE))
+          .map((item) =>
+            mapToDeploymentItem(item, this.featuredIds, this.hiddenTags),
+          )
           .filter((item): item is DeploymentItemDto => item !== null);
+
         await this.cacheManager.set(cacheKey, allItems, 30_000);
       } catch (err) {
         return handleDialFetchError(err, 'list deployments', this.logger, 0);
       }
     }
 
-    if (!interfaceType || interfaceType.length === 0) {
-      return { deployments: allItems };
+    const { toolsets: toolsetIds, deployments: deploymentIds } =
+      await this.userConfigService.getInstalledIds(accessToken, bucket);
+    const toolsetsSet = new Set(toolsetIds);
+    const deploymentsSet = new Set(deploymentIds);
+
+    const withInstalled = allItems.map((item) => ({
+      ...item,
+      isInstalled:
+        item.type === 'toolset'
+          ? toolsetsSet.has(item.id)
+          : deploymentsSet.has(item.id),
+      isMy: item.id.split('/').includes(bucket),
+    }));
+
+    if (!interfaceFilter) {
+      return { deployments: withInstalled };
     }
 
-    const filtered = allItems.filter(
+    const filtered = withInstalled.filter(
       (item) =>
         item.interfaces &&
-        item.interfaces.some((iface) => interfaceType.includes(iface)),
+        item.interfaces.some((iface) =>
+          interfaceFilter.includes(iface as DeploymentInterfaceType),
+        ),
     );
     return { deployments: filtered };
   }
@@ -163,6 +230,7 @@ export class DeploymentsService extends AppService {
         );
       }
       const raw = result.data ?? {};
+
       const data: DeploymentConfigurationDto = {
         type: typeof raw['type'] === 'string' ? raw['type'] : undefined,
         title: typeof raw['title'] === 'string' ? raw['title'] : undefined,

@@ -14,7 +14,10 @@ import {
   useState,
 } from 'react';
 import { streamCompletion } from '../../server-api/chat-stream.api';
-import { saveConversation } from '../../server-api/conversations.api';
+import {
+  getConversation,
+  saveConversation,
+} from '../../server-api/conversations.api';
 import { applyChunkToMessages } from '../../utils/apply-chunk';
 import { getConversationPath } from '../../utils/conversation-path';
 
@@ -27,7 +30,7 @@ interface Params {
 
 interface Result {
   startStream: (
-    conversationPath: string,
+    conversationId: string,
     userContent: string,
     messageIndex: number,
     model: string,
@@ -57,7 +60,7 @@ export const useConversationStream = ({
 
   const startStream = useCallback(
     (
-      conversationPath: string,
+      currentConversationId: string,
       userContent: string,
       messageIndex: number,
       model: string,
@@ -69,7 +72,7 @@ export const useConversationStream = ({
       setIsStreaming(true);
 
       streamCompletion(
-        conversationPath,
+        currentConversationId,
         userContent,
         model,
         {
@@ -94,10 +97,23 @@ export const useConversationStream = ({
             const final = conversationRef.current;
             if (final) {
               try {
+                const conversationPath = getConversationPath(
+                  currentConversationId,
+                );
                 await saveConversation(
                   conversationPath,
                   final as ConversationResponseDto,
                 );
+                // Reload from server so server-computed fields (e.g. stage
+                // attachment `data` extracted by DIAL Core from referenced docs)
+                // are available in React state for canvas preview.
+                if (!abortRef.current) {
+                  const refreshed = (await getConversation(
+                    conversationPath,
+                  )) as Conversation;
+                  setConversation(refreshed);
+                  conversationRef.current = refreshed;
+                }
               } catch (err: unknown) {
                 void err;
               }

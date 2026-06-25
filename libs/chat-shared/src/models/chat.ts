@@ -1,6 +1,8 @@
-import { AttachmentType } from '../types/attachment';
+import { AttachmentErrorReason, AttachmentType } from '../types/attachment';
 import { MIMEType } from '../types/mime-type';
+import type { Annotation } from './annotation';
 import type { DeploymentConfigurationSchema } from './deployment-configuration';
+import type { ResponseFormat } from './deployment-features';
 
 /** Metadata returned by the DIAL file/conversation listing API for a single resource node. */
 export interface ConversationMetadata {
@@ -83,6 +85,8 @@ export interface StatusMessageCustomContent {
 export interface MessageCustomContent {
   /** Files or media items associated with this message. */
   attachments?: MessageAttachment[];
+  /** Annotations produced by the model, each optionally citing a source document. */
+  annotations?: Annotation[];
   /** Form field values submitted via an embedded form widget. */
   form_value?: MessageFormValue;
   /**
@@ -167,6 +171,8 @@ export interface StreamChunkDelta {
   content?: string;
   /** Role field — only present in the first chunk of a response. */
   role?: string;
+  /** DIAL Core response identifier used for the rate API. Present on the final chunk. */
+  responseId?: string;
   /**
    * Partial custom content carried in this chunk.
    * `form_schema`, `attachments`, and `stages` may arrive in separate chunks or together in the final chunk.
@@ -178,6 +184,8 @@ export interface StreamChunkDelta {
     form_schema?: DeploymentConfigurationSchema;
     /** AI-generated files produced by the model; typically present in the final chunk. */
     attachments?: MessageAttachment[];
+    /** Partial annotation updates; merge by `index` into the accumulating annotation list. */
+    annotations?: Annotation[];
   };
 }
 
@@ -230,10 +238,16 @@ export interface DisplayAttachment {
   type: AttachmentType;
   /** Upload / processing lifecycle state. */
   status: RequestStatus;
+  /** Reason the upload failed; only set when `status === RequestStatus.Error`. */
+  errorReason?: AttachmentErrorReason;
   /** Object URL for image preview; only set when `type === AttachmentType.Image`. */
   previewUrl?: string;
   /** Remote URL for an attachment that has already been uploaded. */
   url?: string;
+  /** Alternate reference URL (e.g. from the DIAL API `reference_url` field); used when `url` is absent. */
+  referenceUrl?: string;
+  /** Inline base-64 encoded content; present when the attachment carries data directly rather than via a URL. */
+  data?: string;
 }
 
 /** Attachment selected locally by the user before it is sent to the backend. */
@@ -250,8 +264,8 @@ export interface Attachment extends DisplayAttachment {
 export interface MessageAttachment {
   /** Zero-based position in the attachment list. */
   index?: number;
-  /** MIME type of the attachment content. */
-  type: MIMEType | string;
+  /** MIME type of the attachment content. May be absent in streamed runtime payloads. */
+  type?: MIMEType | string;
   /** Display name shown in the UI. */
   title: string;
   /** Inline base-64 encoded content (mutually exclusive with `url`). */
@@ -288,4 +302,6 @@ export interface Conversation {
   selectedAddons: string[];
   /** Override model ID used when an assistant model is selected. */
   assistantModelId: string;
+  /** Response format used when rendering messages. */
+  responseFormat?: ResponseFormat;
 }

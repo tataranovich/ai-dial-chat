@@ -1,10 +1,12 @@
 import {
-  MessageRole,
+  CodeBlockTheme,
   isStatusMessage,
+  MessageRole,
   type Attachment,
+  type AttachmentErrorReason,
   type DisplayAttachment,
-  type Message as MessageType,
   type MessageRating,
+  type Message as MessageType,
   type StarterOption,
 } from '@epam/ai-dial-chat-shared';
 import {
@@ -12,10 +14,22 @@ import {
   type MessageActionAriaLabels,
   type MessageActionTooltips,
 } from '@epam/ai-dial-conversation-messages';
-import { StagesPanel } from '@epam/ai-dial-conversation-stages';
+import { CollapsedGroup } from '@epam/ai-dial-conversation-stages';
 import { DialNotification, NotificationVariant } from '@epam/ai-dial-ui-kit';
-import { FC, lazy, memo, Suspense } from 'react';
+import { FC, lazy, memo, Suspense, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  AttachmentsI18nKeys,
+  ButtonsI18nKeys,
+} from '../../constants/translation-keys';
+import { useTheme } from '../../context/ThemeContext';
+import { useAnnotations } from '../../hooks/annotations/useAnnotations';
+import { useAttachmentAction } from '../../hooks/attachment/useAttachmentAction';
+import { useCitationCard } from '../../hooks/citations/useCitationCard';
+import { useCitationMarkdownComponents } from '../../hooks/citations/useCitationMarkdownComponents';
+import { ThemeId } from '../../types/theme-id';
 import { attachmentDtosToDisplayAttachments } from '../../utils/attachment-dto-to-display';
+import { groupAnnotationsBySource } from '../../utils/group-annotations-by-source';
 import { messageHasStages } from '../../utils/message-utils';
 import { buildMessageActions } from './utils/build-message-actions';
 import {
@@ -46,6 +60,7 @@ interface Props {
   onDeleteMessage?: (messageIndex: number) => void;
   onRegenerateMessage?: (messageIndex: number) => void;
   onRateMessage?: (messageIndex: number, rating: MessageRating | null) => void;
+  onDislikeMessage?: (messageIndex: number) => void;
   onCancelEdit?: (messageIndex: number) => void;
   onEditMessage?: (
     messageIndex: number,
@@ -54,6 +69,8 @@ interface Props {
     newAttachments: Attachment[],
   ) => void;
   onUploadAttachment?: (attachment: Attachment) => Promise<string>;
+  pendingDropFiles?: File[];
+  onDropFilesConsumed?: () => void;
   deploymentLookup: Record<
     string,
     { displayName: string; iconUrl: string | undefined }
@@ -73,6 +90,14 @@ interface Props {
   formatStatusModelChangedBody: (from: string, to: string) => string;
   streamErrorText: string;
   thinkingLabel: string;
+  executedLabel: string;
+  stepsLabel: (count: number) => string;
+  validateAttachment?: (
+    attachment: Attachment,
+  ) => AttachmentErrorReason | undefined;
+  hideAttachFile?: boolean;
+  /** When provided, called instead of the default download action when an attachment card is activated. */
+  onAttachmentClick?: (attachment: DisplayAttachment) => void;
 }
 
 const ConversationMessageItem: FC<Props> = ({
@@ -86,9 +111,12 @@ const ConversationMessageItem: FC<Props> = ({
   onDeleteMessage,
   onRegenerateMessage,
   onRateMessage,
+  onDislikeMessage,
   onCancelEdit,
   onEditMessage,
   onUploadAttachment,
+  pendingDropFiles,
+  onDropFilesConsumed,
   deploymentLookup,
   effectiveDeploymentId,
   tooltips,
@@ -105,7 +133,16 @@ const ConversationMessageItem: FC<Props> = ({
   formatStatusModelChangedBody,
   streamErrorText,
   thinkingLabel,
+  executedLabel,
+  stepsLabel,
+  validateAttachment,
+  hideAttachFile,
+  onAttachmentClick: onAttachmentClickProp,
 }) => {
+  const { t } = useTranslation();
+  const { currentTheme } = useTheme();
+  const { handleAttachmentClick: handleDownload } = useAttachmentAction();
+  const handleAttachmentClick = onAttachmentClickProp ?? handleDownload;
   const isStreaming = isStreamingMessage(
     msg.role,
     index,
@@ -114,6 +151,20 @@ const ConversationMessageItem: FC<Props> = ({
   );
   const isEditing =
     msg.role === MessageRole.User && !!editingMessageIndexes?.has(index);
+
+  const annotations = useAnnotations(msg, isStreaming);
+  const citationGroups = useMemo(
+    () => groupAnnotationsBySource(annotations),
+    [annotations],
+  );
+  const citationCard = useCitationCard();
+  const { processedContent, markdownComponents } =
+    useCitationMarkdownComponents(
+      msg.content,
+      citationGroups,
+      citationCard,
+      handleAttachmentClick,
+    );
 
   if (isEditing) {
     return (
@@ -130,6 +181,8 @@ const ConversationMessageItem: FC<Props> = ({
               showLessLabel={showLessLabel}
               showMoreAriaLabel={showMoreUserMessageAriaLabel}
               showLessAriaLabel={showLessUserMessageAriaLabel}
+              onAttachmentClick={handleAttachmentClick}
+              attachmentClickLabel={t(AttachmentsI18nKeys.Download)}
               className="justify-end"
             />
           }
@@ -148,6 +201,10 @@ const ConversationMessageItem: FC<Props> = ({
             saveLabel={saveLabel}
             ariaLabel={editMessageAriaLabel}
             className="w-full max-w-[748px]"
+            pendingDropFiles={pendingDropFiles}
+            onDropFilesConsumed={onDropFilesConsumed}
+            validateAttachment={validateAttachment}
+            hideAttachFile={hideAttachFile}
           />
         </Suspense>
       </div>
@@ -177,10 +234,16 @@ const ConversationMessageItem: FC<Props> = ({
       )
     : {};
 
+  const messageText =
+    msg.role === MessageRole.Assistant ? processedContent : msg.content;
+
   return (
     <MessageBubble
       role={msg.role}
-      text={msg.content}
+      text={messageText}
+      markdownComponents={
+        msg.role === MessageRole.Assistant ? markdownComponents : undefined
+      }
       attachments={attachmentDtosToDisplayAttachments(
         msg.custom_content?.attachments,
       )}
@@ -195,6 +258,7 @@ const ConversationMessageItem: FC<Props> = ({
           onDelete: onDeleteMessage,
           onRegenerate: onRegenerateMessage,
           onRate: onRateMessage,
+          onDislike: onDislikeMessage,
         },
         tooltips,
         ariaLabels,
@@ -207,9 +271,12 @@ const ConversationMessageItem: FC<Props> = ({
         hasStages || msg.hasStreamError ? (
           <>
             {hasStages && (
-              <StagesPanel
+              <CollapsedGroup
                 stages={msg.custom_content?.stages ?? []}
                 isStreaming={isStreaming}
+                executedLabel={executedLabel}
+                stepsLabel={stepsLabel}
+                onAttachmentClick={handleAttachmentClick}
               />
             )}
             {msg.hasStreamError && (
@@ -233,6 +300,15 @@ const ConversationMessageItem: FC<Props> = ({
       deploymentIconUrl={deploymentEntry?.iconUrl}
       deploymentDisplayName={deploymentEntry?.displayName}
       thinkingLabel={thinkingLabel}
+      codeBlockCopyLabel={t(ButtonsI18nKeys.Copy)}
+      codeBlockCopiedLabel={t(ButtonsI18nKeys.Copied)}
+      codeBlockTheme={
+        currentTheme === ThemeId.Light
+          ? CodeBlockTheme.Light
+          : CodeBlockTheme.Dark
+      }
+      onAttachmentClick={handleAttachmentClick}
+      attachmentClickLabel={t(AttachmentsI18nKeys.Download)}
       {...statusProps}
     />
   );

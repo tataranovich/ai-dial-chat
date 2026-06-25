@@ -1,4 +1,7 @@
-import type { ConversationListItemDto } from '@epam/chat-api-client';
+import type {
+  ConversationDeletionResultDto,
+  ConversationListItemDto,
+} from '@epam/chat-api-client';
 import {
   createContext,
   type ReactNode,
@@ -10,13 +13,14 @@ import {
 } from 'react';
 import { normalizeConversationId } from '../constants/routes';
 import {
+  deleteAllConversations as apiDeleteAllConversations,
   deleteConversation as apiDeleteConversation,
   duplicateConversation as apiDuplicateConversation,
   listConversations,
   renameConversation as apiRenameConversation,
 } from '../server-api/conversations.api';
-import { pinConversation as apiPinConversation } from '../server-api/user-config.api';
 import { getConversationPath } from '../utils/conversation-path';
+import { useUserConfig } from './UserConfigContext';
 
 interface ConversationsContextType {
   /** Flat list of all loaded conversations. */
@@ -35,6 +39,14 @@ interface ConversationsContextType {
   duplicateConversation: (id: string) => Promise<string>;
   /** Re-fetch the full conversation list from the server. */
   refreshConversations: () => Promise<void>;
+  /**
+   * Delete every conversation in the authenticated user's bucket.
+   * Returns the structured result. The list is re-fetched whenever at least one
+   * item was deleted or absent (preserving shared/public conversations).
+   * On total failure local state is unchanged.
+   * Throws if the API call itself fails before returning per-item results.
+   */
+  deleteAllConversations: () => Promise<ConversationDeletionResultDto>;
 }
 
 const ConversationsContext = createContext<
@@ -46,6 +58,7 @@ export const ConversationsProvider = ({
 }: {
   children: ReactNode;
 }) => {
+  const { setPinnedConversation } = useUserConfig();
   const [conversations, setConversations] = useState<ConversationListItemDto[]>(
     [],
   );
@@ -89,19 +102,22 @@ export const ConversationsProvider = ({
     };
   }, []);
 
-  const pinConversation = useCallback(async (id: string, isPinned: boolean) => {
-    setConversations((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, isPinned } : c)),
-    );
-    try {
-      await apiPinConversation(id, isPinned);
-    } catch (err) {
+  const pinConversation = useCallback(
+    async (id: string, isPinned: boolean) => {
       setConversations((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, isPinned: !isPinned } : c)),
+        prev.map((c) => (c.id === id ? { ...c, isPinned } : c)),
       );
-      console.error('Failed to persist pin state', err);
-    }
-  }, []);
+      try {
+        await setPinnedConversation(id, isPinned);
+      } catch (err) {
+        setConversations((prev) =>
+          prev.map((c) => (c.id === id ? { ...c, isPinned: !isPinned } : c)),
+        );
+        console.error('Failed to persist pin state', err);
+      }
+    },
+    [setPinnedConversation],
+  );
 
   const deleteConversation = useCallback(async (id: string) => {
     let snapshot: ConversationListItemDto[] | undefined;
@@ -163,6 +179,21 @@ export const ConversationsProvider = ({
     [refreshConversations],
   );
 
+  const deleteAllConversations =
+    useCallback(async (): Promise<ConversationDeletionResultDto> => {
+      const result = await apiDeleteAllConversations();
+
+      if (
+        result.deleted > 0 ||
+        result.alreadyAbsent > 0 ||
+        result.failed.length === 0
+      ) {
+        await refreshConversations();
+      }
+
+      return result;
+    }, [refreshConversations]);
+
   const value = useMemo(
     () => ({
       conversations,
@@ -173,6 +204,7 @@ export const ConversationsProvider = ({
       renameConversation,
       duplicateConversation,
       refreshConversations,
+      deleteAllConversations,
     }),
     [
       conversations,
@@ -183,6 +215,7 @@ export const ConversationsProvider = ({
       renameConversation,
       duplicateConversation,
       refreshConversations,
+      deleteAllConversations,
     ],
   );
 

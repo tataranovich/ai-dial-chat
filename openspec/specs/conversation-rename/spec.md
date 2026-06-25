@@ -64,6 +64,16 @@ i18n keys:
 - **WHEN** the user types "  New Title  " and clicks Save
 - **THEN** `onSave` is called with `"New Title"` (trimmed)
 
+#### Scenario: Trailing dot is stripped before save
+
+- **WHEN** the user types "My Chat..." and clicks Save
+- **THEN** `onSave` is called with `"My Chat"` (trailing dots removed after trimming)
+
+#### Scenario: Dot at start or inside name is preserved
+
+- **WHEN** the user types ".hidden" or "v1.2.chat"
+- **THEN** the value is accepted as-is and `onSave` receives the value unchanged
+
 #### Scenario: onCancel is called on Cancel click
 
 - **WHEN** the user clicks Cancel
@@ -97,12 +107,18 @@ i18n keys:
 
 ### Requirement: ConversationsContext exposes renameConversation with optimistic update
 
-`ConversationsContext` SHALL expose a `renameConversation(id: string, newTitle: string): Promise<void>` operation. Implementation:
+`ConversationsContext` SHALL expose a `renameConversation(id: string, newTitle: string): Promise<string>` operation. Implementation:
 
-1. Optimistically update the matching item's `title` in local state.
-2. Call `PATCH /api/v1/conversations` via the server-api wrapper.
-3. On success, update the item's `id` in local state to the `newPath` returned by the API.
-4. On failure, revert the optimistic title update and re-throw the error.
+1. Capture whether the conversation is currently pinned (`wasPinned`).
+2. Optimistically update the matching item's `title` in local state.
+3. Call `PATCH /api/v1/conversations/:path/rename` via the server-api wrapper.
+4. On success:
+   a. Update the item's `id` in local state to the `newPath` returned by the API.
+   b. If `wasPinned` is true, call `PATCH /api/v1/user-config/pins` twice: first to unpin the old ID, then to pin the new `newPath`. Failures in this step are caught and logged without failing the rename.
+5. On failure, revert the optimistic title update and re-throw the error.
+6. Return `newPath`.
+
+Background: DIAL Core renames a conversation by **moving** it to a new path derived from the new title. The old ID ceases to exist after a rename, so the pinned-conversation list must be updated atomically or the pin state will be lost on page refresh.
 
 State ownership: `ConversationsContext` — no new context state needed beyond the function exposed on the interface.
 
@@ -121,6 +137,17 @@ State ownership: `ConversationsContext` — no new context state needed beyond t
 - **WHEN** the API returns `{ newPath: "conversations/bucket/model__New Name__uuid" }`
 - **THEN** the item's `id` in the list is updated to match the returned path
 
+#### Scenario: Pinned state is preserved after rename
+
+- **WHEN** a pinned conversation is renamed successfully
+- **THEN** `updatePin` is called to unpin the old ID and then pin the new ID
+- **AND** the conversation remains pinned after page refresh
+
+#### Scenario: Rename succeeds even when pin update fails
+
+- **WHEN** a pinned conversation is renamed and the `updatePin` API calls throw
+- **THEN** the rename itself still resolves (no error is re-thrown for the pin failure)
+
 ---
 
 ### Requirement: RenameConversationPopup has unit tests
@@ -131,3 +158,43 @@ Unit tests SHALL be written at `apps/chat/src/components/RenameConversationPopup
 
 - **WHEN** the unit test suite runs
 - **THEN** it covers: pre-fill, Save disabled (unchanged), Save disabled (empty), Save disabled (saving), trimmed onSave, onCancel, error display
+
+---
+
+### Requirement: Conversation name input filters prohibited characters and strips trailing dots
+
+The conversation name input SHALL enforce the following naming conventions at the point of input, with no error message shown — invalid content is silently excluded:
+
+- The following characters are **prohibited** and must be stripped as the user types: tab (`\t`), `"`, `:`, `;`, `/`, `\`, `,`, `=`, `{`, `}`, `%`, `&`.
+- Trailing dots (`.`) are **automatically removed** from the value before it is passed to `onSave`. Dots at the start of or inside the name are preserved.
+
+Implementation:
+- `sanitizeConversationName(name: string): string` in `apps/chat/src/utils/string-utils.ts` strips all prohibited characters using `PROHIBITED_CONVERSATION_NAME_CHARS_RE`.
+- `stripTrailingDots(name: string): string` in the same file strips one or more trailing dots.
+- The `onChange` handler of the input calls `sanitizeConversationName` so prohibited characters never appear in the field.
+- Before calling `onSave`, the value is trimmed and then passed through `stripTrailingDots`.
+
+#### Scenario: Prohibited characters are stripped while typing
+
+- **WHEN** the user types any of `"`, `:`, `;`, `/`, `\`, `,`, `=`, `{`, `}`, `%`, `&` or a tab
+- **THEN** those characters are not reflected in the input value
+
+#### Scenario: Other special symbols are allowed
+
+- **WHEN** the user types characters such as `!`, `@`, `#`, `$`, `^`, `*`, `(`, `)`, `-`, `_`, `+`, `[`, `]`, `|`, `~`, `'`
+- **THEN** those characters appear in the input and are passed to `onSave` unchanged
+
+#### Scenario: Trailing dots are removed before save
+
+- **WHEN** the input value is `"My Chat..."` and Save is clicked
+- **THEN** `onSave` receives `"My Chat"`
+
+#### Scenario: Dot at the start is preserved
+
+- **WHEN** the input value is `".hidden"`
+- **THEN** `onSave` receives `".hidden"`
+
+#### Scenario: Dot inside the name is preserved
+
+- **WHEN** the input value is `"v1.2.release"`
+- **THEN** `onSave` receives `"v1.2.release"`

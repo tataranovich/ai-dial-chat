@@ -1,6 +1,6 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import { FC } from 'react';
-import type { StagesPanelProps } from '../../models/StagesPanel';
+import type { StagesPanelProps } from '../../models/stages-props';
 import { StageItem } from '../StageItem/StageItem';
 import styles from './StagesPanel.module.scss';
 
@@ -14,6 +14,7 @@ export const StagesPanel: FC<StagesPanelProps> = ({
   className,
   styles: panelStyles,
   copyAriaLabel,
+  onAttachmentClick,
 }) => {
   const { colors, typography = { fontClassName: 'dial-small-text' } } =
     panelStyles ?? {};
@@ -27,16 +28,6 @@ export const StagesPanel: FC<StagesPanelProps> = ({
     '--cs-completed': colors?.completedColor,
     '--cs-failed': colors?.failedColor,
     '--cs-button-bg': colors?.buttonBackground,
-    '--cs-font-size': noCustomClass ? typography?.fontSize : undefined,
-    '--cs-font-weight': noCustomClass
-      ? typography?.fontWeight?.toString()
-      : undefined,
-    '--cs-line-height': noCustomClass
-      ? typography?.lineHeight?.toString()
-      : undefined,
-    '--cs-letter-spacing': noCustomClass
-      ? typography?.letterSpacing
-      : undefined,
     '--cs-font-family': noCustomClass ? typography?.fontFamily : undefined,
   });
 
@@ -54,18 +45,19 @@ export const StagesPanel: FC<StagesPanelProps> = ({
       style={cssVars}
       className={mergeClasses('w-full', styles.panel, className)}
     >
-      <ul role="list" className="flex flex-col gap-4">
+      <ul role="list" className="flex w-full flex-col gap-4">
         {stages.map((stage, index) => (
           <li
             key={stage.index}
             role="listitem"
-            className={typography.fontClassName}
+            className={mergeClasses('w-full', typography.fontClassName)}
           >
             <StageItem
               stage={stage}
               isLive={lastRunningStageIndex === index}
               typography={typography}
               copyAriaLabel={copyAriaLabel}
+              onAttachmentClick={onAttachmentClick}
             />
           </li>
         ))}

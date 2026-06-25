@@ -1,29 +1,35 @@
 import {
   Attachment,
   isAudioTranscriptionSupported,
-  Conversation,
-  Message,
+  MessageRating,
   MessageRole,
+  type Conversation,
+  type Message,
 } from '@epam/ai-dial-chat-shared';
 import {
   ConfirmationPopupVariant,
   DialConfirmationPopup,
+  NotificationVariant,
 } from '@epam/ai-dial-ui-kit';
 import type { ConversationResponseDto } from '@epam/chat-api-client';
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import ConversationView from '../../components/ConversationView/ConversationView';
-import { getConversationRoute, ROUTES } from '../../constants/routes';
+import NegativeFeedbackModal from '../../components/ConversationView/Rate/NegativeFeedbackModal';
+import { getConversationRoute } from '../../constants/routes';
 import {
-  ActionsI18nKeys,
+  AttachmentsI18nKeys,
+  ButtonsI18nKeys,
   ChatI18nKeys,
-  ConversationHistoryI18nKeys,
+  ConversationPanelI18nKeys,
+  RateI18nKeys,
 } from '../../constants/translation-keys';
 import { useAppConfig } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
 import { useConversations } from '../../context/ConversationsContext';
 import { useDeployments } from '../../context/DeploymentsContext';
+import { useNotification } from '../../context/NotificationContext';
 import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
 import { useConversationHandlers } from '../../hooks/conversation/useConversationHandlers';
 import { useConversationStream } from '../../hooks/conversation/useConversationStream';
@@ -37,21 +43,29 @@ import {
   saveConversation,
 } from '../../server-api/conversations.api';
 import { uploadFile } from '../../server-api/files.api';
+import { ROUTES } from '../../types/routes';
 import { buildUploadPath } from '../../utils/build-upload-path';
-import { decodeConversationId } from '../../utils/conversation-path';
+import { getConversationPath } from '../../utils/conversation-path';
+import { setLastConversationSettings } from '../../utils/local-storage';
 import { getLastDeploymentId } from '../../utils/message-utils';
 
-export const ConversationPage: FC = () => {
+interface Props {
+  onDuplicateReadonly?: () => void;
+}
+
+export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   const { '*': conversationId } = useParams<{ '*': string }>();
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [isFetching, setIsFetching] = useState(!!conversationId);
   const conversationRef = useRef<Conversation | null>(null);
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { asrModelId, transcribeSizeLimitBytes } = useAppConfig();
+  const {
+    config: { asrModelId, transcribeSizeLimitBytes },
+  } = useAppConfig();
   const {
     items: deploymentItems,
-    setSelectedItemId,
+    restoreSelectedItemId,
     selectedItemId: currentSelectedItemId,
     isLoading: isDeploymentsLoading,
   } = useDeployments();
@@ -59,7 +73,7 @@ export const ConversationPage: FC = () => {
     useSourcesSidebar();
   const { user } = useUser();
   const bucket = user?.bucket ?? '';
-  const { duplicateConversation } = useConversations();
+  const { conversations, duplicateConversation } = useConversations();
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
   const isTranscriptionSupported = useMemo(() => {
@@ -111,34 +125,104 @@ export const ConversationPage: FC = () => {
     [asrModelId, currentSelectedItemId],
   );
 
+  const { showNotification } = useNotification();
+
+  const handleNetworkUploadError = useCallback(
+    (filenames: string[]) => {
+      showNotification({
+        variant: NotificationVariant.Error,
+        title: t(AttachmentsI18nKeys.NetworkErrorTitle),
+        message: (
+          <div className="min-w-0 overflow-hidden">
+            <span className="whitespace-pre-line">
+              {t(AttachmentsI18nKeys.NetworkErrorMessage)}
+            </span>
+            <ul className="mt-1 max-w-[508px]">
+              {filenames.map((name, i) => (
+                <li key={i} className="flex items-center gap-1 overflow-hidden">
+                  <span className="shrink-0" aria-hidden>
+                    •
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{name}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ),
+      });
+    },
+    [showNotification, t],
+  );
+
+  const [pendingDislikeMessageIndex, setPendingDislikeMessageIndex] = useState<
+    number | null
+  >(null);
+
   const isReadOnly = useMemo(() => {
-    if (!conversationId || !bucket) return false;
-    const decoded = decodeConversationId(conversationId);
-    const slashIndex = decoded.indexOf('/');
-    return slashIndex !== -1 && decoded.slice(0, slashIndex) !== bucket;
-  }, [conversationId, bucket]);
+    if (!conversationId) return false;
+    const listItem = conversations.find((c) => c.id.includes(conversationId));
+    if (listItem) {
+      return (
+        listItem.isReadonly || listItem.sharedWithMe || listItem.publishedWithMe
+      );
+    }
+    // Fallback: bucket-prefix check when the conversation isn't in the list yet.
+    if (!bucket) return false;
+    const slashIndex = conversationId.indexOf('/');
+    return slashIndex !== -1 && conversationId.slice(0, slashIndex) !== bucket;
+  }, [conversationId, bucket, conversations]);
+
+  const handleConversationChange = useCallback(
+    (updated: Conversation) => {
+      setConversation(updated);
+      conversationRef.current = updated;
+      setLastConversationSettings({
+        temperature: updated.temperature,
+        responseFormat: updated.responseFormat,
+      });
+      if (conversationId) {
+        void saveConversation(
+          getConversationPath(conversationId),
+          updated as ConversationResponseDto,
+        );
+      }
+    },
+    // conversationRef is a stable ref — intentionally omitted from deps
+
+    [conversationId],
+  );
 
   const handleDuplicateConversation = useCallback(async () => {
     if (!conversationId) return;
     setDuplicateError(null);
     try {
       const newPath = await duplicateConversation(conversationId);
+      if (isReadOnly) onDuplicateReadonly?.();
       navigate(getConversationRoute(newPath));
     } catch {
-      setDuplicateError(t(ConversationHistoryI18nKeys.DuplicateError));
+      setDuplicateError(t(ConversationPanelI18nKeys.DuplicateError));
     }
-  }, [conversationId, duplicateConversation, navigate, t]);
+  }, [
+    conversationId,
+    isReadOnly,
+    onDuplicateReadonly,
+    duplicateConversation,
+    navigate,
+    t,
+  ]);
 
   useEffect(() => {
     setMessages(conversation?.messages ?? []);
-    return () => handleCloseSourcesSidebar();
+    return () => {
+      handleCloseSourcesSidebar();
+      setMessages([]);
+    };
   }, [handleCloseSourcesSidebar, conversation?.messages, setMessages]);
 
   const addStatusMessage = useCallback(
     (msg: Message) => {
       if (!conversationId) return;
-      const decoded = decodeConversationId(conversationId);
-      const conversationPath = decoded.substring(decoded.indexOf('/') + 1);
+      const conversationPath = getConversationPath(conversationId);
       setConversation((prev) => {
         if (!prev) return prev;
         const next = { ...prev, messages: [...prev.messages, msg] };
@@ -172,20 +256,19 @@ export const ConversationPage: FC = () => {
 
   const loadConversation = useCallback(
     async (id: string) => {
-      const decodedConversationId = decodeConversationId(id);
-      const conversationPath = decodedConversationId.substring(
-        decodedConversationId.indexOf('/') + 1,
-      );
-
       setIsFetching(true);
       try {
-        const dto = await apiGetConversation(decodedConversationId);
+        const dto = await apiGetConversation(id);
         const result = dto as Conversation; // adapt if API response shape differs
 
         // Restore the last selected agent from the conversation's change history
         // so the deployment selector reflects what was active, not the default.
         const lastDeploymentId = getLastDeploymentId(result.messages);
-        setSelectedItemId(lastDeploymentId ?? result.assistantModelId);
+        const modelToSelect =
+          lastDeploymentId ?? (result.assistantModelId || result.model.id);
+        if (modelToSelect) {
+          restoreSelectedItemId(modelToSelect);
+        }
 
         const lastMsg = result.messages[result.messages.length - 1];
 
@@ -202,7 +285,7 @@ export const ConversationPage: FC = () => {
           setConversation(withPlaceholder);
           conversationRef.current = withPlaceholder;
           startStream(
-            conversationPath,
+            id,
             lastMsg.content,
             withPlaceholder.messages.length - 1,
             lastDeploymentId ?? result.model.id,
@@ -212,12 +295,12 @@ export const ConversationPage: FC = () => {
           setConversation(result);
         }
       } catch {
-        navigate(ROUTES.ROOT);
+        navigate(ROUTES.Root);
       } finally {
         setIsFetching(false);
       }
     },
-    [navigate, setSelectedItemId, startStream],
+    [navigate, restoreSelectedItemId, startStream],
   );
 
   useEffect(() => {
@@ -254,12 +337,56 @@ export const ConversationPage: FC = () => {
     conversationRef,
     setConversation,
     navigate,
+    showNetworkError: handleNetworkUploadError,
   });
+
+  const handleLike = useCallback(
+    async (messageIndex: number, rating: MessageRating | null) => {
+      const success = await handleRateMessage(messageIndex, rating);
+      if (success && rating === MessageRating.Like) {
+        showNotification({
+          variant: NotificationVariant.Success,
+          title: t(RateI18nKeys.LikeToastTitle),
+          message: t(RateI18nKeys.LikeToastDescription),
+        });
+      }
+    },
+    [handleRateMessage, showNotification, t],
+  );
+
+  const handleOpenDislikeModal = useCallback((messageIndex: number) => {
+    setPendingDislikeMessageIndex(messageIndex);
+  }, []);
+
+  const handleDislikeSubmit = useCallback(
+    async (comment: string) => {
+      if (pendingDislikeMessageIndex == null) return;
+      const index = pendingDislikeMessageIndex;
+      setPendingDislikeMessageIndex(null);
+      const success = await handleRateMessage(
+        index,
+        MessageRating.Dislike,
+        comment,
+      );
+      if (success) {
+        showNotification({
+          variant: NotificationVariant.Success,
+          title: t(RateI18nKeys.DislikeToastTitle),
+          message: t(RateI18nKeys.DislikeToastDescription),
+        });
+      }
+    },
+    [pendingDislikeMessageIndex, handleRateMessage, showNotification, t],
+  );
+
+  const handleDislikeModalClose = useCallback(() => {
+    setPendingDislikeMessageIndex(null);
+  }, []);
 
   if (isFetching) return null;
 
   if (!conversation) {
-    navigate(ROUTES.ROOT);
+    navigate(ROUTES.Root);
     return null;
   }
 
@@ -268,13 +395,16 @@ export const ConversationPage: FC = () => {
       <div className="flex h-full flex-col items-center justify-center overflow-hidden">
         <ConversationView
           messages={conversation.messages}
-          initialModelId={conversation.assistantModelId}
+          initialModelId={
+            conversation.assistantModelId || conversation.model.id
+          }
           onSend={handleSend}
           onUploadAttachment={handleUploadAttachment}
           onStop={handleStop}
           onDeleteMessage={handleDeleteMessage}
           onRegenerateMessage={handleRegenerateMessage}
-          onRateMessage={handleRateMessage}
+          onRateMessage={handleLike}
+          onDislikeMessage={handleOpenDislikeModal}
           onStartEdit={handleStartEdit}
           onCancelEdit={handleCancelEdit}
           onEditMessage={handleEditMessage}
@@ -289,15 +419,24 @@ export const ConversationPage: FC = () => {
           isTranscriptionSupported={isTranscriptionSupported}
           onUploadAudio={handleUploadAudio}
           onTranscribeAudio={handleTranscribeAudio}
+          conversation={conversation}
+          onConversationChange={handleConversationChange}
         />
       </div>
+
+      {pendingDislikeMessageIndex != null && (
+        <NegativeFeedbackModal
+          onClose={handleDislikeModalClose}
+          onSubmit={handleDislikeSubmit}
+        />
+      )}
 
       <DialConfirmationPopup
         open={pendingDeleteIndex != null}
         header={t(ChatI18nKeys.DeleteMessageTitle)}
         description={t(ChatI18nKeys.DeleteMessageDescription)}
-        confirmLabel={t(ActionsI18nKeys.Delete)}
-        cancelLabel={t(ActionsI18nKeys.Cancel)}
+        confirmLabel={t(ButtonsI18nKeys.Delete)}
+        cancelLabel={t(ButtonsI18nKeys.Cancel)}
         variant={ConfirmationPopupVariant.Danger}
         onConfirm={handleConfirmDelete}
         onClose={() => setPendingDeleteIndex(null)}
@@ -310,8 +449,8 @@ export const ConversationPage: FC = () => {
           pendingStarterContext?.starter['dial:widgetOptions']
             .confirmationMessage ?? ''
         }
-        confirmLabel={t(ActionsI18nKeys.Confirm)}
-        cancelLabel={t(ActionsI18nKeys.Cancel)}
+        confirmLabel={t(ButtonsI18nKeys.Confirm)}
+        cancelLabel={t(ButtonsI18nKeys.Cancel)}
         onConfirm={handleConfirmStarter}
         onClose={() => setPendingStarterContext(null)}
       />

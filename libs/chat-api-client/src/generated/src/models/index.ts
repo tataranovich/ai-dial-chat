@@ -127,6 +127,48 @@ export interface ApplicationsResponseDto {
 /**
  *
  * @export
+ * @interface ArchiveItemDto
+ */
+export interface ArchiveItemDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof ArchiveItemDto
+   */
+  bucket: string;
+  /**
+   * File or folder path within the bucket
+   * @type {string}
+   * @memberof ArchiveItemDto
+   */
+  path: string;
+  /**
+   * Display name for archive entry
+   * @type {string}
+   * @memberof ArchiveItemDto
+   */
+  name: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ArchiveItemDto
+   */
+  nodeType: ArchiveItemDtoNodeTypeEnum;
+}
+
+/**
+ * @export
+ */
+export const ArchiveItemDtoNodeTypeEnum = {
+  Item: 'item',
+  Folder: 'folder',
+} as const;
+export type ArchiveItemDtoNodeTypeEnum =
+  (typeof ArchiveItemDtoNodeTypeEnum)[keyof typeof ArchiveItemDtoNodeTypeEnum];
+
+/**
+ *
+ * @export
  * @interface AttachmentDto
  */
 export interface AttachmentDto {
@@ -218,6 +260,12 @@ export interface ChatCompletionChoiceDtoMessage {
  */
 export interface ChatCompletionDto {
   /**
+   * DIAL Core deployment name (may contain slashes and special characters)
+   * @type {string}
+   * @memberof ChatCompletionDto
+   */
+  deployment: string;
+  /**
    * Ordered chat messages to send to DIAL Core
    * @type {Array<MessageDto>}
    * @memberof ChatCompletionDto
@@ -289,6 +337,138 @@ export interface Check200Response {
 /**
  *
  * @export
+ * @interface ClientConfigDto
+ */
+export interface ClientConfigDto {
+  /**
+   * Deployment ID of the ASR model. Null when ASR is not configured.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  asrModelId: string | null;
+  /**
+   * Maximum audio file size in bytes accepted by the transcription endpoint.
+   * @type {number}
+   * @memberof ClientConfigDto
+   */
+  transcribeSizeLimitBytes: number;
+}
+/**
+ *
+ * @export
+ * @interface ClientConfigMetadataDto
+ */
+export interface ClientConfigMetadataDto {
+  /**
+   * ISO timestamp when the config was resolved.
+   * @type {string}
+   * @memberof ClientConfigMetadataDto
+   */
+  resolvedAt: string;
+  /**
+   * Cache TTL in seconds applied to this response.
+   * @type {number}
+   * @memberof ClientConfigMetadataDto
+   */
+  cacheTtlSeconds: number;
+}
+/**
+ *
+ * @export
+ * @interface ClientConfigResponseDto
+ */
+export interface ClientConfigResponseDto {
+  /**
+   * Application identifier.
+   * @type {string}
+   * @memberof ClientConfigResponseDto
+   */
+  appId: string;
+  /**
+   * Feature flags — boolean per feature key.
+   * @type {object}
+   * @memberof ClientConfigResponseDto
+   */
+  features: object;
+  /**
+   * Non-boolean configuration values.
+   * @type {ClientConfigDto}
+   * @memberof ClientConfigResponseDto
+   */
+  config: ClientConfigDto;
+  /**
+   * Resolution metadata.
+   * @type {ClientConfigMetadataDto}
+   * @memberof ClientConfigResponseDto
+   */
+  metadata?: ClientConfigMetadataDto;
+}
+/**
+ *
+ * @export
+ * @interface ConversationDeletionFailureDto
+ */
+export interface ConversationDeletionFailureDto {
+  /**
+   * Conversation ID that failed to delete
+   * @type {string}
+   * @memberof ConversationDeletionFailureDto
+   */
+  id: string;
+  /**
+   * Stable application error code
+   * @type {string}
+   * @memberof ConversationDeletionFailureDto
+   */
+  code: ConversationDeletionFailureDtoCodeEnum;
+}
+
+/**
+ * @export
+ */
+export const ConversationDeletionFailureDtoCodeEnum = {
+  NotFound: 'NOT_FOUND',
+  Forbidden: 'FORBIDDEN',
+  UpstreamError: 'UPSTREAM_ERROR',
+  Unknown: 'UNKNOWN',
+} as const;
+export type ConversationDeletionFailureDtoCodeEnum =
+  (typeof ConversationDeletionFailureDtoCodeEnum)[keyof typeof ConversationDeletionFailureDtoCodeEnum];
+
+/**
+ *
+ * @export
+ * @interface ConversationDeletionResultDto
+ */
+export interface ConversationDeletionResultDto {
+  /**
+   * Total number of IDs received in the request (after deduplication)
+   * @type {number}
+   * @memberof ConversationDeletionResultDto
+   */
+  requested: number;
+  /**
+   * Number of conversations successfully deleted from DIAL Core
+   * @type {number}
+   * @memberof ConversationDeletionResultDto
+   */
+  deleted: number;
+  /**
+   * Number of IDs that were already absent from DIAL Core (counted as success)
+   * @type {number}
+   * @memberof ConversationDeletionResultDto
+   */
+  alreadyAbsent: number;
+  /**
+   * Items that could not be deleted
+   * @type {Array<ConversationDeletionFailureDto>}
+   * @memberof ConversationDeletionResultDto
+   */
+  failed: Array<ConversationDeletionFailureDto>;
+}
+/**
+ *
+ * @export
  * @interface ConversationListItemDto
  */
 export interface ConversationListItemDto {
@@ -328,6 +508,12 @@ export interface ConversationListItemDto {
    * @memberof ConversationListItemDto
    */
   isPinned: boolean;
+  /**
+   * True when the current user does not have WRITE permission on this conversation.
+   * @type {boolean}
+   * @memberof ConversationListItemDto
+   */
+  isReadonly: boolean;
 }
 /**
  *
@@ -351,9 +537,68 @@ export interface ConversationListResponseDto {
 /**
  *
  * @export
+ * @interface ConversationMessageCustomContentDto
+ */
+export interface ConversationMessageCustomContentDto {
+  /**
+   * DIAL API attachments to include with the message
+   * @type {Array<AttachmentDto>}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  attachments?: Array<AttachmentDto>;
+  /**
+   * Form/button submission value (e.g. `{ button: 1 }`).
+   * @type {object}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  configurationValue?: object;
+  /**
+   * Key-value map of form field values submitted via an embedded form widget.
+   * @type {object}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  formValue?: object;
+  /**
+   * Status event discriminator when role is status
+   * @type {string}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  eventType?: ConversationMessageCustomContentDtoEventTypeEnum;
+  /**
+   * Deployment active before a model_changed event
+   * @type {object}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  previousDeploymentId?: object | null;
+  /**
+   * Deployment selected after a model_changed event
+   * @type {string}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  newDeploymentId?: string;
+}
+
+/**
+ * @export
+ */
+export const ConversationMessageCustomContentDtoEventTypeEnum = {
+  ModelChanged: 'model_changed',
+} as const;
+export type ConversationMessageCustomContentDtoEventTypeEnum =
+  (typeof ConversationMessageCustomContentDtoEventTypeEnum)[keyof typeof ConversationMessageCustomContentDtoEventTypeEnum];
+
+/**
+ *
+ * @export
  * @interface ConversationMessageDto
  */
 export interface ConversationMessageDto {
+  /**
+   * Unique message identifier
+   * @type {string}
+   * @memberof ConversationMessageDto
+   */
+  id?: string;
   /**
    *
    * @type {string}
@@ -372,6 +617,12 @@ export interface ConversationMessageDto {
    * @memberof ConversationMessageDto
    */
   timestamp: string;
+  /**
+   *
+   * @type {ConversationMessageCustomContentDto}
+   * @memberof ConversationMessageDto
+   */
+  customContent?: ConversationMessageCustomContentDto;
 }
 
 /**
@@ -380,6 +631,7 @@ export interface ConversationMessageDto {
 export const ConversationMessageDtoRoleEnum = {
   User: 'user',
   Assistant: 'assistant',
+  Status: 'status',
 } as const;
 export type ConversationMessageDtoRoleEnum =
   (typeof ConversationMessageDtoRoleEnum)[keyof typeof ConversationMessageDtoRoleEnum];
@@ -546,6 +798,19 @@ export interface ConversationResponseDto {
 /**
  *
  * @export
+ * @interface ConversationsConfigDto
+ */
+export interface ConversationsConfigDto {
+  /**
+   * Pinned conversation identifiers.
+   * @type {Array<string>}
+   * @memberof ConversationsConfigDto
+   */
+  pinnedIds: Array<string>;
+}
+/**
+ *
+ * @export
  * @interface CreateConversationDto
  */
 export interface CreateConversationDto {
@@ -556,7 +821,7 @@ export interface CreateConversationDto {
    */
   firstMessage: string;
   /**
-   * ID of the catalog item (model or application) to use for this conversation
+   * ID of the catalog item (model or application) to use for this conversation. May contain percent-encoded bytes.
    * @type {string}
    * @memberof CreateConversationDto
    */
@@ -567,6 +832,193 @@ export interface CreateConversationDto {
    * @memberof CreateConversationDto
    */
   customContent?: MessageCustomContentDto;
+}
+/**
+ *
+ * @export
+ * @interface CreateFolderDto
+ */
+export interface CreateFolderDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof CreateFolderDto
+   */
+  bucket: string;
+  /**
+   * Parent folder path within bucket (no leading slash, no ..)
+   * @type {string}
+   * @memberof CreateFolderDto
+   */
+  parentPath?: string;
+  /**
+   * Folder name
+   * @type {string}
+   * @memberof CreateFolderDto
+   */
+  name: string;
+}
+/**
+ *
+ * @export
+ * @interface CreateFolderResponseDto
+ */
+export interface CreateFolderResponseDto {
+  /**
+   *
+   * @type {string}
+   * @memberof CreateFolderResponseDto
+   */
+  name: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateFolderResponseDto
+   */
+  path: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateFolderResponseDto
+   */
+  parentPath: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateFolderResponseDto
+   */
+  bucket: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateFolderResponseDto
+   */
+  nodeType: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateFolderResponseDto
+   */
+  folderId: string;
+}
+/**
+ *
+ * @export
+ * @interface DeleteAllConversationsBodyDto
+ */
+export interface DeleteAllConversationsBodyDto {
+  /**
+   * Must be `true` to confirm intentional deletion of all conversations.
+   * @type {boolean}
+   * @memberof DeleteAllConversationsBodyDto
+   */
+  confirm: boolean;
+}
+/**
+ *
+ * @export
+ * @interface DeleteConversationsBodyDto
+ */
+export interface DeleteConversationsBodyDto {
+  /**
+   * Stable DIAL Core conversation IDs to delete. 1–100 IDs. Duplicates are silently deduplicated.
+   * @type {Array<string>}
+   * @memberof DeleteConversationsBodyDto
+   */
+  ids: Array<string>;
+}
+/**
+ *
+ * @export
+ * @interface DeleteFilesDto
+ */
+export interface DeleteFilesDto {
+  /**
+   *
+   * @type {Array<DeleteItemDto>}
+   * @memberof DeleteFilesDto
+   */
+  items: Array<DeleteItemDto>;
+}
+/**
+ *
+ * @export
+ * @interface DeleteFilesResponseDto
+ */
+export interface DeleteFilesResponseDto {
+  /**
+   *
+   * @type {Array<DeleteItemResultDto>}
+   * @memberof DeleteFilesResponseDto
+   */
+  results: Array<DeleteItemResultDto>;
+}
+/**
+ *
+ * @export
+ * @interface DeleteItemDto
+ */
+export interface DeleteItemDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof DeleteItemDto
+   */
+  bucket: string;
+  /**
+   * File or folder path within the bucket
+   * @type {string}
+   * @memberof DeleteItemDto
+   */
+  path: string;
+  /**
+   * Display name (used in error messages)
+   * @type {string}
+   * @memberof DeleteItemDto
+   */
+  name: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DeleteItemDto
+   */
+  nodeType: DeleteItemDtoNodeTypeEnum;
+}
+
+/**
+ * @export
+ */
+export const DeleteItemDtoNodeTypeEnum = {
+  Item: 'item',
+  Folder: 'folder',
+} as const;
+export type DeleteItemDtoNodeTypeEnum =
+  (typeof DeleteItemDtoNodeTypeEnum)[keyof typeof DeleteItemDtoNodeTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface DeleteItemResultDto
+ */
+export interface DeleteItemResultDto {
+  /**
+   * Same path from the request
+   * @type {string}
+   * @memberof DeleteItemResultDto
+   */
+  path: string;
+  /**
+   * true when DIAL Core returned 2xx or 404
+   * @type {boolean}
+   * @memberof DeleteItemResultDto
+   */
+  success: boolean;
+  /**
+   * Human-readable error reason when success is false
+   * @type {string}
+   * @memberof DeleteItemResultDto
+   */
+  error?: string;
 }
 /**
  *
@@ -648,6 +1100,30 @@ export interface DeploymentItemDto {
    */
   interfaces?: Array<string>;
   /**
+   * Display version from DIAL Core
+   * @type {string}
+   * @memberof DeploymentItemDto
+   */
+  displayVersion?: string;
+  /**
+   * Whether this deployment is featured (configured via env)
+   * @type {boolean}
+   * @memberof DeploymentItemDto
+   */
+  isFeatured?: boolean;
+  /**
+   * Whether this deployment is hidden (configured via env)
+   * @type {boolean}
+   * @memberof DeploymentItemDto
+   */
+  isHidden?: boolean;
+  /**
+   * Timestamp of last update time from DIAL Core (e.g. 1714768496000)
+   * @type {number}
+   * @memberof DeploymentItemDto
+   */
+  updatedAt?: number;
+  /**
    * Application type schema id from DIAL Core (present only for application deployments)
    * @type {string}
    * @memberof DeploymentItemDto
@@ -659,6 +1135,67 @@ export interface DeploymentItemDto {
    * @memberof DeploymentItemDto
    */
   inputAttachmentTypes?: Array<string>;
+  /**
+   * Feature flags from DIAL Core controlling which per-conversation settings are available
+   * @type {DeploymentFeaturesDto}
+   * @memberof DeploymentItemDto
+   */
+  features?: DeploymentFeaturesDto;
+  /**
+   * Topics associated with this deployment from DIAL Core (e.g. ["topic1", "topic2"])
+   * @type {Array<string>}
+   * @memberof DeploymentItemDto
+   */
+  topics?: Array<string>;
+  /**
+   * Maximum number of attachments allowed per message; undefined when not specified by DIAL Core
+   * @type {number}
+   * @memberof DeploymentItemDto
+   */
+  maxInputAttachments?: number;
+  /**
+   * Whether this deployment is installed by the current user (from user config)
+   * @type {boolean}
+   * @memberof DeploymentItemDto
+   */
+  isInstalled?: boolean;
+  /**
+   * Owner of the deployment as reported by DIAL Core
+   * @type {string}
+   * @memberof DeploymentItemDto
+   */
+  owner?: string;
+  /**
+   * True when the deployment owner matches the current session user (computed post-cache)
+   * @type {boolean}
+   * @memberof DeploymentItemDto
+   */
+  isMy?: boolean;
+  /**
+   * Parent folder path for application-type deployments (absent for root-level or non-application items)
+   * @type {string}
+   * @memberof DeploymentItemDto
+   */
+  applicationFolder?: string;
+}
+
+/**
+ * Feature flags for a deployment controlling which per-conversation settings are available.
+ * @interface DeploymentFeaturesDto
+ */
+export interface DeploymentFeaturesDto {
+  /**
+   * Whether the deployment supports a custom system prompt
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  systemPrompt: boolean;
+  /**
+   * Whether the deployment supports temperature control
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  temperature: boolean;
 }
 
 /**
@@ -672,6 +1209,19 @@ export const DeploymentItemDtoTypeEnum = {
 export type DeploymentItemDtoTypeEnum =
   (typeof DeploymentItemDtoTypeEnum)[keyof typeof DeploymentItemDtoTypeEnum];
 
+/**
+ *
+ * @export
+ * @interface DeploymentsConfigDto
+ */
+export interface DeploymentsConfigDto {
+  /**
+   * Installed deployment identifiers.
+   * @type {Array<string>}
+   * @memberof DeploymentsConfigDto
+   */
+  installed: Array<string>;
+}
 /**
  *
  * @export
@@ -1060,6 +1610,19 @@ export interface DialModelPricingDto {
 /**
  *
  * @export
+ * @interface DownloadArchiveDto
+ */
+export interface DownloadArchiveDto {
+  /**
+   *
+   * @type {Array<ArchiveItemDto>}
+   * @memberof DownloadArchiveDto
+   */
+  items: Array<ArchiveItemDto>;
+}
+/**
+ *
+ * @export
  * @interface DuplicateConversationResponseDto
  */
 export interface DuplicateConversationResponseDto {
@@ -1073,6 +1636,91 @@ export interface DuplicateConversationResponseDto {
 /**
  *
  * @export
+ * @interface FileMetadataResponseDto
+ */
+export interface FileMetadataResponseDto {
+  /**
+   * File name without path
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  name?: string;
+  /**
+   * Node type, expected "item" for files
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  nodeType?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  bucket?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  parentPath?: string;
+  /**
+   * DIAL Core resource URL
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  url?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  resourceType?: string;
+  /**
+   * ETag; not available for folders
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  etag?: string;
+  /**
+   *
+   * @type {number}
+   * @memberof FileMetadataResponseDto
+   */
+  contentLength?: number;
+  /**
+   *
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  contentType?: string;
+  /**
+   * Creation time in Unix milliseconds; not supported by all storage providers
+   * @type {number}
+   * @memberof FileMetadataResponseDto
+   */
+  createdAt?: number;
+  /**
+   * Last-modified time in Unix milliseconds
+   * @type {number}
+   * @memberof FileMetadataResponseDto
+   */
+  updatedAt?: number;
+  /**
+   * READ | WRITE | SHARE
+   * @type {Array<string>}
+   * @memberof FileMetadataResponseDto
+   */
+  permissions?: Array<string>;
+  /**
+   * Author; not available for folders
+   * @type {string}
+   * @memberof FileMetadataResponseDto
+   */
+  author?: string;
+}
+/**
+ *
+ * @export
  * @interface FileUploadResponseDto
  */
 export interface FileUploadResponseDto {
@@ -1082,6 +1730,139 @@ export interface FileUploadResponseDto {
    * @memberof FileUploadResponseDto
    */
   url: string;
+}
+/**
+ *
+ * @export
+ * @interface ListFilesItemDto
+ */
+export interface ListFilesItemDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  name: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  path: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  folderId: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  nodeType: ListFilesItemDtoNodeTypeEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  bucket: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  parentPath?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  url?: string;
+  /**
+   *
+   * @type {number}
+   * @memberof ListFilesItemDto
+   */
+  contentLength?: number;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  contentType?: string;
+  /**
+   * Unix timestamp ms
+   * @type {number}
+   * @memberof ListFilesItemDto
+   */
+  updatedAt?: number;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof ListFilesItemDto
+   */
+  permissions?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  resourceType?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesItemDto
+   */
+  author?: string;
+}
+
+/**
+ * @export
+ */
+export const ListFilesItemDtoNodeTypeEnum = {
+  Item: 'item',
+  Folder: 'folder',
+} as const;
+export type ListFilesItemDtoNodeTypeEnum =
+  (typeof ListFilesItemDtoNodeTypeEnum)[keyof typeof ListFilesItemDtoNodeTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface ListFilesResponseDto
+ */
+export interface ListFilesResponseDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesResponseDto
+   */
+  bucket: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesResponseDto
+   */
+  path: string;
+  /**
+   *
+   * @type {Array<ListFilesItemDto>}
+   * @memberof ListFilesResponseDto
+   */
+  items: Array<ListFilesItemDto>;
+  /**
+   *
+   * @type {string}
+   * @memberof ListFilesResponseDto
+   */
+  nextToken?: string;
+  /**
+   * READ/WRITE/SHARE permissions on the listed folder
+   * @type {Array<string>}
+   * @memberof ListFilesResponseDto
+   */
+  permissions?: Array<string>;
 }
 /**
  *
@@ -1306,6 +2087,12 @@ export interface ThemeConfigResponseDto {
    * @memberof ThemeConfigResponseDto
    */
   themes: Array<ThemeDto>;
+  /**
+   *
+   * @type {ThemeImagesDto}
+   * @memberof ThemeConfigResponseDto
+   */
+  images: ThemeImagesDto;
 }
 /**
  *
@@ -1324,13 +2111,126 @@ export interface ThemeDto {
    * @type {string}
    * @memberof ThemeDto
    */
-  name: string;
+  displayName: string;
+  /**
+   *
+   * @type {{ [key: string]: string; }}
+   * @memberof ThemeDto
+   */
+  colors: { [key: string]: string };
   /**
    *
    * @type {string}
    * @memberof ThemeDto
    */
-  icon?: string;
+  appLogo: string;
+}
+/**
+ *
+ * @export
+ * @interface ThemeImagesDto
+ */
+export interface ThemeImagesDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ThemeImagesDto
+   */
+  defaultAddon: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ThemeImagesDto
+   */
+  defaultModel: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ThemeImagesDto
+   */
+  favicon: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ThemeImagesDto
+   */
+  chatLogoLight?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ThemeImagesDto
+   */
+  chatLogoDark?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ThemeImagesDto
+   */
+  chatFavicon?: string;
+}
+/**
+ *
+ * @export
+ * @interface ToolsetsConfigDto
+ */
+export interface ToolsetsConfigDto {
+  /**
+   * Installed toolset identifiers.
+   * @type {Array<string>}
+   * @memberof ToolsetsConfigDto
+   */
+  installed: Array<string>;
+}
+/**
+ *
+ * @export
+ * @interface TranscribeAudio200Response
+ */
+export interface TranscribeAudio200Response {
+  /**
+   *
+   * @type {string}
+   * @memberof TranscribeAudio200Response
+   */
+  transcript?: string;
+}
+/**
+ *
+ * @export
+ * @interface TranscribeAudioDto
+ */
+export interface TranscribeAudioDto {
+  /**
+   * DIAL storage URL of the uploaded audio file.
+   * @type {string}
+   * @memberof TranscribeAudioDto
+   */
+  audioUrl: string;
+  /**
+   * MIME type of the audio file (e.g. audio/webm;codecs=opus).
+   * @type {string}
+   * @memberof TranscribeAudioDto
+   */
+  mimeType: string;
+}
+/**
+ *
+ * @export
+ * @interface UpdateInstalledDto
+ */
+export interface UpdateInstalledDto {
+  /**
+   * Identifier of the resource to install or uninstall.
+   * @type {string}
+   * @memberof UpdateInstalledDto
+   */
+  id: string;
+  /**
+   * Pass `true` to install the resource, `false` to uninstall.
+   * @type {boolean}
+   * @memberof UpdateInstalledDto
+   */
+  isInstalled: boolean;
 }
 /**
  *
@@ -1350,6 +2250,37 @@ export interface UpdatePinsDto {
    * @memberof UpdatePinsDto
    */
   isPinned: boolean;
+}
+/**
+ *
+ * @export
+ * @interface UserConfigDto
+ */
+export interface UserConfigDto {
+  /**
+   * User configuration schema version.
+   * @type {number}
+   * @memberof UserConfigDto
+   */
+  version: number;
+  /**
+   *
+   * @type {ConversationsConfigDto}
+   * @memberof UserConfigDto
+   */
+  conversations: ConversationsConfigDto;
+  /**
+   *
+   * @type {ToolsetsConfigDto}
+   * @memberof UserConfigDto
+   */
+  toolsets: ToolsetsConfigDto;
+  /**
+   *
+   * @type {DeploymentsConfigDto}
+   * @memberof UserConfigDto
+   */
+  deployments: DeploymentsConfigDto;
 }
 /**
  *

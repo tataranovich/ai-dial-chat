@@ -1,10 +1,16 @@
 import type { Attachment, DisplayAttachment } from '@epam/ai-dial-chat-shared';
 import { RequestStatus, mergeClasses } from '@epam/ai-dial-chat-shared';
 import { DialNeutralButton, DialPrimaryButton } from '@epam/ai-dial-ui-kit';
-import { ChangeEvent, type FC, useCallback, useRef, useState } from 'react';
+import {
+  ChangeEvent,
+  type FC,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { EditMessageInputProps } from '../../models/ConversationInput';
 import { AddAttachmentButton } from '../AddAttachmentButton/AddAttachmentButton';
-import { AttachmentTray } from '../AttachmentTray/AttachmentTray';
 import { Input } from '../Input/Input';
 
 export const EditMessageInput: FC<EditMessageInputProps> = ({
@@ -23,9 +29,19 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
   menuTitle = 'Menu',
   menuCloseLabel = 'Close',
   className,
+  pendingDropFiles: externalPendingFiles,
+  onDropFilesConsumed,
+  validateAttachment,
+  hideAttachFile = false,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingDropFiles, setPendingDropFiles] = useState<File[]>([]);
+
+  useEffect(() => {
+    if (!externalPendingFiles?.length) return;
+    setPendingDropFiles(externalPendingFiles);
+    onDropFilesConsumed?.();
+  }, [externalPendingFiles, onDropFilesConsumed]);
   const [currentText, setCurrentText] = useState(message ?? '');
   const [currentNewAttachments, setCurrentNewAttachments] = useState<
     Attachment[]
@@ -62,6 +78,11 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
     }
   };
 
+  const handleDropFilesConsumed = useCallback(
+    () => setPendingDropFiles([]),
+    [],
+  );
+
   const handleFileChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
@@ -71,22 +92,14 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
 
   return (
     <div className={mergeClasses('flex w-full flex-col gap-2', className)}>
-      {keptAttachments.length > 0 && (
-        <AttachmentTray
-          attachments={keptAttachments}
-          onRemove={handleRemovePreExisting}
-          removeLabel={removeLabel}
-        />
-      )}
-
-      {/* Bordered box — contains only the textarea (and new attachment tray) */}
+      {/* Bordered box — contains kept attachments, new attachments, and the textarea */}
       <Input
         message={message}
         ariaLabel={ariaLabel}
         isStacked
         hideActionBar
         pendingDropFiles={pendingDropFiles}
-        onDropFilesConsumed={() => setPendingDropFiles([])}
+        onDropFilesConsumed={handleDropFilesConsumed}
         onSend={handleSend}
         onUploadAttachment={onUploadAttachment}
         onChange={setCurrentText}
@@ -94,27 +107,34 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
         removeLabel={removeLabel}
         retryLabel={retryLabel}
         className="max-w-full"
+        prefixAttachments={keptAttachments}
+        onRemovePrefixAttachment={handleRemovePreExisting}
+        validateAttachment={validateAttachment}
       />
 
       {/* Action row — outside the bordered box */}
       <div className="flex items-center justify-between">
         <div className="flex">
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="sr-only"
-            aria-hidden
-            tabIndex={-1}
-            onChange={handleFileChange}
-          />
-          <AddAttachmentButton
-            onAttachClick={() => fileInputRef.current?.click()}
-            attachLabel={attachLabel}
-            addMenuLabel={addMenuLabel}
-            menuTitle={menuTitle}
-            menuCloseLabel={menuCloseLabel}
-          />
+          {!hideAttachFile && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="sr-only"
+                aria-hidden
+                tabIndex={-1}
+                onChange={handleFileChange}
+              />
+              <AddAttachmentButton
+                onAttachClick={() => fileInputRef.current?.click()}
+                attachLabel={attachLabel}
+                addMenuLabel={addMenuLabel}
+                menuTitle={menuTitle}
+                menuCloseLabel={menuCloseLabel}
+              />
+            </>
+          )}
         </div>
 
         <div className="flex gap-2">

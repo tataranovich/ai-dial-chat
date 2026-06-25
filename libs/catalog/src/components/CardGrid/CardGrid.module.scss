@@ -1,0 +1,25 @@
+.card {
+  background: var(--cat-card-bg, var(--bg-layer-2, #161b2d));
+  border-color: var(--cat-card-border, var(--stroke-secondary, #242c42));
+
+  &:hover {
+    background: var(--cat-card-hover-bg, var(--bg-layer-3, #1d2439));
+  }
+}
+
+.featuredCard {
+  box-shadow: 0 0 15px 0 var(--cat-card-featured-glow, rgba(125, 164, 255, 0.5));
+}
+
+.description {
+  color: var(--cat-card-text-primary, var(--text-primary, #eef1f7));
+}
+
+.cardFooter {
+  border-color: var(--cat-card-footer-border, var(--stroke-secondary, #242c42));
+}
+
+.skeletonCard {
+  border-color: var(--cat-card-border, var(--stroke-secondary, #242c42));
+  --cat-skeleton-bg: var(--bg-layer-4);
+}

@@ -1,22 +1,33 @@
 import {
-  Conversation,
-  ConversationMetadata,
-  Message,
-  MessageRole,
-} from '@epam/ai-dial-chat-shared';
-import { Injectable, Logger } from '@nestjs/common';
+  BadGatewayException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppService } from '../app/app.service';
-import { ChatMessageRole, MessageDto } from '../chat/dto/chat-completion.dto';
 import { getBearerAuthHeaders } from '../common/utils/auth-header';
 import { handleDialError } from '../common/utils/dial-error';
 import { EnvironmentVariables } from '../config/environment.config';
+import { HIDDEN_FILE } from '../constants/dial.constants';
+import {
+  ConversationMetadataDto,
+  ConversationResponseDto,
+} from '../openapi/openapi-response.dto';
 import { UserConfigService } from '../user-config/user-config.service';
 import { PUBLIC_BUCKET } from './constants/conversation.constants';
 import {
   ConversationListItemDto,
   ConversationListResponseDto,
 } from './dto/conversation-list.dto';
+import {
+  ConversationMessageDto,
+  ConversationMessageRole,
+} from './dto/conversation-message.dto';
+import {
+  ConversationDeletionFailureDto,
+  ConversationDeletionResultDto,
+} from './dto/delete-conversations.dto';
 import { DuplicateConversationResponseDto } from './dto/duplicate-conversation.dto';
 import { MessageCustomContentDto } from './dto/message-custom-content.dto';
 import { RenameConversationResponseDto } from './dto/rename-conversation.dto';
@@ -26,17 +37,22 @@ import type {
   SharedResourcesResult,
 } from './types/conversation.types';
 import {
+  buildConversationUrl,
   buildRenamedConversationPath,
+  buildRenamedFilename,
   decodeNextToken,
   encodeCompoundToken,
   encodeDialResourcePath,
   getConversationName,
   getConversationTitleFromName,
   prepareEntityName,
+  safeDecodeURIComponent,
 } from './utils/conversation.utils';
 import { resolveUniqueConversationName } from './utils/resolve-unique-conversation-name';
 
-const getValidAttachments = (customContent?: Message['custom_content']) =>
+const getValidAttachments = (
+  customContent?: ConversationMessageDto['custom_content'],
+) =>
   (customContent?.attachments ?? []).filter((attachment) =>
     Boolean(attachment.data || attachment.url),
   );
@@ -106,7 +122,7 @@ export class ConversationService extends AppService {
     bucket: string,
     deploymentId: string,
     customContent?: MessageCustomContentDto,
-  ): Promise<Conversation> {
+  ): Promise<ConversationResponseDto> {
     const now = Date.now();
     const uuid = crypto.randomUUID();
     const baseName = getConversationName('New chat', firstMessage);
@@ -115,16 +131,16 @@ export class ConversationService extends AppService {
     const conversationPath = `${deploymentId}__${name}`;
     const folderId = `${bucket}`; // TODO: check
 
-    const userMessage: MessageDto = {
+    const userMessage: ConversationMessageDto = {
       id: uuid,
-      role: ChatMessageRole.User,
+      role: ConversationMessageRole.User,
       content: firstMessage,
       timestamp: new Date(now).toISOString(),
       custom_content: customContent,
     };
 
     // TODO: add temperature and other conversation settings
-    const conversation: Conversation = {
+    const conversation: ConversationResponseDto = {
       id: `${folderId}/${conversationPath}`,
       folderId,
       name,
@@ -139,12 +155,16 @@ export class ConversationService extends AppService {
     };
 
     try {
+      const encodedConversationPath = conversationPath
+        .split('/')
+        .map((segment) => encodeURIComponent(safeDecodeURIComponent(segment)))
+        .join('/');
       const { data, error } = (await this.client.saveConversation(
         bucket,
-        encodeDialResourcePath(conversationPath),
+        encodedConversationPath,
         {
           headers: getBearerAuthHeaders(token),
-          body: conversation,
+          body: conversation as never,
         },
       )) as { data?: unknown; error?: unknown };
       if (error != null || !data) {
@@ -152,7 +172,7 @@ export class ConversationService extends AppService {
         return handleDialError(error);
       }
 
-      return { ...data, ...conversation } as Conversation;
+      return { ...data, ...conversation } as ConversationResponseDto;
     } catch (error) {
       this.logger.error('DIAL Core rejected saveConversation', error);
       return handleDialError(error);
@@ -163,7 +183,7 @@ export class ConversationService extends AppService {
     conversationPath: string,
     token: string,
     sessionBucket: string,
-  ): Promise<Conversation> {
+  ): Promise<ConversationResponseDto> {
     const slashIndex = conversationPath.indexOf('/');
     const bucket =
       slashIndex === -1 ? sessionBucket : conversationPath.slice(0, slashIndex);
@@ -182,7 +202,7 @@ export class ConversationService extends AppService {
         this.logger.error('DIAL Core rejected getConversation', error);
         return handleDialError(error);
       }
-      return data as Conversation;
+      return data as ConversationResponseDto;
     } catch (error) {
       this.logger.error('DIAL Core rejected getConversation', error);
       return handleDialError(error);
@@ -224,9 +244,13 @@ export class ConversationService extends AppService {
     }
 
     // Remove from pins if present — fire-and-forget, non-fatal
-    const conversationId = `conversations/${bucket}/${conversationPath}`;
-    void this.pinConversation(conversationId, false, token, bucket).catch(
-      (err) => this.logger.error('Failed to clean up pin on delete', err),
+    void this.pinConversation(
+      buildConversationUrl(bucket, conversationPath),
+      false,
+      token,
+      bucket,
+    ).catch((err) =>
+      this.logger.error('Failed to clean up pin on delete', err),
     );
   }
 
@@ -242,8 +266,8 @@ export class ConversationService extends AppService {
       sanitisedTitle,
     );
 
-    const sourceUrl = `conversations/${bucket}/${encodeDialResourcePath(conversationPath)}`;
-    const destinationUrl = `conversations/${bucket}/${encodeDialResourcePath(renamedPath)}`;
+    const sourceUrl = `${buildConversationUrl(bucket, encodeDialResourcePath(conversationPath))}`;
+    const destinationUrl = `${buildConversationUrl(bucket, encodeDialResourcePath(renamedPath))}`;
 
     try {
       const { error } = (await this.client.moveResource({
@@ -259,7 +283,17 @@ export class ConversationService extends AppService {
       return handleDialError(error);
     }
 
-    return { newPath: `conversations/${bucket}/${renamedPath}` };
+    // Migrate pin state: if the old conversation was pinned, point the pin at
+    // the new path. Fire-and-forget, non-fatal (mirrors deleteConversation cleanup).
+    const oldPinId = buildConversationUrl(bucket, conversationPath);
+    const newPinId = buildConversationUrl(bucket, renamedPath);
+    void this.userConfigService
+      .migratePin(oldPinId, newPinId, token, bucket)
+      .catch((err) =>
+        this.logger.error('Failed to migrate pin on rename', err),
+      );
+
+    return { newPath: buildConversationUrl(bucket, renamedPath) };
   }
 
   async duplicateConversation(
@@ -273,17 +307,48 @@ export class ConversationService extends AppService {
     const subPath =
       slashIndex === -1 ? sourcePath : sourcePath.slice(slashIndex + 1);
 
-    const filename = subPath.split('/').at(-1) ?? subPath;
-    const sourceTitle = getConversationTitleFromName(filename);
-    const existingTitles = await this.fetchAllUserTitles(token, sessionBucket);
-    const uniqueTitle = resolveUniqueConversationName(
-      prepareEntityName(sourceTitle),
-      existingTitles,
-    );
-    const destFilename = buildRenamedConversationPath(filename, uniqueTitle);
+    // `subPath` arrives percent-encoded (it comes from a resource URL). Each
+    // `/`-separated segment is one path component; a literal slash inside a
+    // component (e.g. a deployment name "Team/App One") is encoded as %2F.
+    const segments = subPath.split('/');
+    const encodedFilename = segments.at(-1) ?? subPath;
+    const decodedFilename = safeDecodeURIComponent(encodedFilename);
+    const decodedFolderSegments = segments
+      .slice(0, -1)
+      .map(safeDecodeURIComponent);
 
-    const sourceUrl = `conversations/${sourceBucket}/${encodeDialResourcePath(subPath)}`;
-    const destinationUrl = `conversations/${sessionBucket}/${encodeURIComponent(destFilename)}`;
+    const sourceTitle = getConversationTitleFromName(decodedFilename);
+    const baseTitle = prepareEntityName(sourceTitle);
+    const existingTitles = await this.fetchAllUserTitles(token, sessionBucket);
+    // A duplicate must never reuse the source's exact name+path
+    const reservedTitles = new Set(existingTitles);
+    reservedTitles.add(baseTitle);
+    const uniqueTitle = resolveUniqueConversationName(
+      baseTitle,
+      reservedTitles,
+    );
+
+    const decodedRenamedFilename = buildRenamedFilename(
+      decodedFilename,
+      uniqueTitle,
+    );
+    const decodedDestinationSubPath = [
+      ...decodedFolderSegments,
+      decodedRenamedFilename,
+    ].join('/');
+    const encodedDestinationSubPath = [
+      ...decodedFolderSegments.map(encodeURIComponent),
+      encodeURIComponent(decodedRenamedFilename),
+    ].join('/');
+
+    const sourceUrl = buildConversationUrl(
+      sourceBucket,
+      encodeDialResourcePath(subPath),
+    );
+    const destinationUrl = buildConversationUrl(
+      sessionBucket,
+      encodedDestinationSubPath,
+    );
 
     try {
       const { error } = (await this.client.copyResource({
@@ -299,7 +364,69 @@ export class ConversationService extends AppService {
       return handleDialError(error);
     }
 
-    return { newPath: `conversations/${sessionBucket}/${destFilename}` };
+    const folderId = decodedFolderSegments.length
+      ? `${sessionBucket}/${decodedFolderSegments.join('/')}`
+      : sessionBucket;
+    await this.rewriteDuplicatedConversationMetadata(
+      sessionBucket,
+      encodedDestinationSubPath,
+      {
+        id: `${sessionBucket}/${decodedDestinationSubPath}`,
+        folderId,
+        name: uniqueTitle,
+      },
+      token,
+    );
+
+    return { newPath: destinationUrl };
+  }
+
+  /**
+   * Repoints a freshly-copied conversation's identity fields (id/folderId/name)
+   * at the destination bucket/path. Reads from the user's own bucket and
+   * re-saves; all failures are logged and swallowed so the duplicate still
+   * succeeds.
+   */
+  private async rewriteDuplicatedConversationMetadata(
+    bucket: string,
+    encodedSubPath: string,
+    identity: Pick<ConversationResponseDto, 'id' | 'folderId' | 'name'>,
+    token: string,
+  ): Promise<void> {
+    try {
+      const { data, error } = (await this.client.getConversation(
+        bucket,
+        encodedSubPath,
+        { headers: getBearerAuthHeaders(token) },
+      )) as { data?: ConversationResponseDto; error?: unknown };
+      if (error != null || !data) {
+        this.logger.warn(
+          'Could not read duplicated conversation to fix its metadata',
+          error,
+        );
+        return;
+      }
+
+      const { error: saveError } = (await this.client.saveConversation(
+        bucket,
+        encodedSubPath,
+        {
+          headers: getBearerAuthHeaders(token),
+          body: { ...data, ...identity },
+        },
+      )) as { error?: unknown };
+      if (saveError != null) {
+        this.logger.warn(
+          'Could not re-save duplicated conversation metadata',
+          saveError,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        'Failed to rewrite duplicated conversation metadata',
+        error,
+      );
+    }
   }
 
   async listConversations(
@@ -325,7 +452,9 @@ export class ConversationService extends AppService {
             encodeDialResourcePath(path ?? ''),
             {
               headers: getBearerAuthHeaders(token),
-              params: { query: buildQuery(userNextToken) },
+              params: {
+                query: { ...buildQuery(userNextToken), permissions: true },
+              },
             },
           ) as Promise<MetadataResult>,
           (
@@ -387,17 +516,25 @@ export class ConversationService extends AppService {
         );
       }
 
-      const pinnedSet = new Set(pinnedIds);
+      const pinnedSet = new Set(pinnedIds.map(safeDecodeURIComponent));
 
       const mapItems = (
         items: MetadataItem[],
-        overrides: { sharedWithMe?: boolean; publishedWithMe?: boolean } = {},
+        overrides: {
+          sharedWithMe?: boolean;
+          publishedWithMe?: boolean;
+          isReadonly?: boolean;
+        } = {},
       ): ConversationListItemDto[] =>
         items
           .filter((item) => item.nodeType !== 'FOLDER')
           .map((item) => {
             const id =
               item.url ?? `${item.parentPath ?? ''}/${item.name ?? ''}`;
+            const decodedId = safeDecodeURIComponent(id);
+            const isReadonly =
+              overrides.isReadonly ??
+              !(item.permissions?.includes('WRITE') ?? false);
             return {
               id,
               title: getConversationTitleFromName(item.name ?? ''),
@@ -406,7 +543,8 @@ export class ConversationService extends AppService {
                 overrides.sharedWithMe ?? item.sharedWithMe ?? false,
               publishedWithMe:
                 overrides.publishedWithMe ?? item.publishedWithMe ?? false,
-              isPinned: pinnedSet.has(id),
+              isPinned: pinnedSet.has(decodedId),
+              isReadonly,
             };
           });
 
@@ -470,7 +608,7 @@ export class ConversationService extends AppService {
               (publicData.items ?? []).filter(
                 (item) => !userItemPaths.has(getBucketRelativePath(item)),
               ),
-              { publishedWithMe: true },
+              { publishedWithMe: true, isReadonly: true },
             )
           : [];
       const sharedItems =
@@ -479,20 +617,24 @@ export class ConversationService extends AppService {
               .filter((r) => r.nodeType !== 'FOLDER')
               .map((r) => {
                 const id = r.url ?? `${r.parentPath ?? ''}/${r.name ?? ''}`;
+                const decodedId = safeDecodeURIComponent(id);
                 return {
                   id,
                   title: getConversationTitleFromName(r.name ?? ''),
                   updatedAt: 0,
                   sharedWithMe: true,
                   publishedWithMe: false,
-                  isPinned: pinnedSet.has(id),
+                  isPinned: pinnedSet.has(decodedId),
+                  isReadonly: true,
                 };
               })
           : [];
 
-      const items = [...userItems, ...publicItems, ...sharedItems].sort(
-        (a, b) => b.updatedAt - a.updatedAt,
-      );
+      const items = [...userItems, ...publicItems, ...sharedItems]
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .filter(
+          (item) => item.id !== HIDDEN_FILE && !item.id.includes(HIDDEN_FILE),
+        );
 
       return {
         items,
@@ -512,7 +654,7 @@ export class ConversationService extends AppService {
     token: string,
     bucket: string,
     permissions?: boolean,
-  ): Promise<ConversationMetadata> {
+  ): Promise<ConversationMetadataDto> {
     try {
       const { data, error } = (await this.client.getConversationMetadata(
         bucket,
@@ -527,7 +669,7 @@ export class ConversationService extends AppService {
         this.logger.error('DIAL Core rejected getConversationMetadata', error);
         return handleDialError(error);
       }
-      return data as ConversationMetadata;
+      return data as ConversationMetadataDto;
     } catch (error) {
       this.logger.error('DIAL Core rejected getConversationMetadata', error);
       return handleDialError(error);
@@ -538,26 +680,187 @@ export class ConversationService extends AppService {
     conversationPath: string,
     token: string,
     bucket: string,
-    conversation: Conversation,
-  ): Promise<Conversation> {
+    conversation: ConversationResponseDto,
+  ): Promise<ConversationResponseDto> {
     try {
       const { data, error } = (await this.client.saveConversation(
         bucket,
         encodeDialResourcePath(conversationPath),
         {
           headers: getBearerAuthHeaders(token),
-          body: conversation,
+          body: conversation as never,
         },
       )) as { data?: unknown; error?: unknown };
       if (error != null || !data) {
         this.logger.error('DIAL Core rejected saveConversation', error);
         return handleDialError(error);
       }
-      return { ...data, ...conversation } as Conversation;
+      return { ...data, ...conversation } as ConversationResponseDto;
     } catch (error) {
       this.logger.error('DIAL Core rejected saveConversation', error);
       return handleDialError(error);
     }
+  }
+
+  private isOwnedBySessionBucket(id: string, sessionBucket: string): boolean {
+    const prefix = `conversations/${sessionBucket}/`;
+    if (!id.startsWith(prefix)) return false;
+    const rawPath = id.slice(prefix.length);
+    return !rawPath.split('/').some((seg) => seg === '..');
+  }
+
+  async deleteConversations(
+    ids: string[],
+    token: string,
+    bucket: string,
+  ): Promise<ConversationDeletionResultDto> {
+    const uniqueIds = [...new Set(ids)];
+    const ownedIds: string[] = [];
+    const failed: ConversationDeletionFailureDto[] = [];
+
+    for (const id of uniqueIds) {
+      if (this.isOwnedBySessionBucket(id, bucket)) {
+        ownedIds.push(id);
+      } else {
+        failed.push({ id, code: 'FORBIDDEN' });
+      }
+    }
+
+    const prefix = `conversations/${bucket}/`;
+    this.logger.debug(
+      `deleteConversations: bucket=${bucket} total=${uniqueIds.length} owned=${ownedIds.length}`,
+    );
+
+    // IDs from the metadata listing are already URL-encoded (e.g. %20 for spaces).
+    // Decode each segment before passing to encodeDialResourcePath to avoid
+    // double-encoding (%20 → %2520).
+    const pathsForDelete = ownedIds.map((id) => {
+      const rawPath = id.slice(prefix.length);
+      return rawPath.split('/').map(safeDecodeURIComponent).join('/');
+    });
+
+    const results = await Promise.allSettled(
+      pathsForDelete.map((path, i) => {
+        const encodedPath = encodeDialResourcePath(path);
+        this.logger.debug(
+          `deleteConversations[${i}]: decodedPath=${path} encodedPath=${encodedPath}`,
+        );
+        return this.client.deleteConversation(bucket, encodedPath, {
+          headers: getBearerAuthHeaders(token),
+        });
+      }),
+    );
+
+    let deleted = 0;
+    let alreadyAbsent = 0;
+
+    for (const [i, id] of ownedIds.entries()) {
+      const result = results[i];
+
+      if (result.status === 'fulfilled') {
+        const { error } = result.value as { error?: unknown };
+        if (error == null) {
+          deleted++;
+          void this.pinConversation(id, false, token, bucket).catch((err) =>
+            this.logger.error('Failed to clean up pin on bulk delete', err),
+          );
+        } else if (isHttpLikeError(error) && error.status === 404) {
+          alreadyAbsent++;
+        } else if (isHttpLikeError(error) && error.status === 403) {
+          failed.push({ id, code: 'FORBIDDEN' });
+        } else {
+          this.logger.error(
+            `deleteConversations[${i}] UPSTREAM_ERROR id=${id} errorStatus=${isHttpLikeError(error) ? error.status : 'n/a'} error=${JSON.stringify(error)}`,
+          );
+          failed.push({ id, code: 'UPSTREAM_ERROR' });
+        }
+      } else {
+        this.logger.error(
+          `deleteConversations[${i}] threw unexpectedly id=${id}`,
+          (result.reason as Error | undefined)?.stack,
+        );
+        failed.push({ id, code: 'UPSTREAM_ERROR' });
+      }
+    }
+
+    return { requested: uniqueIds.length, deleted, alreadyAbsent, failed };
+  }
+
+  async deleteAllConversations(
+    token: string,
+    bucket: string,
+  ): Promise<ConversationDeletionResultDto> {
+    const allIds: string[] = [];
+    let cursor: string | undefined;
+
+    try {
+      do {
+        const { data, error } = (await this.client.getConversationMetadata(
+          bucket,
+          '',
+          {
+            headers: getBearerAuthHeaders(token),
+            params: {
+              query: {
+                recursive: true,
+                limit: 1000,
+                ...(cursor ? { token: cursor } : {}),
+              },
+            },
+          },
+        )) as MetadataResult;
+
+        if (error != null || !data) {
+          this.logger.error(
+            'DIAL Core metadata listing failed during deleteAll',
+            (error as Error | undefined)?.stack,
+          );
+          throw new BadGatewayException('DIAL Core metadata listing failed');
+        }
+
+        for (const item of data?.items ?? []) {
+          if (item.nodeType !== 'FOLDER') {
+            const id =
+              item.url ?? `${item.parentPath ?? ''}/${item.name ?? ''}`;
+            allIds.push(id);
+          }
+        }
+
+        cursor = data?.nextToken ?? undefined;
+      } while (cursor != null && cursor !== '');
+    } catch (err) {
+      if (
+        err instanceof BadGatewayException ||
+        err instanceof ServiceUnavailableException
+      ) {
+        throw err;
+      }
+      this.logger.error(
+        'DIAL Core metadata listing threw during deleteAll',
+        (err as Error | undefined)?.stack,
+      );
+      if (
+        err instanceof TypeError ||
+        (err instanceof Error &&
+          (err.name === 'TimeoutError' ||
+            err.message.includes('ECONNREFUSED') ||
+            err.message.includes('ENOTFOUND') ||
+            err.message.includes('fetch failed')))
+      ) {
+        throw new ServiceUnavailableException('DIAL Core is unreachable');
+      }
+      throw new BadGatewayException('DIAL Core metadata listing failed');
+    }
+
+    this.logger.debug(
+      `deleteAllConversations: listed ${allIds.length} item(s) from bucket=${bucket}`,
+    );
+
+    if (allIds.length === 0) {
+      return { requested: 0, deleted: 0, alreadyAbsent: 0, failed: [] };
+    }
+
+    return this.deleteConversations(allIds, token, bucket);
   }
 
   async streamCompletion(
@@ -578,9 +881,9 @@ export class ConversationService extends AppService {
       bucket,
     );
 
-    const userMessage: Message = {
+    const userMessage: ConversationMessageDto = {
       id: crypto.randomUUID(),
-      role: MessageRole.User,
+      role: ConversationMessageRole.User,
       content: message,
       timestamp: new Date().toISOString(),
       ...(customContent &&
@@ -596,7 +899,7 @@ export class ConversationService extends AppService {
     // don't append again — the message is already in the persisted history.
     const lastMessage = conversation.messages[conversation.messages.length - 1];
     const messagesForCompletion =
-      lastMessage?.role === MessageRole.User
+      lastMessage?.role === ConversationMessageRole.User
         ? conversation.messages
         : [...conversation.messages, userMessage];
 
@@ -607,10 +910,10 @@ export class ConversationService extends AppService {
         .at(-1)?.custom_content?.configuration_value;
     const shouldHideCurrentConfigurationContent =
       customContent?.configuration_value !== undefined &&
-      lastMessage?.role === MessageRole.User;
+      lastMessage?.role === ConversationMessageRole.User;
 
     const messages = messagesForCompletion
-      .filter((m) => m.role !== MessageRole.Status)
+      .filter((m) => m.role !== ConversationMessageRole.Status)
       .map((m, index, filteredMessages) => {
         const validAttachments = getValidAttachments(m.custom_content);
         const hasConfigurationValue =
@@ -637,9 +940,16 @@ export class ConversationService extends AppService {
         };
       });
 
+    const systemMessages = conversation.prompt
+      ? [{ role: 'system', content: conversation.prompt }]
+      : [];
+
     const requestBody = {
-      messages,
+      messages: [...systemMessages, ...messages],
       stream: true,
+      ...(conversation.temperature != null && {
+        temperature: conversation.temperature,
+      }),
       ...(configuration ? { custom_fields: { configuration } } : {}),
     };
 
@@ -649,7 +959,7 @@ export class ConversationService extends AppService {
 
     try {
       const result = (await this.client.sendChatCompletionRequest(model, {
-        body: requestBody,
+        body: requestBody as never,
         headers: {
           ...getBearerAuthHeaders(token),
           Accept: 'text/event-stream',
@@ -671,3 +981,9 @@ export class ConversationService extends AppService {
     }
   }
 }
+
+const isHttpLikeError = (e: unknown): e is { status: number } =>
+  typeof e === 'object' &&
+  e != null &&
+  'status' in e &&
+  typeof (e as Record<string, unknown>).status === 'number';

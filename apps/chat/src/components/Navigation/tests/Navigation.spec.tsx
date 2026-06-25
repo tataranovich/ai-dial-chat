@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import type { AriaAttributes } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { NavigationI18nKeys } from '../../../constants/translation-keys';
 import Navigation from '../Navigation';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
@@ -30,6 +31,10 @@ vi.mock('../UserMenu', () => ({
   default: () => <div>User menu</div>,
 }));
 
+vi.mock('../../LogoutConfirmation/LogoutConfirmationModal', () => ({
+  default: () => null,
+}));
+
 const renderNavigation = (initialPath = '/') =>
   render(
     <MemoryRouter initialEntries={[initialPath]}>
@@ -42,13 +47,13 @@ describe('Navigation', () => {
     const { container } = renderNavigation();
     const nav = container.querySelector('nav');
     expect(nav).toBeTruthy();
-    expect(nav?.getAttribute('aria-label')).toBe('navigation.ariaLabel');
+    expect(nav?.getAttribute('aria-label')).toBe(NavigationI18nKeys.AriaLabel);
   });
 
   it('renders a Home button', () => {
     renderNavigation();
     expect(
-      screen.getByRole('button', { name: 'navigation.home' }),
+      screen.getByRole('button', { name: NavigationI18nKeys.Home }),
     ).toBeTruthy();
   });
 
@@ -56,7 +61,7 @@ describe('Navigation', () => {
     renderNavigation('/');
     expect(
       screen
-        .getByRole('button', { name: 'navigation.home' })
+        .getByRole('button', { name: NavigationI18nKeys.Home })
         .getAttribute('aria-current'),
     ).toBe('page');
   });

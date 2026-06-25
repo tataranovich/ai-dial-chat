@@ -29,6 +29,21 @@
     },
     {
       "path": "./libs/conversation-panel"
+    },
+    {
+      "path": "./libs/starter-buttons"
+    },
+    {
+      "path": "./libs/catalog"
+    },
+    {
+      "path": "./libs/source-panel"
+    },
+    {
+      "path": "./libs/attachment-canvas"
+    },
+    {
+      "path": "./libs/attachment-input"
     }
   ]
 }

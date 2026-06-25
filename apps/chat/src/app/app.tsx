@@ -1,13 +1,21 @@
 import {
+  AttachmentCanvasContainer,
+  useAttachmentCanvas,
+} from '@epam/ai-dial-attachment-canvas';
+import { CodeBlockTheme } from '@epam/ai-dial-chat-shared';
+import { FilterTab } from '@epam/ai-dial-conversation-panel';
+import {
   lazy,
   memo,
   Suspense,
-  type FC,
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type FC,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Route,
   Routes,
@@ -17,18 +25,25 @@ import {
 } from 'react-router-dom';
 import ConversationPanelView from '../components/ConversationPanel/ConversationPanelView';
 import ConversationSourcesPanel from '../components/ConversationSourcesPanel/ConversationSourcesPanel';
+import { RouteErrorBoundary } from '../components/ErrorBoundary/ErrorBoundary';
 import Header from '../components/Header/Header';
 import Navigation from '../components/Navigation/Navigation';
 import RouteFallback from '../components/RouteFallback/RouteFallback';
 import {
-  ROUTES,
   getConversationRoute,
   normalizeConversationId,
 } from '../constants/routes';
-import { StorageKey } from '../constants/storage';
+import {
+  AttachmentCanvasI18nKeys,
+  ButtonsI18nKeys,
+} from '../constants/translation-keys';
+import { useTheme } from '../context/ThemeContext';
 import { useIsMobile } from '../hooks/breakpoint/useBreakpoint';
 import useLocalStorage from '../hooks/useLocalStorage';
 import ConversationRoute from '../pages/ConversationRoute/ConversationRoute';
+import { ROUTES } from '../types/routes';
+import { StorageKey } from '../types/storage-key';
+import { ThemeId } from '../types/theme-id';
 
 const CatalogView = lazy(() => import('../components/CatalogView/CatalogView'));
 
@@ -38,9 +53,13 @@ const ConversationPage = lazy(async () => {
 });
 
 const App: FC = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isMobile = useIsMobile();
+  const { currentTheme } = useTheme();
+  const codeBlockTheme =
+    currentTheme === ThemeId.Light ? CodeBlockTheme.Light : CodeBlockTheme.Dark;
 
   const [isNavOpen, setIsNavOpen] = useState(false);
   const closeNav = useCallback(() => setIsNavOpen(false), []);
@@ -64,11 +83,20 @@ const App: FC = () => {
     if (isMobile) closeHistoryPanel();
   }, [isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const matchRoot = useMatch(ROUTES.ROOT);
-  const matchConversation = useMatch(`${ROUTES.CONVERSATIONS}/*`);
+  useEffect(() => {
+    if (pathname === ROUTES.Catalog) closeHistoryPanel();
+  }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { closeCanvas } = useAttachmentCanvas();
+  useEffect(() => {
+    closeCanvas();
+  }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const matchRoot = useMatch(ROUTES.Root);
+  const matchConversation = useMatch(`${ROUTES.Conversations}/*`);
   const isConversationRoute = !!(matchRoot ?? matchConversation);
   const activeConversationId = useMemo(() => {
-    const prefix = `${ROUTES.CONVERSATIONS}/`;
+    const prefix = `${ROUTES.Conversations}/`;
     if (!pathname.startsWith(prefix)) return;
 
     const id = pathname.slice(prefix.length);
@@ -80,6 +108,21 @@ const App: FC = () => {
       return normalizeConversationId(id);
     }
   }, [pathname]);
+
+  const switchToMyChatsOnNavRef = useRef(false);
+  const [panelRequestedFilter, setPanelRequestedFilter] = useState<
+    FilterTab | undefined
+  >(undefined);
+
+  useEffect(() => {
+    if (!switchToMyChatsOnNavRef.current) return;
+    switchToMyChatsOnNavRef.current = false;
+    setPanelRequestedFilter(FilterTab.MyChats);
+  }, [activeConversationId]);
+
+  const handleDuplicateReadonly = useCallback(() => {
+    switchToMyChatsOnNavRef.current = true;
+  }, []);
 
   const handleSelectConversation = useCallback(
     (id: string) => {
@@ -102,7 +145,10 @@ const App: FC = () => {
         activeConversationId={activeConversationId}
         onClose={closeHistoryPanel}
         onSelectConversation={handleSelectConversation}
-        onNewChat={() => navigate(ROUTES.ROOT)}
+        onNewChat={() => navigate(ROUTES.Root)}
+        requestedFilter={panelRequestedFilter}
+        onRequestedFilterChange={() => setPanelRequestedFilter(undefined)}
+        onDuplicateReadonly={handleDuplicateReadonly}
       />
 
       <main
@@ -112,30 +158,50 @@ const App: FC = () => {
       >
         <Header
           onMenuToggle={toggleNav}
-          isHistoryPanelOpen={isHistoryPanelOpen}
-          onHistoryPanelToggle={toggleHistoryPanel}
+          isConversationPanelOpen={isHistoryPanelOpen}
+          onConversationPanelToggle={toggleHistoryPanel}
         />
         <Routes>
-          <Route path={ROUTES.ROOT} element={<ConversationRoute />} />
+          <Route path={ROUTES.Root} element={<ConversationRoute />} />
           <Route
-            path={ROUTES.CATALOG}
+            path={ROUTES.Catalog}
             element={
-              <Suspense fallback={<RouteFallback />}>
-                <CatalogView />
-              </Suspense>
+              <RouteErrorBoundary>
+                <Suspense fallback={<RouteFallback />}>
+                  <CatalogView />
+                </Suspense>
+              </RouteErrorBoundary>
             }
           />
           <Route
             path="/conversations/*"
             element={
-              <Suspense fallback={<RouteFallback />}>
-                <ConversationPage />
-              </Suspense>
+              <RouteErrorBoundary>
+                <Suspense fallback={<RouteFallback />}>
+                  <ConversationPage
+                    onDuplicateReadonly={handleDuplicateReadonly}
+                  />
+                </Suspense>
+              </RouteErrorBoundary>
             }
           />
         </Routes>
       </main>
       {isConversationRoute && <ConversationSourcesPanel />}
+      {isConversationRoute && (
+        <AttachmentCanvasContainer
+          ariaLabel={t(AttachmentCanvasI18nKeys.AriaLabel)}
+          closeLabel={t(AttachmentCanvasI18nKeys.CloseLabel)}
+          downloadLabel={t(AttachmentCanvasI18nKeys.DownloadLabel)}
+          unsupportedLabel={t(AttachmentCanvasI18nKeys.UnsupportedLabel)}
+          copyMarkdownLabel={t(ButtonsI18nKeys.CopyAsMarkdown)}
+          copiedMarkdownLabel={t(ButtonsI18nKeys.Copied)}
+          copyJsonLabel={t(ButtonsI18nKeys.CopyAsJson)}
+          copiedJsonLabel={t(ButtonsI18nKeys.Copied)}
+          isMobile={isMobile}
+          codeBlockTheme={codeBlockTheme}
+        />
+      )}
     </div>
   );
 };

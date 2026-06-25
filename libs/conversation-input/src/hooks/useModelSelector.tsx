@@ -1,6 +1,11 @@
 import { type DeploymentItem, mergeClasses } from '@epam/ai-dial-chat-shared';
-import type { DropdownItem } from '@epam/ai-dial-ui-kit';
-import { DIAL_ICON_SIZE, DialSearch, ElementSize } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_ICON_SIZE,
+  DialEllipsisTooltip,
+  DialSearch,
+  DropdownItem,
+  ElementSize,
+} from '@epam/ai-dial-ui-kit';
 import { type ReactNode, useMemo, useState } from 'react';
 import {
   MODEL_SELECTOR_SKELETON_ROW_COUNT,
@@ -67,6 +72,7 @@ export const useModelSelector = ({
           selectedItem?.iconUrl,
           selectedItem?.type,
           DIAL_ICON_SIZE.LG,
+          selectedItem?.displayName ?? selectedItem?.id,
         )
       ),
     [isLoading, selectedItem],
@@ -106,7 +112,7 @@ export const useModelSelector = ({
     }
     return filterDeployments(deployments, searchQuery).map((item) => ({
       key: item.id,
-      label: getDeploymentLabel(item),
+      label: <DialEllipsisTooltip text={getDeploymentLabel(item)} />,
       icon: buildDeploymentIcon(item.iconUrl, item.type),
       onClick: () => onDeploymentChange?.(item.id),
       className:
