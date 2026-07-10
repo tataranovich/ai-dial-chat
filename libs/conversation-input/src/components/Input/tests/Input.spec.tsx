@@ -149,6 +149,33 @@ describe('Input', () => {
     expect(handleSend).toHaveBeenCalledWith('Click send', []);
   });
 
+  it('should show stop button while streaming when onStop is provided', () => {
+    const handleStop = vi.fn();
+    render(
+      <Input isStreaming onStop={handleStop} stopLabel="Stop streaming" />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Stop streaming'));
+
+    expect(handleStop).toHaveBeenCalledOnce();
+    expect(screen.queryByLabelText('Send message')).toBeNull();
+  });
+
+  it('should not show stop or send while streaming when onStop is omitted', () => {
+    const handleSend = vi.fn();
+    const { container } = render(
+      <Input isStreaming message="Draft" onSend={handleSend} />,
+    );
+    const textarea = container.querySelector('textarea');
+    if (textarea) {
+      fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+    }
+
+    expect(screen.queryByLabelText('Stop streaming')).toBeNull();
+    expect(screen.queryByLabelText('Send message')).toBeNull();
+    expect(handleSend).not.toHaveBeenCalled();
+  });
+
   it('should set --ci-bg and --ci-text CSS variables when colors prop is provided', () => {
     const { container } = render(
       <Input colors={{ background: '#fff', text: '#000' }} />,
@@ -164,10 +191,13 @@ describe('Input', () => {
     expect(wrapper.style.getPropertyValue('--ci-text')).toBe('');
   });
 
-  it('should set --ci-font-size CSS variable when typography prop is provided', () => {
-    const { container } = render(<Input typography={{ fontSize: '16px' }} />);
-    const wrapper = container.firstElementChild as HTMLElement;
-    expect(wrapper.style.getPropertyValue('--ci-font-size')).toBe('16px');
+  it('should apply the typography fontClassName to the textarea', () => {
+    const { container } = render(
+      <Input typography={{ fontClassName: 'dial-body-paragraph-text' }} />,
+    );
+    expect(container.querySelector('textarea')?.className).toContain(
+      'dial-body-paragraph-text',
+    );
   });
 
   it('should use custom placeholder when provided', () => {
@@ -453,6 +483,53 @@ describe('Input — model selector', () => {
   it('does not render selector when deployments is undefined', () => {
     render(<Input />);
     expect(screen.queryByLabelText(/Select model/)).toBeNull();
+  });
+});
+
+describe('Input — isModelSelectorDisabled', () => {
+  it('keeps the model chip visible and marks it aria-disabled', () => {
+    const { container } = render(
+      <Input
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        isModelSelectorDisabled
+      />,
+    );
+    expect(screen.getByLabelText(/Select model/)).toBeTruthy();
+    expect(container.querySelector('[aria-disabled="true"]')).toBeTruthy();
+  });
+
+  it('does not mark the chip aria-disabled when isModelSelectorDisabled is false', () => {
+    const { container } = render(
+      <Input
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        isModelSelectorDisabled={false}
+      />,
+    );
+    expect(container.querySelector('[aria-disabled="true"]')).toBeNull();
+  });
+
+  it('keeps typing and sending enabled while the model selector is disabled', () => {
+    const handleSend = vi.fn();
+    const { container } = render(
+      <Input
+        onSend={handleSend}
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        isModelSelectorDisabled
+      />,
+    );
+    const textarea = container.querySelector('textarea');
+    expect(textarea?.disabled).toBe(false);
+    if (textarea) {
+      fireEvent.change(textarea, { target: { value: 'Hello' } });
+      fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+    }
+    expect(handleSend).toHaveBeenCalledWith('Hello', []);
   });
 });
 

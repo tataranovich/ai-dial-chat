@@ -3,9 +3,8 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EnvironmentVariables } from '../../config/environment.config';
+import type { DialClientService } from '../../dial/dial-client.service';
 import { ChatService } from '../chat.service';
 import { ChatCompletionDto, ChatMessageRole } from '../dto/chat-completion.dto';
 
@@ -16,15 +15,13 @@ const dto: ChatCompletionDto = {
 
 const TOKEN = 'test-token';
 
-function makeService() {
-  const configService = {
-    get: vi.fn((key: string) => {
-      if (key === 'DIAL_CORE_URL') return 'http://dial-core';
-      if (key === 'DIAL_API_VERSION') return '2024-10-21';
-      return undefined;
-    }),
-  } as unknown as ConfigService<EnvironmentVariables>;
-  return new ChatService(configService);
+function makeService(sendChatCompletionRequest: ReturnType<typeof vi.fn>) {
+  const dialClient = {
+    client: { sendChatCompletionRequest },
+    baseUrl: 'http://dial-core',
+    dialApiVersion: '2024-10-21',
+  } as unknown as DialClientService;
+  return new ChatService(dialClient);
 }
 
 describe('ChatService', () => {
@@ -32,13 +29,8 @@ describe('ChatService', () => {
   let sendChatCompletionRequest: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    service = makeService();
     sendChatCompletionRequest = vi.fn();
-    (
-      service as unknown as { client: { sendChatCompletionRequest: unknown } }
-    ).client = {
-      sendChatCompletionRequest,
-    };
+    service = makeService(sendChatCompletionRequest);
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -65,6 +57,18 @@ describe('ChatService', () => {
     sendChatCompletionRequest.mockResolvedValue({
       data: undefined,
       error: { status: 404 },
+      response: { ok: false, status: 404 },
+    });
+
+    await expect(service.sendCompletion(dto, TOKEN)).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('throws NotFoundException from response.status when the error body carries no status', async () => {
+    sendChatCompletionRequest.mockResolvedValue({
+      data: undefined,
+      error: { message: 'Resource not found' },
       response: { ok: false, status: 404 },
     });
 

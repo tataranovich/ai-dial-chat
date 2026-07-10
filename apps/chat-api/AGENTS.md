@@ -231,9 +231,10 @@ Services MUST:
   Never cast with `as string`; rely on the validated env schema.
 
 - For DIAL Core integrations, prefer `@epam/ai-dial-typescript-sdk` through the shared
-  SDK client on `AppService` (`createSDK({ baseUrl })`). Pass per-request auth headers
-  from the BFF session for user-scoped data, and handle the SDK's success/error response
-  shape explicitly.
+  SDK client injected via `DialClientService` (`dial/dial-client.service.ts`, exported by
+  the global `DialCoreModule`) rather than each service creating its own `createSDK`
+  instance. Pass per-request auth headers from the BFF session for user-scoped data, and
+  handle the SDK's success/error response shape explicitly.
 - Use raw `fetch` only for non-DIAL upstreams or when the SDK does not expose the required
   DIAL operation. In those cases, use an `AbortController` and the configurable timeout
   env var (e.g. `THEMES_SERVICE_TIMEOUT_MS`). Always `clearTimeout` in both branches and
@@ -244,8 +245,8 @@ Services MUST:
   (`@nestjs/cache-manager`). Cache key naming: `<domain>:<resource>[:<param>]`
   (e.g. `themes:config`, `themes:icon:<name>`).
 
-Follow `AppService` as the reference for DIAL SDK client setup. Follow `ThemeService` only
-for non-DIAL fetch + timeout + cache + error mapping.
+Follow `DialClientService` as the reference for DIAL SDK client setup. Follow `ThemeService`
+only for non-DIAL fetch + timeout + cache + error mapping.
 
 Bad:
 
@@ -396,7 +397,7 @@ parseInt(value, 10))` + `@IsNumber()`.
 
 ## 12. Verification After Each Slice
 
-Per repo rule `incremental-implementation`, after each slice run:
+Per the openspec task rules (thin vertical slices, `openspec/config.yaml`), after each slice run:
 
 ```sh
 npm exec nx test  chat-api

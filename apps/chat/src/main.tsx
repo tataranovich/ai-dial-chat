@@ -1,5 +1,9 @@
 import { AttachmentCanvasProvider } from '@epam/ai-dial-attachment-canvas';
 import '@epam/ai-dial-ui-kit/styles.css';
+import '@epam/ai-dial-react-pdf-highlighter/styles.css';
+import '@epam/pdf-highlighter-kit/dist/pdf-highlight-viewer.css';
+import { GlobalWorkerOptions } from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { lazy, StrictMode, Suspense } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
@@ -11,6 +15,7 @@ import AppConfigProvider from './context/AppConfigContext';
 import { UserProvider } from './context/auth/UserContext';
 import { ConversationsProvider } from './context/ConversationsContext';
 import { DeploymentsProvider } from './context/DeploymentsContext';
+import { GenerationProvider } from './context/GenerationContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { SourcesSidebarProvider } from './context/SourcesSidebarContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -19,6 +24,9 @@ import './i18n/config';
 import './styles.scss';
 
 const LoginPage = lazy(() => import('./pages/auth/Login'));
+
+/* Override the CDN fallback set by @epam/pdf-highlighter-kit at module-load time. */
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement,
@@ -33,29 +41,31 @@ root.render(
           <UserProvider>
             <ThemeProvider>
               <AppConfigProvider>
-                <DeploymentsProvider>
-                  <SourcesSidebarProvider>
-                    <AttachmentCanvasProvider>
-                      <Suspense fallback={null}>
-                        <Routes>
-                          <Route path="/login" element={<LoginPage />} />
-                          <Route
-                            path="*"
-                            element={
-                              <RequireAuth>
+                <SourcesSidebarProvider>
+                  <AttachmentCanvasProvider>
+                    <Suspense fallback={null}>
+                      <Routes>
+                        <Route path="/login" element={<LoginPage />} />
+                        <Route
+                          path="*"
+                          element={
+                            <RequireAuth>
+                              <GenerationProvider>
                                 <UserConfigProvider>
-                                  <ConversationsProvider>
-                                    <App />
-                                  </ConversationsProvider>
+                                  <DeploymentsProvider>
+                                    <ConversationsProvider>
+                                      <App />
+                                    </ConversationsProvider>
+                                  </DeploymentsProvider>
                                 </UserConfigProvider>
-                              </RequireAuth>
-                            }
-                          />
-                        </Routes>
-                      </Suspense>
-                    </AttachmentCanvasProvider>
-                  </SourcesSidebarProvider>
-                </DeploymentsProvider>
+                              </GenerationProvider>
+                            </RequireAuth>
+                          }
+                        />
+                      </Routes>
+                    </Suspense>
+                  </AttachmentCanvasProvider>
+                </SourcesSidebarProvider>
               </AppConfigProvider>
             </ThemeProvider>
           </UserProvider>

@@ -17,7 +17,8 @@ The `AttachmentCanvas` side panel opens to the right of the main conversation ar
 | `CollapsedGroup` stage attachments | `ConversationMessageItem.tsx` via `onAttachmentClick` | Open canvas |
 | `ConversationInput` tray (new message) | `ConversationRoute.tsx` → `handleAttachmentClick` | Open canvas |
 | `EditMessageInput` tray | `ConversationView.tsx` → `handleInputAttachmentClick` | Open canvas |
-| `ConversationSourcesPanel` | `ConversationSourcesPanel.tsx` → `handleAttachmentClick` | Open canvas if previewable (closes source panel), fall back to download if `openAttachmentCanvas` returns `false` |
+| `ConversationSourcesPanel` (attachment card) | `ConversationSourcesPanel.tsx` → `handleAttachmentClick` | Open canvas if previewable (closes source panel), fall back to anchor-download if `openAttachmentCanvas` returns `false` |
+| `ConversationSourcesPanel` (source link) | `ConversationSourcesPanel.tsx` → `handleSourceClick` | Builds a `DisplayAttachment` from `QuotationSource` (`url`, `title`, `contentType`); opens canvas if previewable (closes source panel); falls back to `window.open` for web URLs or anchor-download for DIAL file IDs when `openAttachmentCanvas` returns `false` |
 
 #### Open behavior
 
@@ -40,6 +41,7 @@ The canvas closes when the URL `pathname` changes (conversation switch, catalog 
 - **Resizability**: enabled on desktop, disabled on mobile (`isMobile` prop from `useIsMobile()`).
 - **Width defaults**: 560 px default, 320 px min, 960 px max. Width is not persisted between sessions.
 - **Both panels**: `ConversationSourcesPanel` and `AttachmentCanvas` cannot be open simultaneously. Opening the canvas from the source panel closes the source panel first (calls `closeSourcesPanel()` before `openCanvas()`). Opening the canvas from any other surface does not affect the source panel state.
+- **Conversation panel**: The conversation history panel (`isHistoryPanelOpen`) is automatically closed when the canvas opens. Implemented via a `useEffect` in `apps/chat/src/app/app.tsx` that watches `isCanvasOpen` and calls `closeHistoryPanel()` whenever it becomes `true`.
 
 #### i18n
 
@@ -82,8 +84,10 @@ None. The canvas is always available to authenticated users.
 |---|---|---|
 | `text/markdown` MIME | `resolveMarkdownCanvasContent` | `MarkdownCanvasContent` |
 | `application/json` MIME | `resolveJsonCanvasContent` | `JsonCanvasContent` or `PlainTextCanvasContent` |
+| `application/pdf` MIME | `resolvePdfCanvasContent` | `PdfCanvasContent` |
 | `md`, `markdown` extension | `resolveMarkdownCanvasContent` | `MarkdownCanvasContent` |
 | `json` extension | `resolveJsonCanvasContent` | `JsonCanvasContent` or `PlainTextCanvasContent` (parse failure) |
+| `pdf` extension | `resolvePdfCanvasContent` | `PdfCanvasContent` |
 | `image/*` MIME | `resolveImageCanvasContent` | `ImageCanvasContent` |
 | Other text-previewable (see `TEXT_EXTENSIONS`) | `resolveTextCanvasContent` | `PlainTextCanvasContent` |
 | Everything else | `createUnsupportedCanvasContent` | `UnsupportedCanvasContent` |
@@ -98,6 +102,7 @@ Extension checks for `md`/`markdown` and `json` run *before* the generic `isText
 | `PlainText` | `text: string` | `<pre>` with `whitespace-pre-wrap break-words` |
 | `Markdown` | `text: string` | `MarkdownRenderer` from `@epam/ai-dial-chat-shared`, neutral defaults |
 | `Json` | `value: unknown` | `react-json-view-lite` `JsonView`, container has `dir="ltr"` |
+| `Pdf` | `url: string; highlights?: InputHighlightData[]; selectedHighlightId?: string` | `PdfContent` (thumbnail sidebar + `DocumentPreview` from `@epam/ai-dial-react-pdf-highlighter`) |
 | `Unsupported` | — | Centered "Preview not supported" message |
 
 ---
@@ -185,8 +190,90 @@ The reload is guarded by `!abortRef.current` to skip if the user has already sta
 
 ---
 
+### PDF rendering
+
+#### Trigger
+
+`useOpenAttachmentCanvas` routes to `resolvePdfCanvasContent` when `contentType === 'application/pdf'` (MIME, checked first) or when the lowercased file extension is `pdf`. PDF routing runs before the generic `isTextPreviewable` branch.
+
+#### Content resolution
+
+`resolvePdfCanvasContent` in `apps/chat/src/utils/attachment-canvas.ts`:
+
+1. If the attachment is a local file (`'file' in attachment` and `attachment.file.size > 0`): return `{ type: AttachmentContentType.Pdf, url: URL.createObjectURL(attachment.file) }`.
+2. Resolve the download URL via `resolveDialUrl(attachment)`. If `null`, return `null`.
+3. Return `{ type: AttachmentContentType.Pdf, url }`.
+
+No server fetch is performed at resolution time; `DocumentPreview` handles file loading internally.
+
+#### Rendering
+
+The `PdfContent` component (`libs/attachment-canvas/src/components/AttachmentCanvas/PdfContent.tsx`) wraps `DocumentPreview` and adds a thumbnail sidebar.
+
+**Layout** — `flex h-full overflow-hidden`:
+- **Thumbnail sidebar** (`w-30 shrink-0 overflow-auto`) — rendered once `totalPages > 0`. Displays one `PageThumbnail` per page. Clicking a thumbnail calls `viewerApiRef.current?.navigateToPage(pageNum)` and updates `selectedPage` state.
+- **Viewer pane** (`min-w-0 flex-1 overflow-hidden`) — contains `DocumentPreview`.
+
+**`selectedPage` state** — tracks which thumbnail is highlighted (selected):
+- Initialised via a lazy `useState` initializer: finds the `InputHighlightData` entry whose `id` matches `selectedHighlightId` and returns its first `BBox.page`; falls back to `1` when no match is found.
+- A `useEffect` keyed on `[selectedHighlightId, highlights]` updates `selectedPage` when the user opens a different citation in the same PDF (new `selectedHighlightId` prop on the already-mounted component).
+- `PdfContent` is keyed by `content.url` in `AttachmentCanvas` — the component stays mounted across same-PDF citation changes, so there is no blink or document reload.
+- A second `useEffect` keyed on `[selectedPage, totalPages]` calls `scrollIntoView({ block: 'center', behavior: 'smooth' })` on the selected thumbnail's wrapper `div` (tracked in `thumbnailNodeRefs`). Including `totalPages` in the deps ensures the scroll fires once the thumbnail sidebar has been rendered for the first time.
+- Clicking a thumbnail calls `handleSelectPage`, which sets `selectedPage` directly and calls `viewerApiRef.current?.navigateToPage(pageNum)`.
+
+`DocumentPreview` props:
+
+| Prop | Value |
+|---|---|
+| `fileUrl` | `content.url` — resolved URL or object URL |
+| `loadFileCb` | `loadPdf` prop (optional); falls back to `fetchBlobFromUrl` from `libs/attachment-canvas/src/utils/download.ts` (fetches the URL, throws on non-OK status, returns `Blob`) |
+| `highlights` | `content.highlights ?? []` — highlight regions; empty when no citation context |
+| `selectedHighlightId` | `content.selectedHighlightId` — viewer scrolls to this highlight on load |
+| `showOccurrences` | `false` — occurrence counter suppressed |
+| `thumbnailPageNumbers` | `[1 … totalPages]` — drives thumbnail generation inside the library |
+| `onTotalPagesChange` | sets `totalPages` state, which controls sidebar visibility and `thumbnailPageNumbers` |
+| `onThumbnailsLoaded` | merges newly loaded thumbnail URLs into `thumbnails` state (`Map<number, string>`) |
+| `onViewerReady` | stores the `PdfViewerApi` reference used for programmatic page navigation |
+
+No `title` prop is passed — toolbar title is hidden.
+
+Body wrapper class: `h-full overflow-hidden` — no padding; the viewer manages its own scrolling.
+
+The `loadPdf` prop is optional on `PdfContent`, `AttachmentCanvas`, and `AttachmentCanvasContainer`. The default (`fetchBlobFromUrl`) works for cookie-based DIAL auth. The app layer can supply a custom `loadPdf` callback if it needs to add auth headers.
+
+#### Download
+
+PDF is downloadable. `isDownloadable` returns `true` for `PdfCanvasContent`. `downloadAttachmentContent` uses `content.url` as the anchor `href` directly (same pattern as `ImageCanvasContent`).
+
+---
+
 ### Citation preview
 
-When a user clicks "Preview" in a `CitationDropdown`, `annotationToDisplayAttachment` converts the annotation's backing `AttachmentResource` to a `DisplayAttachment`. The canvas opens with the full source file. The `Annotation.body` fields (`quote`, `selector`, `configuration`) are **not** carried through; no highlighted region is shown.
+When a user clicks "Preview" in a `CitationDropdown`, `useCitationMarkdownComponents.onPreview` opens the canvas with the full source file.
 
-A future "citation-aware" mode would pass the full `Annotation` to the canvas and render document-level highlights. Out of scope for this iteration.
+#### PDF sources (highlights)
+
+When `annotation.body.source.attachment.type === 'application/pdf'`:
+
+1. Find the `AnnotationGroup` that owns the clicked annotation (by `sourceUrl`).
+2. `annotationsToPdfHighlights(group.annotations)` — maps every annotation whose `body.selector` contains one or more `PdfBBoxSelector` entries (`type: 'pdf_bbox'`) to an `InputHighlightData`. Each annotation becomes one highlight whose `bboxes` list collects all its `pdf_bbox` selectors. The highlight `id` is `annotation.index` when present, otherwise the annotation's position in the group.
+3. `selectedHighlightId` is computed for the clicked annotation using the same ID formula, so the viewer scrolls to it on load.
+4. `fileName` is derived from the annotation's `attachment`: `attachment.title` is used when present; otherwise the last path segment of `attachment.url` is URL-decoded with `decodeURIComponent` (so `%20` → space, etc.).
+5. `openCanvas` is called directly with `PdfCanvasContent { type: Pdf, url, highlights, selectedHighlightId }` and the resolved `fileName`.
+6. Annotations whose `body.selector` carries no `pdf_bbox` entries produce no highlight and are silently skipped.
+
+#### Non-PDF sources
+
+`annotationToDisplayAttachment` converts the annotation's `AttachmentResource` to a `DisplayAttachment` and calls `onAttachmentPreview` — the generic canvas open path.
+
+#### Selector type
+
+`AnnotationBody.selector` may be a single `AnnotationSelector` or an array. Only entries with `type === 'pdf_bbox'` are mapped; all other selector types are ignored. The `PdfBBoxSelector` shape:
+
+```ts
+interface PdfBBoxSelector {
+  type: 'pdf_bbox';
+  page: number;   // 1-based
+  x1: number; y1: number; x2: number; y2: number;
+}
+```

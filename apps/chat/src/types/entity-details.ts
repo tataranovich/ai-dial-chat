@@ -6,13 +6,6 @@
 
 // ---- Shared enums ----
 
-export enum Availability {
-  AlwaysOn = 'ALWAYS_ON',
-  OnDemand = 'ON_DEMAND',
-  Scheduled = 'SCHEDULED',
-  Deprecated = 'DEPRECATED',
-}
-
 export enum AuthenticationType {
   None = 'NONE',
   ApiKey = 'API_KEY',
@@ -23,16 +16,46 @@ export enum AuthenticationType {
 
 // ---- Model entity ----
 
+export enum ModelProvider {
+  OpenAI = 'OPEN_AI',
+  Anthropic = 'ANTHROPIC',
+  Google = 'GOOGLE',
+  Meta = 'META',
+  Mistral = 'MISTRAL',
+  Azure = 'AZURE',
+  Amazon = 'AMAZON',
+  Cohere = 'COHERE',
+}
+
+export enum ModelEndpointType {
+  AzureOpenAI = 'AZURE_OPEN_AI',
+  Anthropic = 'ANTHROPIC',
+  Responses = 'RESPONSES',
+}
+
+export interface ModelEndpointSnippets {
+  pythonSnippet?: string;
+  curlSnippet?: string;
+  jsSnippet?: string;
+}
+
+export interface ModelEndpoint {
+  type: ModelEndpointType;
+  url: string;
+  snippets?: ModelEndpointSnippets;
+}
+
 export interface ModelCapabilities {
-  hasChat: boolean;
-  hasReasoning: boolean;
-  hasGeneration: boolean;
-  hasKnowledge: boolean;
-  hasInstructions: boolean;
-  hasContext: boolean;
-  hasMultimodal: boolean;
-  hasTools: boolean;
-  hasStructuredOutput: boolean;
+  hasTools?: boolean;
+  hasMcp?: boolean;
+  hasCaching?: boolean;
+  hasParallelToolCalls?: boolean;
+  hasUrlAttachments?: boolean;
+  hasFolderAttachments?: boolean;
+  hasSeed?: boolean;
+  hasSystemPrompt?: boolean;
+  hasResume?: boolean;
+  reasoningEfforts?: string[];
 }
 
 export interface ModelSpecification {
@@ -41,14 +64,8 @@ export interface ModelSpecification {
   inputTypes?: string[];
   outputTypes?: string[];
   languages?: string[];
-  availability?: Availability;
-  hasSystemPrompt?: boolean;
-  hasTools?: boolean;
-  hasTemperature?: boolean;
-  hasSeed?: boolean;
-  hasUrlAttachments?: boolean;
-  hasFolderAttachments?: boolean;
-  hasAssistantAttachments?: boolean;
+  hostedBy?: string;
+  createdAt?: number;
 }
 
 export interface ModelPricing {
@@ -63,13 +80,11 @@ export interface ModelPricing {
 
 export interface ModelApiDetails {
   modelId?: string;
-  endpointUrl?: string;
-  pythonSnippet?: string;
-  curlSnippet?: string;
-  jsSnippet?: string;
+  endpoints?: ModelEndpoint[];
 }
 
 export interface ModelEntityDetails {
+  provider?: ModelProvider;
   capabilities?: ModelCapabilities;
   specification?: ModelSpecification;
   pricing?: ModelPricing;
@@ -101,6 +116,22 @@ export interface AgentSpecification {
   maturity?: AgentMaturity;
   permissions?: string[];
   skills?: string[];
+  hostedBy?: string;
+  createdAt?: number;
+  routes?: string[];
+}
+
+export interface AgentCapabilities {
+  hasTools?: boolean;
+  hasMcp?: boolean;
+  hasCaching?: boolean;
+  hasParallelToolCalls?: boolean;
+  hasUrlAttachments?: boolean;
+  hasFolderAttachments?: boolean;
+  hasSeed?: boolean;
+  hasSystemPrompt?: boolean;
+  hasResume?: boolean;
+  hasConfiguration?: boolean;
 }
 
 export interface AgentConfiguration {
@@ -124,20 +155,43 @@ export interface AgentApiDetails {
 export interface AgentEntityDetails {
   specification?: AgentSpecification;
   configuration?: AgentConfiguration;
+  capabilities?: AgentCapabilities;
   capabilityLinks?: AgentCapabilityLink[];
   api?: AgentApiDetails;
 }
 
 // ---- Toolset entity ----
 
+export interface ToolsetAuthStatus {
+  global?: string;
+  appLevel?: string;
+  userLevel?: string;
+  scopesSupported?: string[];
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
+}
+
 export interface ToolsetSpecification {
   provider?: string;
   authentication?: AuthenticationType;
   permissions?: string[];
+  hostedBy?: string;
+  authStatus?: ToolsetAuthStatus;
+  createdAt?: number;
+  /** Names of all tools the underlying MCP server supports, not just the allow-listed subset in `permissions`. */
+  allTools?: string[];
+}
+
+export interface ToolsetCapabilities {
+  hasMcp?: boolean;
+  hasCaching?: boolean;
+  hasSystemPrompt?: boolean;
+  hasResume?: boolean;
 }
 
 export interface ToolsetEntityDetails {
   specification?: ToolsetSpecification;
+  capabilities?: ToolsetCapabilities;
 }
 
 // ---- Guardrail entity ----

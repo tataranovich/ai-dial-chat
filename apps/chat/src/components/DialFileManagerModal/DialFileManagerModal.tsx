@@ -2,21 +2,17 @@ import {
   isMimeTypeAllowed,
   mimeTypesToExtensionLabels,
 } from '@epam/ai-dial-attachment-input';
+import { PrimaryButton } from '@epam/ai-dial-kit';
 import {
-  DialFileManager,
-  DialFileManagerActions,
   DialFileManagerTabs,
   DialFileNodeType,
-  DialLoader,
   DialPopup,
-  DialPrimaryButton,
-  GridSelectionMode,
-  NOT_ALLOWED_SYMBOLS_REGEXP,
   NotificationVariant,
+  NOT_ALLOWED_SYMBOLS_REGEXP,
   PopupSize,
+  useDialFileManagerTabs,
   type DialFile,
   type FileManagerGridRow,
-  useDialFileManagerTabs,
 } from '@epam/ai-dial-ui-kit';
 import {
   memo,
@@ -33,15 +29,16 @@ import {
 } from '../../constants/translation-keys';
 import { useNotification } from '../../context/NotificationContext';
 import { useDialFileManager } from '../../hooks/files/useDialFileManager';
+import { DialFileManagerVariant } from '../../types/file-manager-variant';
 import {
   mimeTypesToAttachmentExtensionLabels,
   mimeTypesToDialFileAcceptTypes,
 } from '../../utils/attachment-types';
 import { isHiddenPath } from '../../utils/file-path';
 import { formatFileSize } from '../../utils/string-utils';
+import DialFileManagerShell from '../DialFileManagerShell/DialFileManagerShell';
+import type { DialFileManagerShellLabels } from '../DialFileManagerShell/types/labels';
 import type { AttachResult } from './types/attach-result';
-import { FileUploadStatus } from './types/upload';
-import UploadProgressModal from './UploadProgressModal';
 
 interface Props {
   isOpen: boolean;
@@ -75,6 +72,7 @@ interface Props {
   maximumAttachmentsAmount?: number;
   canAttachFolders?: boolean;
   allowedTypesLabel?: string;
+  autoSelectUploadedItems?: boolean;
 }
 
 const DialFileManagerModal: FC<Props> = ({
@@ -109,62 +107,56 @@ const DialFileManagerModal: FC<Props> = ({
   maximumAttachmentsAmount,
   canAttachFolders = false,
   allowedTypesLabel,
+  autoSelectUploadedItems = true,
 }) => {
   const { t } = useTranslation();
   const { showNotification } = useNotification();
 
-  const {
-    activeTab,
-    handleTabChange,
-    tabs: allTabs,
-  } = useDialFileManagerTabs(
-    {
+  const tabLabels = useMemo(
+    () => ({
       [DialFileManagerTabs.MyFiles]: t(DialFileManagerI18nKeys.TabMyFiles),
       [DialFileManagerTabs.Shared]: t(DialFileManagerI18nKeys.TabShared),
       [DialFileManagerTabs.Organization]: t(
         DialFileManagerI18nKeys.TabOrganization,
       ),
       [DialFileManagerTabs.Review]: '',
-    },
-    DialFileManagerTabs.MyFiles,
+    }),
+    [t],
   );
+
+  const {
+    activeTab,
+    handleTabChange,
+    tabs: allTabs,
+  } = useDialFileManagerTabs(tabLabels, DialFileManagerTabs.MyFiles);
+
+  const rootLabel =
+    tabLabels[activeTab] || tabLabels[DialFileManagerTabs.MyFiles];
+
   const tabs = useMemo(
     () => allTabs?.filter((tab) => tab.id !== DialFileManagerTabs.Review),
     [allTabs],
   );
 
+  const hookResult = useDialFileManager({
+    bucket,
+    activeTab,
+    rootLabel,
+    onNotification: showNotification,
+    variant: DialFileManagerVariant.Attach,
+    forbiddenSymbolsRegExp: NOT_ALLOWED_SYMBOLS_REGEXP,
+  });
+
   const {
     items,
     isLoading,
-    error,
-    path,
-    onPathChange,
-    retry,
-    onUploadFiles,
-    onValidateUpload,
+    searchResults,
     uploadBatchState,
-    cancelUpload,
-    clearUploadBatch,
-    onCreateFolder,
-    onCreateFolderValidate,
     isCreatingFolder,
-    onDownloadFiles,
     isDownloading,
-    onDeleteFiles,
     isDeleting,
-    uploadEnabled,
-    isNewButtonDisabled,
-    disabledNewButtonTooltip,
-    visibleColumns,
-    dateLocale,
-    dateOptions,
-    actionLabels: tabActionLabels,
-    sharedWithMeIds,
-  } = useDialFileManager({
-    bucket,
-    activeTab,
-    onNotification: showNotification,
-  });
+    isRenaming,
+  } = hookResult;
 
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(
     () => new Set(),
@@ -193,8 +185,12 @@ const DialFileManagerModal: FC<Props> = ({
       });
     };
     collect(items);
+    searchResults?.forEach((file) => {
+      result.set(file.path, file);
+      if (file.id) result.set(file.id, file);
+    });
     return result;
-  }, [items]);
+  }, [items, searchResults]);
 
   const selectedFiles = useMemo(
     () =>
@@ -250,7 +246,30 @@ const DialFileManagerModal: FC<Props> = ({
       });
     }
 
-    const totalCount = dedupedFiles.length + dedupedFolderPaths.length;
+    const dialCoreFolderPaths = dedupedFolderPaths.flatMap((virtualPath) => {
+      const file = filesByPath.get(virtualPath);
+      if (file == null) return [];
+      const source = file.url ?? file.id ?? '';
+      if (!source) return [];
+      const dialPath = source.startsWith('files/')
+        ? source
+        : `files/${file.bucket ?? bucket}/${source.replace(/^\/+/, '')}`;
+      /*
+       * Strip any `../`/`./` segments before the path is forwarded to DIAL Core —
+       * the BFF is the trust boundary, but this guards against a compromised response.
+       */
+      const normalizedDialPath = dialPath
+        .split('/')
+        .filter((segment) => segment !== '..' && segment !== '.')
+        .join('/');
+      return [
+        normalizedDialPath.endsWith('/')
+          ? normalizedDialPath
+          : `${normalizedDialPath}/`,
+      ];
+    });
+
+    const totalCount = dedupedFiles.length + dialCoreFolderPaths.length;
     if (
       maximumAttachmentsAmount != null &&
       maximumAttachmentsAmount > 0 &&
@@ -267,7 +286,7 @@ const DialFileManagerModal: FC<Props> = ({
       return;
     }
 
-    onAttach({ files: dedupedFiles, folderPaths: dedupedFolderPaths });
+    onAttach({ files: dedupedFiles, folderPaths: dialCoreFolderPaths });
   }, [
     onAttach,
     selectedFiles,
@@ -275,6 +294,8 @@ const DialFileManagerModal: FC<Props> = ({
     maximumAttachmentsAmount,
     showNotification,
     t,
+    filesByPath,
+    bucket,
   ]);
 
   const headerDescription = useMemo(() => {
@@ -367,26 +388,6 @@ const DialFileManagerModal: FC<Props> = ({
     [allowedTypes],
   );
 
-  const uploadProgressText = useMemo(() => {
-    if (uploadBatchState == null) {
-      return '';
-    }
-
-    const done = uploadBatchState.files.filter(
-      (file) => file.status !== FileUploadStatus.Uploading,
-    ).length;
-
-    return t('dialFileManager.uploadProgressSummary', {
-      done,
-      total: uploadBatchState.files.length,
-    });
-  }, [uploadBatchState, t]);
-
-  const handleUploadCancel = useCallback(() => {
-    cancelUpload();
-    clearUploadBatch();
-  }, [cancelUpload, clearUploadBatch]);
-
   const getDisabledTooltip = useCallback(
     (row: FileManagerGridRow) => {
       if (isHiddenPath(row.path)) {
@@ -398,7 +399,62 @@ const DialFileManagerModal: FC<Props> = ({
   );
 
   const isOperationInProgress =
-    isDownloading || isDeleting || isCreatingFolder || uploadBatchState != null;
+    isDownloading ||
+    isDeleting ||
+    isRenaming ||
+    isCreatingFolder ||
+    uploadBatchState != null;
+
+  const isRowSelectable = useCallback(
+    (node: { data?: FileManagerGridRow | null }) => {
+      const row = node.data;
+      if (row == null) return false;
+
+      if (isHiddenPath(row.path)) return false;
+
+      if (row.nodeType === DialFileNodeType.FOLDER) {
+        return canAttachFolders;
+      }
+
+      if (row.nodeType === DialFileNodeType.ITEM) {
+        if (
+          allowedTypes != null &&
+          allowedTypes.length > 0 &&
+          row.contentType != null &&
+          !isMimeTypeAllowed(row.contentType, allowedTypes)
+        ) {
+          return false;
+        }
+
+        if (
+          maxSelectableFileSize != null &&
+          row.contentLength != null &&
+          row.contentLength > maxSelectableFileSize
+        ) {
+          return false;
+        }
+
+        return true;
+      }
+
+      return false;
+    },
+    [canAttachFolders, allowedTypes, maxSelectableFileSize],
+  );
+
+  const getUploadProgressText = useCallback(
+    (done: number, total: number) =>
+      t(DialFileManagerI18nKeys.UploadProgressSummary, { done, total }),
+    [t],
+  );
+
+  const renameValidationMessages = useMemo(
+    () => ({
+      emptyName: t(DialFileManagerI18nKeys.RenameNameEmpty),
+      duplicateName: t(DialFileManagerI18nKeys.RenameDuplicateName),
+    }),
+    [t],
+  );
 
   const conflictResolutionPopupOptions = useMemo(
     () => ({
@@ -420,246 +476,162 @@ const DialFileManagerModal: FC<Props> = ({
     [t],
   );
 
-  const deleteConfirmationOptions = useMemo(
+  const emptyStateByTab = useMemo(
     () => ({
-      cancelLabel: deleteCancelLabel,
-      confirmLabel: deleteConfirmLabel,
-      titleRenderer: deleteConfirmTitle,
-      contentRenderer: deleteConfirmBody,
-    }),
-    [
-      deleteCancelLabel,
-      deleteConfirmLabel,
-      deleteConfirmTitle,
-      deleteConfirmBody,
-    ],
-  );
-
-  const actionLabels = useMemo(() => {
-    const labels: Partial<Record<DialFileManagerActions, string>> = {};
-    if (DialFileManagerActions.Download in tabActionLabels) {
-      labels[DialFileManagerActions.Download] = downloadLabel;
-    }
-    if (DialFileManagerActions.Delete in tabActionLabels) {
-      labels[DialFileManagerActions.Delete] = deleteLabel;
-    }
-    return labels;
-  }, [tabActionLabels, downloadLabel, deleteLabel]);
-
-  const gridOptions = useMemo(
-    () => ({
-      selectionMode: GridSelectionMode.MULTIPLE,
-      visibleColumns,
-      dateLocale,
-      dateOptions,
-      additionalGridOptions: {
-        domLayout: 'normal' as const,
-        rowSelection: {
-          mode: 'multiRow' as const,
-          isRowSelectable: (node: { data?: FileManagerGridRow | null }) => {
-            const row = node.data;
-            if (row == null) return false;
-
-            if (isHiddenPath(row.path)) return false;
-
-            if (row.nodeType === DialFileNodeType.FOLDER) {
-              return canAttachFolders;
-            }
-
-            if (row.nodeType === DialFileNodeType.ITEM) {
-              if (
-                allowedTypes != null &&
-                allowedTypes.length > 0 &&
-                row.contentType != null &&
-                !isMimeTypeAllowed(row.contentType, allowedTypes)
-              ) {
-                return false;
-              }
-
-              if (
-                maxSelectableFileSize != null &&
-                row.contentLength != null &&
-                row.contentLength > maxSelectableFileSize
-              ) {
-                return false;
-              }
-
-              return true;
-            }
-
-            return false;
-          },
-        },
+      [DialFileManagerTabs.MyFiles]: {
+        title: t(DialFileManagerI18nKeys.MyFilesEmptyStateTitle),
+        description: t(DialFileManagerI18nKeys.MyFilesEmptyStateDescription),
       },
-      actionLabels,
-    }),
-    [
-      visibleColumns,
-      dateLocale,
-      dateOptions,
-      actionLabels,
-      allowedTypes,
-      maxSelectableFileSize,
-      canAttachFolders,
-    ],
-  );
-
-  const treeOptions = useMemo(
-    () => ({
-      actionLabels,
-    }),
-    [actionLabels],
-  );
-
-  const toolbarOptions = useMemo(
-    () => ({
-      tabs,
-      activeTab,
-      onTabChange: handleTabChangeWithReset,
-      showHiddenFilesToggle: true,
-      hiddenFilesSwitcherLabel: hiddenFilesLabel,
-      showHiddenFilesLabel,
-      hideHiddenFilesLabel,
-      isNewButtonDisabled,
-      disabledNewButtonTooltip,
-      newActions: {
-        uploadFiles: { label: uploadFilesLabel },
-        newFolder: { label: newFolderLabel },
+      [DialFileManagerTabs.Shared]: {
+        title: t(DialFileManagerI18nKeys.SharedEmptyStateTitle),
+        description: t(DialFileManagerI18nKeys.SharedEmptyStateDescription),
+      },
+      [DialFileManagerTabs.Organization]: {
+        title: t(DialFileManagerI18nKeys.OrganizationEmptyStateTitle),
+        description: t(
+          DialFileManagerI18nKeys.OrganizationEmptyStateDescription,
+        ),
+      },
+      [DialFileManagerTabs.Review]: {
+        title: emptyTitle,
+        description: emptyDescription,
       },
     }),
-    [
-      tabs,
-      activeTab,
-      handleTabChangeWithReset,
+    [t, emptyTitle, emptyDescription],
+  );
+
+  const treeHeaderByTab: Record<DialFileManagerTabs, string> = useMemo(
+    () => ({
+      [DialFileManagerTabs.MyFiles]: t(
+        DialFileManagerI18nKeys.MyFilesTreeHeader,
+      ),
+      [DialFileManagerTabs.Shared]: t(DialFileManagerI18nKeys.SharedTreeHeader),
+      [DialFileManagerTabs.Organization]: t(
+        DialFileManagerI18nKeys.OrganizationTreeHeader,
+      ),
+      [DialFileManagerTabs.Review]: '',
+    }),
+    [t],
+  );
+
+  const labels: DialFileManagerShellLabels = useMemo(
+    () => ({
+      errorMessage,
+      retryLabel,
       hiddenFilesLabel,
       showHiddenFilesLabel,
       hideHiddenFilesLabel,
-      isNewButtonDisabled,
-      disabledNewButtonTooltip,
+      getSelectionLabel,
       uploadFilesLabel,
       newFolderLabel,
+      downloadLabel,
+      downloadingLabel,
+      deleteLabel,
+      deletingLabel,
+      renameLabel: t(DialFileManagerI18nKeys.RenameAction),
+      renamingLabel: t(DialFileManagerI18nKeys.RenamingLabel),
+      copyLabel: t(DialFileManagerI18nKeys.CopyAction),
+      moveLabel: t(DialFileManagerI18nKeys.MoveAction),
+      copyingLabel: t(DialFileManagerI18nKeys.CopyingLabel),
+      movingLabel: t(DialFileManagerI18nKeys.MovingLabel),
+      operationLoaderCopyTitle: t(
+        DialFileManagerI18nKeys.OperationLoaderCopyTitle,
+      ),
+      operationLoaderMoveTitle: t(
+        DialFileManagerI18nKeys.OperationLoaderMoveTitle,
+      ),
+      operationLoaderCancelLabel: t(
+        DialFileManagerI18nKeys.OperationLoaderCancelLabel,
+      ),
+      deleteConfirmTitle,
+      deleteConfirmBody,
+      deleteConfirmLabel,
+      deleteCancelLabel,
+      uploadProgressTitle,
+      cancelLabel,
+      getUploadProgressText,
+      searchEmptyStateTitle: t(DialFileManagerI18nKeys.SearchEmptyStateTitle),
+      forbiddenSymbolsTooltip: t(
+        DialFileManagerI18nKeys.ForbiddenSymbolsTooltip,
+      ),
+      emptyStateByTab,
+      treeHeaderByTab,
+      renameValidationMessages,
+      conflictResolutionPopupOptions,
+    }),
+    [
+      errorMessage,
+      retryLabel,
+      hiddenFilesLabel,
+      showHiddenFilesLabel,
+      hideHiddenFilesLabel,
+      getSelectionLabel,
+      uploadFilesLabel,
+      newFolderLabel,
+      downloadLabel,
+      downloadingLabel,
+      deleteLabel,
+      deletingLabel,
+      deleteConfirmTitle,
+      deleteConfirmBody,
+      deleteConfirmLabel,
+      deleteCancelLabel,
+      uploadProgressTitle,
+      cancelLabel,
+      getUploadProgressText,
+      emptyStateByTab,
+      treeHeaderByTab,
+      renameValidationMessages,
+      conflictResolutionPopupOptions,
+      t,
     ],
   );
 
-  const bulkActionsToolbarOptions = useMemo(
-    () => ({
-      getSelectionLabel,
-      actionLabels,
-    }),
-    [getSelectionLabel, actionLabels],
-  );
-
   return (
-    <>
-      <DialPopup
-        open={isOpen}
-        header={
-          <div className="flex flex-col gap-1">
-            <span>{title}</span>
-            {headerDescription != null && (
-              <p className="text-start text-sm font-normal">
-                {headerDescription}
-              </p>
-            )}
-          </div>
-        }
-        size={PopupSize.Lg}
-        className="flex !h-[min(800px,100dvh)] w-full flex-col !bg-layer-2 [&>[aria-label='popup-description']]:flex [&>[aria-label='popup-description']]:min-h-0 [&>[aria-label='popup-description']]:flex-col"
-        onClose={onClose}
-        footer={
-          <div className="flex justify-end px-6 py-4">
-            <DialPrimaryButton
-              label={attachLabel}
-              disabled={
-                selectedFiles.length === 0 || isLoading || isOperationInProgress
-              }
-              onClick={handleAttach}
-            />
-          </div>
-        }
-      >
-        {error != null ? (
-          <div role="alert" className="flex flex-col items-center gap-4 p-6">
-            <p>{errorMessage}</p>
-            <DialPrimaryButton label={retryLabel} onClick={retry} />
-          </div>
-        ) : (
-          <div className="relative flex min-h-0 w-full grow overflow-auto bg-layer-2">
-            <DialFileManager
-              className="min-h-0 w-full grow bg-layer-2"
-              gridClassName="size-full"
-              items={items}
-              path={path}
-              onPathChange={onPathChange}
-              filesLoading={isLoading}
-              allowedFileTypes={allowedFileTypes}
-              maxSelectableFileSize={maxSelectableFileSize}
-              selectedPaths={selectedPaths}
-              onSelectedPathsChange={setSelectedPaths}
-              navigationPanelOptions={{
-                searchable: false,
-              }}
-              gridOptions={gridOptions}
-              treeOptions={treeOptions}
-              toolbarOptions={toolbarOptions}
-              bulkActionsToolbarOptions={bulkActionsToolbarOptions}
-              emptyStateTitle={emptyTitle}
-              emptyStateDescription={emptyDescription}
-              uploadEnabled={uploadEnabled}
-              sharedWithMeIds={sharedWithMeIds}
-              onUploadFiles={onUploadFiles}
-              onValidateUpload={onValidateUpload}
-              onCreateFolder={onCreateFolder}
-              onCreateFolderValidate={onCreateFolderValidate}
-              onDownloadFiles={onDownloadFiles}
-              onDeleteFiles={onDeleteFiles}
-              deleteConfirmationOptions={deleteConfirmationOptions}
-              conflictResolutionPopupOptions={conflictResolutionPopupOptions}
-              forbiddenSymbolsRegExp={NOT_ALLOWED_SYMBOLS_REGEXP}
-              forbiddenSymbolsTooltip={t(
-                DialFileManagerI18nKeys.ForbiddenSymbolsTooltip,
-              )}
-              getDisabledTooltip={getDisabledTooltip}
-              unsupportedFileTypeTooltip={unsupportedFileTypeTooltip}
-            />
-            {isDownloading && (
-              <div
-                aria-live="polite"
-                className="absolute inset-0 z-[52] flex items-center justify-center bg-blackout md:p-4"
-              >
-                <DialLoader
-                  size={32}
-                  fullWidth={false}
-                  ariaLabel={downloadingLabel}
-                />
-              </div>
-            )}
-            {isDeleting && (
-              <div
-                aria-live="polite"
-                className="absolute inset-0 z-[52] flex items-center justify-center bg-blackout md:p-4"
-              >
-                <DialLoader
-                  size={32}
-                  fullWidth={false}
-                  ariaLabel={deletingLabel}
-                />
-              </div>
-            )}
-          </div>
-        )}
-      </DialPopup>
-
-      {uploadBatchState != null && (
-        <UploadProgressModal
-          batchState={uploadBatchState}
-          uploadProgressTitle={uploadProgressTitle}
-          uploadProgressText={uploadProgressText}
-          cancelLabel={cancelLabel}
-          onCancel={handleUploadCancel}
-        />
-      )}
-    </>
+    <DialPopup
+      open={isOpen}
+      header={
+        <div className="flex flex-col gap-1">
+          <span>{title}</span>
+          {headerDescription != null && (
+            <p className="text-start text-sm font-normal">
+              {headerDescription}
+            </p>
+          )}
+        </div>
+      }
+      size={PopupSize.Lg}
+      className="flex !h-[min(800px,100dvh)] w-full flex-col !bg-layer-2 [&>[aria-label='popup-description']]:flex [&>[aria-label='popup-description']]:min-h-0 [&>[aria-label='popup-description']]:flex-col"
+      onClose={onClose}
+      hideClose={true}
+      footer={
+        <div className="flex justify-end px-6 py-4">
+          <PrimaryButton
+            label={attachLabel}
+            disabled={
+              selectedFiles.length === 0 || isLoading || isOperationInProgress
+            }
+            onClick={handleAttach}
+          />
+        </div>
+      }
+    >
+      <DialFileManagerShell
+        hookResult={hookResult}
+        labels={labels}
+        activeTab={activeTab}
+        tabs={tabs}
+        onTabChange={handleTabChangeWithReset}
+        selectedPaths={selectedPaths}
+        onSelectedPathsChange={setSelectedPaths}
+        autoSelectUploadedItems={autoSelectUploadedItems}
+        allowedFileTypes={allowedFileTypes}
+        maxSelectableFileSize={maxSelectableFileSize}
+        isRowSelectable={isRowSelectable}
+        getDisabledTooltip={getDisabledTooltip}
+        unsupportedFileTypeTooltip={unsupportedFileTypeTooltip}
+      />
+    </DialPopup>
   );
 };
 

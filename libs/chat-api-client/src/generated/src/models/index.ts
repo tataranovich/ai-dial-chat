@@ -3,6 +3,67 @@
 /**
  *
  * @export
+ * @interface ApplicationDetailsDto
+ */
+export interface ApplicationDetailsDto {
+  /**
+   * Non-secret custom application properties reported by DIAL Core
+   * @type {{ [key: string]: unknown }}
+   * @memberof ApplicationDetailsDto
+   */
+  applicationProperties?: { [key: string]: unknown };
+  /**
+   * Runtime environment for the function
+   * @type {string}
+   * @memberof ApplicationDetailsDto
+   */
+  functionRuntime?: string;
+  /**
+   * Current deployment status of the function
+   * @type {string}
+   * @memberof ApplicationDetailsDto
+   */
+  functionStatus?: string;
+  /**
+   * Custom route names exposed by the application
+   * @type {Array<string>}
+   * @memberof ApplicationDetailsDto
+   */
+  routes?: Array<string>;
+  /**
+   * Owner of the deployment as reported by DIAL Core
+   * @type {string}
+   * @memberof ApplicationDetailsDto
+   */
+  owner?: string;
+  /**
+   *
+   * @type {DeploymentFeaturesDetailsDto}
+   * @memberof ApplicationDetailsDto
+   */
+  features?: DeploymentFeaturesDetailsDto;
+  /**
+   * Accepted MIME types for input attachments
+   * @type {Array<string>}
+   * @memberof ApplicationDetailsDto
+   */
+  inputAttachmentTypes?: Array<string>;
+  /**
+   * URI of the custom application type schema, when present
+   * @type {string}
+   * @memberof ApplicationDetailsDto
+   */
+  applicationTypeSchemaId?: string;
+  /**
+   * Timestamp of creation time from DIAL Core (e.g. 1714768496000)
+   * @type {number}
+   * @memberof ApplicationDetailsDto
+   */
+  createdAt?: number;
+}
+/**
+ *
+ * @export
  * @interface ApplicationDto
  */
 export interface ApplicationDto {
@@ -42,6 +103,12 @@ export interface ApplicationDto {
    * @memberof ApplicationDto
    */
   description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationDto
+   */
+  intro?: string;
   /**
    *
    * @type {Array<string>}
@@ -352,6 +419,12 @@ export interface ClientConfigDto {
    * @memberof ClientConfigDto
    */
   transcribeSizeLimitBytes: number;
+  /**
+   * Operator-configured default deployment ID. Null when not configured.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  defaultDeploymentId?: string | null;
 }
 /**
  *
@@ -794,7 +867,30 @@ export interface ConversationResponseDto {
    * @memberof ConversationResponseDto
    */
   assistantModelId: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ConversationResponseDto
+   */
+  responseFormat?: ConversationResponseDtoResponseFormatEnum;
+  /**
+   * When true, automatic LLM conversation naming has already run for this conversation.
+   * @type {boolean}
+   * @memberof ConversationResponseDto
+   */
+  llmNamingDone?: boolean;
 }
+
+/**
+ * @export
+ */
+export const ConversationResponseDtoResponseFormatEnum = {
+  Markdown: 'markdown',
+  PlainText: 'plain_text',
+} as const;
+export type ConversationResponseDtoResponseFormatEnum =
+  (typeof ConversationResponseDtoResponseFormatEnum)[keyof typeof ConversationResponseDtoResponseFormatEnum];
+
 /**
  *
  * @export
@@ -807,6 +903,166 @@ export interface ConversationsConfigDto {
    * @memberof ConversationsConfigDto
    */
   pinnedIds: Array<string>;
+}
+/**
+ *
+ * @export
+ * @interface CopyFilesDto
+ */
+export interface CopyFilesDto {
+  /**
+   *
+   * @type {Array<CopyItemDto>}
+   * @memberof CopyFilesDto
+   */
+  items: Array<CopyItemDto>;
+}
+/**
+ *
+ * @export
+ * @interface CopyFilesResponseDto
+ */
+export interface CopyFilesResponseDto {
+  /**
+   *
+   * @type {Array<CopyItemResultDto>}
+   * @memberof CopyFilesResponseDto
+   */
+  results: Array<CopyItemResultDto>;
+}
+/**
+ *
+ * @export
+ * @interface CopyItemDto
+ */
+export interface CopyItemDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof CopyItemDto
+   */
+  bucket: string;
+  /**
+   * Relative source path within bucket
+   * @type {string}
+   * @memberof CopyItemDto
+   */
+  sourcePath: string;
+  /**
+   * Relative destination path within bucket
+   * @type {string}
+   * @memberof CopyItemDto
+   */
+  destinationPath: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CopyItemDto
+   */
+  nodeType: CopyItemDtoNodeTypeEnum;
+  /**
+   * Display name (last segment) for error messages
+   * @type {string}
+   * @memberof CopyItemDto
+   */
+  name: string;
+}
+
+/**
+ * @export
+ */
+export const CopyItemDtoNodeTypeEnum = {
+  Item: 'item',
+  Folder: 'folder',
+} as const;
+export type CopyItemDtoNodeTypeEnum =
+  (typeof CopyItemDtoNodeTypeEnum)[keyof typeof CopyItemDtoNodeTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface CopyItemResultDto
+ */
+export interface CopyItemResultDto {
+  /**
+   * Source path from request
+   * @type {string}
+   * @memberof CopyItemResultDto
+   */
+  sourcePath: string;
+  /**
+   * Destination path from request
+   * @type {string}
+   * @memberof CopyItemResultDto
+   */
+  destinationPath: string;
+  /**
+   * true when all Core copyResource calls succeeded
+   * @type {boolean}
+   * @memberof CopyItemResultDto
+   */
+  success: boolean;
+  /**
+   * Human-readable error reason when success is false
+   * @type {string}
+   * @memberof CopyItemResultDto
+   */
+  error?: string;
+}
+/**
+ *
+ * @export
+ * @interface CreateApplicationBodyDto
+ */
+export interface CreateApplicationBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof CreateApplicationBodyDto
+   */
+  name: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateApplicationBodyDto
+   */
+  type: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateApplicationBodyDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateApplicationBodyDto
+   */
+  iconUrl?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateApplicationBodyDto
+   */
+  version?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof CreateApplicationBodyDto
+   */
+  topics?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateApplicationBodyDto
+   */
+  intro?: string;
+  /**
+   *
+   * @type {object}
+   * @memberof CreateApplicationBodyDto
+   */
+  applicationProperties?: object;
 }
 /**
  *
@@ -900,6 +1156,31 @@ export interface CreateFolderResponseDto {
    * @memberof CreateFolderResponseDto
    */
   folderId: string;
+}
+/**
+ *
+ * @export
+ * @interface CreatedApplicationDto
+ */
+export interface CreatedApplicationDto {
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedApplicationDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedApplicationDto
+   */
+  displayName?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedApplicationDto
+   */
+  object?: string;
 }
 /**
  *
@@ -1060,6 +1341,231 @@ export interface DeploymentConfigurationDto {
 /**
  *
  * @export
+ * @interface DeploymentDetailsDto
+ */
+export interface DeploymentDetailsDto {
+  /**
+   * The requested deployment id
+   * @type {string}
+   * @memberof DeploymentDetailsDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DeploymentDetailsDto
+   */
+  type: DeploymentDetailsDtoTypeEnum;
+  /**
+   *
+   * @type {ModelDetailsDto}
+   * @memberof DeploymentDetailsDto
+   */
+  modelDetails?: ModelDetailsDto;
+  /**
+   *
+   * @type {ApplicationDetailsDto}
+   * @memberof DeploymentDetailsDto
+   */
+  applicationDetails?: ApplicationDetailsDto;
+  /**
+   *
+   * @type {ToolsetDetailsDto}
+   * @memberof DeploymentDetailsDto
+   */
+  toolsetDetails?: ToolsetDetailsDto;
+}
+
+/**
+ * @export
+ */
+export const DeploymentDetailsDtoTypeEnum = {
+  Model: 'model',
+  Application: 'application',
+  Toolset: 'toolset',
+} as const;
+export type DeploymentDetailsDtoTypeEnum =
+  (typeof DeploymentDetailsDtoTypeEnum)[keyof typeof DeploymentDetailsDtoTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface DeploymentFeaturesDetailsDto
+ */
+export interface DeploymentFeaturesDetailsDto {
+  /**
+   * Supports the /rate endpoint
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  rate?: boolean;
+  /**
+   * Supports MCP requests
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  mcp?: boolean;
+  /**
+   * Supports the /tokenize endpoint
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  tokenize?: boolean;
+  /**
+   * Supports the /truncate_prompt endpoint
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  truncatePrompt?: boolean;
+  /**
+   * Exposes a JSON Schema configuration endpoint
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  hasConfigurationSchema?: boolean;
+  /**
+   * Supports a custom system prompt
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  systemPrompt?: boolean;
+  /**
+   * Supports tools/functions in chat completion requests
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  tools?: boolean;
+  /**
+   * Supports the seed parameter
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  seed?: boolean;
+  /**
+   * Supports URL attachments
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  urlAttachments?: boolean;
+  /**
+   * Supports folder attachments
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  folderAttachments?: boolean;
+  /**
+   * Supports resuming conversations
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  allowResume?: boolean;
+  /**
+   * Accessible using a per-request API key
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  accessibleByPerRequestKey?: boolean;
+  /**
+   * Supports content parts in messages
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  contentParts?: boolean;
+  /**
+   * Supports the temperature parameter
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  temperature?: boolean;
+  /**
+   * Supports LLM prompt caching
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  cache?: boolean;
+  /**
+   * Supports automatic prompt caching
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  autoCaching?: boolean;
+  /**
+   * Supports parallel tool calls
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  parallelToolCalls?: boolean;
+  /**
+   * Supports assistant attachments in the request
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  assistantAttachmentsInRequest?: boolean;
+  /**
+   * Supports chat completion requests
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  chatCompletion?: boolean;
+  /**
+   * Supports the responses API
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  responsesApi?: boolean;
+  /**
+   * Supports the max_tokens parameter
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  maxTokensSupported?: boolean;
+  /**
+   * Supports the max_completion_tokens parameter
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  maxCompletionTokensSupported?: boolean;
+  /**
+   * Supports a custom temperature value
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  customTemperatureSupported?: boolean;
+  /**
+   * Supported reasoning-effort levels, e.g. ["low","medium","high"]
+   * @type {Array<string>}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  reasoningEfforts?: Array<string>;
+}
+/**
+ *
+ * @export
+ * @interface DeploymentFeaturesDto
+ */
+export interface DeploymentFeaturesDto {
+  /**
+   * Whether the deployment supports a custom system prompt
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  systemPrompt: boolean;
+  /**
+   * Whether the deployment supports temperature control
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  temperature: boolean;
+  /**
+   * Whether the deployment supports attaching folders from the file manager
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  folderAttachments?: boolean;
+}
+/**
+ *
+ * @export
  * @interface DeploymentItemDto
  */
 export interface DeploymentItemDto {
@@ -1093,6 +1599,12 @@ export interface DeploymentItemDto {
    * @memberof DeploymentItemDto
    */
   description?: string;
+  /**
+   * Short catalog-friendly intro from DIAL Core
+   * @type {string}
+   * @memberof DeploymentItemDto
+   */
+  intro?: string;
   /**
    * Interface types supported by this deployment
    * @type {Array<string>}
@@ -1180,25 +1692,6 @@ export interface DeploymentItemDto {
 }
 
 /**
- * Feature flags for a deployment controlling which per-conversation settings are available.
- * @interface DeploymentFeaturesDto
- */
-export interface DeploymentFeaturesDto {
-  /**
-   * Whether the deployment supports a custom system prompt
-   * @type {boolean}
-   * @memberof DeploymentFeaturesDto
-   */
-  systemPrompt: boolean;
-  /**
-   * Whether the deployment supports temperature control
-   * @type {boolean}
-   * @memberof DeploymentFeaturesDto
-   */
-  temperature: boolean;
-}
-
-/**
  * @export
  */
 export const DeploymentItemDtoTypeEnum = {
@@ -1212,6 +1705,73 @@ export type DeploymentItemDtoTypeEnum =
 /**
  *
  * @export
+ * @interface DeploymentLimitsResponseDto
+ */
+export interface DeploymentLimitsResponseDto {
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  hourRequestStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  dayRequestStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  minuteTokenStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  dayTokenStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  weekTokenStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  monthTokenStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  minuteCostStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  dayCostStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  weekCostStats?: LimitStatsDto;
+  /**
+   *
+   * @type {LimitStatsDto}
+   * @memberof DeploymentLimitsResponseDto
+   */
+  monthCostStats?: LimitStatsDto;
+}
+/**
+ *
+ * @export
  * @interface DeploymentsConfigDto
  */
 export interface DeploymentsConfigDto {
@@ -1221,6 +1781,12 @@ export interface DeploymentsConfigDto {
    * @memberof DeploymentsConfigDto
    */
   installed: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof DeploymentsConfigDto
+   */
+  selectedId?: string | null;
 }
 /**
  *
@@ -1549,6 +2115,42 @@ export interface DialModelFeaturesDto {
    * @memberof DialModelFeaturesDto
    */
   mcp?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialModelFeaturesDto
+   */
+  chatCompletion?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialModelFeaturesDto
+   */
+  responsesApi?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialModelFeaturesDto
+   */
+  maxTokensSupported?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialModelFeaturesDto
+   */
+  maxCompletionTokensSupported?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialModelFeaturesDto
+   */
+  customTemperatureSupported?: boolean;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof DialModelFeaturesDto
+   */
+  reasoningEfforts?: Array<string>;
 }
 /**
  *
@@ -1606,6 +2208,263 @@ export interface DialModelPricingDto {
    * @memberof DialModelPricingDto
    */
   completion?: string;
+}
+/**
+ *
+ * @export
+ * @interface DialToolsetAuthSettingsDto
+ */
+export interface DialToolsetAuthSettingsDto {
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  authenticationType: DialToolsetAuthSettingsDtoAuthenticationTypeEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  apiKeyHeader?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  clientId?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  redirectUri?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  authorizationEndpoint?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  tokenEndpoint?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  codeChallenge?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  codeChallengeMethod?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  scopesSupported?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  globalAuthStatus?: DialToolsetAuthSettingsDtoGlobalAuthStatusEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  userLevelAuthStatus?: DialToolsetAuthSettingsDtoUserLevelAuthStatusEnum;
+}
+
+/**
+ * @export
+ */
+export const DialToolsetAuthSettingsDtoAuthenticationTypeEnum = {
+  Oauth: 'OAUTH',
+  ApiKey: 'API_KEY',
+  None: 'NONE',
+} as const;
+export type DialToolsetAuthSettingsDtoAuthenticationTypeEnum =
+  (typeof DialToolsetAuthSettingsDtoAuthenticationTypeEnum)[keyof typeof DialToolsetAuthSettingsDtoAuthenticationTypeEnum];
+
+/**
+ * @export
+ */
+export const DialToolsetAuthSettingsDtoGlobalAuthStatusEnum = {
+  SignedIn: 'SIGNED_IN',
+  SignedOut: 'SIGNED_OUT',
+} as const;
+export type DialToolsetAuthSettingsDtoGlobalAuthStatusEnum =
+  (typeof DialToolsetAuthSettingsDtoGlobalAuthStatusEnum)[keyof typeof DialToolsetAuthSettingsDtoGlobalAuthStatusEnum];
+
+/**
+ * @export
+ */
+export const DialToolsetAuthSettingsDtoUserLevelAuthStatusEnum = {
+  SignedIn: 'SIGNED_IN',
+  SignedOut: 'SIGNED_OUT',
+} as const;
+export type DialToolsetAuthSettingsDtoUserLevelAuthStatusEnum =
+  (typeof DialToolsetAuthSettingsDtoUserLevelAuthStatusEnum)[keyof typeof DialToolsetAuthSettingsDtoUserLevelAuthStatusEnum];
+
+/**
+ *
+ * @export
+ * @interface DialToolsetDto
+ */
+export interface DialToolsetDto {
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  toolset: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  displayName?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  displayVersion?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  intro?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  iconUrl?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  owner?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  object?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  status?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof DialToolsetDto
+   */
+  descriptionKeywords?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  reference?: string;
+  /**
+   *
+   * @type {number}
+   * @memberof DialToolsetDto
+   */
+  maxRetryAttempts?: number;
+  /**
+   *
+   * @type {number}
+   * @memberof DialToolsetDto
+   */
+  createdAt?: number;
+  /**
+   *
+   * @type {number}
+   * @memberof DialToolsetDto
+   */
+  updatedAt?: number;
+  /**
+   *
+   * @type {DialModelFeaturesDto}
+   * @memberof DialToolsetDto
+   */
+  features?: DialModelFeaturesDto;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  endpoint?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof DialToolsetDto
+   */
+  transport?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof DialToolsetDto
+   */
+  allowedTools?: Array<string>;
+  /**
+   *
+   * @type {DialToolsetAuthSettingsDto}
+   * @memberof DialToolsetDto
+   */
+  authSettings?: DialToolsetAuthSettingsDto;
+  /**
+   * Whether this toolset is installed by the current user
+   * @type {boolean}
+   * @memberof DialToolsetDto
+   */
+  isInstalled?: boolean;
+  /**
+   * True when the toolset id/path belongs to the current session user bucket
+   * @type {boolean}
+   * @memberof DialToolsetDto
+   */
+  isMy?: boolean;
+}
+/**
+ *
+ * @export
+ * @interface DialToolsetListResponseDto
+ */
+export interface DialToolsetListResponseDto {
+  /**
+   *
+   * @type {Array<DialToolsetDto>}
+   * @memberof DialToolsetListResponseDto
+   */
+  data: Array<DialToolsetDto>;
 }
 /**
  *
@@ -1730,6 +2589,38 @@ export interface FileUploadResponseDto {
    * @memberof FileUploadResponseDto
    */
   url: string;
+}
+/**
+ *
+ * @export
+ * @interface GenerateTitleResponseDto
+ */
+export interface GenerateTitleResponseDto {
+  /**
+   * Sanitised LLM-generated title suggestion for the conversation. Not persisted — the caller confirms the rename separately.
+   * @type {string}
+   * @memberof GenerateTitleResponseDto
+   */
+  name: string;
+}
+/**
+ *
+ * @export
+ * @interface LimitStatsDto
+ */
+export interface LimitStatsDto {
+  /**
+   *
+   * @type {number}
+   * @memberof LimitStatsDto
+   */
+  total: number;
+  /**
+   *
+   * @type {number}
+   * @memberof LimitStatsDto
+   */
+  used: number;
 }
 /**
  *
@@ -1941,6 +2832,284 @@ export type MessageDtoRoleEnum =
 /**
  *
  * @export
+ * @interface ModelCapabilitiesDto
+ */
+export interface ModelCapabilitiesDto {
+  /**
+   * True if the model is a completion
+   * @type {boolean}
+   * @memberof ModelCapabilitiesDto
+   */
+  completion?: boolean;
+  /**
+   * True if the model is a chat completion
+   * @type {boolean}
+   * @memberof ModelCapabilitiesDto
+   */
+  chatCompletion?: boolean;
+  /**
+   * True if the model is an embedding
+   * @type {boolean}
+   * @memberof ModelCapabilitiesDto
+   */
+  embeddings?: boolean;
+  /**
+   * True if it is a fine-tuned model
+   * @type {boolean}
+   * @memberof ModelCapabilitiesDto
+   */
+  fineTune?: boolean;
+  /**
+   * True if the model can be deployed
+   * @type {boolean}
+   * @memberof ModelCapabilitiesDto
+   */
+  inference?: boolean;
+  /**
+   * Scale types of the model (defaults to ["standard"])
+   * @type {Array<string>}
+   * @memberof ModelCapabilitiesDto
+   */
+  scaleTypes?: Array<string>;
+}
+/**
+ *
+ * @export
+ * @interface ModelDetailsDto
+ */
+export interface ModelDetailsDto {
+  /**
+   *
+   * @type {ModelCapabilitiesDto}
+   * @memberof ModelDetailsDto
+   */
+  capabilities?: ModelCapabilitiesDto;
+  /**
+   * Lifecycle status of the model
+   * @type {string}
+   * @memberof ModelDetailsDto
+   */
+  lifecycleStatus?: string;
+  /**
+   * Name of the model whose tokenization algorithm this model uses
+   * @type {string}
+   * @memberof ModelDetailsDto
+   */
+  tokenizerModel?: string;
+  /**
+   *
+   * @type {ModelLimitsDto}
+   * @memberof ModelDetailsDto
+   */
+  limits?: ModelLimitsDto;
+  /**
+   *
+   * @type {ModelPricingDto}
+   * @memberof ModelDetailsDto
+   */
+  pricing?: ModelPricingDto;
+  /**
+   *
+   * @type {DeploymentFeaturesDetailsDto}
+   * @memberof ModelDetailsDto
+   */
+  features?: DeploymentFeaturesDetailsDto;
+  /**
+   * Owner of the deployment as reported by DIAL Core
+   * @type {string}
+   * @memberof ModelDetailsDto
+   */
+  owner?: string;
+  /**
+   * Accepted MIME types for input attachments
+   * @type {Array<string>}
+   * @memberof ModelDetailsDto
+   */
+  inputAttachmentTypes?: Array<string>;
+  /**
+   * Default max_tokens value applied when a request omits it
+   * @type {number}
+   * @memberof ModelDetailsDto
+   */
+  defaultMaxTokens?: number;
+  /**
+   * Timestamp of creation time from DIAL Core (e.g. 1714768496000)
+   * @type {number}
+   * @memberof ModelDetailsDto
+   */
+  createdAt?: number;
+}
+/**
+ *
+ * @export
+ * @interface ModelLimitsDto
+ */
+export interface ModelLimitsDto {
+  /**
+   * Maximum number of tokens allowed in a completion request and response combined
+   * @type {number}
+   * @memberof ModelLimitsDto
+   */
+  maxTotalTokens?: number;
+  /**
+   * Maximum number of tokens allowed in a completion request
+   * @type {number}
+   * @memberof ModelLimitsDto
+   */
+  maxPromptTokens?: number;
+  /**
+   * Maximum number of tokens allowed in a completion response
+   * @type {number}
+   * @memberof ModelLimitsDto
+   */
+  maxCompletionTokens?: number;
+}
+/**
+ *
+ * @export
+ * @interface ModelPricingDto
+ */
+export interface ModelPricingDto {
+  /**
+   * The pricing unit
+   * @type {string}
+   * @memberof ModelPricingDto
+   */
+  unit?: string;
+  /**
+   * Per-unit price for the completion request
+   * @type {string}
+   * @memberof ModelPricingDto
+   */
+  prompt?: string;
+  /**
+   * Per-unit price for the completion response
+   * @type {string}
+   * @memberof ModelPricingDto
+   */
+  completion?: string;
+}
+/**
+ *
+ * @export
+ * @interface MoveFilesDto
+ */
+export interface MoveFilesDto {
+  /**
+   *
+   * @type {Array<MoveItemDto>}
+   * @memberof MoveFilesDto
+   */
+  items: Array<MoveItemDto>;
+}
+/**
+ *
+ * @export
+ * @interface MoveFilesResponseDto
+ */
+export interface MoveFilesResponseDto {
+  /**
+   *
+   * @type {Array<MoveItemResultDto>}
+   * @memberof MoveFilesResponseDto
+   */
+  results: Array<MoveItemResultDto>;
+}
+/**
+ *
+ * @export
+ * @interface MoveItemDto
+ */
+export interface MoveItemDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof MoveItemDto
+   */
+  bucket: string;
+  /**
+   * Relative source path within bucket
+   * @type {string}
+   * @memberof MoveItemDto
+   */
+  sourcePath: string;
+  /**
+   * Relative destination path within bucket
+   * @type {string}
+   * @memberof MoveItemDto
+   */
+  destinationPath: string;
+  /**
+   *
+   * @type {string}
+   * @memberof MoveItemDto
+   */
+  nodeType: MoveItemDtoNodeTypeEnum;
+  /**
+   * Display name (last segment) for error messages
+   * @type {string}
+   * @memberof MoveItemDto
+   */
+  name: string;
+}
+
+/**
+ * @export
+ */
+export const MoveItemDtoNodeTypeEnum = {
+  Item: 'item',
+  Folder: 'folder',
+} as const;
+export type MoveItemDtoNodeTypeEnum =
+  (typeof MoveItemDtoNodeTypeEnum)[keyof typeof MoveItemDtoNodeTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface MoveItemResultDto
+ */
+export interface MoveItemResultDto {
+  /**
+   * Source path from request
+   * @type {string}
+   * @memberof MoveItemResultDto
+   */
+  sourcePath: string;
+  /**
+   * Destination path from request
+   * @type {string}
+   * @memberof MoveItemResultDto
+   */
+  destinationPath: string;
+  /**
+   * true when all Core moveResource calls succeeded
+   * @type {boolean}
+   * @memberof MoveItemResultDto
+   */
+  success: boolean;
+  /**
+   * Human-readable error reason when success is false
+   * @type {string}
+   * @memberof MoveItemResultDto
+   */
+  error?: string;
+}
+/**
+ *
+ * @export
+ * @interface MutatedToolsetDto
+ */
+export interface MutatedToolsetDto {
+  /**
+   *
+   * @type {string}
+   * @memberof MutatedToolsetDto
+   */
+  id: string;
+}
+/**
+ *
+ * @export
  * @interface ProviderInfoDto
  */
 export interface ProviderInfoDto {
@@ -2025,11 +3194,116 @@ export interface RenameConversationBodyDto {
  */
 export interface RenameConversationResponseDto {
   /**
-   * New relative path of the renamed conversation
+   * Sanitised stored display name of the renamed conversation
    * @type {string}
    * @memberof RenameConversationResponseDto
    */
-  newPath: string;
+  name: string;
+}
+/**
+ *
+ * @export
+ * @interface RenameFilesDto
+ */
+export interface RenameFilesDto {
+  /**
+   *
+   * @type {Array<RenameItemDto>}
+   * @memberof RenameFilesDto
+   */
+  items: Array<RenameItemDto>;
+}
+/**
+ *
+ * @export
+ * @interface RenameFilesResponseDto
+ */
+export interface RenameFilesResponseDto {
+  /**
+   *
+   * @type {Array<RenameItemResultDto>}
+   * @memberof RenameFilesResponseDto
+   */
+  results: Array<RenameItemResultDto>;
+}
+/**
+ *
+ * @export
+ * @interface RenameItemDto
+ */
+export interface RenameItemDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof RenameItemDto
+   */
+  bucket: string;
+  /**
+   * Relative source path within bucket
+   * @type {string}
+   * @memberof RenameItemDto
+   */
+  sourcePath: string;
+  /**
+   * Relative destination path within bucket
+   * @type {string}
+   * @memberof RenameItemDto
+   */
+  destinationPath: string;
+  /**
+   *
+   * @type {string}
+   * @memberof RenameItemDto
+   */
+  nodeType: RenameItemDtoNodeTypeEnum;
+  /**
+   * Display name (last segment) for error messages
+   * @type {string}
+   * @memberof RenameItemDto
+   */
+  name: string;
+}
+
+/**
+ * @export
+ */
+export const RenameItemDtoNodeTypeEnum = {
+  Item: 'item',
+  Folder: 'folder',
+} as const;
+export type RenameItemDtoNodeTypeEnum =
+  (typeof RenameItemDtoNodeTypeEnum)[keyof typeof RenameItemDtoNodeTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface RenameItemResultDto
+ */
+export interface RenameItemResultDto {
+  /**
+   * Source path from request
+   * @type {string}
+   * @memberof RenameItemResultDto
+   */
+  sourcePath: string;
+  /**
+   * Destination path from request
+   * @type {string}
+   * @memberof RenameItemResultDto
+   */
+  destinationPath: string;
+  /**
+   * true when all Core moveResource calls succeeded
+   * @type {boolean}
+   * @memberof RenameItemResultDto
+   */
+  success: boolean;
+  /**
+   * Human-readable error reason when success is false
+   * @type {string}
+   * @memberof RenameItemResultDto
+   */
+  error?: string;
 }
 /**
  *
@@ -2051,17 +3325,17 @@ export interface SaveConversationBodyDto {
  */
 export interface SendCompletionDto {
   /**
+   * Client-generated UUID identifying this generation attempt.
+   * @type {string}
+   * @memberof SendCompletionDto
+   */
+  generationId: string;
+  /**
    * Conversation path ({deploymentId}__{name}__{uuid}). May contain slashes.
    * @type {string}
    * @memberof SendCompletionDto
    */
   path: string;
-  /**
-   * The new user message to send. May be empty when custom_content carries attachments, form_value, or configuration_value.
-   * @type {string}
-   * @memberof SendCompletionDto
-   */
-  message: string;
   /**
    * DIAL Core deployment name to use for completion
    * @type {string}
@@ -2069,11 +3343,61 @@ export interface SendCompletionDto {
    */
   model: string;
   /**
+   * How the message should be inserted into history. append = new user+assistant turn; continue_last_user = conversation already ends with a user message; regenerate = replace assistant at messageIndex; edit = replace user message at messageIndex.
+   * @type {string}
+   * @memberof SendCompletionDto
+   */
+  mode: SendCompletionDtoModeEnum;
+  /**
+   * The new user message to send. May be empty when custom_content carries attachments, form_value, or configuration_value.
+   * @type {string}
+   * @memberof SendCompletionDto
+   */
+  message?: string;
+  /**
+   * Zero-based message index for regenerate and edit modes. Ignored for append/continue_last_user.
+   * @type {number}
+   * @memberof SendCompletionDto
+   */
+  messageIndex?: number;
+  /**
    * Extra DIAL payload attached to the user message
    * @type {MessageCustomContentDto}
    * @memberof SendCompletionDto
    */
   customContent?: MessageCustomContentDto;
+}
+
+/**
+ * @export
+ */
+export const SendCompletionDtoModeEnum = {
+  Append: 'append',
+  ContinueLastUser: 'continue_last_user',
+  Regenerate: 'regenerate',
+  Edit: 'edit',
+} as const;
+export type SendCompletionDtoModeEnum =
+  (typeof SendCompletionDtoModeEnum)[keyof typeof SendCompletionDtoModeEnum];
+
+/**
+ *
+ * @export
+ * @interface StopCompletionDto
+ */
+export interface StopCompletionDto {
+  /**
+   * Generation ID that was returned by the active stream.
+   * @type {string}
+   * @memberof StopCompletionDto
+   */
+  generationId: string;
+  /**
+   * Conversation path of the active generation.
+   * @type {string}
+   * @memberof StopCompletionDto
+   */
+  path: string;
 }
 /**
  *
@@ -2171,6 +3495,472 @@ export interface ThemeImagesDto {
 /**
  *
  * @export
+ * @interface ToolsetAuthResultDto
+ */
+export interface ToolsetAuthResultDto {
+  /**
+   *
+   * @type {boolean}
+   * @memberof ToolsetAuthResultDto
+   */
+  success: boolean;
+}
+/**
+ *
+ * @export
+ * @interface ToolsetAuthSettingsBodyDto
+ */
+export interface ToolsetAuthSettingsBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  authenticationType: ToolsetAuthSettingsBodyDtoAuthenticationTypeEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  apiKeyHeader?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  clientId?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  clientSecret?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  authorizationEndpoint?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  tokenEndpoint?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  scopesSupported?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  redirectUri?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  codeChallengeMethod?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetAuthSettingsBodyDto
+   */
+  codeChallenge?: string;
+}
+
+/**
+ * @export
+ */
+export const ToolsetAuthSettingsBodyDtoAuthenticationTypeEnum = {
+  None: 'NONE',
+  ApiKey: 'API_KEY',
+  Oauth: 'OAUTH',
+} as const;
+export type ToolsetAuthSettingsBodyDtoAuthenticationTypeEnum =
+  (typeof ToolsetAuthSettingsBodyDtoAuthenticationTypeEnum)[keyof typeof ToolsetAuthSettingsBodyDtoAuthenticationTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface ToolsetAuthSettingsDto
+ */
+export interface ToolsetAuthSettingsDto {
+  /**
+   * Type of authentication
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  authenticationType?: ToolsetAuthSettingsDtoAuthenticationTypeEnum;
+  /**
+   * Whether the toolset has global (shared) credentials signed in
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  globalAuthStatus?: ToolsetAuthSettingsDtoGlobalAuthStatusEnum;
+  /**
+   * Whether the toolset has app-level credentials signed in
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  appLevelAuthStatus?: ToolsetAuthSettingsDtoAppLevelAuthStatusEnum;
+  /**
+   * Whether the current user has user-level credentials signed in
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  userLevelAuthStatus?: ToolsetAuthSettingsDtoUserLevelAuthStatusEnum;
+  /**
+   * OAuth scopes supported by this toolset
+   * @type {Array<string>}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  scopesSupported?: Array<string>;
+  /**
+   * (OAuth only) Authorization endpoint
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  authorizationEndpoint?: string;
+  /**
+   * (OAuth only) Token endpoint
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  tokenEndpoint?: string;
+  /**
+   * (API key only) Header name the API key is sent in
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  apiKeyHeader?: string;
+  /**
+   * (OAuth only) Public OAuth client id — not a secret
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  clientId?: string;
+  /**
+   * (OAuth only) OAuth redirect URI
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  redirectUri?: string;
+  /**
+   * (OAuth only) Token endpoint authentication method
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  tokenEndpointAuthMethod?: string;
+  /**
+   * (OAuth/PKCE only) PKCE code challenge — the challenge itself is not secret, only the verifier is
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  codeChallenge?: string;
+  /**
+   * (OAuth/PKCE only) PKCE challenge method (e.g. S256)
+   * @type {string}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  codeChallengeMethod?: string;
+}
+
+/**
+ * @export
+ */
+export const ToolsetAuthSettingsDtoAuthenticationTypeEnum = {
+  Oauth: 'OAUTH',
+  ApiKey: 'API_KEY',
+  None: 'NONE',
+} as const;
+export type ToolsetAuthSettingsDtoAuthenticationTypeEnum =
+  (typeof ToolsetAuthSettingsDtoAuthenticationTypeEnum)[keyof typeof ToolsetAuthSettingsDtoAuthenticationTypeEnum];
+
+/**
+ * @export
+ */
+export const ToolsetAuthSettingsDtoGlobalAuthStatusEnum = {
+  SignedIn: 'SIGNED_IN',
+  SignedOut: 'SIGNED_OUT',
+} as const;
+export type ToolsetAuthSettingsDtoGlobalAuthStatusEnum =
+  (typeof ToolsetAuthSettingsDtoGlobalAuthStatusEnum)[keyof typeof ToolsetAuthSettingsDtoGlobalAuthStatusEnum];
+
+/**
+ * @export
+ */
+export const ToolsetAuthSettingsDtoAppLevelAuthStatusEnum = {
+  SignedIn: 'SIGNED_IN',
+  SignedOut: 'SIGNED_OUT',
+} as const;
+export type ToolsetAuthSettingsDtoAppLevelAuthStatusEnum =
+  (typeof ToolsetAuthSettingsDtoAppLevelAuthStatusEnum)[keyof typeof ToolsetAuthSettingsDtoAppLevelAuthStatusEnum];
+
+/**
+ * @export
+ */
+export const ToolsetAuthSettingsDtoUserLevelAuthStatusEnum = {
+  SignedIn: 'SIGNED_IN',
+  SignedOut: 'SIGNED_OUT',
+} as const;
+export type ToolsetAuthSettingsDtoUserLevelAuthStatusEnum =
+  (typeof ToolsetAuthSettingsDtoUserLevelAuthStatusEnum)[keyof typeof ToolsetAuthSettingsDtoUserLevelAuthStatusEnum];
+
+/**
+ *
+ * @export
+ * @interface ToolsetBodyDto
+ */
+export interface ToolsetBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetBodyDto
+   */
+  name: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetBodyDto
+   */
+  version?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetBodyDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetBodyDto
+   */
+  iconUrl?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof ToolsetBodyDto
+   */
+  topics?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetBodyDto
+   */
+  intro?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetBodyDto
+   */
+  endpoint: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetBodyDto
+   */
+  transport: ToolsetBodyDtoTransportEnum;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof ToolsetBodyDto
+   */
+  allowedTools?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetBodyDto
+   */
+  reference?: string;
+  /**
+   *
+   * @type {ToolsetAuthSettingsBodyDto}
+   * @memberof ToolsetBodyDto
+   */
+  authSettings: ToolsetAuthSettingsBodyDto;
+}
+
+/**
+ * @export
+ */
+export const ToolsetBodyDtoTransportEnum = {
+  Http: 'HTTP',
+  Sse: 'SSE',
+} as const;
+export type ToolsetBodyDtoTransportEnum =
+  (typeof ToolsetBodyDtoTransportEnum)[keyof typeof ToolsetBodyDtoTransportEnum];
+
+/**
+ *
+ * @export
+ * @interface ToolsetDetailsDto
+ */
+export interface ToolsetDetailsDto {
+  /**
+   * Transport supported by the MCP server (HTTP or SSE)
+   * @type {string}
+   * @memberof ToolsetDetailsDto
+   */
+  transport?: string;
+  /**
+   * Names of tools allowed for use from this toolset
+   * @type {Array<string>}
+   * @memberof ToolsetDetailsDto
+   */
+  allowedTools?: Array<string>;
+  /**
+   * Names of all tools supported by the underlying MCP server, regardless of whether they are allow-listed. From GET /v1/toolset/{id}/tools.
+   * @type {Array<string>}
+   * @memberof ToolsetDetailsDto
+   */
+  allToolNames?: Array<string>;
+  /**
+   *
+   * @type {ToolsetAuthSettingsDto}
+   * @memberof ToolsetDetailsDto
+   */
+  authSettings?: ToolsetAuthSettingsDto;
+  /**
+   * Owner of the deployment as reported by DIAL Core
+   * @type {string}
+   * @memberof ToolsetDetailsDto
+   */
+  owner?: string;
+  /**
+   *
+   * @type {DeploymentFeaturesDetailsDto}
+   * @memberof ToolsetDetailsDto
+   */
+  features?: DeploymentFeaturesDetailsDto;
+  /**
+   * Timestamp of creation time from DIAL Core (e.g. 1714768496000)
+   * @type {number}
+   * @memberof ToolsetDetailsDto
+   */
+  createdAt?: number;
+}
+/**
+ *
+ * @export
+ * @interface ToolsetLoginBodyDto
+ */
+export interface ToolsetLoginBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetLoginBodyDto
+   */
+  url: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetLoginBodyDto
+   */
+  credentialsLevel: ToolsetLoginBodyDtoCredentialsLevelEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetLoginBodyDto
+   */
+  authenticationType: ToolsetLoginBodyDtoAuthenticationTypeEnum;
+  /**
+   * API key value (API_KEY auth).
+   * @type {string}
+   * @memberof ToolsetLoginBodyDto
+   */
+  apiKey?: string;
+  /**
+   * OAuth authorization code (OAUTH auth).
+   * @type {string}
+   * @memberof ToolsetLoginBodyDto
+   */
+  code?: string;
+  /**
+   * OAuth redirect URI used for the code exchange.
+   * @type {string}
+   * @memberof ToolsetLoginBodyDto
+   */
+  redirectUri?: string;
+}
+
+/**
+ * @export
+ */
+export const ToolsetLoginBodyDtoCredentialsLevelEnum = {
+  Global: 'GLOBAL',
+  User: 'USER',
+  App: 'APP',
+} as const;
+export type ToolsetLoginBodyDtoCredentialsLevelEnum =
+  (typeof ToolsetLoginBodyDtoCredentialsLevelEnum)[keyof typeof ToolsetLoginBodyDtoCredentialsLevelEnum];
+
+/**
+ * @export
+ */
+export const ToolsetLoginBodyDtoAuthenticationTypeEnum = {
+  None: 'NONE',
+  ApiKey: 'API_KEY',
+  Oauth: 'OAUTH',
+} as const;
+export type ToolsetLoginBodyDtoAuthenticationTypeEnum =
+  (typeof ToolsetLoginBodyDtoAuthenticationTypeEnum)[keyof typeof ToolsetLoginBodyDtoAuthenticationTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface ToolsetLogoutBodyDto
+ */
+export interface ToolsetLogoutBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetLogoutBodyDto
+   */
+  url: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetLogoutBodyDto
+   */
+  credentialsLevel: ToolsetLogoutBodyDtoCredentialsLevelEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof ToolsetLogoutBodyDto
+   */
+  authenticationType: ToolsetLogoutBodyDtoAuthenticationTypeEnum;
+}
+
+/**
+ * @export
+ */
+export const ToolsetLogoutBodyDtoCredentialsLevelEnum = {
+  Global: 'GLOBAL',
+  User: 'USER',
+  App: 'APP',
+} as const;
+export type ToolsetLogoutBodyDtoCredentialsLevelEnum =
+  (typeof ToolsetLogoutBodyDtoCredentialsLevelEnum)[keyof typeof ToolsetLogoutBodyDtoCredentialsLevelEnum];
+
+/**
+ * @export
+ */
+export const ToolsetLogoutBodyDtoAuthenticationTypeEnum = {
+  None: 'NONE',
+  ApiKey: 'API_KEY',
+  Oauth: 'OAUTH',
+} as const;
+export type ToolsetLogoutBodyDtoAuthenticationTypeEnum =
+  (typeof ToolsetLogoutBodyDtoAuthenticationTypeEnum)[keyof typeof ToolsetLogoutBodyDtoAuthenticationTypeEnum];
+
+/**
+ *
+ * @export
  * @interface ToolsetsConfigDto
  */
 export interface ToolsetsConfigDto {
@@ -2254,6 +4044,19 @@ export interface UpdatePinsDto {
 /**
  *
  * @export
+ * @interface UpdateSelectedDeploymentDto
+ */
+export interface UpdateSelectedDeploymentDto {
+  /**
+   * Deployment ID to set as selected, or null to clear.
+   * @type {string}
+   * @memberof UpdateSelectedDeploymentDto
+   */
+  id?: string | null;
+}
+/**
+ *
+ * @export
  * @interface UserConfigDto
  */
 export interface UserConfigDto {
@@ -2312,4 +4115,17 @@ export interface UserProfileDto {
    * @memberof UserProfileDto
    */
   bucket: string;
+}
+/**
+ *
+ * @export
+ * @interface WatchConversationBodyDto
+ */
+export interface WatchConversationBodyDto {
+  /**
+   * Conversation sub-path (bucket-stripped), e.g. "gpt-4o__My Chat".
+   * @type {string}
+   * @memberof WatchConversationBodyDto
+   */
+  path: string;
 }

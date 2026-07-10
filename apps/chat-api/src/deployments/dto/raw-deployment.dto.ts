@@ -1,3 +1,9 @@
+export interface RawDeploymentFeaturesDto {
+  system_prompt?: boolean;
+  temperature?: boolean;
+  folder_attachments?: boolean;
+}
+
 export interface RawDeploymentDto {
   id?: string;
   display_name?: string;
@@ -7,6 +13,7 @@ export interface RawDeploymentDto {
   updated_at?: number;
   reference?: string;
   description?: string;
+  intro?: string;
   display_version?: string;
   interfaces?: string | string[];
   application_type_schema_id?: string;
@@ -14,4 +21,5 @@ export interface RawDeploymentDto {
   max_input_attachments?: number;
   description_keywords?: string[];
   owner?: string;
+  features?: RawDeploymentFeaturesDto;
 }

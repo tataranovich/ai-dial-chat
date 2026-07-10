@@ -13,16 +13,16 @@ import { MetricsInterceptor } from '../common/interceptors/metrics.interceptor';
 import { validate } from '../config/validation';
 import { ConversationModule } from '../conversations/conversation.module';
 import { DeploymentsModule } from '../deployments/deployments.module';
+import { DialCoreModule } from '../dial/dial-core.module';
 import { FilesModule } from '../files/files.module';
 import { HealthController } from '../health/health.controller';
 import { ModelsModule } from '../models/models.module';
 import { RateModule } from '../rate/rate.module';
-import { ThemeController } from '../themes/theme.controller';
-import { ThemeService } from '../themes/theme.service';
+import { ThemesModule } from '../themes/themes.module';
+import { ToolsetsModule } from '../toolsets/toolsets.module';
 import { TranscriptionModule } from '../transcription/transcription.module';
 import { UserConfigModule } from '../user-config/user-config.module';
 import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { createServeStaticOptions } from './static-assets';
 
 @Module({
@@ -45,22 +45,23 @@ import { createServeStaticOptions } from './static-assets';
       },
     ]),
     ServeStaticModule.forRoot(createServeStaticOptions()),
+    DialCoreModule,
     AppConfigModule,
     ApplicationSchemasModule,
     ApplicationsModule,
     DeploymentsModule,
     ModelsModule,
+    ToolsetsModule,
     ChatModule,
     ConversationModule,
     UserConfigModule,
     FilesModule,
     RateModule,
     TranscriptionModule,
+    ThemesModule,
   ],
-  controllers: [AppController, ThemeController, HealthController],
+  controllers: [AppController, HealthController],
   providers: [
-    AppService,
-    ThemeService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

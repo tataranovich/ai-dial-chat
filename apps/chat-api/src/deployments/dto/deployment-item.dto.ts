@@ -10,6 +10,12 @@ export class DeploymentFeaturesDto {
     description: 'Whether the deployment supports temperature control',
   })
   temperature!: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the deployment supports attaching folders from the file manager',
+  })
+  folderAttachments?: boolean;
 }
 
 export class DeploymentItemDto {
@@ -27,6 +33,12 @@ export class DeploymentItemDto {
 
   @ApiPropertyOptional({ description: 'Description from DIAL Core' })
   description?: string;
+
+  @ApiPropertyOptional({
+    description: 'Short catalog-friendly intro from DIAL Core',
+    maxLength: 90,
+  })
+  intro?: string;
 
   @ApiPropertyOptional({
     description: 'Interface types supported by this deployment',

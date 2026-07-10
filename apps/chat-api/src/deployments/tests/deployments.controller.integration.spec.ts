@@ -69,12 +69,16 @@ describe('DeploymentsController (integration)', () => {
   let service: {
     listDeployments: ReturnType<typeof vi.fn>;
     getDeploymentConfiguration: ReturnType<typeof vi.fn>;
+    getDeploymentLimits: ReturnType<typeof vi.fn>;
+    getDeploymentDetails: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
     service = {
       listDeployments: vi.fn().mockResolvedValue(mockResponse),
       getDeploymentConfiguration: vi.fn(),
+      getDeploymentLimits: vi.fn(),
+      getDeploymentDetails: vi.fn(),
     };
     app = await buildApp(service);
   });
@@ -173,6 +177,32 @@ describe('DeploymentsController (integration)', () => {
         .expect(400);
     });
 
+    it('returns 400 for old embeddings value', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments?interface_type=embeddings')
+        .expect(400);
+    });
+
+    it('returns 200 for corrected embedding value', async () => {
+      const embeddingResponse: DeploymentsResponseDto = {
+        deployments: [
+          { id: 'embed-model', displayName: 'Embed', type: 'model' },
+        ],
+      };
+      service.listDeployments.mockResolvedValue(embeddingResponse);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments?interface_type=embedding')
+        .expect(200);
+
+      expect(service.listDeployments).toHaveBeenCalledWith(
+        TEST_USER.sub,
+        TEST_USER.at,
+        TEST_USER.bucket,
+        ['embedding'],
+      );
+    });
+
     it('returns 401 when service throws UnauthorizedException', async () => {
       service.listDeployments.mockRejectedValue(new UnauthorizedException());
       await request(app.getHttpServer()).get('/api/v1/deployments').expect(401);
@@ -230,6 +260,118 @@ describe('DeploymentsController (integration)', () => {
 
       await request(app.getHttpServer())
         .get('/api/v1/deployments/statgpt/configuration')
+        .expect(503);
+    });
+  });
+
+  describe('GET /api/v1/deployments/:deployment/limits', () => {
+    const mockLimits = {
+      dayTokenStats: { total: 10000, used: 4000 },
+    };
+
+    it('returns 200 with deployment limits', async () => {
+      service.getDeploymentLimits.mockResolvedValue(mockLimits);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/deployments/gpt-4o/limits')
+        .expect(200);
+
+      expect(res.body).toEqual(mockLimits);
+      expect(service.getDeploymentLimits).toHaveBeenCalledWith(
+        'gpt-4o',
+        TEST_USER.at,
+      );
+    });
+
+    it('accepts percent-encoded deployment names in a single path segment', async () => {
+      service.getDeploymentLimits.mockResolvedValue(mockLimits);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments/applications%2Ffoo%2Fbar/limits')
+        .expect(200);
+
+      expect(service.getDeploymentLimits).toHaveBeenCalledWith(
+        'applications/foo/bar',
+        TEST_USER.at,
+      );
+    });
+
+    it('returns 404 when limits not found', async () => {
+      const { NotFoundException } = await import('@nestjs/common');
+      service.getDeploymentLimits.mockRejectedValue(new NotFoundException());
+
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments/unknown/limits')
+        .expect(404);
+    });
+
+    it('returns 503 when DIAL Core is unreachable', async () => {
+      const { ServiceUnavailableException } = await import('@nestjs/common');
+      service.getDeploymentLimits.mockRejectedValue(
+        new ServiceUnavailableException(),
+      );
+
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments/gpt-4o/limits')
+        .expect(503);
+    });
+  });
+
+  describe('GET /api/v1/deployments/:deployment/details', () => {
+    const mockDetails = {
+      id: 'gpt-4o',
+      type: 'model',
+      modelDetails: { lifecycleStatus: 'generally-available' },
+    };
+
+    it('returns 200 with deployment details', async () => {
+      service.getDeploymentDetails.mockResolvedValue(mockDetails);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/deployments/gpt-4o/details')
+        .expect(200);
+
+      expect(res.body).toEqual(mockDetails);
+      expect(service.getDeploymentDetails).toHaveBeenCalledWith(
+        'gpt-4o',
+        TEST_USER.at,
+      );
+    });
+
+    it('returns 401 when service throws UnauthorizedException', async () => {
+      service.getDeploymentDetails.mockRejectedValue(
+        new UnauthorizedException(),
+      );
+
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments/gpt-4o/details')
+        .expect(401);
+    });
+
+    it('returns 404 when deployment is not found', async () => {
+      const { NotFoundException } = await import('@nestjs/common');
+      service.getDeploymentDetails.mockRejectedValue(new NotFoundException());
+
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments/unknown/details')
+        .expect(404);
+    });
+
+    it('returns 502 when DIAL Core returns an error response', async () => {
+      service.getDeploymentDetails.mockRejectedValue(new BadGatewayException());
+
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments/gpt-4o/details')
+        .expect(502);
+    });
+
+    it('returns 503 when DIAL Core is unreachable', async () => {
+      service.getDeploymentDetails.mockRejectedValue(
+        new ServiceUnavailableException(),
+      );
+
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments/gpt-4o/details')
         .expect(503);
     });
   });

@@ -1,6 +1,7 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DialDropdown,
   DialDropdownIcon,
   DialGhostIconButton,
   ElementSize,
@@ -20,7 +21,19 @@ interface Props {
   isStreaming: boolean;
   isMobile: boolean;
   isInputDisabled?: boolean;
+  /**
+   * When `true`, the control renders dimmed and does not open, regardless of
+   * `isInputDisabled`/`isStreaming` — the current model stays visible.
+   */
+  isDisabled?: boolean;
   style: CSSProperties;
+  modelPickerOverlay: InputProps['modelPickerOverlay'];
+  /** Whether the model picker popover is open (controlled from Input). */
+  isPickerOpen?: boolean;
+  /** Toggles the model picker popover open/closed. */
+  onPickerToggle?: () => void;
+  /** Called by DialDropdown when open state changes (e.g. outside click). */
+  onPickerOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -34,7 +47,12 @@ export const ModelSelectorControl: FC<Props> = ({
   isStreaming,
   isMobile,
   isInputDisabled = false,
+  isDisabled = false,
   style,
+  modelPickerOverlay,
+  isPickerOpen,
+  onPickerToggle,
+  onPickerOpenChange,
 }) => {
   const [isModelSheetOpen, setIsModelSheetOpen] = useState(false);
 
@@ -55,9 +73,10 @@ export const ModelSelectorControl: FC<Props> = ({
     return null;
   }
 
-  const disabledIconClassName = isStreaming
-    ? 'pointer-events-none opacity-50 cursor-not-allowed'
-    : undefined;
+  const disabledIconClassName =
+    isStreaming || isDisabled
+      ? 'pointer-events-none opacity-50 cursor-not-allowed'
+      : undefined;
 
   const caretIcon = (
     <div
@@ -77,11 +96,13 @@ export const ModelSelectorControl: FC<Props> = ({
           icon={
             <div className="relative flex items-center">
               {selectorIcon}
-              <div className="absolute right-[-12px]"> {caretIcon}</div>
+              <div className="absolute end-[-12px]"> {caretIcon}</div>
             </div>
           }
           aria-label={selectorAriaLabel}
-          onClick={() => setIsModelSheetOpen(true)}
+          onClick={() => {
+            if (!isDisabled) setIsModelSheetOpen(true);
+          }}
           className={mergeClasses(
             styles.modelSelectorButton,
             disabledIconClassName,
@@ -105,26 +126,74 @@ export const ModelSelectorControl: FC<Props> = ({
     );
   }
 
+  if (modelPickerOverlay) {
+    return (
+      <DialDropdown
+        placement="top-end"
+        matchReferenceWidth={false}
+        open={isPickerOpen}
+        onOpenChange={onPickerOpenChange}
+        trigger={[]}
+        outsideClosable
+        renderOverlay={() =>
+          modelPickerOverlay(() => onPickerOpenChange?.(false))
+        }
+        listClassName="cp-dropdown-overlay !w-[480px]"
+      >
+        <button
+          type="button"
+          aria-label={selectorAriaLabel}
+          className={mergeClasses(
+            'relative flex items-center justify-center rounded-md p-2',
+            styles.modelSelectorButton,
+            isInputDisabled || isStreaming || isDisabled
+              ? disabledIconClassName
+              : undefined,
+            (isInputDisabled || isDisabled) &&
+              styles.modelSelectorButtonDisabled,
+          )}
+          onClick={() => {
+            if (!isInputDisabled && !isStreaming && !isDisabled) {
+              onPickerToggle?.();
+            }
+          }}
+        >
+          <div className="relative flex items-center">
+            {selectorIcon}
+            <div className="absolute end-[-12px]">{caretIcon}</div>
+          </div>
+        </button>
+      </DialDropdown>
+    );
+  }
+
   return (
-    <DialDropdownIcon
-      icon={selectorIcon}
-      ariaLabel={selectorAriaLabel}
-      items={menuItems}
-      menuHeader={menuHeader}
-      placement="bottom-end"
-      matchReferenceWidth={false}
-      listClassName="!w-[240px] !max-h-80 shadow-md"
-      onOpenChange={handleModelSelectorOpenChange}
-      size={ElementSize.Standard}
-      caretIcon={caretIcon}
-      iconClassName={isInputDisabled ? disabledIconClassName : undefined}
-      buttonClassName={mergeClasses(
-        'bg-transparent',
-        styles.modelSelectorButton,
-        isInputDisabled &&
-          disabledIconClassName &&
-          styles.modelSelectorButtonDisabled,
-      )}
-    />
+    <div
+      className={mergeClasses(isDisabled && disabledIconClassName)}
+      aria-disabled={isDisabled || undefined}
+    >
+      <DialDropdownIcon
+        icon={selectorIcon}
+        ariaLabel={selectorAriaLabel}
+        items={menuItems}
+        menuHeader={menuHeader}
+        placement="bottom-end"
+        matchReferenceWidth={false}
+        listClassName="cp-dropdown-overlay !w-[240px] !max-h-80"
+        onOpenChange={isDisabled ? undefined : handleModelSelectorOpenChange}
+        size={ElementSize.Standard}
+        caretIcon={caretIcon}
+        iconClassName={
+          isInputDisabled || isDisabled ? disabledIconClassName : undefined
+        }
+        buttonClassName={mergeClasses(
+          'bg-transparent',
+          styles.modelSelectorButton,
+          (isInputDisabled || isDisabled) &&
+            disabledIconClassName &&
+            styles.modelSelectorButtonDisabled,
+        )}
+      />
+    </div>
   );
 };

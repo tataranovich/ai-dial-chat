@@ -1,5 +1,6 @@
 import {
   buildCssVars,
+  DEFAULT_MARKDOWN_CLASS_NAMES,
   MarkdownRenderer,
   mergeClasses,
 } from '@epam/ai-dial-chat-shared';
@@ -17,6 +18,7 @@ import 'react-json-view-lite/dist/index.css';
 import type { AttachmentCanvasProps } from '../../models/attachment-canvas';
 import { AttachmentContentType } from '../../types/attachment-canvas';
 import { isDownloadable } from '../../utils/download';
+import { PdfContent } from '../PdfContent/PdfContent';
 import styles from './AttachmentCanvas.module.scss';
 
 const COPY_RESET_MS = 2000;
@@ -29,27 +31,45 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
   ariaLabel,
   closeLabel = 'Close',
   onDownload,
+  onCopyText,
   onCopyMarkdown,
   onCopyJson,
   downloadLabel = 'Download',
+  copyTextLabel = 'Copy text',
+  copiedTextLabel = 'Copied!',
   copyMarkdownLabel = 'Copy as Markdown',
   copiedMarkdownLabel = 'Copied!',
   copyJsonLabel = 'Copy as JSON',
   copiedJsonLabel = 'Copied!',
   unsupportedLabel = 'Preview is not supported for this file',
   isMobile = false,
-  defaultWidth = 560,
+  defaultWidth,
   minWidth = 320,
-  maxWidth = 960,
+  maxWidth = 1500,
   onResizeStop,
   styles: stylesProp,
   className,
   codeBlockTheme,
+  loadPdf,
 }) => {
+  const [isCopiedText, setIsCopiedText] = useState(false);
   const [isCopiedMarkdown, setIsCopiedMarkdown] = useState(false);
   const [isCopiedJson, setIsCopiedJson] = useState(false);
+  const copyTextResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyJsonResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleCopyText = useCallback(() => {
+    onCopyText?.();
+    if (copyTextResetRef.current != null) {
+      clearTimeout(copyTextResetRef.current);
+    }
+    setIsCopiedText(true);
+    copyTextResetRef.current = setTimeout(
+      () => setIsCopiedText(false),
+      COPY_RESET_MS,
+    );
+  }, [onCopyText]);
 
   const handleCopyMarkdown = useCallback(() => {
     onCopyMarkdown?.();
@@ -82,22 +102,10 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
     panelStyles,
   } = stylesProp ?? {};
 
-  const noCustomClass = !typography?.fontClassName;
   const cssVars = useMemo(
     () => ({
       ...buildCssVars({
         '--ac-text': colors?.text,
-        '--ac-font-size': noCustomClass ? typography?.fontSize : undefined,
-        '--ac-font-weight': noCustomClass
-          ? typography?.fontWeight?.toString()
-          : undefined,
-        '--ac-line-height': noCustomClass
-          ? typography?.lineHeight?.toString()
-          : undefined,
-        '--ac-letter-spacing': noCustomClass
-          ? typography?.letterSpacing
-          : undefined,
-        '--ac-font-family': noCustomClass ? typography?.fontFamily : undefined,
       }),
       ...extraCssVars,
     }),
@@ -105,6 +113,8 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
     [stylesProp],
   );
 
+  const showCopyText =
+    onCopyText != null && content.type === AttachmentContentType.PlainText;
   const showCopyMarkdown =
     onCopyMarkdown != null && content.type === AttachmentContentType.Markdown;
   const showCopyJson =
@@ -118,6 +128,8 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
         return 'h-full overflow-auto p-4 flex items-center justify-center';
       case AttachmentContentType.Json:
         return 'h-full overflow-auto';
+      case AttachmentContentType.Pdf:
+        return 'h-full overflow-hidden';
       default:
         return 'h-full overflow-auto p-4';
     }
@@ -151,37 +163,73 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
             content={content.text}
             isStreaming={false}
             codeBlockTheme={codeBlockTheme}
+            classNames={DEFAULT_MARKDOWN_CLASS_NAMES}
           />
         );
       case AttachmentContentType.Json:
         return (
           <div dir="ltr" className="h-full overflow-auto">
-            <div className={styles.jsonWrapper}>
+            <div
+              className={mergeClasses(
+                'm-3 overflow-auto rounded-md border',
+                styles.jsonWrapper,
+              )}
+            >
               <JsonView
                 data={content.value as object}
                 style={{
-                  container: styles.jsonContainer,
+                  container: mergeClasses(
+                    'whitespace-pre-wrap break-words p-2',
+                    styles.jsonContainer,
+                  ),
                   basicChildStyle: defaultStyles.basicChildStyle,
-                  childFieldsContainer: styles.jsonChildContainer,
-                  label: styles.jsonLabel,
-                  clickableLabel: styles.jsonClickableLabel,
-                  nullValue: styles.jsonNullValue,
-                  undefinedValue: styles.jsonNullValue,
+                  childFieldsContainer: 'm-0 ps-3',
+                  label: mergeClasses('me-1 font-semibold', styles.jsonLabel),
+                  clickableLabel: mergeClasses(
+                    'me-1 cursor-pointer font-semibold hover:underline',
+                    styles.jsonClickableLabel,
+                  ),
+                  nullValue: mergeClasses('italic', styles.jsonNullValue),
+                  undefinedValue: mergeClasses('italic', styles.jsonNullValue),
                   stringValue: styles.jsonStringValue,
                   booleanValue: styles.jsonBooleanValue,
                   numberValue: styles.jsonNumberValue,
-                  otherValue: styles.jsonNullValue,
-                  punctuation: styles.jsonPunctuation,
-                  collapseIcon: styles.jsonCollapseIcon,
-                  expandIcon: styles.jsonExpandIcon,
-                  collapsedContent: styles.jsonCollapsedContent,
+                  otherValue: mergeClasses('italic', styles.jsonNullValue),
+                  punctuation: mergeClasses('me-1', styles.jsonPunctuation),
+                  collapseIcon: mergeClasses(
+                    'me-1 cursor-pointer select-none transition-colors',
+                    styles.jsonCollapseIcon,
+                  ),
+                  expandIcon: mergeClasses(
+                    'me-1 cursor-pointer select-none transition-colors',
+                    styles.jsonExpandIcon,
+                  ),
+                  collapsedContent: mergeClasses(
+                    'me-1 cursor-pointer rounded px-1',
+                    styles.jsonCollapsedContent,
+                  ),
                 }}
               />
             </div>
           </div>
         );
+      case AttachmentContentType.Pdf:
+        return (
+          <PdfContent
+            key={content.url}
+            fileName={fileName}
+            url={content.url}
+            highlights={content.highlights ?? []}
+            selectedHighlightId={content.selectedHighlightId}
+            loadPdf={loadPdf}
+          />
+        );
       case AttachmentContentType.Unsupported:
-        return <p className="text-center text-secondary">{unsupportedLabel}</p>;
+        return (
+          <p className={mergeClasses('text-center', styles.unsupportedLabel)}>
+            {unsupportedLabel}
+          </p>
+        );
     }
   }, [
     content,
@@ -189,6 +237,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
     fileName,
     codeBlockTheme,
     unsupportedLabel,
+    loadPdf,
   ]);
 
   return (
@@ -207,8 +256,24 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
       className={mergeClasses(isOpen ? 'mobile:w-full' : 'w-0', className)}
       styles={panelStyles}
       rightActions={
-        showCopyMarkdown || showCopyJson || showDownload ? (
+        showCopyText || showCopyMarkdown || showCopyJson || showDownload ? (
           <>
+            {showCopyText && (
+              <DialGhostIconButton
+                icon={
+                  isCopiedText ? (
+                    <IconCheck size={DIAL_ICON_SIZE.LG} stroke={1.5} />
+                  ) : (
+                    <IconCopy size={DIAL_ICON_SIZE.LG} stroke={1.5} />
+                  )
+                }
+                aria-label={isCopiedText ? copiedTextLabel : copyTextLabel}
+                tooltipProps={{
+                  tooltip: isCopiedText ? copiedTextLabel : copyTextLabel,
+                }}
+                onClick={handleCopyText}
+              />
+            )}
             {showCopyMarkdown && (
               <DialGhostIconButton
                 icon={

@@ -2,7 +2,7 @@ import type { DeploymentConfigurationSchema } from '@epam/ai-dial-chat-shared';
 import { SendOnEnter } from '@epam/ai-dial-conversation-input';
 import { NotificationVariant } from '@epam/ai-dial-ui-kit';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import React from 'react';
+import { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as UserContextModule from '../../context/auth/UserContext';
@@ -19,7 +19,7 @@ vi.mock('../../hooks/attachment/useOpenAttachmentCanvas', () => ({
   useOpenAttachmentCanvas: () => ({ openAttachmentCanvas: vi.fn() }),
 }));
 vi.mock('../../context/AppConfigContext', () => ({
-  default: ({ children }: { children: React.ReactNode }) => children,
+  default: ({ children }: { children: ReactNode }) => children,
   useAppConfig: () => ({
     status: 'ready',
     features: {},
@@ -184,6 +184,9 @@ describe('ConversationRoute', () => {
       selectedDeploymentConfiguration: null,
       isLoading: false,
       error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
     });
     mockUseUser.mockReturnValue({
       user: { sub: 'u1', providerId: 'p1', claims: {}, bucket: 'user-bucket' },
@@ -291,6 +294,9 @@ describe('ConversationRoute', () => {
       selectedDeploymentConfiguration: null,
       isLoading: false,
       error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
     });
 
     renderRoute();
@@ -314,6 +320,9 @@ describe('ConversationRoute', () => {
       },
       isLoading: false,
       error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
     });
     renderRoute();
     await waitFor(() => {
@@ -337,6 +346,9 @@ describe('ConversationRoute', () => {
       selectedDeploymentConfiguration: { type: 'object' },
       isLoading: false,
       error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
     });
     renderRoute();
     await waitFor(() => {
@@ -371,6 +383,9 @@ describe('ConversationRoute', () => {
       selectedDeploymentConfiguration,
       isLoading: false,
       error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
     });
 
     renderRoute();
@@ -417,6 +432,9 @@ describe('ConversationRoute', () => {
       selectedDeploymentConfiguration,
       isLoading: false,
       error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
     });
 
     renderRoute();
@@ -462,6 +480,9 @@ describe('ConversationRoute', () => {
       selectedDeploymentConfiguration,
       isLoading: false,
       error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
     });
     mockCreateConversation.mockRejectedValueOnce({
       response: {

@@ -15,10 +15,20 @@
 import * as runtime from '../runtime';
 import type {
   DeploymentConfigurationDto,
+  DeploymentDetailsDto,
+  DeploymentLimitsResponseDto,
   DeploymentsResponseDto,
 } from '../models/index';
 
 export interface GetDeploymentConfigurationRequest {
+  deployment: string;
+}
+
+export interface GetDeploymentDetailsRequest {
+  deployment: string;
+}
+
+export interface GetDeploymentLimitsRequest {
   deployment: string;
 }
 
@@ -84,6 +94,112 @@ export class DeploymentsApi extends runtime.BaseAPI {
   }
 
   /**
+   * Fetches the full per-entity payload for a model, application, or toolset by id (dispatching to DIAL Core\'s getModel/getApplication/getToolset based on the resolved deployment type) and maps it into a frontend-safe DeploymentDetailsDto. Results are cached server-side for 60 seconds.
+   * Get full details for a single deployment
+   */
+  async getDeploymentDetailsRaw(
+    requestParameters: GetDeploymentDetailsRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<runtime.ApiResponse<DeploymentDetailsDto>> {
+    if (requestParameters['deployment'] == null) {
+      throw new runtime.RequiredError(
+        'deployment',
+        'Required parameter "deployment" was null or undefined when calling getDeploymentDetails().',
+      );
+    }
+
+    const queryParameters: runtime.HTTPQuery = {};
+
+    const headerParameters: runtime.HTTPHeaders = {};
+
+    let urlPath = `/api/v1/deployments/{deployment}/details`;
+    urlPath = urlPath.replace(
+      `{${'deployment'}}`,
+      encodeURIComponent(String(requestParameters['deployment'])),
+    );
+
+    const response = await this.request(
+      {
+        path: urlPath,
+        method: 'GET',
+        headers: headerParameters,
+        query: queryParameters,
+      },
+      initOverrides,
+    );
+
+    return new runtime.JSONApiResponse<DeploymentDetailsDto>(response);
+  }
+
+  /**
+   * Fetches the full per-entity payload for a model, application, or toolset by id (dispatching to DIAL Core\'s getModel/getApplication/getToolset based on the resolved deployment type) and maps it into a frontend-safe DeploymentDetailsDto. Results are cached server-side for 60 seconds.
+   * Get full details for a single deployment
+   */
+  async getDeploymentDetails(
+    requestParameters: GetDeploymentDetailsRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<DeploymentDetailsDto> {
+    const response = await this.getDeploymentDetailsRaw(
+      requestParameters,
+      initOverrides,
+    );
+    return await response.value();
+  }
+
+  /**
+   * Returns spent/limit statistics for a single deployment. Proxies GET /v1/deployments/{deployment_name}/limits using the caller\'s session access token. Not cached — every request hits DIAL Core for real-time usage data.
+   * Get deployment usage limits
+   */
+  async getDeploymentLimitsRaw(
+    requestParameters: GetDeploymentLimitsRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<runtime.ApiResponse<DeploymentLimitsResponseDto>> {
+    if (requestParameters['deployment'] == null) {
+      throw new runtime.RequiredError(
+        'deployment',
+        'Required parameter "deployment" was null or undefined when calling getDeploymentLimits().',
+      );
+    }
+
+    const queryParameters: runtime.HTTPQuery = {};
+
+    const headerParameters: runtime.HTTPHeaders = {};
+
+    let urlPath = `/api/v1/deployments/{deployment}/limits`;
+    urlPath = urlPath.replace(
+      `{${'deployment'}}`,
+      encodeURIComponent(String(requestParameters['deployment'])),
+    );
+
+    const response = await this.request(
+      {
+        path: urlPath,
+        method: 'GET',
+        headers: headerParameters,
+        query: queryParameters,
+      },
+      initOverrides,
+    );
+
+    return new runtime.JSONApiResponse<DeploymentLimitsResponseDto>(response);
+  }
+
+  /**
+   * Returns spent/limit statistics for a single deployment. Proxies GET /v1/deployments/{deployment_name}/limits using the caller\'s session access token. Not cached — every request hits DIAL Core for real-time usage data.
+   * Get deployment usage limits
+   */
+  async getDeploymentLimits(
+    requestParameters: GetDeploymentLimitsRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<DeploymentLimitsResponseDto> {
+    const response = await this.getDeploymentLimitsRaw(
+      requestParameters,
+      initOverrides,
+    );
+    return await response.value();
+  }
+
+  /**
    * List deployments by interface type
    */
   async listDeploymentsRaw(
@@ -133,7 +249,7 @@ export class DeploymentsApi extends runtime.BaseAPI {
  */
 export const ListDeploymentsInterfaceTypeEnum = {
   Chat: 'chat',
-  Embeddings: 'embeddings',
+  Embedding: 'embedding',
   Mcp: 'mcp',
   CustomUi: 'custom_ui',
   All: 'all',

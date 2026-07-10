@@ -1,6 +1,7 @@
 import { type FC, memo } from 'react';
 import type { Components } from 'react-markdown';
 import { CodeBlockTheme } from '../../types/code-editor';
+import { DEFAULT_MARKDOWN_CLASS_NAMES } from './markdown-class-names';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 /** Props for the {@link MDMessageViewer} markdown renderer. */
@@ -47,19 +48,7 @@ export const MDMessageViewer: FC<Props> = memo(
       codeBlockCopyLabel={codeBlockCopyLabel}
       codeBlockCopiedLabel={codeBlockCopiedLabel}
       codeBlockTheme={codeBlockTheme}
-      classNames={{
-        h1: 'dial-h1-text mb-2',
-        h2: 'dial-h2-text mb-2',
-        h3: 'dial-h3-text mb-1',
-        p: 'mb-2 break-words [overflow-wrap:anywhere] last:mb-0',
-        ul: 'mb-2',
-        ol: 'mb-2',
-        codeInline: 'bg-black/20 break-words [overflow-wrap:anywhere]',
-        blockquote: 'border-current/30 my-2',
-        link: 'break-words [overflow-wrap:anywhere]',
-        tableWrapper: 'my-2',
-        tableHeader: 'bg-white/10',
-      }}
+      classNames={DEFAULT_MARKDOWN_CLASS_NAMES}
     />
   ),
 );

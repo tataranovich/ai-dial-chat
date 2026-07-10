@@ -1,10 +1,10 @@
-import { DeploymentIcon } from '@epam/ai-dial-chat-shared';
-import { DialTag } from '@epam/ai-dial-ui-kit';
-import { FC } from 'react';
+import { DeploymentIcon, mergeClasses } from '@epam/ai-dial-chat-shared';
+import { FC, ReactNode } from 'react';
+import { ENTITY_TYPE_COLOR } from '../../constants/entity-colors';
 import { CatalogItem } from '../../models/catalog-item';
-import { EntityBadge } from '../EntityBadge/EntityBadge';
+import { getFeaturedEntityStyle } from '../../utils/styles';
+import { FeaturedChip } from '../FeaturedChip/FeaturedChip';
 import { ItemHeader } from '../ItemHeader/ItemHeader';
-import styles from './EntityHeader.module.scss';
 
 /** Props for EntityHeader. */
 export interface EntityHeaderProps {
@@ -12,14 +12,24 @@ export interface EntityHeaderProps {
   item: CatalogItem;
   /** CSS class for the item name. Default: 'dial-h3-text text-primary'. */
   nameClassName?: string;
+  /** CSS class for the entity type label. Default: 'dial-caption-text font-semibold'. */
+  typeClassName?: string;
+  /** CSS class applied to the icon badge, e.g. to set border-radius. Default: 'rounded-[14px]'. */
+  iconBadgeClassName?: string;
   /** CSS class for the version text. Default: 'dial-tiny-text text-secondary'. */
   versionClassName?: string;
   /** Label for the featured tag shown when item.isFeatured is true. Default: 'Featured'. */
   featuredLabel?: string;
-  /** Whether the isFeatured property is available on the item. Default: true. */
-  isFeaturedAvailable?: boolean;
+  /** Whether to render the featured tag. Default: true. */
+  hasFeaturedTag?: boolean;
   /** Size of the deployment icon. Default: 48. */
   iconSize?: number;
+  /** Search query string; when provided, matching text in the title is highlighted. */
+  query?: string;
+  /** Content pinned to the bottom of the text column via `mt-auto`, aligning its baseline with the avatar bottom. When provided, `gap-1` between type and name is removed so the column fills the icon height exactly. */
+  footer?: ReactNode;
+  /** CSS class for the featured chip. */
+  featuredChipClassName?: string;
 }
 
 /** Compact card for the Favorites strip with hover lift and star toggle. */
@@ -27,20 +37,48 @@ export const EntityHeader: FC<EntityHeaderProps> = ({
   item,
   nameClassName,
   versionClassName,
-  isFeaturedAvailable = true,
+  typeClassName = 'dial-caption-text font-semibold',
+  iconBadgeClassName = 'rounded-[14px]',
+  featuredChipClassName,
   featuredLabel = 'Featured',
+  hasFeaturedTag = true,
   iconSize = 48,
+  query,
+  footer,
 }) => {
-  return (
-    <div className="flex items-start gap-2">
-      <DeploymentIcon src={item.iconUrl} size={iconSize} />
+  const featuredStyle = getFeaturedEntityStyle(item);
 
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+  return (
+    <div className="flex items-start gap-2" style={featuredStyle}>
+      <DeploymentIcon
+        src={item.iconUrl}
+        size={iconSize}
+        initialsName={item.name}
+        badgeClassName={iconBadgeClassName}
+      />
+
+      <div
+        className={mergeClasses(
+          'flex min-w-0 flex-1 flex-col',
+          footer == null ? 'gap-1' : 'self-stretch',
+        )}
+      >
         <div className="relative flex flex-row items-center justify-between">
-          <EntityBadge type={item.type} />
-          {isFeaturedAvailable && item.isFeatured && (
-            <div className="absolute right-0 top-[-6px]">
-              <DialTag label={featuredLabel} className={styles.featuredTag} />
+          <span
+            className={mergeClasses(
+              'uppercase tracking-[0.06em]',
+              typeClassName,
+            )}
+            style={{ color: ENTITY_TYPE_COLOR[item.type] }}
+          >
+            {item.type}
+          </span>
+          {hasFeaturedTag && item.isFeatured && (
+            <div className="absolute end-0 top-[-6px]">
+              <FeaturedChip
+                label={featuredLabel}
+                className={featuredChipClassName}
+              />
             </div>
           )}
         </div>
@@ -49,7 +87,9 @@ export const EntityHeader: FC<EntityHeaderProps> = ({
           postfix={item.version}
           postfixClassName={versionClassName}
           titleClassName={nameClassName}
+          query={query}
         />
+        {footer != null && <div className="mt-auto pt-1">{footer}</div>}
       </div>
     </div>
   );

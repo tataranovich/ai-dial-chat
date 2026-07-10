@@ -1,11 +1,27 @@
 import { buildCssVars } from '@epam/ai-dial-chat-shared';
 import { CSSProperties } from 'react';
+import {
+  ENTITY_TYPE_COLOR,
+  ENTITY_TYPE_SHADOW,
+} from '../constants/entity-colors';
+import { CatalogItem } from '../models/catalog-item';
 import { CatalogStyles } from '../models/catalog-styles';
 
-export const getStyles = (catalogStyles?: CatalogStyles): CSSProperties => {
-  const { colors, typography } = catalogStyles ?? {};
+/** Returns CSS custom properties for entity color and shadow when the item is featured, undefined otherwise. */
+export const getFeaturedEntityStyle = (
+  item: CatalogItem,
+): CSSProperties | undefined => {
+  if (!item.isFeatured) return undefined;
 
-  const hasPageHeadingClass = Boolean(typography?.pageHeadingFontClassName);
+  return buildCssVars({
+    '--entity-color': ENTITY_TYPE_COLOR[item.type],
+    '--entity-shadow': ENTITY_TYPE_SHADOW[item.type],
+  });
+};
+
+export const getStyles = (catalogStyles?: CatalogStyles): CSSProperties => {
+  const { colors } = catalogStyles ?? {};
+
   return buildCssVars({
     '--cat-bg': colors?.background,
     '--cat-text-primary': colors?.text,
@@ -17,17 +33,5 @@ export const getStyles = (catalogStyles?: CatalogStyles): CSSProperties => {
     '--cat-section-heading-text': colors?.sectionHeadingText,
     '--cat-no-results-title-text': colors?.noResultsTitleText,
     '--cat-no-results-description-text': colors?.noResultsDescriptionText,
-    '--cat-page-heading-font-family': hasPageHeadingClass
-      ? undefined
-      : typography?.pageHeadingFontFamily,
-    '--cat-page-heading-font-size': hasPageHeadingClass
-      ? undefined
-      : typography?.pageHeadingFontSize,
-    '--cat-page-heading-font-weight': hasPageHeadingClass
-      ? undefined
-      : typography?.pageHeadingFontWeight?.toString(),
-    '--cat-page-heading-line-height': hasPageHeadingClass
-      ? undefined
-      : typography?.pageHeadingLineHeight,
   });
 };

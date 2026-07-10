@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { finished, pipeline } from 'node:stream/promises';
+import type { components } from '@epam/ai-dial-typescript-sdk';
 import {
   ConflictException,
   HttpException,
@@ -15,10 +16,18 @@ import {
 import { ConfigService } from '@nestjs/config';
 import archiver from 'archiver';
 import type { Response as ExpressResponse } from 'express';
-import { AppService } from '../app/app.service';
+import { handleDialSdkError } from '../common/dial/dial-error.mapper';
 import { getBearerAuthHeaders } from '../common/utils/auth-header';
-import { handleDialError } from '../common/utils/dial-error';
+import { encodeDialResourcePath } from '../common/utils/encode-dial-path';
+import { safeDecodeURIComponent } from '../common/utils/uri';
 import type { EnvironmentVariables } from '../config/environment.config';
+import { DialClientService } from '../dial/dial-client.service';
+import type { CopyItemDto } from './dto/copy-files.dto';
+import {
+  CopyFilesResponseDto,
+  CopyItemNodeType,
+  CopyItemResultDto,
+} from './dto/copy-files.dto';
 import type { CreateFolderResponseDto } from './dto/create-folder.dto';
 import type { DeleteItemDto } from './dto/delete-files.dto';
 import {
@@ -30,6 +39,18 @@ import type { ArchiveItemDto } from './dto/download-archive.dto';
 import { ArchiveItemNodeType } from './dto/download-archive.dto';
 import type { FileMetadataResponseDto } from './dto/file-metadata-response.dto';
 import type { ListFilesResponseDto } from './dto/list-files.dto';
+import type { MoveItemDto } from './dto/move-files.dto';
+import {
+  MoveFilesResponseDto,
+  MoveItemNodeType,
+  MoveItemResultDto,
+} from './dto/move-files.dto';
+import type { RenameItemDto } from './dto/rename-files.dto';
+import {
+  RenameFilesResponseDto,
+  RenameItemNodeType,
+  RenameItemResultDto,
+} from './dto/rename-files.dto';
 import type { FileUploadResponseDto } from './dto/upload-file-response.dto';
 import type { UploadMode } from './dto/upload-file.dto';
 import { FOLDER_NODE_TYPE, MARKER_NAME } from './files.constants';
@@ -82,6 +103,12 @@ const buildDialFileUrl = (bucket: string, path: string): string =>
 const getFileNameFromPath = (path: string): string =>
   path.split('/').filter(Boolean).pop() ?? 'file';
 
+const safeDecodePathForCompare = (path: string): string =>
+  path.split('/').map(safeDecodeURIComponent).join('/');
+
+const buildDialFileResourceUrl = (bucket: string, path: string): string =>
+  buildDialFileUrl(bucket, encodeDialResourcePath(path));
+
 const buildUploadFormData = (file: UploadedFile, path: string): FormData => {
   const formData = new FormData();
   const fileName = file.originalname ?? getFileNameFromPath(path);
@@ -93,13 +120,52 @@ const buildUploadFormData = (file: UploadedFile, path: string): FormData => {
   return formData;
 };
 
-@Injectable()
-export class FilesService extends AppService {
-  protected override readonly logger = new Logger(FilesService.name);
-
-  constructor(configService: ConfigService<EnvironmentVariables>) {
-    super(configService);
+const getRenameErrorMessage = (error: unknown): string => {
+  try {
+    handleDialSdkError(error, 'files.renameItem');
+  } catch (err) {
+    if (err instanceof HttpException) {
+      if (err.getStatus() === HttpStatus.CONFLICT) return 'Conflict';
+      if (err.getStatus() === HttpStatus.FORBIDDEN) return 'Forbidden';
+      if (err.getStatus() === HttpStatus.NOT_FOUND) return 'Not found';
+    }
   }
+
+  return 'Rename failed';
+};
+
+const getResourceOperationErrorMessage = (
+  error: unknown,
+  operationTag: string,
+  fallback: string,
+): string => {
+  try {
+    handleDialSdkError(error, operationTag);
+  } catch (err) {
+    if (err instanceof HttpException) {
+      if (err.getStatus() === HttpStatus.CONFLICT) return 'Conflict';
+      if (err.getStatus() === HttpStatus.FORBIDDEN) return 'Forbidden';
+      if (err.getStatus() === HttpStatus.NOT_FOUND) return 'Not found';
+    }
+  }
+
+  return fallback;
+};
+
+const getCopyErrorMessage = (error: unknown): string =>
+  getResourceOperationErrorMessage(error, 'files.copyItem', 'Copy failed');
+
+const getMoveErrorMessage = (error: unknown): string =>
+  getResourceOperationErrorMessage(error, 'files.moveItem', 'Move failed');
+
+@Injectable()
+export class FilesService {
+  private readonly logger = new Logger(FilesService.name);
+
+  constructor(
+    private readonly dialClient: DialClientService,
+    private readonly configService: ConfigService<EnvironmentVariables>,
+  ) {}
 
   private getTimeoutMs(): number {
     return this.configService.get<number>('FILE_TRANSFER_TIMEOUT_MS') ?? 30_000;
@@ -120,10 +186,8 @@ export class FilesService extends AppService {
     nextToken?: string;
     permissions?: string[];
   }> {
-    const { data, error, response } = await this.client.getFileMetadata(
-      bucket,
-      normalizedPath,
-      {
+    const { data, error, response } =
+      await this.dialClient.client.getFileMetadata(bucket, normalizedPath, {
         headers: getBearerAuthHeaders(at),
         params: {
           query: {
@@ -134,14 +198,18 @@ export class FilesService extends AppService {
           },
         },
         signal: AbortSignal.timeout(this.getTimeoutMs()),
-      },
-    );
+      });
 
     if (error != null) {
       this.logger.warn(
         `DIAL Core listFiles returned error: status=${response.status}, bucket=${bucket}`,
       );
-      return handleDialError({ status: response.status });
+      return handleDialSdkError(
+        error,
+        'files.listFiles',
+        this.logger,
+        response,
+      );
     }
 
     const dialData = (data ?? {}) as typeof data & {
@@ -172,18 +240,15 @@ export class FilesService extends AppService {
       const conditionalHeaders =
         uploadMode === 'create-only' ? { 'If-None-Match': '*' } : {};
 
-      const { data, error, response } = (await this.client.uploadFile(
-        bucket,
-        path,
-        {
+      const { data, error, response } =
+        (await this.dialClient.client.uploadFile(bucket, path, {
           headers: {
             ...getBearerAuthHeaders(token),
             ...conditionalHeaders,
           },
           body: buildUploadFormData(file, path) as unknown as string,
           signal: AbortSignal.timeout(this.getTimeoutMs()),
-        },
-      )) as { data?: { url?: string }; error?: unknown; response: Response };
+        })) as { data?: { url?: string }; error?: unknown; response: Response };
 
       if (error != null) {
         if (response.status === 412) {
@@ -198,7 +263,12 @@ export class FilesService extends AppService {
         this.logger.warn(
           `DIAL Core upload returned error: status=${response.status}, bucket=${bucket}, path=${path}`,
         );
-        return handleDialError({ status: response.status });
+        return handleDialSdkError(
+          error,
+          'files.uploadFile',
+          this.logger,
+          response,
+        );
       }
 
       const url = buildDialFileUrl(bucket, path);
@@ -211,7 +281,7 @@ export class FilesService extends AppService {
         throw err;
       }
       this.logger.error(`Upload failed for ${bucket}/${path}`, err);
-      return handleDialError(err);
+      return handleDialSdkError(err, 'files.uploadFile', this.logger);
     }
   }
 
@@ -284,7 +354,7 @@ export class FilesService extends AppService {
       };
     } catch (err) {
       this.logger.warn(`listFiles failed for bucket=${bucket}`, err);
-      return handleDialError(err);
+      return handleDialSdkError(err, 'files.listFiles', this.logger);
     }
   }
 
@@ -310,17 +380,23 @@ export class FilesService extends AppService {
     at: string,
   ): Promise<ListFilesResponseDto> {
     try {
-      const { data, error, response } = await this.client.getSharedResources({
-        headers: getBearerAuthHeaders(at),
-        body: { resourceTypes: ['FILE'], with: 'me' },
-        signal: AbortSignal.timeout(this.getTimeoutMs()),
-      });
+      const { data, error, response } =
+        await this.dialClient.client.getSharedResources({
+          headers: getBearerAuthHeaders(at),
+          body: { resourceTypes: ['FILE'], with: 'me', includeUserInfo: true },
+          signal: AbortSignal.timeout(this.getTimeoutMs()),
+        });
 
       if (error != null) {
         this.logger.warn(
           `DIAL Core getSharedResources returned error: status=${response.status}`,
         );
-        return handleDialError({ status: response.status });
+        return handleDialSdkError(
+          error,
+          'files.listSharedFiles',
+          this.logger,
+          response,
+        );
       }
 
       const sharedData = (data ?? {}) as typeof data & {
@@ -343,7 +419,7 @@ export class FilesService extends AppService {
       return { bucket: '', path: query.path ?? '', items };
     } catch (err) {
       this.logger.warn('listSharedFiles failed', err);
-      return handleDialError(err);
+      return handleDialSdkError(err, 'files.listSharedFiles', this.logger);
     }
   }
 
@@ -357,34 +433,29 @@ export class FilesService extends AppService {
         `Getting file metadata from DIAL Core: bucket=${bucket}, path=${path}`,
       );
 
-      const { data, error, response } = await this.client.getFileMetadata(
-        bucket,
-        path,
-        {
+      const { data, error, response } =
+        await this.dialClient.client.getFileMetadata(bucket, path, {
           headers: getBearerAuthHeaders(token),
           signal: AbortSignal.timeout(this.getTimeoutMs()),
-        },
-      );
+        });
 
       if (error != null) {
         this.logger.warn(
           `DIAL Core getFileMetadata returned error: status=${response.status}, bucket=${bucket}, path=${path}`,
         );
-        return handleDialError({ status: response.status });
-      }
-
-      if (data == null) {
-        this.logger.warn(
-          `DIAL Core getFileMetadata returned no data: bucket=${bucket}, path=${path}`,
+        return handleDialSdkError(
+          error,
+          'files.getFileMetadata',
+          this.logger,
+          response,
         );
-        return handleDialError({ status: response.status });
       }
 
       this.logger.debug(
         `getFileMetadata succeeded: bucket=${bucket}, path=${path}`,
       );
 
-      const fileData = data as typeof data & { etag?: string };
+      const fileData = data as components['schemas']['FileMetadata'];
       return {
         name: fileData.name,
         nodeType: fileData.nodeType,
@@ -405,7 +476,7 @@ export class FilesService extends AppService {
         `getFileMetadata failed for bucket=${bucket}, path=${path}`,
         err,
       );
-      return handleDialError(err);
+      return handleDialSdkError(err, 'files.getFileMetadata', this.logger);
     }
   }
 
@@ -435,7 +506,7 @@ export class FilesService extends AppService {
         data,
         error: metaError,
         response: metaResponse,
-      } = await this.client.getFileMetadata(bucket, markerPath, {
+      } = await this.dialClient.client.getFileMetadata(bucket, markerPath, {
         headers: getBearerAuthHeaders(at),
         signal: AbortSignal.timeout(this.getTimeoutMs()),
       });
@@ -461,7 +532,9 @@ export class FilesService extends AppService {
           `createFolder marker probe mismatch: requested=${markerPath}, probeName=${probe.name ?? '(none)'}, probeUrl=${probe.url ?? '(none)'}`,
         );
       } else if (metaError != null && metaStatus !== 404) {
-        handleDialError({ status: metaStatus });
+        handleDialSdkError(metaError, 'files.createFolder', this.logger, {
+          status: metaStatus,
+        });
       }
 
       await this.uploadFile(
@@ -487,7 +560,7 @@ export class FilesService extends AppService {
         `createFolder failed for ${bucket}/${normalizedParent}${name}`,
         err,
       );
-      return handleDialError(err);
+      return handleDialSdkError(err, 'files.createFolder', this.logger);
     }
   }
 
@@ -521,7 +594,7 @@ export class FilesService extends AppService {
     const relativePath = this.toRelativePath(path, bucket);
 
     try {
-      const { error, response } = (await this.client.downloadFile(
+      const { error, response } = (await this.dialClient.client.downloadFile(
         bucket,
         relativePath,
         {
@@ -535,7 +608,12 @@ export class FilesService extends AppService {
       };
 
       if (error != null) {
-        return handleDialError({ status: response.status });
+        return handleDialSdkError(
+          error,
+          'files.downloadFile',
+          this.logger,
+          response,
+        );
       }
 
       const headers = Object.fromEntries(
@@ -547,7 +625,7 @@ export class FilesService extends AppService {
       return { stream: response.body as ReadableStream, headers };
     } catch (err) {
       this.logger.error(`Download failed for ${bucket}/${path}`, err);
-      return handleDialError(err);
+      return handleDialSdkError(err, 'files.downloadFile', this.logger);
     }
   }
 
@@ -557,8 +635,10 @@ export class FilesService extends AppService {
     archiveRoot: string,
     at: string,
   ): Promise<ExpandedFile[]> {
-    // DialFile.path is the full DIAL resource path: "files/{bucket}/reports/"
-    // Both the metadata API and download SDK expect the relative path: "reports/"
+    /*
+     * DialFile.path is the full DIAL resource path: "files/{bucket}/reports/"
+     * Both the metadata API and download SDK expect the relative path: "reports/"
+     */
     const relFolderPath = this.toRelativePath(folderPath, bucket);
 
     const results: ExpandedFile[] = [];
@@ -571,25 +651,25 @@ export class FilesService extends AppService {
 
     do {
       page += 1;
-      const { data, error, response } = await this.client.getFileMetadata(
-        bucket,
-        relFolderPath,
-        {
+      const { data, error, response } =
+        await this.dialClient.client.getFileMetadata(bucket, relFolderPath, {
           headers: getBearerAuthHeaders(at),
           params: {
             query: { recursive: true, limit: 1000, token },
           },
           signal: AbortSignal.timeout(this.getTimeoutMs()),
-        },
-      );
+        });
 
       if (error != null) {
         this.logger.warn(
           `Archive folder metadata failed: bucket=${bucket}, path=${relFolderPath}, page=${page}, status=${response.status}`,
         );
-        return handleDialError({
-          status: (response as { status: number }).status,
-        });
+        return handleDialSdkError(
+          error,
+          'files.expandFolderContents',
+          this.logger,
+          response as { status: number },
+        );
       }
 
       const dialData = (data ?? {}) as typeof data & {
@@ -619,9 +699,11 @@ export class FilesService extends AppService {
         const rawUrl = item.url ?? item.name ?? '';
         const relItemPath = this.toRelativePath(rawUrl, bucket);
 
-        const relative = relItemPath.startsWith(relFolderPath)
-          ? relItemPath.slice(relFolderPath.length)
-          : (item.name ?? relItemPath);
+        const relative = this.getRelativeChildPath(
+          relItemPath,
+          relFolderPath,
+          item.name ?? relItemPath,
+        );
 
         const archivePath = this.buildArchivePath(archiveRoot, relative);
         if (archivePath == null) {
@@ -661,6 +743,27 @@ export class FilesService extends AppService {
     }
     const joined = root ? `${root}/${relative}` : relative;
     return joined;
+  }
+
+  private getRelativeChildPath(
+    childPath: string,
+    folderPath: string,
+    fallback: string,
+  ): string {
+    const folderPrefix = folderPath.endsWith('/')
+      ? folderPath
+      : `${folderPath}/`;
+    if (childPath.startsWith(folderPrefix)) {
+      return childPath.slice(folderPrefix.length);
+    }
+
+    const comparableChildPath = safeDecodePathForCompare(childPath);
+    const comparableFolderPrefix = safeDecodePathForCompare(folderPrefix);
+    if (comparableChildPath.startsWith(comparableFolderPrefix)) {
+      return comparableChildPath.slice(comparableFolderPrefix.length);
+    }
+
+    return fallback;
   }
 
   async downloadArchive(
@@ -933,7 +1036,7 @@ export class FilesService extends AppService {
   ): Promise<DeleteItemResultDto> {
     this.logger.debug(`deleteFileItem: bucket=${bucket}, relPath=${relPath}`);
     try {
-      const { error, response } = (await this.client.deleteFile(
+      const { error, response } = (await this.dialClient.client.deleteFile(
         bucket,
         relPath,
         {
@@ -1006,6 +1109,417 @@ export class FilesService extends AppService {
     }
 
     return { path: item.path, success: true };
+  }
+
+  async renameFiles(
+    items: RenameItemDto[],
+    at: string,
+  ): Promise<RenameFilesResponseDto> {
+    this.logger.log(`Rename files started: batchSize=${items.length}`);
+
+    const results: RenameItemResultDto[] = await Promise.all(
+      items.map((item) => this.renameItem(item, at)),
+    );
+
+    const successCount = results.filter((r) => r.success).length;
+    this.logger.log(
+      `Rename files completed: batchSize=${items.length}, successCount=${successCount}, failedCount=${items.length - successCount}`,
+    );
+
+    return { results };
+  }
+
+  private async renameItem(
+    item: RenameItemDto,
+    at: string,
+  ): Promise<RenameItemResultDto> {
+    if (item.nodeType === RenameItemNodeType.Folder) {
+      return this.renameFolderItem(
+        item.bucket,
+        item.sourcePath,
+        item.destinationPath,
+        at,
+      );
+    }
+    return this.renameFileItem(
+      item.bucket,
+      item.sourcePath,
+      item.destinationPath,
+      at,
+    );
+  }
+
+  private async renameFileItem(
+    bucket: string,
+    sourcePath: string,
+    destPath: string,
+    at: string,
+  ): Promise<RenameItemResultDto> {
+    const sourceUrl = buildDialFileResourceUrl(bucket, sourcePath);
+    const destinationUrl = buildDialFileResourceUrl(bucket, destPath);
+
+    try {
+      const { error, response } = (await this.dialClient.client.moveResource({
+        headers: getBearerAuthHeaders(at),
+        body: { sourceUrl, destinationUrl, overwrite: false },
+        signal: AbortSignal.timeout(this.getTimeoutMs()),
+      })) as { error?: unknown; response: { status: number } };
+
+      if (error == null) {
+        return { sourcePath, destinationPath: destPath, success: true };
+      }
+
+      const status = response.status;
+      this.logger.warn(
+        `renameFileItem failed: bucket=${bucket}, sourcePath=${sourcePath}, destPath=${destPath}, status=${status}`,
+      );
+
+      return {
+        sourcePath,
+        destinationPath: destPath,
+        success: false,
+        error: getRenameErrorMessage({ status }),
+      };
+    } catch (err) {
+      this.logger.error(
+        `renameFileItem exception: bucket=${bucket}, sourcePath=${sourcePath}, err=${err instanceof Error ? err.message : String(err)}`,
+      );
+      return {
+        sourcePath,
+        destinationPath: destPath,
+        success: false,
+        error: getRenameErrorMessage(err),
+      };
+    }
+  }
+
+  private async renameFolderItem(
+    bucket: string,
+    sourceFolderPath: string,
+    destFolderPath: string,
+    at: string,
+  ): Promise<RenameItemResultDto> {
+    const srcPrefix = sourceFolderPath.endsWith('/')
+      ? sourceFolderPath
+      : `${sourceFolderPath}/`;
+    const destPrefix = destFolderPath.endsWith('/')
+      ? destFolderPath
+      : `${destFolderPath}/`;
+
+    let children: ExpandedFile[];
+    try {
+      children = await this.expandFolderContents(bucket, srcPrefix, '', at);
+    } catch {
+      return {
+        sourcePath: sourceFolderPath,
+        destinationPath: destFolderPath,
+        success: false,
+        error: 'Rename failed',
+      };
+    }
+
+    let anyFailed = false;
+    for (const child of children) {
+      const relative = child.archivePath;
+      const destChildPath = `${destPrefix}${relative}`;
+      const result = await this.renameFileItem(
+        bucket,
+        child.path,
+        destChildPath,
+        at,
+      );
+      if (!result.success) {
+        anyFailed = true;
+      }
+    }
+
+    if (anyFailed) {
+      return {
+        sourcePath: sourceFolderPath,
+        destinationPath: destFolderPath,
+        success: false,
+        error: 'Partial rename',
+      };
+    }
+    return {
+      sourcePath: sourceFolderPath,
+      destinationPath: destFolderPath,
+      success: true,
+    };
+  }
+
+  async copyFiles(
+    items: CopyItemDto[],
+    at: string,
+  ): Promise<CopyFilesResponseDto> {
+    this.logger.log(`Copy files started: batchSize=${items.length}`);
+
+    const results: CopyItemResultDto[] = await Promise.all(
+      items.map((item) => this.copyItem(item, at)),
+    );
+
+    const successCount = results.filter((r) => r.success).length;
+    this.logger.log(
+      `Copy files completed: batchSize=${items.length}, successCount=${successCount}, failedCount=${items.length - successCount}`,
+    );
+
+    return { results };
+  }
+
+  private async copyItem(
+    item: CopyItemDto,
+    at: string,
+  ): Promise<CopyItemResultDto> {
+    if (item.nodeType === CopyItemNodeType.Folder) {
+      return this.copyFolderItem(
+        item.bucket,
+        item.sourcePath,
+        item.destinationPath,
+        at,
+      );
+    }
+    return this.copyFileItem(
+      item.bucket,
+      item.sourcePath,
+      item.destinationPath,
+      at,
+    );
+  }
+
+  private async copyFileItem(
+    bucket: string,
+    sourcePath: string,
+    destPath: string,
+    at: string,
+  ): Promise<CopyItemResultDto> {
+    const sourceUrl = buildDialFileResourceUrl(bucket, sourcePath);
+    const destinationUrl = buildDialFileResourceUrl(bucket, destPath);
+
+    try {
+      const { error, response } = (await this.dialClient.client.copyResource({
+        headers: getBearerAuthHeaders(at),
+        body: { sourceUrl, destinationUrl, overwrite: false },
+        signal: AbortSignal.timeout(this.getTimeoutMs()),
+      })) as { error?: unknown; response: { status: number } };
+
+      if (error == null) {
+        return { sourcePath, destinationPath: destPath, success: true };
+      }
+
+      const status = response.status;
+      this.logger.warn(
+        `copyFileItem failed: bucket=${bucket}, sourcePath=${sourcePath}, destPath=${destPath}, status=${status}`,
+      );
+
+      return {
+        sourcePath,
+        destinationPath: destPath,
+        success: false,
+        error: getCopyErrorMessage({ status }),
+      };
+    } catch (err) {
+      this.logger.error(
+        `copyFileItem exception: bucket=${bucket}, sourcePath=${sourcePath}, err=${err instanceof Error ? err.message : String(err)}`,
+      );
+      return {
+        sourcePath,
+        destinationPath: destPath,
+        success: false,
+        error: getCopyErrorMessage(err),
+      };
+    }
+  }
+
+  private async copyFolderItem(
+    bucket: string,
+    sourceFolderPath: string,
+    destFolderPath: string,
+    at: string,
+  ): Promise<CopyItemResultDto> {
+    const srcPrefix = sourceFolderPath.endsWith('/')
+      ? sourceFolderPath
+      : `${sourceFolderPath}/`;
+    const destPrefix = destFolderPath.endsWith('/')
+      ? destFolderPath
+      : `${destFolderPath}/`;
+
+    let children: ExpandedFile[];
+    try {
+      children = await this.expandFolderContents(bucket, srcPrefix, '', at);
+    } catch {
+      return {
+        sourcePath: sourceFolderPath,
+        destinationPath: destFolderPath,
+        success: false,
+        error: 'Copy failed',
+      };
+    }
+
+    let anyFailed = false;
+    for (const child of children) {
+      const relative = child.archivePath;
+      const destChildPath = `${destPrefix}${relative}`;
+      const result = await this.copyFileItem(
+        bucket,
+        child.path,
+        destChildPath,
+        at,
+      );
+      if (!result.success) {
+        anyFailed = true;
+      }
+    }
+
+    if (anyFailed) {
+      return {
+        sourcePath: sourceFolderPath,
+        destinationPath: destFolderPath,
+        success: false,
+        error: 'Partial copy',
+      };
+    }
+    return {
+      sourcePath: sourceFolderPath,
+      destinationPath: destFolderPath,
+      success: true,
+    };
+  }
+
+  async moveFiles(
+    items: MoveItemDto[],
+    at: string,
+  ): Promise<MoveFilesResponseDto> {
+    this.logger.log(`Move files started: batchSize=${items.length}`);
+
+    const results: MoveItemResultDto[] = await Promise.all(
+      items.map((item) => this.moveItem(item, at)),
+    );
+
+    const successCount = results.filter((r) => r.success).length;
+    this.logger.log(
+      `Move files completed: batchSize=${items.length}, successCount=${successCount}, failedCount=${items.length - successCount}`,
+    );
+
+    return { results };
+  }
+
+  private async moveItem(
+    item: MoveItemDto,
+    at: string,
+  ): Promise<MoveItemResultDto> {
+    if (item.nodeType === MoveItemNodeType.Folder) {
+      return this.moveFolderItem(
+        item.bucket,
+        item.sourcePath,
+        item.destinationPath,
+        at,
+      );
+    }
+    return this.moveFileItem(
+      item.bucket,
+      item.sourcePath,
+      item.destinationPath,
+      at,
+    );
+  }
+
+  private async moveFileItem(
+    bucket: string,
+    sourcePath: string,
+    destPath: string,
+    at: string,
+  ): Promise<MoveItemResultDto> {
+    const sourceUrl = buildDialFileResourceUrl(bucket, sourcePath);
+    const destinationUrl = buildDialFileResourceUrl(bucket, destPath);
+
+    try {
+      const { error, response } = (await this.dialClient.client.moveResource({
+        headers: getBearerAuthHeaders(at),
+        body: { sourceUrl, destinationUrl, overwrite: false },
+        signal: AbortSignal.timeout(this.getTimeoutMs()),
+      })) as { error?: unknown; response: { status: number } };
+
+      if (error == null) {
+        return { sourcePath, destinationPath: destPath, success: true };
+      }
+
+      const status = response.status;
+      this.logger.warn(
+        `moveFileItem failed: bucket=${bucket}, sourcePath=${sourcePath}, destPath=${destPath}, status=${status}`,
+      );
+
+      return {
+        sourcePath,
+        destinationPath: destPath,
+        success: false,
+        error: getMoveErrorMessage({ status }),
+      };
+    } catch (err) {
+      this.logger.error(
+        `moveFileItem exception: bucket=${bucket}, sourcePath=${sourcePath}, err=${err instanceof Error ? err.message : String(err)}`,
+      );
+      return {
+        sourcePath,
+        destinationPath: destPath,
+        success: false,
+        error: getMoveErrorMessage(err),
+      };
+    }
+  }
+
+  private async moveFolderItem(
+    bucket: string,
+    sourceFolderPath: string,
+    destFolderPath: string,
+    at: string,
+  ): Promise<MoveItemResultDto> {
+    const srcPrefix = sourceFolderPath.endsWith('/')
+      ? sourceFolderPath
+      : `${sourceFolderPath}/`;
+    const destPrefix = destFolderPath.endsWith('/')
+      ? destFolderPath
+      : `${destFolderPath}/`;
+
+    let children: ExpandedFile[];
+    try {
+      children = await this.expandFolderContents(bucket, srcPrefix, '', at);
+    } catch {
+      return {
+        sourcePath: sourceFolderPath,
+        destinationPath: destFolderPath,
+        success: false,
+        error: 'Move failed',
+      };
+    }
+
+    let anyFailed = false;
+    for (const child of children) {
+      const relative = child.archivePath;
+      const destChildPath = `${destPrefix}${relative}`;
+      const result = await this.moveFileItem(
+        bucket,
+        child.path,
+        destChildPath,
+        at,
+      );
+      if (!result.success) {
+        anyFailed = true;
+      }
+    }
+
+    if (anyFailed) {
+      return {
+        sourcePath: sourceFolderPath,
+        destinationPath: destFolderPath,
+        success: false,
+        error: 'Partial move',
+      };
+    }
+    return {
+      sourcePath: sourceFolderPath,
+      destinationPath: destFolderPath,
+      success: true,
+    };
   }
 
   private fillArchiveDownloadPool(
@@ -1087,7 +1601,7 @@ export class FilesService extends AppService {
         data: downloadedStream,
         error,
         response,
-      } = (await this.client.downloadFile(file.bucket, file.path, {
+      } = (await this.dialClient.client.downloadFile(file.bucket, file.path, {
         headers: getBearerAuthHeaders(at),
         parseAs: 'stream',
         signal: AbortSignal.any([

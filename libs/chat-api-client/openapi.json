@@ -1,94 +1,6 @@
 {
   "openapi": "3.0.0",
   "paths": {
-    "/api/themes": {
-      "get": {
-        "description": "Fetches the complete theme configuration from the external themes service. Returns a JSON object containing all available themes with their properties, colors, and icon references. Results are cached for 5 minutes.",
-        "operationId": "getThemes",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Successfully retrieved theme configuration",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ThemeConfigResponseDto"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Theme configuration not found on the external service"
-          },
-          "502": {
-            "description": "External theme service returned an error response"
-          },
-          "503": {
-            "description": "Theme service is unavailable or request timed out"
-          }
-        },
-        "summary": "Get themes configuration",
-        "tags": ["themes"]
-      }
-    },
-    "/api/themes/icon": {
-      "get": {
-        "description": "Fetches a theme icon as SVG or PNG content from the external themes service. The icon name is validated to prevent path traversal attacks - only alphanumeric characters, dashes, underscores, and dots are allowed. Results are cached for 5 minutes.",
-        "operationId": "getThemeIcon",
-        "parameters": [
-          {
-            "name": "iconName",
-            "required": true,
-            "in": "query",
-            "description": "Icon filename (alphanumeric, dash, underscore, and dot only)",
-            "schema": {
-              "example": "icon-light.svg",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successfully retrieved icon content",
-            "content": {
-              "image/svg+xml": {
-                "schema": {
-                  "type": "string"
-                },
-                "example": "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"10\"/></svg>"
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid icon name (validation failed or path traversal attempt)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "example": {
-                    "statusCode": 400,
-                    "message": [
-                      "Icon name must contain only alphanumeric characters, dash, underscore, and dot"
-                    ],
-                    "error": "Bad Request"
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Icon not found on the external service"
-          },
-          "502": {
-            "description": "External theme service returned an error response"
-          },
-          "503": {
-            "description": "Theme service is unavailable or request timed out"
-          }
-        },
-        "summary": "Get theme icon",
-        "tags": ["themes"]
-      }
-    },
     "/api/health": {
       "get": {
         "description": "Returns a simple health check response indicating the application is running. Use this endpoint for load balancer health checks, monitoring, and deployment verification.",
@@ -412,6 +324,50 @@
         },
         "summary": "List available applications",
         "tags": ["applications"]
+      },
+      "post": {
+        "description": "Creates a new application for the authenticated session user by proxying DIAL Core. Invalidates the applications list cache on success.",
+        "operationId": "createApplication",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApplicationBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Application created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedApplicationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — missing or invalid fields"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "409": {
+            "description": "Application name already taken"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Create a new application",
+        "tags": ["applications"]
       }
     },
     "/api/v1/deployments": {
@@ -427,7 +383,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "enum": ["chat", "embeddings", "mcp", "custom_ui", "all"]
+                "enum": ["chat", "embedding", "mcp", "custom_ui", "all"]
               }
             }
           }
@@ -505,6 +461,102 @@
           }
         },
         "summary": "Get JSON Schema configuration for a deployment",
+        "tags": ["deployments"]
+      }
+    },
+    "/api/v1/deployments/{deployment}/limits": {
+      "get": {
+        "description": "Returns spent/limit statistics for a single deployment. Proxies GET /v1/deployments/{deployment_name}/limits using the caller's session access token. Not cached — every request hits DIAL Core for real-time usage data.",
+        "operationId": "getDeploymentLimits",
+        "parameters": [
+          {
+            "name": "deployment",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved deployment limits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentLimitsResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission to access deployment limits"
+          },
+          "404": {
+            "description": "Deployment limits not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "500": {
+            "description": "Internal server error"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Get deployment usage limits",
+        "tags": ["deployments"]
+      }
+    },
+    "/api/v1/deployments/{deployment}/details": {
+      "get": {
+        "description": "Fetches the full per-entity payload for a model, application, or toolset by id (dispatching to DIAL Core's getModel/getApplication/getToolset based on the resolved deployment type) and maps it into a frontend-safe DeploymentDetailsDto. Results are cached server-side for 60 seconds.",
+        "operationId": "getDeploymentDetails",
+        "parameters": [
+          {
+            "name": "deployment",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentDetailsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "404": {
+            "description": "Deployment not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Get full details for a single deployment",
         "tags": ["deployments"]
       }
     },
@@ -618,6 +670,32 @@
         "tags": ["user-config"]
       }
     },
+    "/api/v1/user-config/deployments/selected": {
+      "patch": {
+        "operationId": "updateSelectedDeployment",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSelectedDeploymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Selected deployment updated"
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "summary": "Set the selected deployment",
+        "tags": ["user-config"]
+      }
+    },
     "/api/v1/models": {
       "get": {
         "description": "Returns the list of DIAL Core deployments visible to the authenticated session user. Proxies GET /openai/models using the caller's session access token. Results are cached server-side for 30 seconds per user.",
@@ -711,6 +789,381 @@
         },
         "summary": "Get model by name",
         "tags": ["models"]
+      }
+    },
+    "/api/v1/toolsets": {
+      "get": {
+        "description": "Returns the list of DIAL Core toolsets visible to the authenticated session user. Proxies GET /openai/toolsets using the caller's session access token. Results are cached server-side for 30 seconds per user.",
+        "operationId": "listToolsets",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved toolset list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DialToolsetListResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission to list toolsets"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "500": {
+            "description": "Internal server error"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "List available toolsets",
+        "tags": ["toolsets"]
+      },
+      "post": {
+        "description": "Creates a new toolset for the authenticated session user by proxying DIAL Core. Invalidates the toolset list cache on success.",
+        "operationId": "createToolset",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolsetBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Toolset created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutatedToolsetDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — missing or invalid fields"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission"
+          },
+          "409": {
+            "description": "Toolset name already taken"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Create a new toolset",
+        "tags": ["toolsets"]
+      }
+    },
+    "/api/v1/toolsets/{toolsetName}": {
+      "get": {
+        "description": "Returns a single DIAL Core toolset by name for the authenticated session user. Proxies GET /openai/toolsets/{toolset_name} using the caller's session access token. Results are cached server-side for 60 seconds per user per toolset.",
+        "operationId": "getToolset",
+        "parameters": [
+          {
+            "name": "toolsetName",
+            "required": true,
+            "in": "path",
+            "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "example": "my-toolset",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved toolset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DialToolsetDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid toolset name — disallowed characters"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission to access this toolset"
+          },
+          "404": {
+            "description": "Toolset not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "500": {
+            "description": "Internal server error"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Get toolset by name",
+        "tags": ["toolsets"]
+      },
+      "patch": {
+        "description": "Updates an existing toolset for the authenticated session user by proxying DIAL Core. Invalidates the relevant caches on success.",
+        "operationId": "updateToolset",
+        "parameters": [
+          {
+            "name": "toolsetName",
+            "required": true,
+            "in": "path",
+            "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "example": "my-toolset",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolsetBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Toolset updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutatedToolsetDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid toolset name or body"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission"
+          },
+          "404": {
+            "description": "Toolset not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Update a toolset",
+        "tags": ["toolsets"]
+      },
+      "delete": {
+        "description": "Deletes a toolset for the authenticated session user by proxying DIAL Core. Invalidates the relevant caches on success.",
+        "operationId": "deleteToolset",
+        "parameters": [
+          {
+            "name": "toolsetName",
+            "required": true,
+            "in": "path",
+            "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "example": "my-toolset",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Toolset deleted successfully"
+          },
+          "400": {
+            "description": "Invalid toolset name"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission"
+          },
+          "404": {
+            "description": "Toolset not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Delete a toolset",
+        "tags": ["toolsets"]
+      }
+    },
+    "/api/v1/toolsets/{toolsetName}/login": {
+      "post": {
+        "description": "Submits API key or OAuth authorization-code credentials for a toolset by proxying DIAL Core (POST /v1/ops/toolset/signin). Credential payloads are never logged.",
+        "operationId": "loginToolset",
+        "parameters": [
+          {
+            "name": "toolsetName",
+            "required": true,
+            "in": "path",
+            "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "example": "my-toolset",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolsetLoginBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credentials submitted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolsetAuthResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid toolset name or body"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Submit toolset credentials",
+        "tags": ["toolsets"]
+      }
+    },
+    "/api/v1/toolsets/{toolsetName}/logout": {
+      "post": {
+        "description": "Revokes a toolset's credentials by proxying DIAL Core (POST /v1/ops/toolset/signout).",
+        "operationId": "logoutToolset",
+        "parameters": [
+          {
+            "name": "toolsetName",
+            "required": true,
+            "in": "path",
+            "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "example": "my-toolset",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolsetLogoutBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credentials revoked successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolsetAuthResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid toolset name or body"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Revoke toolset credentials",
+        "tags": ["toolsets"]
       }
     },
     "/api/v1/chat/completions": {
@@ -915,7 +1368,7 @@
         },
         "responses": {
           "200": {
-            "description": "Conversation renamed — new path returned",
+            "description": "Conversation renamed — display name updated, path unchanged",
             "content": {
               "application/json": {
                 "schema": {
@@ -932,9 +1385,6 @@
           },
           "404": {
             "description": "Conversation not found"
-          },
-          "409": {
-            "description": "Destination path already exists"
           },
           "502": {
             "description": "DIAL Core error"
@@ -1109,7 +1559,7 @@
     },
     "/api/v1/conversations/completions": {
       "post": {
-        "description": "Appends the user message to the conversation history, streams a completion from DIAL Core as SSE, and returns the raw event stream.",
+        "description": "Appends the user message to the conversation history, streams a completion from DIAL Core as SSE, persists the result, and returns the raw event stream. Backend owns persistence.",
         "operationId": "streamCompletion",
         "parameters": [],
         "requestBody": {
@@ -1138,6 +1588,9 @@
           "404": {
             "description": "Conversation not found"
           },
+          "409": {
+            "description": "Another generation is already active for this conversation"
+          },
           "429": {
             "description": "Rate limit exceeded"
           },
@@ -1149,6 +1602,118 @@
           }
         },
         "summary": "Stream a chat completion",
+        "tags": ["conversations"]
+      }
+    },
+    "/api/v1/conversations/completions/stop": {
+      "post": {
+        "operationId": "stopCompletion",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StopCompletionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Generation stopped successfully"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "404": {
+            "description": "No active generation found for the given path and generationId"
+          }
+        },
+        "summary": "Stop an active generation",
+        "tags": ["conversations"]
+      }
+    },
+    "/api/v1/conversations/watch": {
+      "post": {
+        "description": "Opens an SSE stream that proxies DIAL Core resource-update events for the given conversation path. Used by the frontend to detect when LLM naming completes.",
+        "operationId": "watchConversation",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchConversationBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of resource events"
+          },
+          "400": {
+            "description": "Invalid or missing path"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "502": {
+            "description": "DIAL Core subscription failed"
+          }
+        },
+        "summary": "Subscribe to conversation resource updates via SSE",
+        "tags": ["conversations"]
+      }
+    },
+    "/api/v1/conversations/generate-title": {
+      "post": {
+        "description": "Generates a title for an existing conversation using the operator-configured utility model, based on the most recent messages. The suggestion is returned but NOT persisted — the caller confirms the rename separately. Does not read or set the llmNamingDone flag.",
+        "operationId": "generateConversationTitle",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Conversation path (uuid__name). May contain slashes.",
+            "schema": {
+              "example": "gpt-4o__My Conversation__UUID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generated title suggestion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateTitleResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid path, or conversation has no content"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "404": {
+            "description": "Conversation not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "LLM title generation failed"
+          },
+          "503": {
+            "description": "LLM title generation unavailable or timed out"
+          }
+        },
+        "summary": "Generate an LLM-based title suggestion for a conversation",
         "tags": ["conversations"]
       }
     },
@@ -1825,6 +2390,141 @@
         "tags": ["files"]
       }
     },
+    "/api/v1/files/rename": {
+      "post": {
+        "operationId": "renameFiles",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameFilesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameFilesResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error"
+          },
+          "503": {
+            "description": "DIAL Core unreachable or timed out"
+          }
+        },
+        "summary": "Rename files and folders",
+        "tags": ["files"]
+      }
+    },
+    "/api/v1/files/copy": {
+      "post": {
+        "operationId": "copyFiles",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopyFilesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CopyFilesResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error"
+          },
+          "503": {
+            "description": "DIAL Core unreachable or timed out"
+          }
+        },
+        "summary": "Copy files and folders",
+        "tags": ["files"]
+      }
+    },
+    "/api/v1/files/move": {
+      "post": {
+        "operationId": "moveFiles",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveFilesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveFilesResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error"
+          },
+          "503": {
+            "description": "DIAL Core unreachable or timed out"
+          }
+        },
+        "summary": "Move files and folders across folders",
+        "tags": ["files"]
+      }
+    },
     "/api/v1/files/download": {
       "get": {
         "operationId": "downloadFile",
@@ -1971,6 +2671,94 @@
         "summary": "Transcribe audio using the configured ASR model",
         "tags": ["transcription"]
       }
+    },
+    "/api/themes": {
+      "get": {
+        "description": "Fetches the complete theme configuration from the external themes service. Returns a JSON object containing all available themes with their properties, colors, and icon references. Results are cached for 5 minutes.",
+        "operationId": "getThemes",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved theme configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeConfigResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Theme configuration not found on the external service"
+          },
+          "502": {
+            "description": "External theme service returned an error response"
+          },
+          "503": {
+            "description": "Theme service is unavailable or request timed out"
+          }
+        },
+        "summary": "Get themes configuration",
+        "tags": ["themes"]
+      }
+    },
+    "/api/themes/icon": {
+      "get": {
+        "description": "Fetches a theme icon as SVG or PNG content from the external themes service. The icon name is validated to prevent path traversal attacks - only alphanumeric characters, dashes, underscores, and dots are allowed. Results are cached for 5 minutes.",
+        "operationId": "getThemeIcon",
+        "parameters": [
+          {
+            "name": "iconName",
+            "required": true,
+            "in": "query",
+            "description": "Icon filename (alphanumeric, dash, underscore, and dot only)",
+            "schema": {
+              "example": "icon-light.svg",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved icon content",
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"10\"/></svg>"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid icon name (validation failed or path traversal attempt)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "statusCode": 400,
+                    "message": [
+                      "Icon name must contain only alphanumeric characters, dash, underscore, and dot"
+                    ],
+                    "error": "Bad Request"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Icon not found on the external service"
+          },
+          "502": {
+            "description": "External theme service returned an error response"
+          },
+          "503": {
+            "description": "Theme service is unavailable or request timed out"
+          }
+        },
+        "summary": "Get theme icon",
+        "tags": ["themes"]
+      }
     }
   },
   "info": {
@@ -2020,78 +2808,6 @@
       }
     },
     "schemas": {
-      "ThemeDto": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "example": "light"
-          },
-          "displayName": {
-            "type": "string",
-            "example": "Light Theme"
-          },
-          "colors": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "example": {
-              "primary-color": "#ffffff"
-            }
-          },
-          "app-logo": {
-            "type": "string",
-            "example": "https://example.com/logo-light.svg"
-          }
-        },
-        "required": ["id", "displayName", "colors", "app-logo"]
-      },
-      "ThemeImagesDto": {
-        "type": "object",
-        "properties": {
-          "default-addon": {
-            "type": "string",
-            "example": "https://example.com/addon.png"
-          },
-          "default-model": {
-            "type": "string",
-            "example": "https://example.com/model.png"
-          },
-          "favicon": {
-            "type": "string",
-            "example": "https://example.com/favicon.ico"
-          },
-          "chat-logo-light": {
-            "type": "string",
-            "example": "chat-logo-light.svg"
-          },
-          "chat-logo-dark": {
-            "type": "string",
-            "example": "chat-logo-dark.svg"
-          },
-          "chat-favicon": {
-            "type": "string",
-            "example": "https://example.com/chat-favicon.png"
-          }
-        },
-        "required": ["default-addon", "default-model", "favicon"]
-      },
-      "ThemeConfigResponseDto": {
-        "type": "object",
-        "properties": {
-          "themes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ThemeDto"
-            }
-          },
-          "images": {
-            "$ref": "#/components/schemas/ThemeImagesDto"
-          }
-        },
-        "required": ["themes", "images"]
-      },
       "ProviderInfoDto": {
         "type": "object",
         "properties": {
@@ -2141,6 +2857,12 @@
             "type": "number",
             "description": "Maximum audio file size in bytes accepted by the transcription endpoint.",
             "example": 5242880
+          },
+          "defaultDeploymentId": {
+            "type": "string",
+            "description": "Operator-configured default deployment ID. Null when not configured.",
+            "example": "gpt-4o",
+            "nullable": true
           }
         },
         "required": ["asrModelId", "transcribeSizeLimitBytes"]
@@ -2261,6 +2983,11 @@
             "type": "string",
             "example": "A custom application."
           },
+          "intro": {
+            "type": "string",
+            "example": "Summarizes long documents in one line.",
+            "maxLength": 90
+          },
           "input_attachment_types": {
             "example": ["image/png"],
             "type": "array",
@@ -2287,6 +3014,76 @@
         },
         "required": ["data"]
       },
+      "CreateApplicationBodyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "My App"
+          },
+          "type": {
+            "type": "string",
+            "example": "https://mydial.epam.com/custom_application_schemas/quickapps2"
+          },
+          "description": {
+            "type": "string",
+            "example": "A custom application."
+          },
+          "iconUrl": {
+            "type": "string",
+            "example": "https://example.com/icon.svg"
+          },
+          "version": {
+            "type": "string",
+            "example": "1.0"
+          },
+          "topics": {
+            "example": ["nlp", "assistant"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "intro": {
+            "type": "string",
+            "example": "Summarizes long documents in one line.",
+            "maxLength": 90
+          },
+          "applicationProperties": {
+            "type": "object",
+            "example": {
+              "orchestrator": {
+                "system_prompt": {
+                  "type": "custom",
+                  "variables": {},
+                  "content": ""
+                }
+              },
+              "contexts": [],
+              "tool_sets": []
+            }
+          }
+        },
+        "required": ["name", "type"]
+      },
+      "CreatedApplicationDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "users/my-user/applications/my-app"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "My App"
+          },
+          "object": {
+            "type": "string",
+            "example": "application"
+          }
+        },
+        "required": ["id"]
+      },
       "DeploymentFeaturesDto": {
         "type": "object",
         "properties": {
@@ -2297,6 +3094,10 @@
           "temperature": {
             "type": "boolean",
             "description": "Whether the deployment supports temperature control"
+          },
+          "folderAttachments": {
+            "type": "boolean",
+            "description": "Whether the deployment supports attaching folders from the file manager"
           }
         },
         "required": ["systemPrompt", "temperature"]
@@ -2323,6 +3124,11 @@
           "description": {
             "type": "string",
             "description": "Description from DIAL Core"
+          },
+          "intro": {
+            "type": "string",
+            "description": "Short catalog-friendly intro from DIAL Core",
+            "maxLength": 90
           },
           "interfaces": {
             "description": "Interface types supported by this deployment",
@@ -2434,6 +3240,440 @@
           }
         }
       },
+      "LimitStatsDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number",
+            "example": 100
+          },
+          "used": {
+            "type": "number",
+            "example": 10
+          }
+        },
+        "required": ["total", "used"]
+      },
+      "DeploymentLimitsResponseDto": {
+        "type": "object",
+        "properties": {
+          "hourRequestStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "dayRequestStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "minuteTokenStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "dayTokenStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "weekTokenStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "monthTokenStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "minuteCostStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "dayCostStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "weekCostStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          },
+          "monthCostStats": {
+            "$ref": "#/components/schemas/LimitStatsDto"
+          }
+        }
+      },
+      "ModelCapabilitiesDto": {
+        "type": "object",
+        "properties": {
+          "completion": {
+            "type": "boolean",
+            "description": "True if the model is a completion"
+          },
+          "chatCompletion": {
+            "type": "boolean",
+            "description": "True if the model is a chat completion"
+          },
+          "embeddings": {
+            "type": "boolean",
+            "description": "True if the model is an embedding"
+          },
+          "fineTune": {
+            "type": "boolean",
+            "description": "True if it is a fine-tuned model"
+          },
+          "inference": {
+            "type": "boolean",
+            "description": "True if the model can be deployed"
+          },
+          "scaleTypes": {
+            "description": "Scale types of the model (defaults to [\"standard\"])",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ModelLimitsDto": {
+        "type": "object",
+        "properties": {
+          "maxTotalTokens": {
+            "type": "number",
+            "description": "Maximum number of tokens allowed in a completion request and response combined"
+          },
+          "maxPromptTokens": {
+            "type": "number",
+            "description": "Maximum number of tokens allowed in a completion request"
+          },
+          "maxCompletionTokens": {
+            "type": "number",
+            "description": "Maximum number of tokens allowed in a completion response"
+          }
+        }
+      },
+      "ModelPricingDto": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "type": "string",
+            "description": "The pricing unit"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Per-unit price for the completion request"
+          },
+          "completion": {
+            "type": "string",
+            "description": "Per-unit price for the completion response"
+          }
+        }
+      },
+      "DeploymentFeaturesDetailsDto": {
+        "type": "object",
+        "properties": {
+          "rate": {
+            "type": "boolean",
+            "description": "Supports the /rate endpoint"
+          },
+          "mcp": {
+            "type": "boolean",
+            "description": "Supports MCP requests"
+          },
+          "tokenize": {
+            "type": "boolean",
+            "description": "Supports the /tokenize endpoint"
+          },
+          "truncatePrompt": {
+            "type": "boolean",
+            "description": "Supports the /truncate_prompt endpoint"
+          },
+          "hasConfigurationSchema": {
+            "type": "boolean",
+            "description": "Exposes a JSON Schema configuration endpoint"
+          },
+          "systemPrompt": {
+            "type": "boolean",
+            "description": "Supports a custom system prompt"
+          },
+          "tools": {
+            "type": "boolean",
+            "description": "Supports tools/functions in chat completion requests"
+          },
+          "seed": {
+            "type": "boolean",
+            "description": "Supports the seed parameter"
+          },
+          "urlAttachments": {
+            "type": "boolean",
+            "description": "Supports URL attachments"
+          },
+          "folderAttachments": {
+            "type": "boolean",
+            "description": "Supports folder attachments"
+          },
+          "allowResume": {
+            "type": "boolean",
+            "description": "Supports resuming conversations"
+          },
+          "accessibleByPerRequestKey": {
+            "type": "boolean",
+            "description": "Accessible using a per-request API key"
+          },
+          "contentParts": {
+            "type": "boolean",
+            "description": "Supports content parts in messages"
+          },
+          "temperature": {
+            "type": "boolean",
+            "description": "Supports the temperature parameter"
+          },
+          "cache": {
+            "type": "boolean",
+            "description": "Supports LLM prompt caching"
+          },
+          "autoCaching": {
+            "type": "boolean",
+            "description": "Supports automatic prompt caching"
+          },
+          "parallelToolCalls": {
+            "type": "boolean",
+            "description": "Supports parallel tool calls"
+          },
+          "assistantAttachmentsInRequest": {
+            "type": "boolean",
+            "description": "Supports assistant attachments in the request"
+          },
+          "chatCompletion": {
+            "type": "boolean",
+            "description": "Supports chat completion requests"
+          },
+          "responsesApi": {
+            "type": "boolean",
+            "description": "Supports the responses API"
+          },
+          "maxTokensSupported": {
+            "type": "boolean",
+            "description": "Supports the max_tokens parameter"
+          },
+          "maxCompletionTokensSupported": {
+            "type": "boolean",
+            "description": "Supports the max_completion_tokens parameter"
+          },
+          "customTemperatureSupported": {
+            "type": "boolean",
+            "description": "Supports a custom temperature value"
+          },
+          "reasoningEfforts": {
+            "description": "Supported reasoning-effort levels, e.g. [\"low\",\"medium\",\"high\"]",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ModelDetailsDto": {
+        "type": "object",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/ModelCapabilitiesDto"
+          },
+          "lifecycleStatus": {
+            "type": "string",
+            "description": "Lifecycle status of the model"
+          },
+          "tokenizerModel": {
+            "type": "string",
+            "description": "Name of the model whose tokenization algorithm this model uses"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ModelLimitsDto"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/ModelPricingDto"
+          },
+          "features": {
+            "$ref": "#/components/schemas/DeploymentFeaturesDetailsDto"
+          },
+          "owner": {
+            "type": "string",
+            "description": "Owner of the deployment as reported by DIAL Core"
+          },
+          "inputAttachmentTypes": {
+            "description": "Accepted MIME types for input attachments",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "defaultMaxTokens": {
+            "type": "number",
+            "description": "Default max_tokens value applied when a request omits it"
+          },
+          "createdAt": {
+            "type": "number",
+            "description": "Timestamp of creation time from DIAL Core (e.g. 1714768496000)"
+          }
+        }
+      },
+      "ApplicationDetailsDto": {
+        "type": "object",
+        "properties": {
+          "applicationProperties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Non-secret custom application properties reported by DIAL Core"
+          },
+          "functionRuntime": {
+            "type": "string",
+            "description": "Runtime environment for the function"
+          },
+          "functionStatus": {
+            "type": "string",
+            "description": "Current deployment status of the function"
+          },
+          "routes": {
+            "description": "Custom route names exposed by the application",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "owner": {
+            "type": "string",
+            "description": "Owner of the deployment as reported by DIAL Core"
+          },
+          "features": {
+            "$ref": "#/components/schemas/DeploymentFeaturesDetailsDto"
+          },
+          "inputAttachmentTypes": {
+            "description": "Accepted MIME types for input attachments",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "applicationTypeSchemaId": {
+            "type": "string",
+            "description": "URI of the custom application type schema, when present"
+          },
+          "createdAt": {
+            "type": "number",
+            "description": "Timestamp of creation time from DIAL Core (e.g. 1714768496000)"
+          }
+        }
+      },
+      "ToolsetAuthSettingsDto": {
+        "type": "object",
+        "properties": {
+          "authenticationType": {
+            "type": "string",
+            "description": "Type of authentication",
+            "enum": ["OAUTH", "API_KEY", "NONE"]
+          },
+          "globalAuthStatus": {
+            "type": "string",
+            "description": "Whether the toolset has global (shared) credentials signed in",
+            "enum": ["SIGNED_IN", "SIGNED_OUT"]
+          },
+          "appLevelAuthStatus": {
+            "type": "string",
+            "description": "Whether the toolset has app-level credentials signed in",
+            "enum": ["SIGNED_IN", "SIGNED_OUT"]
+          },
+          "userLevelAuthStatus": {
+            "type": "string",
+            "description": "Whether the current user has user-level credentials signed in",
+            "enum": ["SIGNED_IN", "SIGNED_OUT"]
+          },
+          "scopesSupported": {
+            "description": "OAuth scopes supported by this toolset",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "authorizationEndpoint": {
+            "type": "string",
+            "description": "(OAuth only) Authorization endpoint"
+          },
+          "tokenEndpoint": {
+            "type": "string",
+            "description": "(OAuth only) Token endpoint"
+          },
+          "apiKeyHeader": {
+            "type": "string",
+            "description": "(API key only) Header name the API key is sent in"
+          },
+          "clientId": {
+            "type": "string",
+            "description": "(OAuth only) Public OAuth client id — not a secret"
+          },
+          "redirectUri": {
+            "type": "string",
+            "description": "(OAuth only) OAuth redirect URI"
+          },
+          "tokenEndpointAuthMethod": {
+            "type": "string",
+            "description": "(OAuth only) Token endpoint authentication method"
+          },
+          "codeChallenge": {
+            "type": "string",
+            "description": "(OAuth/PKCE only) PKCE code challenge — the challenge itself is not secret, only the verifier is"
+          },
+          "codeChallengeMethod": {
+            "type": "string",
+            "description": "(OAuth/PKCE only) PKCE challenge method (e.g. S256)"
+          }
+        }
+      },
+      "ToolsetDetailsDto": {
+        "type": "object",
+        "properties": {
+          "transport": {
+            "type": "string",
+            "description": "Transport supported by the MCP server (HTTP or SSE)"
+          },
+          "allowedTools": {
+            "description": "Names of tools allowed for use from this toolset",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allToolNames": {
+            "description": "Names of all tools supported by the underlying MCP server, regardless of whether they are allow-listed. From GET /v1/toolset/{id}/tools.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "authSettings": {
+            "$ref": "#/components/schemas/ToolsetAuthSettingsDto"
+          },
+          "owner": {
+            "type": "string",
+            "description": "Owner of the deployment as reported by DIAL Core"
+          },
+          "features": {
+            "$ref": "#/components/schemas/DeploymentFeaturesDetailsDto"
+          },
+          "createdAt": {
+            "type": "number",
+            "description": "Timestamp of creation time from DIAL Core (e.g. 1714768496000)"
+          }
+        }
+      },
+      "DeploymentDetailsDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The requested deployment id"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["model", "application", "toolset"]
+          },
+          "modelDetails": {
+            "$ref": "#/components/schemas/ModelDetailsDto"
+          },
+          "applicationDetails": {
+            "$ref": "#/components/schemas/ApplicationDetailsDto"
+          },
+          "toolsetDetails": {
+            "$ref": "#/components/schemas/ToolsetDetailsDto"
+          }
+        },
+        "required": ["id", "type"]
+      },
       "ConversationsConfigDto": {
         "type": "object",
         "properties": {
@@ -2472,6 +3712,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "selectedId": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": ["installed"]
@@ -2527,6 +3771,16 @@
           }
         },
         "required": ["id", "isInstalled"]
+      },
+      "UpdateSelectedDeploymentDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Deployment ID to set as selected, or null to clear.",
+            "nullable": true
+          }
+        }
       },
       "DialModelFeaturesDto": {
         "type": "object",
@@ -2602,6 +3856,33 @@
           "mcp": {
             "type": "boolean",
             "example": false
+          },
+          "chat_completion": {
+            "type": "boolean",
+            "example": false
+          },
+          "responses_api": {
+            "type": "boolean",
+            "example": false
+          },
+          "max_tokens_supported": {
+            "type": "boolean",
+            "example": true
+          },
+          "max_completion_tokens_supported": {
+            "type": "boolean",
+            "example": false
+          },
+          "custom_temperature_supported": {
+            "type": "boolean",
+            "example": true
+          },
+          "reasoning_efforts": {
+            "example": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -2789,6 +4070,352 @@
           }
         },
         "required": ["data"]
+      },
+      "DialToolsetAuthSettingsDto": {
+        "type": "object",
+        "properties": {
+          "authentication_type": {
+            "type": "string",
+            "example": "OAUTH",
+            "enum": ["OAUTH", "API_KEY", "NONE"]
+          },
+          "api_key_header": {
+            "type": "string",
+            "example": "X-Api-Key"
+          },
+          "client_id": {
+            "type": "string",
+            "example": "my-client-id"
+          },
+          "redirect_uri": {
+            "type": "string",
+            "example": ""
+          },
+          "authorization_endpoint": {
+            "type": "string",
+            "example": ""
+          },
+          "token_endpoint": {
+            "type": "string",
+            "example": ""
+          },
+          "code_challenge": {
+            "type": "string",
+            "example": "base64-url-code-challenge"
+          },
+          "code_challenge_method": {
+            "type": "string",
+            "example": "S256"
+          },
+          "scopes_supported": {
+            "example": ["scope1", "scope2"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "global_auth_status": {
+            "type": "string",
+            "example": "SIGNED_OUT",
+            "enum": ["SIGNED_IN", "SIGNED_OUT"]
+          },
+          "user_level_auth_status": {
+            "type": "string",
+            "example": "SIGNED_OUT",
+            "enum": ["SIGNED_IN", "SIGNED_OUT"]
+          }
+        },
+        "required": ["authentication_type"]
+      },
+      "DialToolsetDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "toolsets/encrypted-bucket/folder/toolset-name"
+          },
+          "toolset": {
+            "type": "string",
+            "example": "toolsets/encrypted-bucket/folder/toolset-name"
+          },
+          "display_name": {
+            "type": "string",
+            "example": "Toolset display name"
+          },
+          "display_version": {
+            "type": "string",
+            "example": "0.0.1"
+          },
+          "description": {
+            "type": "string",
+            "example": "My toolset description"
+          },
+          "intro": {
+            "type": "string",
+            "example": "Runs your toolset in one line.",
+            "maxLength": 90
+          },
+          "icon_url": {
+            "type": "string",
+            "example": ""
+          },
+          "owner": {
+            "type": "string",
+            "example": "Owner's name"
+          },
+          "object": {
+            "type": "string",
+            "example": "toolset"
+          },
+          "status": {
+            "type": "string",
+            "example": "succeeded"
+          },
+          "description_keywords": {
+            "example": ["keyword1", "keyword2"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reference": {
+            "type": "string",
+            "example": "ff5584b7-a82b-4f4f-bf42-5bf74a3893d6"
+          },
+          "max_retry_attempts": {
+            "type": "number",
+            "example": 2
+          },
+          "created_at": {
+            "type": "number",
+            "example": 1672534800
+          },
+          "updated_at": {
+            "type": "number",
+            "example": 1672534900
+          },
+          "features": {
+            "$ref": "#/components/schemas/DialModelFeaturesDto"
+          },
+          "endpoint": {
+            "type": "string",
+            "example": "https://my-toolset.example.com/mcp"
+          },
+          "transport": {
+            "type": "string",
+            "example": "HTTP"
+          },
+          "allowed_tools": {
+            "example": ["tool1", "tool2"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "auth_settings": {
+            "$ref": "#/components/schemas/DialToolsetAuthSettingsDto"
+          },
+          "is_installed": {
+            "type": "boolean",
+            "description": "Whether this toolset is installed by the current user"
+          },
+          "is_my": {
+            "type": "boolean",
+            "description": "True when the toolset id/path belongs to the current session user bucket"
+          }
+        },
+        "required": ["id", "toolset"]
+      },
+      "DialToolsetListResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DialToolsetDto"
+            }
+          }
+        },
+        "required": ["data"]
+      },
+      "ToolsetAuthSettingsBodyDto": {
+        "type": "object",
+        "properties": {
+          "authenticationType": {
+            "type": "string",
+            "enum": ["NONE", "API_KEY", "OAUTH"],
+            "example": "NONE"
+          },
+          "apiKeyHeader": {
+            "type": "string",
+            "example": "X-Api-Key"
+          },
+          "clientId": {
+            "type": "string",
+            "example": "my-client-id"
+          },
+          "clientSecret": {
+            "type": "string",
+            "example": "my-client-secret"
+          },
+          "authorizationEndpoint": {
+            "type": "string",
+            "example": "https://auth.example.com/authorize"
+          },
+          "tokenEndpoint": {
+            "type": "string",
+            "example": "https://auth.example.com/token"
+          },
+          "scopesSupported": {
+            "example": ["read", "write"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "redirectUri": {
+            "type": "string",
+            "example": "https://chat.example.com/toolset-editor/callback"
+          },
+          "codeChallengeMethod": {
+            "type": "string",
+            "example": "S256"
+          },
+          "codeChallenge": {
+            "type": "string",
+            "example": "abc123"
+          }
+        },
+        "required": ["authenticationType"]
+      },
+      "ToolsetBodyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "My toolset"
+          },
+          "version": {
+            "type": "string",
+            "example": "0.0.1"
+          },
+          "description": {
+            "type": "string",
+            "example": "My toolset description"
+          },
+          "iconUrl": {
+            "type": "string",
+            "example": "https://example.com/icon.svg"
+          },
+          "topics": {
+            "example": ["keyword1", "keyword2"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "intro": {
+            "type": "string",
+            "example": "Runs your toolset in one line.",
+            "maxLength": 90
+          },
+          "endpoint": {
+            "type": "string",
+            "example": "https://my-toolset.example.com/mcp"
+          },
+          "transport": {
+            "type": "string",
+            "enum": ["HTTP", "SSE"],
+            "example": "HTTP"
+          },
+          "allowedTools": {
+            "example": ["tool1", "tool2"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reference": {
+            "type": "string",
+            "example": "ff5584b7-a82b-4f4f-bf42-5bf74a3893d6"
+          },
+          "authSettings": {
+            "$ref": "#/components/schemas/ToolsetAuthSettingsBodyDto"
+          }
+        },
+        "required": ["name", "endpoint", "transport", "authSettings"]
+      },
+      "MutatedToolsetDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "toolsets/encrypted-bucket/My%20toolset__0.0.1"
+          }
+        },
+        "required": ["id"]
+      },
+      "ToolsetLoginBodyDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "example": "toolsets/encrypted-bucket/My%20toolset__0.0.1"
+          },
+          "credentialsLevel": {
+            "type": "string",
+            "enum": ["GLOBAL", "USER", "APP"],
+            "example": "USER"
+          },
+          "authenticationType": {
+            "type": "string",
+            "enum": ["NONE", "API_KEY", "OAUTH"],
+            "example": "API_KEY"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "API key value (API_KEY auth)."
+          },
+          "code": {
+            "type": "string",
+            "description": "OAuth authorization code (OAUTH auth)."
+          },
+          "redirectUri": {
+            "type": "string",
+            "description": "OAuth redirect URI used for the code exchange."
+          }
+        },
+        "required": ["url", "credentialsLevel", "authenticationType"]
+      },
+      "ToolsetAuthResultDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "ToolsetLogoutBodyDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "example": "toolsets/encrypted-bucket/My%20toolset__0.0.1"
+          },
+          "credentialsLevel": {
+            "type": "string",
+            "enum": ["GLOBAL", "USER", "APP"],
+            "example": "USER"
+          },
+          "authenticationType": {
+            "type": "string",
+            "enum": ["NONE", "API_KEY", "OAUTH"],
+            "example": "OAUTH"
+          }
+        },
+        "required": ["url", "credentialsLevel", "authenticationType"]
       },
       "AttachmentDto": {
         "type": "object",
@@ -3118,6 +4745,16 @@
           "assistantModelId": {
             "type": "string",
             "example": "anthropic.claude-v3-sonnet"
+          },
+          "responseFormat": {
+            "type": "string",
+            "example": "markdown",
+            "enum": ["markdown", "plain_text"]
+          },
+          "llmNamingDone": {
+            "type": "boolean",
+            "example": false,
+            "description": "When true, automatic LLM conversation naming has already run for this conversation."
           }
         },
         "required": [
@@ -3277,10 +4914,27 @@
       "SendCompletionDto": {
         "type": "object",
         "properties": {
+          "generationId": {
+            "type": "string",
+            "description": "Client-generated UUID identifying this generation attempt.",
+            "example": "cfeaf733-4ecd-4898-ad3b-d6835c0b5fc8",
+            "format": "uuid"
+          },
           "path": {
             "type": "string",
             "description": "Conversation path ({deploymentId}__{name}__{uuid}). May contain slashes.",
             "example": "gpt-4o__My Conversation__cfeaf733-4ecd-4898-ad3b-d6835c0b5fc8"
+          },
+          "model": {
+            "type": "string",
+            "description": "DIAL Core deployment name to use for completion",
+            "example": "anthropic.claude-v3-sonnet",
+            "maxLength": 256
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["append", "continue_last_user", "regenerate", "edit"],
+            "description": "How the message should be inserted into history. append = new user+assistant turn; continue_last_user = conversation already ends with a user message; regenerate = replace assistant at messageIndex; edit = replace user message at messageIndex."
           },
           "message": {
             "type": "string",
@@ -3288,10 +4942,10 @@
             "example": "What is the capital of France?",
             "maxLength": 4000
           },
-          "model": {
-            "type": "string",
-            "description": "DIAL Core deployment name to use for completion",
-            "example": "anthropic.claude-v3-sonnet"
+          "messageIndex": {
+            "type": "number",
+            "description": "Zero-based message index for regenerate and edit modes. Ignored for append/continue_last_user.",
+            "example": 3
           },
           "custom_content": {
             "description": "Extra DIAL payload attached to the user message",
@@ -3302,7 +4956,35 @@
             ]
           }
         },
-        "required": ["path", "message", "model"]
+        "required": ["generationId", "path", "model", "mode"]
+      },
+      "StopCompletionDto": {
+        "type": "object",
+        "properties": {
+          "generationId": {
+            "type": "string",
+            "description": "Generation ID that was returned by the active stream.",
+            "example": "cfeaf733-4ecd-4898-ad3b-d6835c0b5fc8",
+            "format": "uuid"
+          },
+          "path": {
+            "type": "string",
+            "description": "Conversation path of the active generation.",
+            "example": "gpt-4o__My Conversation__cfeaf733-4ecd-4898-ad3b-d6835c0b5fc8"
+          }
+        },
+        "required": ["generationId", "path"]
+      },
+      "WatchConversationBodyDto": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Conversation sub-path (bucket-stripped), e.g. \"gpt-4o__My Chat\".",
+            "example": "gpt-4o__My Chat"
+          }
+        },
+        "required": ["path"]
       },
       "RenameConversationBodyDto": {
         "type": "object",
@@ -3318,13 +5000,24 @@
       "RenameConversationResponseDto": {
         "type": "object",
         "properties": {
-          "newPath": {
+          "name": {
             "type": "string",
-            "description": "New relative path of the renamed conversation",
-            "example": "conversations/bucket/gpt-4o__My renamed chat__uuid"
+            "description": "Sanitised stored display name of the renamed conversation",
+            "example": "My renamed chat"
           }
         },
-        "required": ["newPath"]
+        "required": ["name"]
+      },
+      "GenerateTitleResponseDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Sanitised LLM-generated title suggestion for the conversation. Not persisted — the caller confirms the rename separately.",
+            "example": "Refactoring the auth module"
+          }
+        },
+        "required": ["name"]
       },
       "DuplicateConversationResponseDto": {
         "type": "object",
@@ -3709,6 +5402,252 @@
         },
         "required": ["results"]
       },
+      "RenameItemDto": {
+        "type": "object",
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "description": "DIAL Core bucket name",
+            "example": "my-bucket"
+          },
+          "sourcePath": {
+            "type": "string",
+            "description": "Relative source path within bucket",
+            "example": "reports/q1.pdf"
+          },
+          "destinationPath": {
+            "type": "string",
+            "description": "Relative destination path within bucket",
+            "example": "reports/q1-final.pdf"
+          },
+          "nodeType": {
+            "type": "string",
+            "enum": ["item", "folder"]
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name (last segment) for error messages",
+            "example": "q1.pdf"
+          }
+        },
+        "required": [
+          "bucket",
+          "sourcePath",
+          "destinationPath",
+          "nodeType",
+          "name"
+        ]
+      },
+      "RenameFilesDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RenameItemDto"
+            }
+          }
+        },
+        "required": ["items"]
+      },
+      "RenameItemResultDto": {
+        "type": "object",
+        "properties": {
+          "sourcePath": {
+            "type": "string",
+            "description": "Source path from request"
+          },
+          "destinationPath": {
+            "type": "string",
+            "description": "Destination path from request"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "true when all Core moveResource calls succeeded"
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable error reason when success is false"
+          }
+        },
+        "required": ["sourcePath", "destinationPath", "success"]
+      },
+      "RenameFilesResponseDto": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RenameItemResultDto"
+            }
+          }
+        },
+        "required": ["results"]
+      },
+      "CopyItemDto": {
+        "type": "object",
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "description": "DIAL Core bucket name",
+            "example": "my-bucket"
+          },
+          "sourcePath": {
+            "type": "string",
+            "description": "Relative source path within bucket",
+            "example": "reports/q1.pdf"
+          },
+          "destinationPath": {
+            "type": "string",
+            "description": "Relative destination path within bucket",
+            "example": "archive/q1.pdf"
+          },
+          "nodeType": {
+            "type": "string",
+            "enum": ["item", "folder"]
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name (last segment) for error messages",
+            "example": "q1.pdf"
+          }
+        },
+        "required": [
+          "bucket",
+          "sourcePath",
+          "destinationPath",
+          "nodeType",
+          "name"
+        ]
+      },
+      "CopyFilesDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CopyItemDto"
+            }
+          }
+        },
+        "required": ["items"]
+      },
+      "CopyItemResultDto": {
+        "type": "object",
+        "properties": {
+          "sourcePath": {
+            "type": "string",
+            "description": "Source path from request"
+          },
+          "destinationPath": {
+            "type": "string",
+            "description": "Destination path from request"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "true when all Core copyResource calls succeeded"
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable error reason when success is false"
+          }
+        },
+        "required": ["sourcePath", "destinationPath", "success"]
+      },
+      "CopyFilesResponseDto": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CopyItemResultDto"
+            }
+          }
+        },
+        "required": ["results"]
+      },
+      "MoveItemDto": {
+        "type": "object",
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "description": "DIAL Core bucket name",
+            "example": "my-bucket"
+          },
+          "sourcePath": {
+            "type": "string",
+            "description": "Relative source path within bucket",
+            "example": "inbox/draft.pdf"
+          },
+          "destinationPath": {
+            "type": "string",
+            "description": "Relative destination path within bucket",
+            "example": "reports/draft.pdf"
+          },
+          "nodeType": {
+            "type": "string",
+            "enum": ["item", "folder"]
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name (last segment) for error messages",
+            "example": "draft.pdf"
+          }
+        },
+        "required": [
+          "bucket",
+          "sourcePath",
+          "destinationPath",
+          "nodeType",
+          "name"
+        ]
+      },
+      "MoveFilesDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MoveItemDto"
+            }
+          }
+        },
+        "required": ["items"]
+      },
+      "MoveItemResultDto": {
+        "type": "object",
+        "properties": {
+          "sourcePath": {
+            "type": "string",
+            "description": "Source path from request"
+          },
+          "destinationPath": {
+            "type": "string",
+            "description": "Destination path from request"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "true when all Core moveResource calls succeeded"
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable error reason when success is false"
+          }
+        },
+        "required": ["sourcePath", "destinationPath", "success"]
+      },
+      "MoveFilesResponseDto": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MoveItemResultDto"
+            }
+          }
+        },
+        "required": ["results"]
+      },
       "RateMessageDto": {
         "type": "object",
         "properties": {
@@ -3753,6 +5692,78 @@
           }
         },
         "required": ["audioUrl", "mimeType"]
+      },
+      "ThemeDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "light"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Light Theme"
+          },
+          "colors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "example": {
+              "primary-color": "#ffffff"
+            }
+          },
+          "app-logo": {
+            "type": "string",
+            "example": "https://example.com/logo-light.svg"
+          }
+        },
+        "required": ["id", "displayName", "colors", "app-logo"]
+      },
+      "ThemeImagesDto": {
+        "type": "object",
+        "properties": {
+          "default-addon": {
+            "type": "string",
+            "example": "https://example.com/addon.png"
+          },
+          "default-model": {
+            "type": "string",
+            "example": "https://example.com/model.png"
+          },
+          "favicon": {
+            "type": "string",
+            "example": "https://example.com/favicon.ico"
+          },
+          "chat-logo-light": {
+            "type": "string",
+            "example": "chat-logo-light.svg"
+          },
+          "chat-logo-dark": {
+            "type": "string",
+            "example": "chat-logo-dark.svg"
+          },
+          "chat-favicon": {
+            "type": "string",
+            "example": "https://example.com/chat-favicon.png"
+          }
+        },
+        "required": ["default-addon", "default-model", "favicon"]
+      },
+      "ThemeConfigResponseDto": {
+        "type": "object",
+        "properties": {
+          "themes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThemeDto"
+            }
+          },
+          "images": {
+            "$ref": "#/components/schemas/ThemeImagesDto"
+          }
+        },
+        "required": ["themes", "images"]
       }
     }
   }

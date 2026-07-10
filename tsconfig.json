@@ -44,6 +44,12 @@
     },
     {
       "path": "./libs/attachment-input"
+    },
+    {
+      "path": "./libs/ai-dial-kit"
+    },
+    {
+      "path": "./libs/deployment-creation-form"
     }
   ]
 }

@@ -7,8 +7,6 @@ export interface SidebarPanelColors {
   background?: string;
   /** Divider border color on the inner edge. */
   border?: string;
-  /** Header bar bottom-border color. */
-  headerBorder?: string;
 }
 
 /** Typography overrides for the `SidebarPanel` component. */
@@ -84,6 +82,8 @@ export interface SidebarPanelProps {
   children: ReactNode;
   /** Extra class name(s) merged onto the panel width wrapper `<div>`. */
   className?: string;
+  /** CSS class applied to the header element. */
+  headerClassName?: string;
   /** Style overrides for colors, typography, and element class names. */
   styles?: SidebarPanelStyles;
   /**

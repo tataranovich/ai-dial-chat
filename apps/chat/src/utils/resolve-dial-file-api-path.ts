@@ -4,7 +4,7 @@ import { resolveRelativeDialFilePath } from './dial-file';
 
 /**
  * Converts a DialFileManager virtual path to an API folder path.
- * e.g. "/All files" → "", "/All files/reports/" → "reports/"
+ * e.g. "/My files" → "", "/My files/reports/" → "reports/"
  */
 export const virtualPathToApiPath = (
   virtualPath: string,
@@ -35,7 +35,13 @@ export const virtualPathToApiPath = (
       : withoutLeadingSlash;
   }
 
-  return stripped && !stripped.endsWith('/') ? `${stripped}/` : stripped;
+  /*
+   * Collapse duplicate slashes (e.g. "folder//name") that ui-kit may produce
+   * when concatenating paths, preventing BFF from forwarding malformed paths.
+   */
+  const collapsed = stripped.replace(/\/{2,}/g, '/');
+
+  return collapsed && !collapsed.endsWith('/') ? `${collapsed}/` : collapsed;
 };
 
 const looksLikeVirtualDialPath = (path: string, rootLabel: string): boolean =>

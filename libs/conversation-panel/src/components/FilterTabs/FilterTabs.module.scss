@@ -1,17 +1,23 @@
-// CSS custom-property references and their hex fallbacks.
-// Layout, spacing, and transitions live in Tailwind classes in the TSX file.
+.filterTabs {
+  background-color: var(--cp-filter-bg, transparent);
 
-.tab {
-  border-color: var(--cp-filter-tab-border, var(--stroke-primary, #2f3757));
+  .tab {
+    border-color: transparent;
+    background-color: transparent;
+    color: var(--text-tertiary, #808898);
 
-  &.tabActive {
-    border-color: var(
-      --cp-filter-tab-active-border,
-      var(--stroke-accent-secondary, #37babc)
-    );
-    background: var(
-      --cp-filter-tab-active-bg,
-      var(--bg-accent-secondary-alpha, #37babc2e)
-    );
+    &:hover {
+      color: var(--text-secondary);
+      background-color: rgba(92, 141, 234, 0.06);
+    }
+
+    > span {
+      text-align: center;
+    }
+
+    &.tabActive {
+      background-color: rgba(39, 100, 217, 0.07);
+      color: var(--text-secondary, #64748b);
+    }
   }
 }

@@ -5,15 +5,26 @@ import {
   FileManagerColumnKey,
 } from '@epam/ai-dial-ui-kit';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as useDialFileManagerModule from '../../../hooks/files/useDialFileManager';
 import type { UseDialFileManagerResult } from '../../../hooks/files/useDialFileManager';
 import DialFileManagerModal from '../DialFileManagerModal';
 
 vi.mock('../../../hooks/files/useDialFileManager');
+
 vi.mock('../../../context/NotificationContext', () => ({
   useNotification: () => ({ showNotification: mockShowNotification }),
 }));
+
+const { mockActiveTab, mockHandleTabChange } = vi.hoisted(() => ({
+  mockActiveTab: { value: undefined as string | undefined },
+  mockHandleTabChange: vi.fn(),
+}));
+
+const { mockShowNotification } = vi.hoisted(() => ({
+  mockShowNotification: vi.fn(),
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, params?: Record<string, string>) => {
@@ -32,27 +43,21 @@ vi.mock('react-i18next', () => ({
     },
   }),
 }));
-const { mockHandleTabChange } = vi.hoisted(() => ({
-  mockHandleTabChange: vi.fn(),
-}));
-const { mockShowNotification } = vi.hoisted(() => ({
-  mockShowNotification: vi.fn(),
-}));
 
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
   const { DialFileManagerTabs: Tabs, DialFileManagerActions: Actions } = actual;
   return {
     ...actual,
-    useDialFileManagerTabs: vi.fn().mockReturnValue({
-      activeTab: Tabs.MyFiles,
+    useDialFileManagerTabs: vi.fn().mockImplementation(() => ({
+      activeTab: mockActiveTab.value ?? Tabs.MyFiles,
       handleTabChange: mockHandleTabChange,
       tabs: [
         { id: Tabs.MyFiles, name: 'My files' },
         { id: Tabs.Shared, name: 'Shared with me' },
         { id: Tabs.Organization, name: 'Organization' },
       ],
-    }),
+    })),
     DialFileManager: ({
       className,
       gridClassName,
@@ -67,11 +72,22 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
       selectedPaths,
       onSelectedPathsChange,
       sharedWithMeIds,
+      conflictResolutionPopupOptions,
+      emptyStateTitle,
+      emptyStateDescription,
+      autoSelectUploadedItems,
     }: {
       className?: string;
       gridClassName?: string;
       gridOptions?: {
-        additionalGridOptions?: { domLayout?: string };
+        additionalGridOptions?: {
+          domLayout?: string;
+          rowSelection?: {
+            isRowSelectable?: (node: {
+              data?: { nodeType?: string; path?: string } | null;
+            }) => boolean;
+          };
+        };
         actionLabels?: Partial<Record<DialFileManagerActions, string>>;
         visibleColumns?: FileManagerColumnKey[];
       };
@@ -98,6 +114,25 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
       selectedPaths?: Set<string>;
       onSelectedPathsChange?: (paths: Set<string>) => void;
       sharedWithMeIds?: string[];
+      conflictResolutionPopupOptions?: {
+        singleFileTitle?: string;
+        multipleFilesTitle?: string;
+        actionLabels?: {
+          replace?: string;
+          duplicate?: string;
+          cancel?: string;
+        };
+        strategyLabels?: {
+          replaceAll?: string;
+          duplicateAll?: string;
+          decideForEach?: string;
+        };
+        confirmLabel?: string;
+        cancelLabel?: string;
+      };
+      emptyStateTitle?: string;
+      emptyStateDescription?: string;
+      autoSelectUploadedItems?: boolean;
     }) => (
       <div
         className={className}
@@ -128,6 +163,29 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
         data-shared-with-me-ids={
           sharedWithMeIds != null ? sharedWithMeIds.join(',') : 'none'
         }
+        data-conflict-single-title={
+          conflictResolutionPopupOptions?.singleFileTitle
+        }
+        data-conflict-multiple-title={
+          conflictResolutionPopupOptions?.multipleFilesTitle
+        }
+        data-conflict-replace={
+          conflictResolutionPopupOptions?.actionLabels?.replace
+        }
+        data-conflict-duplicate={
+          conflictResolutionPopupOptions?.actionLabels?.duplicate
+        }
+        data-conflict-replace-all={
+          conflictResolutionPopupOptions?.strategyLabels?.replaceAll
+        }
+        data-conflict-confirm-label={
+          conflictResolutionPopupOptions?.confirmLabel
+        }
+        data-empty-state-title={emptyStateTitle}
+        data-empty-state-description={emptyStateDescription}
+        data-auto-select-uploaded-items={String(
+          autoSelectUploadedItems ?? true,
+        )}
       >
         {toolbarOptions?.tabs?.map((tab) => (
           <button
@@ -156,10 +214,26 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
         <button
           type="button"
           onClick={() =>
-            onSelectedPathsChange?.(new Set(['/All files/report.pdf']))
+            onSelectedPathsChange?.(new Set(['/My files/report.pdf']))
           }
         >
           Select report
+        </button>
+        <button
+          type="button"
+          data-folder-selectable={String(
+            gridOptions?.additionalGridOptions?.rowSelection?.isRowSelectable?.(
+              {
+                data: {
+                  nodeType: DialFileNodeType.FOLDER,
+                  path: '/My files/docs/',
+                },
+              },
+            ) ?? false,
+          )}
+          onClick={() => onSelectedPathsChange?.(new Set(['/My files/docs/']))}
+        >
+          Select docs folder
         </button>
       </div>
     ),
@@ -174,8 +248,8 @@ const defaultHookResult: UseDialFileManagerResult = {
   items: [
     {
       id: 'bucket-root',
-      name: 'All files',
-      path: '/All files',
+      name: 'My files',
+      path: '/My files',
       parentPath: '',
       nodeType: DialFileNodeType.FOLDER,
       folderId: 'test-bucket',
@@ -183,18 +257,26 @@ const defaultHookResult: UseDialFileManagerResult = {
         {
           id: 'report.pdf',
           name: 'report.pdf',
-          path: '/All files/report.pdf',
-          parentPath: '/All files',
+          path: '/My files/report.pdf',
+          parentPath: '/My files',
           nodeType: DialFileNodeType.ITEM,
           folderId: 'test-bucket',
           contentType: 'application/pdf',
+        },
+        {
+          id: 'docs/',
+          name: 'docs',
+          path: '/My files/docs/',
+          parentPath: '/My files',
+          nodeType: DialFileNodeType.FOLDER,
+          folderId: 'test-bucket',
         },
       ],
     },
   ],
   isLoading: false,
   error: null,
-  path: '/All files',
+  path: '/My files',
   onPathChange: vi.fn(),
   retry: vi.fn(),
   onUploadFiles: vi.fn(),
@@ -209,6 +291,20 @@ const defaultHookResult: UseDialFileManagerResult = {
   isDownloading: false,
   onDeleteFiles: vi.fn(),
   isDeleting: false,
+  onRenameValidate: vi.fn(),
+  onMoveToFiles: vi.fn(),
+  isRenaming: false,
+  onCopyFiles: vi.fn(),
+  isCopying: false,
+  isMoving: false,
+  cancelCopyMove: vi.fn(),
+  onSearchFiles: vi.fn(),
+  isSearching: false,
+  searchResults: null,
+  clearSearchResults: vi.fn(),
+  expandedPaths: new Set<string>(),
+  loadedPaths: new Set<string>(),
+  onExpandedPathsChange: vi.fn(),
   uploadEnabled: true,
   isNewButtonDisabled: false,
   disabledNewButtonTooltip: 'No permission',
@@ -258,6 +354,14 @@ const defaultProps = {
   uploadProgressTitle: 'Uploading files',
   cancelLabel: 'Cancel',
 };
+
+beforeEach(() => {
+  mockActiveTab.value = undefined;
+  mockHandleTabChange.mockClear();
+  mockShowNotification.mockClear();
+  mockUseDialFileManager.mockClear();
+  mockUseDialFileManager.mockReturnValue(defaultHookResult);
+});
 
 describe('DialFileManagerModal', () => {
   it('renders with the given title when isOpen is true', () => {
@@ -312,6 +416,31 @@ describe('DialFileManagerModal', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('passes conflictResolutionPopupOptions to DialFileManager', () => {
+    mockUseDialFileManager.mockReturnValue(defaultHookResult);
+    render(<DialFileManagerModal {...defaultProps} />);
+
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-conflict-single-title')).toBe(
+      'dialFileManager.conflictSingleTitle',
+    );
+    expect(manager.getAttribute('data-conflict-multiple-title')).toBe(
+      'dialFileManager.conflictMultipleTitle',
+    );
+    expect(manager.getAttribute('data-conflict-replace')).toBe(
+      'dialFileManager.conflictReplace',
+    );
+    expect(manager.getAttribute('data-conflict-duplicate')).toBe(
+      'dialFileManager.conflictDuplicate',
+    );
+    expect(manager.getAttribute('data-conflict-replace-all')).toBe(
+      'dialFileManager.conflictReplaceAll',
+    );
+    expect(manager.getAttribute('data-conflict-confirm-label')).toBe(
+      'buttons.confirm',
+    );
+  });
+
   it('keeps a fixed modal height and pads the footer', () => {
     mockUseDialFileManager.mockReturnValue(defaultHookResult);
     render(<DialFileManagerModal {...defaultProps} />);
@@ -343,6 +472,79 @@ describe('DialFileManagerModal', () => {
       files: [expect.objectContaining({ name: 'report.pdf' })],
       folderPaths: [],
     });
+  });
+
+  it('attaches selected folder as DIAL Core path when canAttachFolders is true', () => {
+    const onAttach = vi.fn();
+    mockUseDialFileManager.mockReturnValue(defaultHookResult);
+    render(
+      <DialFileManagerModal
+        {...defaultProps}
+        onAttach={onAttach}
+        canAttachFolders
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select docs folder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }));
+
+    expect(onAttach).toHaveBeenCalledWith({
+      files: [],
+      folderPaths: ['files/test-bucket/docs/'],
+    });
+  });
+
+  it('skips selected folder when DIAL Core source path is missing', () => {
+    const onAttach = vi.fn();
+    const root = defaultHookResult.items[0];
+    mockUseDialFileManager.mockReturnValue({
+      ...defaultHookResult,
+      items: [
+        {
+          ...root,
+          items: root.items?.map((item) =>
+            item.nodeType === DialFileNodeType.FOLDER
+              ? { ...item, id: '', url: undefined }
+              : item,
+          ),
+        },
+      ],
+    });
+    render(
+      <DialFileManagerModal
+        {...defaultProps}
+        onAttach={onAttach}
+        canAttachFolders
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select docs folder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }));
+
+    expect(onAttach).toHaveBeenCalledWith({
+      files: [],
+      folderPaths: [],
+    });
+  });
+
+  it('marks folder rows as selectable when canAttachFolders is true', () => {
+    mockUseDialFileManager.mockReturnValue(defaultHookResult);
+    render(<DialFileManagerModal {...defaultProps} canAttachFolders />);
+
+    expect(
+      screen.getByRole('button', { name: 'Select docs folder' }).dataset
+        .folderSelectable,
+    ).toBe('true');
+  });
+
+  it('marks folder rows as not selectable when canAttachFolders is false (default)', () => {
+    mockUseDialFileManager.mockReturnValue(defaultHookResult);
+    render(<DialFileManagerModal {...defaultProps} />);
+
+    expect(
+      screen.getByRole('button', { name: 'Select docs folder' }).dataset
+        .folderSelectable,
+    ).toBe('false');
   });
 
   it('shows the selection count and clears the selection', () => {
@@ -453,6 +655,48 @@ describe('DialFileManagerModal — tab navigation', () => {
     const manager = screen.getByRole('region', { name: 'file manager' });
     expect(manager.getAttribute('data-active-tab')).toBe(
       DialFileManagerTabs.MyFiles,
+    );
+  });
+
+  it('passes My files as rootLabel for the My files tab', () => {
+    mockActiveTab.value = DialFileManagerTabs.MyFiles;
+    mockUseDialFileManager.mockReturnValue(defaultHookResult);
+
+    render(<DialFileManagerModal {...defaultProps} />);
+
+    expect(mockUseDialFileManager).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeTab: DialFileManagerTabs.MyFiles,
+        rootLabel: 'dialFileManager.tab.myFiles',
+      }),
+    );
+  });
+
+  it('passes Shared with me as rootLabel for the Shared tab', () => {
+    mockActiveTab.value = DialFileManagerTabs.Shared;
+    mockUseDialFileManager.mockReturnValue(defaultHookResult);
+
+    render(<DialFileManagerModal {...defaultProps} />);
+
+    expect(mockUseDialFileManager).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeTab: DialFileManagerTabs.Shared,
+        rootLabel: 'dialFileManager.tab.shared',
+      }),
+    );
+  });
+
+  it('passes Organization as rootLabel for the Organization tab', () => {
+    mockActiveTab.value = DialFileManagerTabs.Organization;
+    mockUseDialFileManager.mockReturnValue(defaultHookResult);
+
+    render(<DialFileManagerModal {...defaultProps} />);
+
+    expect(mockUseDialFileManager).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeTab: DialFileManagerTabs.Organization,
+        rootLabel: 'dialFileManager.tab.organization',
+      }),
     );
   });
 
@@ -608,5 +852,66 @@ describe('DialFileManagerModal — per-tab visibleColumns', () => {
     const manager = screen.getByRole('region', { name: 'file manager' });
     const cols = manager.getAttribute('data-visible-columns') ?? '';
     expect(cols).toContain(FileManagerColumnKey.Author);
+  });
+});
+
+describe('DialFileManagerModal — autoSelectUploadedItems', () => {
+  it('passes autoSelectUploadedItems=true by default', () => {
+    render(<DialFileManagerModal {...defaultProps} />);
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
+      'true',
+    );
+  });
+
+  it('passes autoSelectUploadedItems=false when prop is false', () => {
+    render(
+      <DialFileManagerModal
+        {...defaultProps}
+        autoSelectUploadedItems={false}
+      />,
+    );
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
+      'false',
+    );
+  });
+});
+
+describe('DialFileManagerModal — tab-specific empty states', () => {
+  it('shows MyFiles empty state on the MyFiles tab', () => {
+    mockActiveTab.value = DialFileManagerTabs.MyFiles;
+    render(<DialFileManagerModal {...defaultProps} />);
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-empty-state-title')).toBe(
+      'dialFileManager.myFiles.emptyStateTitle',
+    );
+    expect(manager.getAttribute('data-empty-state-description')).toBe(
+      'dialFileManager.myFiles.emptyStateDescription',
+    );
+  });
+
+  it('shows Shared empty state on the Shared tab', () => {
+    mockActiveTab.value = DialFileManagerTabs.Shared;
+    render(<DialFileManagerModal {...defaultProps} />);
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-empty-state-title')).toBe(
+      'dialFileManager.shared.emptyStateTitle',
+    );
+    expect(manager.getAttribute('data-empty-state-description')).toBe(
+      'dialFileManager.shared.emptyStateDescription',
+    );
+  });
+
+  it('shows Organization empty state on the Organization tab', () => {
+    mockActiveTab.value = DialFileManagerTabs.Organization;
+    render(<DialFileManagerModal {...defaultProps} />);
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-empty-state-title')).toBe(
+      'dialFileManager.organization.emptyStateTitle',
+    );
+    expect(manager.getAttribute('data-empty-state-description')).toBe(
+      'dialFileManager.organization.emptyStateDescription',
+    );
   });
 });

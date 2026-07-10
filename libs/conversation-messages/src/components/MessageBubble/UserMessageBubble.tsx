@@ -2,6 +2,7 @@ import {
   buildCssVars,
   mergeClasses,
   MessageRole,
+  useCollapsedText,
 } from '@epam/ai-dial-chat-shared';
 import { AttachmentTray } from '@epam/ai-dial-conversation-input';
 import {
@@ -11,7 +12,6 @@ import {
 } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconChevronUp } from '@tabler/icons-react';
 import { FC } from 'react';
-import { useCollapsedText } from '../../hooks/useCollapsedText';
 import type { UserMessageBubbleProps } from '../../models/MessageBubble';
 import { BubblePosition } from '../../types/bubble-position';
 import { MessageActions } from '../Message/MessageActions';
@@ -38,7 +38,6 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
   attachmentClickLabel,
 }) => {
   const { colors, typography } = bubbleStyles ?? {};
-  const noCustomClass = !typography?.fontClassName;
 
   const {
     textRef,
@@ -48,21 +47,11 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
     expandedMaxHeight,
     isCollapsed,
     toggleCollapsed,
-  } = useCollapsedText({ text, collapsedLineCount });
+  } = useCollapsedText<HTMLParagraphElement>({ text, collapsedLineCount });
 
   const cssVars = buildCssVars({
     '--cm-bubble-user-bg': colors?.userBackground,
     '--cm-bubble-text': colors?.text,
-    '--cm-bubble-font-family': noCustomClass
-      ? typography?.fontFamily
-      : undefined,
-    '--cm-bubble-font-size': noCustomClass ? typography?.fontSize : undefined,
-    '--cm-bubble-font-weight': noCustomClass
-      ? typography?.fontWeight
-      : undefined,
-    '--cm-bubble-line-height': noCustomClass
-      ? typography?.lineHeight
-      : undefined,
     '--cm-bubble-collapsed-height': isOverflowing
       ? `${collapsedMaxHeight}px`
       : undefined,
@@ -72,7 +61,9 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
   });
 
   const positionRadius =
-    position === BubblePosition.Top ? 'rounded-ee-[24px]' : 'rounded-se-[24px]';
+    position === BubblePosition.Top
+      ? 'rounded-ee-[6px] rounded-se-[16px]'
+      : 'rounded-se-[6px] rounded-ee-[16px]';
 
   const textClass = mergeClasses(styles.text, typography?.fontClassName);
   const expandAriaLabel = showMoreAriaLabel ?? showMoreLabel;
@@ -93,7 +84,7 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
           <div
             className={mergeClasses(
               styles.userBubble,
-              'flex w-fit items-center justify-end rounded-es-[16px] rounded-ss-[16px] px-6 py-4',
+              'flex w-fit items-center justify-end rounded-es-[16px] rounded-ss-[16px] border px-6 py-4',
               positionRadius,
               bubbleClassName,
             )}
