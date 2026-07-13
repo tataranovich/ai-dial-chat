@@ -34,7 +34,7 @@ jobs:
       draft-stable-releases: true
       # Disable long running parts
       docker-build-enabled: true
-      publish-enabled: true
+      publish-enabled: false
       ort-enabled: false
       style-checks-enabled: false
       code-checks-enabled: false
