@@ -30,8 +30,8 @@ jobs:
       primary-branch-pattern: '^development-1\.0$'
       release-branch-pattern: '^release-1\.[0-9]+$'
       docker-development-tag: 'development-1.0'
-      maximize-build-space: true
-      draft-stable-releases: true
+      maximize-build-space: false
+      draft-stable-releases: false
       # Disable long running parts
       docker-build-enabled: false
       publish-enabled: false
