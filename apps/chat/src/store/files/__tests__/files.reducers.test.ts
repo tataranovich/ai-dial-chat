@@ -164,6 +164,33 @@ describe('files.reducers addSharedFiles', () => {
     expect(rootItems[0].name).toBe('fresh-name.txt');
     expect(rootItems[0].contentLength).toBe(10);
   });
+
+  it('keeps selected root shared files that are excluded from the payload', () => {
+    const sharedRootFileId = 'files/sharer-bucket/shared.jpg';
+    const state = {
+      ...filesSlice.getInitialState(),
+      sharedWithMeFilesAndFoldersIds: [sharedRootFileId],
+      files: [
+        makeFile({
+          id: sharedRootFileId,
+          name: 'shared.jpg',
+          folderId: 'files/sharer-bucket',
+          sharedWithMe: true,
+          isRootSharedItem: true,
+        }),
+      ],
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.addSharedFiles({
+        files: [],
+        keepFileIds: [sharedRootFileId],
+      }),
+    );
+
+    expect(nextState.files.map((f) => f.id)).toContain(sharedRootFileId);
+  });
 });
 
 describe('files.reducers deleteFilesSuccess', () => {
@@ -471,5 +498,38 @@ describe('files.reducers quick attachments', () => {
 
     expect(nextState.selectedFilesIds).toEqual(['files/test/other.txt']);
     expect(nextState.files).toHaveLength(1);
+  });
+});
+
+describe('files.reducers getFullListingSuccess', () => {
+  it('preserves client-only metadata like publishedWithMe when merging fresh listing results', () => {
+    const folderPath = 'files/org-bucket';
+    const fileId = `${folderPath}/happy_beach_person.png`;
+    const state = {
+      ...filesSlice.getInitialState(),
+      files: [
+        makeFile({
+          id: fileId,
+          folderId: folderPath,
+          publishedWithMe: true,
+        }),
+      ],
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.getFullListingSuccess({
+        folderPath,
+        files: [
+          makeFile({
+            id: fileId,
+            folderId: folderPath,
+          }),
+        ],
+      }),
+    );
+
+    const file = nextState.files.find((f) => f.id === fileId);
+    expect(file?.publishedWithMe).toBe(true);
   });
 });

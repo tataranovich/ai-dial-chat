@@ -432,9 +432,15 @@ export const filesSlice = createSlice({
             f.folderId !== folderPath &&
             !f.folderId.startsWith(`${folderPath}/`),
         );
-        const inScopeFiles = payload.files.filter(
-          (f) => !f.folderId.endsWith(`/${CLIENTDATA_PATH}`),
+        const prevById: Record<string, DialFile> = Object.fromEntries(
+          state.files.map((f) => [f.id, f]),
         );
+        const inScopeFiles = payload.files
+          .filter((f) => !f.folderId.endsWith(`/${CLIENTDATA_PATH}`))
+          .map((newFile) => {
+            const oldFile = prevById[newFile.id];
+            return oldFile ? { ...oldFile, ...newFile } : newFile;
+          });
         const uploadingInScope = state.files.filter(
           (f) =>
             !f.serverSynced &&
@@ -812,13 +818,19 @@ export const filesSlice = createSlice({
       state,
       {
         payload,
-      }: PayloadAction<{ files: DialFile[]; reviewBuckets?: string[] }>,
+      }: PayloadAction<{
+        files: DialFile[];
+        reviewBuckets?: string[];
+        keepFileIds?: string[];
+      }>,
     ) => {
       const sharedWithMeRootIds = new Set(state.sharedWithMeFilesAndFoldersIds);
       const belongsToActiveSharedRoot = (file: DialFile) =>
         Array.from(sharedWithMeRootIds).some((rootId) =>
           file.id.startsWith(`${rootId}/`),
         );
+
+      const keepFileIds = new Set(payload.keepFileIds);
 
       // Keep nested shared descendants under active roots, but always replace root shared items
       // with latest API payload to avoid stale root-level data after tab switches.
@@ -832,6 +844,10 @@ export const filesSlice = createSlice({
             (reviewBucket) => getEntityBucket(file) === reviewBucket,
           )
         ) {
+          return true;
+        }
+
+        if (keepFileIds.has(file.id)) {
           return true;
         }
 

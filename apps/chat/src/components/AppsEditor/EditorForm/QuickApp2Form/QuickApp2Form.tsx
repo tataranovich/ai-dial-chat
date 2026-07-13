@@ -130,6 +130,9 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
     return selectedModel ? doesModelAllowTemperature(selectedModel) : true;
   }, [modelId, modelsMap]);
 
+  const showProcessLargeFiles =
+    !!modelsMap[modelId]?.inputAttachmentTypes?.length;
+
   const hasStarters = useMemo(
     () => starters.some((s) => s.title.trim() && s.text.trim()),
     [starters],
@@ -285,6 +288,27 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
             />
           )}
         />
+
+        {showProcessLargeFiles && (
+          <Controller
+            name="processLargeFiles"
+            control={control}
+            render={({ field }) => (
+              <ToggleSwitchField
+                isOn={field.value}
+                handleSwitch={() => field.onChange(!field.value)}
+                switchOnText="ON"
+                switchOFFText="OFF"
+                label={t(MarketplaceI18nKeys.ProcessFiles)}
+                additionalText={t(
+                  MarketplaceI18nKeys.AllowOrchestratorToProcessFiles,
+                )}
+                info={t(MarketplaceI18nKeys.ProcessFilesDescription)}
+                className="flex items-center gap-2"
+              />
+            )}
+          />
+        )}
       </FormCollapsibleSection>
 
       <FormCollapsibleSection
@@ -335,6 +359,25 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
         <div data-qa="code-interpreter-field">
           <CodeInterpreterField />
         </div>
+
+        <Controller
+          name="fileTools"
+          control={control}
+          render={({ field }) => (
+            <ToggleSwitchField
+              isOn={field.value}
+              handleSwitch={() => field.onChange(!field.value)}
+              switchOnText="ON"
+              switchOFFText="OFF"
+              label={t(MarketplaceI18nKeys.FileTools)}
+              additionalText={t(
+                MarketplaceI18nKeys.AllowTheAgentToAccessAppFiles,
+              )}
+              info={t(MarketplaceI18nKeys.FileToolsDescription)}
+              className="flex items-center gap-2"
+            />
+          )}
+        />
       </FormCollapsibleSection>
 
       <FormCollapsibleSection

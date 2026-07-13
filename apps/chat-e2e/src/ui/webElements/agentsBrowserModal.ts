@@ -1,3 +1,4 @@
+import { ExpectedConstants } from '@/src/testData/expectedConstants';
 import { AgentsBrowserModalSelectors } from '@/src/ui/selectors';
 import { BaseElement } from '@/src/ui/webElements/baseElement';
 import { Popup } from '@/src/ui/webElements/common/popup';
@@ -22,6 +23,19 @@ export class AgentsBrowserModal extends Popup {
   public marketplaceTab = this.getChildElementBySelector(
     AgentsBrowserModalSelectors.marketplaceTab,
   );
+  // Shown in the entity grid when a search returns nothing.
+  public noResultsFound = this.getChildElementBySelector(
+    AgentsBrowserModalSelectors.noResultsFound,
+  );
+  // Empty state when the user has no created/bookmarked items (no data-qa — by text).
+  public noItemsPlaceholder = this.createElementFromLocator(
+    this.rootLocator.getByText(ExpectedConstants.noAgentsAndToolsets, {
+      exact: true,
+    }),
+  );
+  public goToMarketplaceLink = this.createElementFromLocator(
+    this.rootLocator.getByText(ExpectedConstants.goToMarketplaceLink),
+  );
 
   getEntities(): MarketplaceEntities {
     if (!this.entities) {
@@ -32,5 +46,20 @@ export class AgentsBrowserModal extends Popup {
 
   public getEntityByName(name: string): BaseElement {
     return this.getEntities().getEntity(name);
+  }
+
+  // The tab carries the accent-border class only when it is the active one.
+  public getActiveTab(tab: BaseElement): BaseElement {
+    return this.createElementFromLocator(
+      tab
+        .getElementLocator()
+        .and(this.page.locator(AgentsBrowserModalSelectors.selectedTab)),
+    );
+  }
+
+  // Search for an entity by name and return its card.
+  public async searchForEntity(name: string): Promise<BaseElement> {
+    await this.searchInput.fillInInput(name);
+    return this.getEntityByName(name);
   }
 }

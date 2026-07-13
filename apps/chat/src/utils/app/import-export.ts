@@ -156,8 +156,8 @@ export function cleanData(data: SupportedExportFormats): CleanDataResponse {
 
 export function getCurrentDate() {
   const date = new Date();
-  const month = date.getMonth() + 1;
-  const day = date.getDate();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
   const year = date.getFullYear();
   return `${year}-${month}-${day}`;
 }
@@ -553,4 +553,9 @@ export const updateMessageAttachments = ({
 
 export function getDownLoadCurrentDate() {
   return new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
+}
+
+export function getDefaultExportFileName(fileName: string): string {
+  const date = new Date().toISOString().slice(0, 10);
+  return `${date}_${fileName}`;
 }

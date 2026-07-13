@@ -59,6 +59,7 @@ import {
   DialFileManagerActions,
   type DialFileManagerActionsRef,
   DialFileManagerTabs,
+  DialFilePermission,
   DialUploadFileItem,
   FileManagerGridRow,
 } from '@epam/ai-dial-ui-kit';
@@ -396,13 +397,27 @@ export const ChangePathDialog = ({
     gridEditingOptions,
   });
 
-  const isTempFolder = useCallback(
-    (id: string) =>
-      addedTempFolderIdsRef.current.has(id) ||
-      [...addedTempFolderIdsRef.current].some((rootId) =>
-        id.startsWith(`${rootId}/`),
+  const publishedFolderIds = useMemo(
+    () =>
+      new Set(
+        additionalOrganizationFolders
+          .filter((f) => !f.temporary)
+          .map((f) => f.id),
       ),
-    [],
+    [additionalOrganizationFolders],
+  );
+
+  const isTempFolder = useCallback(
+    (id: string) => {
+      if (publishedFolderIds.has(id)) return false;
+      return (
+        addedTempFolderIdsRef.current.has(id) ||
+        [...addedTempFolderIdsRef.current].some((rootId) =>
+          id.startsWith(`${rootId}/`),
+        )
+      );
+    },
+    [publishedFolderIds],
   );
 
   const handleOrganizationRenameValidation = useCallback(
@@ -602,11 +617,15 @@ export const ChangePathDialog = ({
 
   const itemsToRender = useMemo(() => {
     const applyTreePermissions = (items: DialFile[]): DialFile[] =>
-      items.map((item) => ({
-        ...item,
-        parentPath: isTempFolder(item.path) ? item.parentPath : null,
-        items: item.items ? applyTreePermissions(item.items) : item.items,
-      }));
+      items.map((item) => {
+        const isTemp = isTempFolder(item.path);
+        return {
+          ...item,
+          parentPath: isTemp ? item.parentPath : null,
+          permissions: isTemp ? item.permissions : [DialFilePermission.READ],
+          items: item.items ? applyTreePermissions(item.items) : item.items,
+        };
+      });
 
     return applyTreePermissions(fileTreeItems);
   }, [isTempFolder, fileTreeItems]);

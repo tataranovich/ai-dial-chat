@@ -144,6 +144,17 @@ export class ChatMessagesAssertion extends BaseAssertion {
     );
   }
 
+  public async assertEditMessageInputState(
+    message: string | number,
+    expectedState: ElementState,
+  ) {
+    await this.assertElementState(
+      this.chatMessages.getChatMessageTextarea(message),
+      expectedState,
+      ExpectedMessages.messageContentIsValid,
+    );
+  }
+
   public async assertMessageAttachmentUrl(
     message: string | number,
     expectedUrl: string | null,
@@ -220,6 +231,17 @@ export class ChatMessagesAssertion extends BaseAssertion {
       this.chatMessages.getAttachmentLink(message),
       Attributes.target,
       AttributeValues.blank,
+    );
+  }
+
+  public async assertMessageImageDownloadName(
+    message: number,
+    expectedName: string,
+  ) {
+    await this.assertElementAttribute(
+      this.chatMessages.getAttachmentLink(message),
+      Attributes.download,
+      expectedName,
     );
   }
 

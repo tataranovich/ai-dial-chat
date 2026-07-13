@@ -26,6 +26,10 @@ export enum MarkdownI18nKeys {
   CopyAsCSV = 'Copy as CSV',
   CopyAsTXT = 'Copy as TXT',
   CopyAsMD = 'Copy as MD',
+  DownloadAsCSV = 'Download as CSV',
+  DownloadTableAsCSV = 'Download table as CSV',
+  DownloadCodeBlock = 'Download code block',
+  FileName = 'File name',
 }
 
 // settings.json
@@ -299,6 +303,8 @@ export enum CommonI18nKeys {
   ToolsetSignOutFailed = 'Failed to sign out toolset',
   PublicationWithExternalFilesFailed = 'Publishing failed. You are only allowed to publish conversations with attachments from "My files"',
   PublicationRequestCreatedSuccessfully = 'Publication request created successfully',
+  PublicationApprovedSuccessfully = 'The request has been approved',
+  PublicationRejectedSuccessfully = 'The request has been rejected',
   PublicationFailed = 'Creation of publication failed. Please try again later.',
   PublicationsUploadFailed = 'Publications uploading failed.',
   PublicationUploadFailed = 'Publication uploading failed.',
@@ -343,6 +349,12 @@ export enum CommonI18nKeys {
   ShareApplicationWithPublicResourcesFailed = 'Sharing failed. You are only allowed to share applications with resources from "My files"',
   LogOutBeforeEditingToolset = 'Log out before editing toolset',
   TraceId = 'Trace ID',
+  Continue = 'Continue',
+  Repair = 'Repair',
+  RepairDescription = 'Repair will re-register this toolset with the Authorization Server. All users will need to sign in again once their current session expires. Continue?',
+  RepairMyDescription = 'Repair will re-register this toolset with the Authorization Server. Continue?',
+  ToolsetRepairSuccessMessage = 'Toolset repaired. Users must re-authenticate.',
+  ToolsetRepairFailedMessage = 'Authorization server is currently unavailable. Try again once the AS is back.',
 }
 
 // errors.json
@@ -836,6 +848,8 @@ export enum ChatI18nKeys {
   On = 'On',
   Off = 'Off',
   TimeAwareness = 'Time awareness',
+  FileTools = 'File tools',
+  ProcessFiles = 'Process files',
   AgentSkills = 'Agent Skills',
   Agents = 'Agents',
   Endpoint = 'Endpoint',
@@ -1241,4 +1255,11 @@ export enum MarketplaceI18nKeys {
   NoAgents = 'No agents',
   YouDontHaveAnyAgents = "You don't have any agents.",
   AbsentChatCompletionDisabledMessage = 'This application has no chat endpoint and cannot be selected for conversations',
+  FileTools = 'File tools',
+  AllowTheAgentToAccessAppFiles = 'Allow the agent to access app files',
+  FileToolsDescription = 'Enables the orchestrator’s built-in file tools for this app. When enabled, the agent can browse, search, read, and write or edit files in the app’s file context. When disabled, no file tools are exposed to the orchestrator.',
+  AllowOrchestratorToProcessFiles = 'Allow orchestrator to process files',
+  ProcessFiles = 'Process files',
+  ProcessFilesDescription = 'Allows the orchestrator to handle attachments by reading file content on demand instead of including all attachment content in the initial prompt. This helps reduce context window usage while preserving access to the files when needed.',
+  Repair = 'Repair',
 }

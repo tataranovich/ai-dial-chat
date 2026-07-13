@@ -4,10 +4,30 @@ import {
   Button,
   EntityEditorViewForm,
 } from '@/src/ui/webElements';
+import { RegexUtil } from '@/src/utils';
+import { Locator } from '@playwright/test';
 
 export class QuickApp2EditorViewForm extends EntityEditorViewForm {
   public orchestratorSection = this.getChildElementBySelector(
     AddQuickApp2SettingsFormSelector.orchestratorSection,
+  );
+
+  // Orchestrator model card + its name + the "Change" button that opens the picker
+  public orchestratorModel = this.orchestratorSection.getChildElementBySelector(
+    AddQuickApp2SettingsFormSelector.orchestratorModel,
+  );
+  public orchestratorModelName =
+    this.orchestratorModel.getChildElementBySelector(
+      AddQuickApp2SettingsFormSelector.orchestratorModelName,
+    );
+  public changeModelButton = new Button(
+    this.page,
+    AddQuickApp2SettingsFormSelector.changeModelButtonLabel,
+    this.orchestratorModel.getElementLocator(),
+  );
+  // Temperature slider — rendered only when the selected model allows temperature
+  public temperatureSlider = this.orchestratorSection.getChildElementBySelector(
+    AddQuickApp2SettingsFormSelector.temperatureSlider,
   );
   public contextToolsSection = this.getChildElementBySelector(
     AddQuickApp2SettingsFormSelector.contextToolsSection,
@@ -69,9 +89,30 @@ export class QuickApp2EditorViewForm extends EntityEditorViewForm {
       AddQuickApp2SettingsFormSelector.agentsAndToolsetsJsonToggle,
     );
 
+  // Chip child (name/version) matching the exact text, used as a `filter({ has })`
+  // argument. It must be page-rooted (the `marketplaceEntities.getEntity` idiom):
+  // a `this`-scoped locator carries the form ancestor chain and never matches
+  // once Playwright re-roots the `has` argument under a chip.
+  private chipChildWithText(selector: string, text: string): Locator {
+    return new BaseElement(this.page, selector).getElementLocator().filter({
+      hasText: new RegExp(`^\\s*${RegexUtil.escapeRegexChars(text)}\\s*$`),
+    });
+  }
+
+  private chipsContainer(): Locator {
+    return this.agentsAndToolsetsList
+      .getChildElementBySelector(AddQuickApp2SettingsFormSelector.agentChip)
+      .getElementLocator();
+  }
+
   public getChipByName(name: string): BaseElement {
-    return this.agentsAndToolsetsList.getChildElementBySelector(
-      `${AddQuickApp2SettingsFormSelector.agentChip}:has(${AddQuickApp2SettingsFormSelector.chipName}:text-is("${name}"))`,
+    return this.createElementFromLocator(
+      this.chipsContainer().filter({
+        has: this.chipChildWithText(
+          AddQuickApp2SettingsFormSelector.chipName,
+          name,
+        ),
+      }),
     );
   }
 
@@ -83,8 +124,20 @@ export class QuickApp2EditorViewForm extends EntityEditorViewForm {
 
   // For agents with several versions added — one chip per version.
   public getChipByNameAndVersion(name: string, version: string): BaseElement {
-    return this.agentsAndToolsetsList.getChildElementBySelector(
-      `${AddQuickApp2SettingsFormSelector.agentChip}:has(${AddQuickApp2SettingsFormSelector.chipName}:text-is("${name}")):has(${AddQuickApp2SettingsFormSelector.chipVersion}:text-is("${version}"))`,
+    return this.createElementFromLocator(
+      this.chipsContainer()
+        .filter({
+          has: this.chipChildWithText(
+            AddQuickApp2SettingsFormSelector.chipName,
+            name,
+          ),
+        })
+        .filter({
+          has: this.chipChildWithText(
+            AddQuickApp2SettingsFormSelector.chipVersion,
+            version,
+          ),
+        }),
     );
   }
 
