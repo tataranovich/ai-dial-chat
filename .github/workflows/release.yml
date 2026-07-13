@@ -33,7 +33,7 @@ jobs:
       maximize-build-space: true
       draft-stable-releases: true
       # Disable long running parts
-      docker-build-enabled: true
+      docker-build-enabled: false
       publish-enabled: false
       ort-enabled: false
       style-checks-enabled: false
