@@ -1,8 +1,12 @@
-## ADDED Requirements
+## Purpose
+
+Define the DIAL file manager attach modal UI contract, including tab chrome, attachment constraints copy, and disabled-row feedback.
+
+## Requirements
 
 ### Requirement: Tab navigation UI in DialFileManagerModal
 
-`DialFileManagerModal` SHALL render My files, Shared with me, and Organization tabs using `useDialFileManagerTabs` from `@epam/ai-dial-ui-kit`. The hook is called with an i18n-translated label map and `DialFileManagerTabs.MyFiles` as the initial tab. The resulting `tabs`, `activeTab`, and `handleTabChange` are wired to `toolbarOptions.tabs`, `toolbarOptions.activeTab`, and `toolbarOptions.onTabChange` respectively. No custom tab UI is built — the ui-kit toolbar handles tab rendering.
+`DialFileManagerModal` SHALL render My files, Shared with me, and Organization tabs using `useDialFileManagerTabs` from `@epam/ai-dial-react-file-manager`. The hook is called with an i18n-translated label map and `DialFileManagerTabs.MyFiles` as the initial tab. The resulting `tabs`, `activeTab`, and `handleTabChange` are wired to `toolbarOptions.tabs`, `toolbarOptions.activeTab`, and `toolbarOptions.onTabChange` respectively. No custom tab UI is built — the ui-kit toolbar handles tab rendering.
 
 RTL: tab bar direction is handled by the ui-kit; no physical direction classes on the modal wrapper.
 
@@ -78,16 +82,17 @@ RTL: tab bar direction is handled by the ui-kit; no physical direction classes o
 
 ### Requirement: Selection cleared on tab change
 
-`DialFileManagerModal` SHALL reset `selectedPaths` to an empty `Set` whenever `activeTab` changes. This prevents stale selections from one tab's file tree being carried over to another tab's tree.
+`DialFileManagerModal` SHALL reset `selectedPaths` to an empty `Set` when its tab-change handler changes `activeTab`. This prevents stale selections from one tab's file tree being carried over to another tab's tree.
 
-#### Scenario: selectedPaths empty after tab switch
+> **Implementation note:** the ui-kit may replace the tab strip with the bulk-actions toolbar while a selection is active. Specs and tests SHALL NOT require a user to click a tab while selected files hide the tab controls.
 
-- **WHEN** files are selected on My files and the user switches to Shared
-- **THEN** `selectedPaths` is `new Set()` on the Shared tab
+#### Scenario: selectedPaths empty after tab-change handler runs
+
+- **GIVEN** `selectedPaths` contains files from My files
+- **WHEN** the modal's tab-change handler is invoked with Shared
+- **THEN** `selectedPaths` is reset to `new Set()` before the Shared tab listing is used
 
 ---
-
-## MODIFIED Requirements
 
 ### Requirement: Modal header shows attachment constraints description
 
@@ -132,6 +137,8 @@ Memoisation: description string computed in `useMemo` from props.
 - Return the string `t(DialFileManagerI18nKeys.AttachingHiddenFilesNotAllowed)` when `isHiddenPath(row.path)` is `true`.
 - Return `undefined` for all other rows.
 
+`isHiddenPath` SHALL treat any path segment starting with `.` as hidden, including `.env`, `.hidden`, and the file-manager placeholder `.dial_folder`.
+
 The callback behavior is unchanged by `activeTab`.
 
 i18n key: `DialFileManager.AttachingHiddenFilesNotAllowed`
@@ -141,10 +148,10 @@ Memoisation: `getDisabledTooltip` in `useCallback`.
 
 #### Scenario: Hidden path row shows tooltip
 
-- **WHEN** a grid row has `path` containing `.dial_folder` and the user hovers or focuses the row
-- **THEN** the tooltip "Attaching hidden files is not allowed" (or its translation) is displayed
+- **WHEN** a grid row has `path` containing a dot-prefixed segment such as `/My files/.hidden/report.pdf` and the user hovers or focuses the row
+- **THEN** the tooltip "Attaching hidden files is not allowed." (or its translation) is displayed
 
 #### Scenario: Normal path row shows no tooltip
 
-- **WHEN** a grid row has a normal (non-hidden) path
+- **WHEN** a grid row has a path with no dot-prefixed segment
 - **THEN** no tooltip is shown from `getDisabledTooltip`

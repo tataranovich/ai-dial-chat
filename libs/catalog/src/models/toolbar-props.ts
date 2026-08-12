@@ -1,12 +1,5 @@
+import { DropdownItem } from '@epam/ai-dial-ui-kit';
 import { CatalogViewMode } from '../types/view-mode';
-
-/** A single option in the sort dropdown. */
-export interface CatalogSortOption {
-  /** Sort key passed to `onSortChange`. */
-  value: string;
-  /** Display label shown in the dropdown. */
-  label: string;
-}
 
 /** Typography class overrides for `Toolbar`. */
 export interface ToolbarTypography {
@@ -14,24 +7,32 @@ export interface ToolbarTypography {
   titleClassName?: string;
   /** Typography class for the total count. Default: `'dial-tiny-text'`. */
   countClassName?: string;
+  /** Typography class for the filter section label. Default: `'dial-tiny-semi-text'`. */
+  filterSectionLabelClassName?: string;
+  /** Typography class for the filter checkbox labels. Default: `'dial-small-semi-text'`. */
+  filterButtonClassName?: string;
 }
 
 /** Color overrides for `Toolbar`, applied via CSS custom properties. */
 export interface ToolbarColors {
-  /** Section background color. Fallback: `--bg-layer-1`. */
-  background?: string;
   /** Section title text color. Fallback: `--text-primary`. */
   titleText?: string;
   /** Total count text color. Fallback: `--text-secondary`. */
   countText?: string;
-  /** Filter icon color. Fallback: `--text-secondary`. */
-  icon?: string;
   /** Vertical divider color next to sort dropdown. Fallback: `--stroke-secondary`. */
   divider?: string;
-  /** Clear-all button text color. Fallback: `--text-error`. */
-  clearAll?: string;
-  /** Bottom border color of tabs row. Fallback: `--stroke-secondary`. */
-  tabsBorder?: string;
+  /** Background color of the view-toggle wrapper. Fallback: `--bg-layer-sunken`. */
+  viewToggleBackground?: string;
+  /** Border color of the view-toggle wrapper. Fallback: `--stroke-tertiary`. */
+  viewToggleBorder?: string;
+  /** Background color of the active grid/list view-toggle button. Fallback: `--bg-layer-raised`. */
+  viewToggleActiveBackground?: string;
+  /** Icon color of the active grid/list view-toggle button. Fallback: `--text-accent`. */
+  viewToggleActiveText?: string;
+  /** Icon color of an inactive grid/list view-toggle button. Fallback: `--text-secondary`. */
+  viewToggleText?: string;
+  /** Icon color of an inactive grid/list view-toggle button on hover. Fallback: `--text-primary`. */
+  viewToggleTextHover?: string;
 }
 
 /** Grouped style overrides for `Toolbar`. */
@@ -76,14 +77,12 @@ export interface ToolbarProps {
   onMyAppsChange?: (isActive: boolean) => void;
   /** Label for the filter button when nothing is filtered. Default: 'From'. */
   filterFromLabel?: string;
-  /** Label for the "My Apps" filter checkbox. Default: 'My Apps'. */
+  /** Label for the "My" filter checkbox. Default: 'My'. */
   filterMyAppsLabel?: string;
   /** Label for the Topics section inside the filter dropdown. Default: 'Topics'. */
   filterTopicsLabel?: string;
   /** Currently active sort key. */
   sortKey?: string;
-  /** Called when the user selects a different sort option. */
-  onSortChange?: (key: string) => void;
   /** Available sort options shown in the dropdown. */
-  sortOptions?: CatalogSortOption[];
+  sortOptions?: DropdownItem[];
 }

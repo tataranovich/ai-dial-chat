@@ -1,7 +1,6 @@
-import { mergeClasses } from '@epam/ai-dial-chat-shared';
+import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
 import {
-  type CSSProperties,
   FC,
   useEffect,
   useLayoutEffect,
@@ -64,17 +63,23 @@ export const Favorites: FC<FavoritesProps> = ({
   addToFavoritesAriaLabel,
   removeFromFavoritesAriaLabel,
   selectedItemId,
+  credentialsBadgeLoggedOutLabel,
 }) => {
   const titleClassName =
-    favoritesStyles?.typography?.titleClassName ??
-    'dial-body-semi-text text-primary';
-  const countClassName =
-    favoritesStyles?.typography?.countClassName ??
-    'dial-tiny-semi-text text-secondary';
-  const cssVars = {
-    '--cat-favorites-border': favoritesStyles?.colors?.border,
-  } as CSSProperties;
+    favoritesStyles?.typography?.titleClassName ?? 'dial-body-semi-text';
 
+  const countClassName =
+    favoritesStyles?.typography?.countClassName ?? 'dial-tiny-semi-text';
+
+  const cssVars = buildCssVars({
+    '--cat-fav-title-text': favoritesStyles?.colors?.titleText,
+    '--cat-fav-count-text': favoritesStyles?.colors?.countText,
+    '--cat-fav-selected-check': favoritesStyles?.colors?.selectedCheckIcon,
+    '--cat-fav-selected-border': favoritesStyles?.colors?.selectedCardBorder,
+    '--cat-fav-selected-bg': favoritesStyles?.colors?.selectedCardBackground,
+    '--cat-fav-nav-btn': favoritesStyles?.colors?.navButton,
+    '--cat-fav-nav-btn-disabled': favoritesStyles?.colors?.navButtonDisabled,
+  });
   const sortedItems = useMemo(
     () =>
       [...items].sort(
@@ -388,8 +393,8 @@ export const Favorites: FC<FavoritesProps> = ({
         <ItemHeader
           title={title}
           postfix={displayCount}
-          titleClassName={titleClassName}
-          postfixClassName={countClassName}
+          titleClassName={mergeClasses(titleClassName, styles.titleText)}
+          postfixClassName={mergeClasses(countClassName, styles.countText)}
           trailing={
             favTotalPages > 1 ? (
               <div
@@ -412,7 +417,8 @@ export const Favorites: FC<FavoritesProps> = ({
                 <span
                   className={mergeClasses(
                     'min-w-[32px] select-none px-1 text-center',
-                    styles.pageCounter,
+                    countClassName,
+                    styles.countText,
                   )}
                 >
                   {favPage} / {favTotalPages}
@@ -450,6 +456,7 @@ export const Favorites: FC<FavoritesProps> = ({
               addToFavoritesAriaLabel={addToFavoritesAriaLabel}
               removeFromFavoritesAriaLabel={removeFromFavoritesAriaLabel}
               isSelected={item.id === selectedItemId}
+              credentialsBadgeLoggedOutLabel={credentialsBadgeLoggedOutLabel}
             />
           ))}
         </div>

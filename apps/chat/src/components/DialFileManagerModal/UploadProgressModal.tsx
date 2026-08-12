@@ -1,5 +1,4 @@
-import { NeutralButton } from '@epam/ai-dial-kit';
-import { DialFileName, DialPopup } from '@epam/ai-dial-ui-kit';
+import { DialFileName, Popup, NeutralButton } from '@epam/ai-dial-ui-kit';
 import { memo, useCallback, type FC, type ReactNode } from 'react';
 import type { FileUploadBatchState } from './types/upload';
 
@@ -35,7 +34,7 @@ const UploadProgressModal: FC<Props> = ({
         aria-valuenow={percent}
       >
         <div
-          className="bg-accent-primary h-full rounded-full transition-all duration-300"
+          className="h-full rounded-full bg-control-accent transition-all duration-300"
           style={{ width: `${percent}%` }}
         />
       </div>
@@ -43,10 +42,9 @@ const UploadProgressModal: FC<Props> = ({
   }, []);
 
   return (
-    <DialPopup
+    <Popup
       className="!h-fit !max-h-full !w-[400px] desktop:!max-h-[693px]"
       open={batchState.isOpen}
-      dividers={false}
       closeOnOutsideClick={false}
       hideClose
       onClose={onCancel}
@@ -70,7 +68,7 @@ const UploadProgressModal: FC<Props> = ({
       <div className="flex h-full max-h-full flex-col gap-4 px-6">
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
           {files.map((entry) => (
-            <div key={entry.id} className="rounded bg-layer-2 px-3 py-2">
+            <div key={entry.id} className="rounded bg-layer-sunken px-3 py-2">
               <DialFileName
                 name={entry.name}
                 details={renderDetails(entry.percent)}
@@ -79,7 +77,7 @@ const UploadProgressModal: FC<Props> = ({
           ))}
         </div>
       </div>
-    </DialPopup>
+    </Popup>
   );
 };
 

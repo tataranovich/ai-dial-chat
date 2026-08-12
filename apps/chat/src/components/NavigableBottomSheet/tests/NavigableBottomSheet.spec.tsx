@@ -5,15 +5,16 @@ import { useSheetNavigation } from '../../../hooks/useSheetNavigation';
 import NavigableBottomSheet from '../NavigableBottomSheet';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
-  DIAL_ICON_SIZE: { LG: 24 },
-  DialGhostIconButton: ({
+  DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
+  ElementSize: { Standard: 'standard' },
+  GhostIconButton: ({
     'aria-label': ariaLabel,
     onClick,
   }: {
     'aria-label': string;
-    onClick: () => void;
+    onClick?: () => void;
   }) => <button type="button" aria-label={ariaLabel} onClick={onClick} />,
-  DialCloseButton: ({
+  CloseButton: ({
     ariaLabel,
     onClose,
   }: {

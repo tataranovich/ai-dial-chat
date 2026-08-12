@@ -56,7 +56,7 @@ The input SHALL store the returned URL on the matching `Attachment.url`.
 
 The image source SHALL prefer `attachment.previewUrl` and fall back to `attachment.url`. The `<img>` SHALL use native lazy-loading (`loading="lazy"`) and asynchronous decoding (`decoding="async"`).
 
-While the image has not loaded, `AttachmentCard` SHALL render a rectangular `DialSkeleton` from `@epam/ai-dial-ui-kit` over the image area. The skeleton SHALL use the ui-kit overlay API to display a centered image icon (`IconPhoto`) and SHALL use theme/ui-kit styling only. The skeleton SHALL remain visible while the image is loading or failed, and SHALL be removed when the image emits a successful load event.
+While the image has not loaded, `AttachmentCard` SHALL render a rectangular `Skeleton` from `@epam/ai-dial-ui-kit` over the image area. The skeleton SHALL use the ui-kit overlay API to display a centered image icon (`IconPhoto`) and SHALL use theme/ui-kit styling only. The skeleton SHALL remain visible while the image is loading or failed, and SHALL be removed when the image emits a successful load event.
 
 The image load tracking SHALL be isolated in a reusable hook owned by `libs/conversation-input` and SHALL not introduce host/application knowledge such as REST paths, generated clients, auth/session state, or file-storage URL rules.
 
@@ -74,7 +74,7 @@ The image load tracking SHALL be isolated in a reusable hook owned by `libs/conv
 #### Scenario: Skeleton is shown until image load completes
 
 - **WHEN** an image attachment thumbnail has not emitted a successful load event
-- **THEN** the card shows a rectangular active `DialSkeleton` with a centered image icon overlay
+- **THEN** the card shows a rectangular active `Skeleton` with a centered image icon overlay
 - **WHEN** the image emits a successful load event
 - **THEN** the skeleton is removed and the image is shown
 
@@ -85,39 +85,33 @@ The image load tracking SHALL be isolated in a reusable hook owned by `libs/conv
 
 ---
 
-### Requirement: Voice recording props on ConversationInput
+### Requirement: Voice recording prop on ConversationInput
 
-`ConversationInputProps` (and the inner `InputProps`) SHALL accept three new optional props:
+`ConversationInputProps` (and the inner `InputProps`) SHALL accept an optional `isAudioMessageSupported?: boolean` prop. This prop is host-injected — the lib MUST NOT compute it internally or know about DIAL Core semantics. When absent or `false`, the mic button is hidden and the voice bar is never rendered.
 
-```ts
-isTranscriptionSupported?: boolean
-onUploadAudio?: (file: File, contentType: string) => Promise<string>
-onTranscribeAudio?: (audioUrl: string) => Promise<string>
-```
+When recording stops, the captured audio is immediately added as a `File` attachment to the message input tray (same as any locally-picked file). No upload or transcription callbacks are involved in the lib layer.
 
-These props are host-injected. The lib MUST NOT compute `isTranscriptionSupported` internally or know about DIAL Core semantics. When all three are absent, the mic button is hidden and the voice bar is never rendered.
+#### Scenario: isAudioMessageSupported absent — no mic button
 
-#### Scenario: All three props absent — no mic button
-
-- **WHEN** `ConversationInput` is rendered without `isTranscriptionSupported`, `onUploadAudio`, or `onTranscribeAudio`
+- **WHEN** `ConversationInput` is rendered without `isAudioMessageSupported` (or with it `false`)
 - **THEN** no mic button is rendered and no voice bar is ever shown
 
-#### Scenario: isTranscriptionSupported true — mic button present
+#### Scenario: isAudioMessageSupported true — mic button present
 
-- **WHEN** `isTranscriptionSupported` is `true` and the callbacks are provided
+- **WHEN** `isAudioMessageSupported` is `true`
 - **THEN** the mic button is rendered in the action bar
 
 ---
 
 ### Requirement: `AttachmentTray` forwards a click callback to each `AttachmentCard`
 
-`libs/conversation-input/src/models/AttachmentTray.ts` (`AttachmentTrayProps`) SHALL gain two optional props:
+`libs/attachment-input/src/models/attachment-tray.ts` (`AttachmentTrayProps`) SHALL declare two optional props:
 
-- `onAttachmentClick?: (attachment: DisplayAttachment) => void` — Called when the user clicks or keyboard-activates a card. Receives the full `DisplayAttachment` object.
+- `onAttachmentClick?: (id: string) => void` — Called when the user clicks or keyboard-activates a card. Receives the attachment `id`; callers that need the full `DisplayAttachment` look it up from their own attachment list by `id`.
 - `clickLabel?: string` — Forwarded to each `AttachmentCard` as `clickLabel`. When omitted, `AttachmentCard`'s own default (`'Open attachment'`) applies.
 
 `AttachmentTray.tsx` SHALL, for each rendered `AttachmentCard`:
-- Pass `(attachment) => onAttachmentClick?.(attachment)` as the `onClick` prop when `onAttachmentClick` is provided.
+- Pass `onAttachmentClick` directly as the `onClick` prop (both share the `(id: string) => void` signature, so no wrapper function is needed).
 - Pass `clickLabel` as the `clickLabel` prop (may be `undefined`; card's own default covers that case).
 - Continue passing `onRemove`, `onRetry`, and `onExpand` as today — the new props are purely additive.
 
@@ -132,7 +126,7 @@ When `onAttachmentClick` is not provided, no `onClick` is passed to cards, and c
 
 - **WHEN** `AttachmentTray` is rendered with `onAttachmentClick` and an attachment list
 - **THEN** each `AttachmentCard` receives an `onClick` prop
-- **AND** activating any card invokes `onAttachmentClick` with the corresponding `DisplayAttachment`
+- **AND** activating any card invokes `onAttachmentClick` with the corresponding attachment `id`
 
 #### Scenario: `clickLabel` is forwarded to each card
 
@@ -161,6 +155,58 @@ When `pendingDropFiles` changes to a non-empty array, `EditMessageInput` SHALL m
 
 - **WHEN** `EditMessageInput` processes the externally-supplied files
 - **THEN** it calls the `onDropFilesConsumed` callback to allow the parent to clear its state
+
+---
+
+### Requirement: EditMessageInput accepts externally-supplied pending attachments
+
+`EditMessageInput` SHALL accept two new optional props, mirroring the same-named props already on `ConversationInputProps`:
+- `pendingAttachments?: Attachment[]` — already-uploaded attachments supplied by the host (e.g. selected from the DIAL file manager), awaiting insertion into the edit tray
+- `onPendingAttachmentsConsumed?: () => void` — signals that the host may clear its pending queue
+
+`EditMessageInput` SHALL forward both props unchanged to its inner `Input`, which already inserts `pendingAttachments` into the tray without invoking `onUploadAttachment` for them (see the `useAttachments` pending-attachments effect).
+
+`EditMessageInput` SHALL also accept `onDialFileSystemClick?: () => void` and `dialFileSystemLabel?: string`, with the same contract as `ConversationInputProps`: when `onDialFileSystemClick` is absent, the "DIAL file system" menu item is not rendered.
+
+#### Scenario: External pending attachments appear in edit input
+
+- **WHEN** `EditMessageInput` receives a non-empty `pendingAttachments` prop
+- **THEN** those attachments are added to the attachment tray in the edit input
+- **THEN** `onUploadAttachment` is NOT called for them
+
+#### Scenario: onPendingAttachmentsConsumed is called after consuming external attachments
+
+- **WHEN** `EditMessageInput` processes the externally-supplied `pendingAttachments`
+- **THEN** it calls the `onPendingAttachmentsConsumed` callback to allow the parent to clear its state
+
+#### Scenario: DIAL file system menu item absent without a handler
+
+- **GIVEN** `onDialFileSystemClick` is not passed to `EditMessageInput`
+- **WHEN** the user opens the edit-mode attach (+) menu
+- **THEN** only "Attach file" appears; "DIAL file system" is absent
+
+---
+
+### Requirement: EditMessageInput forwards attachment card clicks to the host
+
+`EditMessageInputProps` SHALL accept an optional `onAttachmentClick?: (attachment: DisplayAttachment) => void` prop. When provided, this callback is forwarded to the inner `Input` as `onAttachmentClick`.
+
+`Input` resolves the clicked card's `id` against both `prefixAttachments` (pre-existing kept attachments) and the newly-added `attachments` list, then calls the callback with the matching `DisplayAttachment`. When `onAttachmentClick` is absent, attachment cards in the edit tray are not rendered as interactive.
+
+#### Scenario: Clicking a pre-existing attachment card invokes the callback
+
+- **WHEN** `EditMessageInput` is rendered with `onAttachmentClick` and the user clicks a card for a pre-existing attachment
+- **THEN** `onAttachmentClick` is called with the matching `DisplayAttachment`
+
+#### Scenario: Clicking a newly-added attachment card invokes the callback
+
+- **WHEN** `EditMessageInput` is rendered with `onAttachmentClick` and the user clicks a card for a newly-added attachment
+- **THEN** `onAttachmentClick` is called with the matching `Attachment` (which extends `DisplayAttachment`)
+
+#### Scenario: Cards are inert without onAttachmentClick
+
+- **WHEN** `EditMessageInput` is rendered without `onAttachmentClick`
+- **THEN** attachment cards in the tray are not keyboard-accessible and do not respond to click
 
 ---
 
@@ -235,6 +281,144 @@ When `validateAttachment` is not provided, existing behaviour is unchanged.
 
 ---
 
+### Requirement: Input suppresses text-to-attachment paste conversion when attachments are disabled
+
+`ConversationInputProps`, `InputProps`, and `EditMessageInputProps` SHALL accept an optional `isAttachmentsEnabled?: boolean` prop. When absent the value defaults to `true` (no change in behaviour).
+
+When `isAttachmentsEnabled` is `false`, the `useClipboardPaste` handler SHALL NOT convert long pasted plain text into a `text/plain` attachment. The text SHALL be inserted inline into the textarea as if no threshold existed. Image clipboard items (pasted screenshots) are unaffected — they still convert to `AttachmentType.Image` attachments and proceed through the normal `validateAttachment` path.
+
+The host app is responsible for setting `isAttachmentsEnabled` based on whether the selected deployment supports attachments:
+- When no deployment is selected, the prop is omitted (undefined → `true`), allowing conversion.
+- When a deployment is selected, the host passes `isAttachmentsEnabled={isAttachmentsAllowed}` where `isAttachmentsAllowed` is derived from `selectedDeployment.inputAttachmentTypes` being non-empty.
+
+This prevents the erroneous "Attachments not supported" error banner that appeared when a user pasted a long prompt into the input while a model with no attachment support was selected.
+
+#### Scenario: Long pasted text on a model without attachment support stays inline
+
+- **WHEN** `isAttachmentsEnabled` is `false`
+- **AND** the user pastes plain text longer than `pasteTextThreshold` characters
+- **THEN** the text is inserted into the textarea normally
+- **AND** no attachment card is created
+- **AND** no "Attachments not supported" notification appears
+
+#### Scenario: Long pasted text on a model with attachment support is converted normally
+
+- **WHEN** `isAttachmentsEnabled` is `true` (default)
+- **AND** the user pastes plain text longer than `pasteTextThreshold` characters
+- **THEN** the text is converted to a `text/plain` attachment and shown as an attachment card
+- **AND** the textarea receives no text (paste is intercepted)
+
+#### Scenario: Pasted image is unaffected by isAttachmentsEnabled
+
+- **WHEN** `isAttachmentsEnabled` is `false`
+- **AND** the user pastes an image from the clipboard (no plain text in the clipboard)
+- **THEN** the image is still converted to an `AttachmentType.Image` attachment
+- **AND** the normal `validateAttachment` path runs for the image attachment
+
+#### Scenario: No deployment selected — conversion is not suppressed
+
+- **WHEN** `isAttachmentsEnabled` is `undefined` (no deployment selected)
+- **AND** the user pastes plain text longer than `pasteTextThreshold` characters
+- **THEN** the text is converted to a `text/plain` attachment (default behaviour)
+
+---
+
+### Requirement: Input enforces an optional maximum attachment count
+
+`ConversationInputProps`, `InputProps`, and `EditMessageInputProps` SHALL accept optional host-injected count-limit props:
+
+```ts
+maximumAttachmentsAmount?: number
+onAttachmentsLimitExceeded?: (count: number, limit: number) => void
+```
+
+When `maximumAttachmentsAmount` is a finite number greater than `0`, the input SHALL reject an entire newly added batch when the combined attachment count would exceed the limit. The combined count includes:
+- attachments already in the input tray;
+- pending attachments added from a native file picker, drag-and-drop, clipboard paste, or host-supplied `pendingAttachments`;
+- for `EditMessageInput`, pre-existing kept attachments rendered through `prefixAttachments`.
+
+When rejecting a batch, the input SHALL NOT add any attachment from that batch to the tray, SHALL NOT call `onUploadAttachment` for that batch, SHALL call `onAttachmentsLimitExceeded(count, limit)` when provided, and SHALL revoke any `previewUrl` object URLs created for rejected image attachments.
+
+When `maximumAttachmentsAmount` is `undefined`, `0`, negative, or non-finite, the input SHALL treat the count as unlimited.
+
+The lib SHALL remain host-agnostic: it must not know DIAL Core, quick apps, deployments, REST paths, notification UI, or i18n keys. The host app owns deriving the limit from the selected deployment and rendering any user-facing notification.
+
+#### Scenario: Selected file batch exceeds limit
+
+- **WHEN** `maximumAttachmentsAmount` is `2`
+- **AND** the user selects 3 files in one native file-picker batch
+- **THEN** no selected file is added to the tray
+- **AND** `onUploadAttachment` is NOT called for any selected file
+- **AND** `onAttachmentsLimitExceeded` is called with `count=3` and `limit=2`
+
+#### Scenario: Existing tray attachments count toward limit
+
+- **WHEN** the tray already contains 1 attachment
+- **AND** `maximumAttachmentsAmount` is `2`
+- **AND** the user selects 2 more files
+- **THEN** the new batch is rejected
+- **AND** the tray still contains only the original attachment
+- **AND** `onAttachmentsLimitExceeded` is called with `count=3` and `limit=2`
+
+#### Scenario: Edit-mode kept attachments count toward limit
+
+- **WHEN** `EditMessageInput` is rendered with 2 kept attachments
+- **AND** `maximumAttachmentsAmount` is `2`
+- **AND** the user selects 1 additional file
+- **THEN** the selected file is rejected
+- **AND** `onAttachmentsLimitExceeded` is called with `count=3` and `limit=2`
+
+#### Scenario: Empty maximum means unlimited
+
+- **WHEN** `maximumAttachmentsAmount` is `undefined`
+- **AND** the user selects any number of valid files
+- **THEN** all selected files are accepted subject to MIME/type/upload validation
+- **AND** no count-limit callback is called
+
+---
+
+### Requirement: Attachments already in the tray are re-validated when validateAttachment changes
+
+`useAttachments` (`libs/conversation-input/src/hooks/useAttachments.ts`) SHALL re-run `validateAttachment` against every attachment already in the tray whenever the `validateAttachment` callback identity changes (e.g., because the host recomputed it after the user switched the selected model/deployment).
+
+Attachments currently in `RequestStatus.Loading` are skipped by this re-validation pass — an in-flight upload is never interrupted.
+
+- If `validateAttachment` now returns an `AttachmentErrorReason` for an attachment that was not already in that exact error state, the attachment SHALL transition to `{ status: RequestStatus.Error, errorReason: reason }`. This reuses the existing error-card rendering, retry-button suppression rules, and `hasBlockedAttachments` gating — no new UI or send-blocking mechanism is introduced.
+- If `validateAttachment` now returns `undefined` for an attachment whose `errorReason` was `AttachmentErrorReason.UnsupportedType`, the attachment SHALL transition back to `RequestStatus.Idle` with `errorReason` cleared. When that attachment has no `url` yet (it was never uploaded because it was invalid at add time), `useAttachments` SHALL call `onUploadAttachment` for it as part of the transition.
+- Attachments with any other error reason (e.g. `AttachmentErrorReason.Network`) or with no error are left untouched by this pass beyond the unsupported-type checks above.
+- When `validateAttachment` is not provided (`undefined`), no re-validation pass runs.
+
+This closes the gap where a file attached while compatible with the selected model, followed by switching to a model that no longer supports that file's type, previously left the attachment silently valid until send failed.
+
+#### Scenario: Switching to an incompatible model flags an already-attached file
+
+- **WHEN** a PDF attachment is idle and uploaded under a model that allows PDFs
+- **AND** the user switches to a model whose `inputAttachmentTypes` no longer include `application/pdf`
+- **THEN** the attachment card transitions to `status: RequestStatus.Error` with `errorReason: AttachmentErrorReason.UnsupportedType`
+- **AND** the send action becomes unavailable
+- **AND** the retry button is not rendered on that card
+
+#### Scenario: Switching back to a compatible model clears the error and uploads if needed
+
+- **WHEN** an attachment is in `status: RequestStatus.Error` with `errorReason: AttachmentErrorReason.UnsupportedType` and no `url`
+- **AND** the user switches to a model whose `inputAttachmentTypes` include that attachment's MIME type
+- **THEN** the attachment transitions to `status: RequestStatus.Idle` with `errorReason` cleared
+- **AND** `onUploadAttachment` is called for that attachment
+
+#### Scenario: In-flight uploads are not disturbed by a model switch
+
+- **WHEN** an attachment is in `status: RequestStatus.Loading`
+- **AND** the selected model changes while the upload is still pending
+- **THEN** the re-validation pass leaves that attachment's status untouched
+
+#### Scenario: Unrelated error reasons are not cleared by re-validation
+
+- **WHEN** an attachment is in `status: RequestStatus.Error` with `errorReason: AttachmentErrorReason.Network`
+- **AND** the selected model changes to one that supports the attachment's MIME type
+- **THEN** the attachment remains in `status: RequestStatus.Error` with `errorReason: AttachmentErrorReason.Network`
+
+---
+
 ### Requirement: Input wrapper removes inline-end padding when the tray is full
 
 When the total attachment count (prefix + new) reaches 7 or more, the `Input` wrapper SHALL drop its inline-end (`padding-right`) to `0`. For fewer than 7 attachments the default `p-3` (12 px on all sides) applies.
@@ -290,3 +474,34 @@ For all other error states (no `errorReason`, or `errorReason === AttachmentErro
 - **WHEN** `AttachmentCard` renders with `status: RequestStatus.Error` and `errorReason` is `undefined` and `onRetry` is provided
 - **THEN** the retry button is rendered
 
+---
+
+### Requirement: Native file picker restricts selectable types via an accept hint
+
+`Input`, `ConversationInput`, and `EditMessageInput` in `libs/conversation-input` SHALL accept an optional `fileAccept?: string` prop.
+
+When provided, the component SHALL apply the value verbatim as the `accept` attribute on its native `<input type="file">` element (the device file picker opened by the "Attach file" action). When absent or empty, no `accept` attribute is applied and the native picker offers every file type.
+
+The lib SHALL treat `fileAccept` as an opaque, host-resolved string. It MUST NOT compute the value from deployment data, MIME lists, or DIAL Core semantics — the host app resolves the selected deployment's supported types (via `mimeTypesToFileAccept` over `inputAttachmentTypes`) and passes the finished `accept` string in.
+
+Because the browser `accept` attribute is only a selection hint (the user can still switch the OS dialog to "All files"), this requirement is complementary to and does NOT replace the `validateAttachment` post-pick validation, which continues to gate every added file.
+
+#### Scenario: accept attribute is applied to the native picker
+
+- **WHEN** `ConversationInput` is rendered with `fileAccept="image/*,application/pdf"`
+- **THEN** the hidden `<input type="file">` used by the "Attach file" action has `accept="image/*,application/pdf"`
+
+#### Scenario: no accept attribute when prop is absent
+
+- **WHEN** `ConversationInput` is rendered without `fileAccept`
+- **THEN** the hidden `<input type="file">` has no `accept` attribute and every file type remains selectable
+
+#### Scenario: edit-message picker honours the accept hint
+
+- **WHEN** `EditMessageInput` is rendered with `fileAccept="image/*"`
+- **THEN** its native `<input type="file">` has `accept="image/*"`
+
+#### Scenario: post-pick validation still runs for forced selections
+
+- **WHEN** `fileAccept` is provided and the user overrides the OS dialog to pick an unsupported file
+- **THEN** `validateAttachment` is still invoked for that file and rejects it as before

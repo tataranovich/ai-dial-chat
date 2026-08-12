@@ -3,15 +3,11 @@ import { type FC, useId } from 'react';
 
 /** Props for {@link MarkdownTaskCheckbox}. */
 export interface MarkdownTaskCheckboxProps {
-  /** Whether the GFM task-list item is checked. */
+  /** Whether the GFM task-list item is checked. Defaults to `false`. */
   checked?: boolean;
 }
 
-/**
- * Read-only checkbox rendered for GFM task-list items (`- [ ]` / `- [x]`),
- * styled with the design-system {@link DialCheckbox}. The wrapping span keeps the
- * control inline with the surrounding list-item text regardless of the checkbox layout.
- */
+/** Read-only checkbox for GFM task-list items (`- [ ]` / `- [x]`). */
 export const MarkdownTaskCheckbox: FC<MarkdownTaskCheckboxProps> = ({
   checked = false,
 }) => {

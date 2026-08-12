@@ -2,22 +2,28 @@ import { CatalogItem } from './catalog-item';
 
 /** Typography class overrides for `CatalogFavorites`. */
 export interface FavoritesTypography {
-  /** Typography class for the section title. Default: `'dial-h3-text'`. */
+  /** Typography class for the section title. Default: `'dial-body-semi-text'`. */
   titleClassName?: string;
-  /** Typography class for the total count. Default: `'dial-tiny-text'`. */
+  /** Typography class for the total count and the page counter. Default: `'dial-tiny-semi-text'`. */
   countClassName?: string;
 }
 
 /** Color overrides for `CatalogFavorites`, applied via CSS custom properties. */
 export interface FavoritesColors {
-  /** Base section background color. Fallback: `--bg-layer-2`. */
-  backgroundBase?: string;
-  /** Section bottom border color. Fallback: `--stroke-secondary`. */
-  border?: string;
   /** Section title color. Fallback: `--text-primary`. */
   titleText?: string;
-  /** Count text color. Fallback: `--text-secondary`. */
+  /** Total-count and page-counter text color. Fallback: `--text-secondary`. */
   countText?: string;
+  /** Color of the checkmark icon on the selected favorite card. Fallback: `--text-accent`. */
+  selectedCheckIcon?: string;
+  /** Border color of the selected favorite card. Fallback: `--stroke-info`. */
+  selectedCardBorder?: string;
+  /** Background color (tint) of the selected favorite card. Fallback: `--bg-accent-primary-alpha`. */
+  selectedCardBackground?: string;
+  /** Icon color of the pagination arrows. Fallback: `--text-accent`. */
+  navButton?: string;
+  /** Icon color of a disabled pagination arrow. Fallback: `--stroke-secondary`. */
+  navButtonDisabled?: string;
 }
 
 /** Grouped style overrides for `CatalogFavorites`. */
@@ -56,4 +62,6 @@ export interface FavoritesProps {
   removeFromFavoritesAriaLabel?: string;
   /** ID of an item to visually mark as selected (border, tint, and checkmark). */
   selectedItemId?: string;
+  /** Credentials-status badge label shown when a favorited item is signed out. Default: `'LOGGED OUT'`. */
+  credentialsBadgeLoggedOutLabel?: string;
 }

@@ -22,11 +22,11 @@ describe('ChatController (integration)', () => {
     app = module.createNestApplication();
     app.use(
       (
-        req: import('express').Request,
-        _res: import('express').Response,
-        next: import('express').NextFunction,
+        req: Express.Request & { user?: unknown },
+        _res: unknown,
+        next: () => void,
       ) => {
-        req.user = TEST_USER as any;
+        req.user = TEST_USER;
         next();
       },
     );
@@ -38,6 +38,7 @@ describe('ChatController (integration)', () => {
       }),
     );
     await app.init();
+    await app.listen(0, '127.0.0.1');
   });
 
   afterEach(async () => {

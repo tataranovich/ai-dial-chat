@@ -1,15 +1,14 @@
-import { AttachmentType, RequestStatus } from '@epam/ai-dial-chat-shared';
 import type { DisplayAttachment } from '@epam/ai-dial-chat-shared';
+import { AttachmentType, RequestStatus } from '@epam/ai-dial-chat-shared';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { ConversationSourcesPanelLabels } from '../../../models/conversation-sources-panel-props';
 import type { QuotationSource } from '../../../models/quotation-source';
 import ConversationSourcesPanel from '../ConversationSourcesPanel';
-import type { ConversationSourcesPanelLabels } from '../ConversationSourcesPanel';
 
 vi.mock('@epam/ai-dial-sidebar', () => ({
-  PanelEmpty: ({ label }: { label: string }) => <div>{label}</div>,
   PanelNoResults: ({ label }: { label: string }) => <div>{label}</div>,
   SidebarOrientation: { Left: 'left', Right: 'right' },
   SidebarPanel: ({
@@ -19,6 +18,7 @@ vi.mock('@epam/ai-dial-sidebar', () => ({
     onClose,
     leftActions,
     rightActions,
+    title,
   }: {
     children: ReactNode;
     isOpen?: boolean;
@@ -26,8 +26,10 @@ vi.mock('@epam/ai-dial-sidebar', () => ({
     onClose: () => void;
     leftActions?: ReactNode;
     rightActions?: ReactNode;
+    title?: ReactNode;
   }) => (
     <aside aria-label={ariaLabel}>
+      {title && <h1>{title}</h1>}
       {leftActions}
       {rightActions}
       <button aria-label="Close" onClick={onClose} />
@@ -57,13 +59,25 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   ElementSize: { Small: 'small' },
   mergeClasses: (...classes: (string | undefined)[]) =>
     classes.filter(Boolean).join(' '),
-  DialGhostIconButton: ({
+  GhostIconButton: ({
     'aria-label': ariaLabel,
     disabled,
+    onClick,
   }: {
     'aria-label': string;
     disabled?: boolean;
-  }) => <button type="button" aria-label={ariaLabel} disabled={disabled} />,
+    onClick?: () => void;
+  }) => (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={onClick}
+    />
+  ),
+  DialNoDataContent: ({ title }: { title: string }) => <div>{title}</div>,
+  DialEllipsisTooltip: ({ text }: { text: ReactNode }) => <span>{text}</span>,
+  Highlight: ({ text }: { text: string }) => <span>{text}</span>,
 }));
 
 vi.mock('@epam/ai-dial-conversation-input', () => ({
@@ -88,7 +102,7 @@ const LABELS: ConversationSourcesPanelLabels = {
   closeLabel: 'Close',
   searchPlaceholder: 'Search',
   searchClearLabel: 'Clear search',
-  emptyLabel: 'Empty',
+  noDataLabel: 'No data',
   noResultsLabel: 'No results',
   downloadAllLabel: 'Download all',
   uploadedSectionTitle: 'Uploaded files',
@@ -124,6 +138,9 @@ const renderPanel = ({
   sources = [] as QuotationSource[],
   onAttachmentClick = vi.fn(),
   onClose = vi.fn(),
+  onDownloadAll = undefined as (() => void) | undefined,
+  title = undefined as ReactNode,
+  additionalSections = undefined as ReactNode,
 } = {}) =>
   render(
     <ConversationSourcesPanel
@@ -133,8 +150,11 @@ const renderPanel = ({
       generated={generated}
       sources={sources}
       onAttachmentClick={onAttachmentClick}
+      onDownloadAll={onDownloadAll}
       isMobile={false}
       labels={LABELS}
+      title={title}
+      additionalSections={additionalSections}
     />,
   );
 
@@ -159,7 +179,7 @@ describe('ConversationSourcesPanel', () => {
 
   it('renders empty state when no data', () => {
     renderPanel();
-    expect(screen.getByText('Empty')).toBeTruthy();
+    expect(screen.getByText('No data')).toBeTruthy();
     expect(screen.queryByRole('heading')).toBeNull();
     expect(screen.queryByRole('searchbox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Download all' })).toBeNull();
@@ -182,6 +202,34 @@ describe('ConversationSourcesPanel', () => {
   it('renders sources section', () => {
     renderPanel({ sources: [makeSource('https://example.com', 'Example')] });
     expect(screen.getByText('Example')).toBeTruthy();
+  });
+
+  it('renders the download-all button disabled when onDownloadAll is omitted', () => {
+    renderPanel({ uploaded: [makeAttachment('upload.pdf')] });
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Download all',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it('renders the download-all button enabled and wired to onDownloadAll', async () => {
+    const user = userEvent.setup();
+    const onDownloadAll = vi.fn();
+    renderPanel({
+      uploaded: [makeAttachment('upload.pdf')],
+      onDownloadAll,
+    });
+
+    const button = screen.getByRole('button', {
+      name: 'Download all',
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+
+    await user.click(button);
+    expect(onDownloadAll).toHaveBeenCalledOnce();
   });
 });
 
@@ -216,7 +264,7 @@ describe('ConversationSourcesPanel — search', () => {
 
     await user.type(screen.getByRole('searchbox'), 'zzznomatch');
 
-    expect(screen.getByText('No results')).toBeTruthy();
+    expect(screen.getAllByText('No results')).toBeTruthy();
     expect(screen.queryByRole('heading')).toBeNull();
   });
 
@@ -229,7 +277,7 @@ describe('ConversationSourcesPanel — search', () => {
 
     const input = screen.getByRole('searchbox');
     await user.type(input, 'zzznomatch');
-    expect(screen.getByText('No results')).toBeTruthy();
+    expect(screen.getAllByText('No results')).toBeTruthy();
 
     await user.clear(input);
     expect(screen.getByText('upload.pdf')).toBeTruthy();
@@ -248,7 +296,69 @@ describe('ConversationSourcesPanel — search', () => {
 
     await user.type(screen.getByRole('searchbox'), 'keep');
 
-    expect(screen.getByText('Keep me')).toBeTruthy();
-    expect(screen.queryByText('Hide me')).toBeNull();
+    expect(screen.getByRole('link', { name: /keep me/i })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /hide me/i })).toBeNull();
+  });
+});
+
+describe('ConversationSourcesPanel — title and additionalSections (optional, additive)', () => {
+  it("omitting title and additionalSections reproduces today's exact empty-state output", () => {
+    renderPanel();
+    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
+  it('renders the supplied title in the panel header', () => {
+    renderPanel({ title: 'Weekly AI Research Digest' });
+    expect(
+      screen.getByRole('heading', {
+        level: 1,
+        name: 'Weekly AI Research Digest',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('renders additionalSections ahead of the existing file/source sections', () => {
+    renderPanel({
+      uploaded: [makeAttachment('upload.pdf')],
+      additionalSections: <div data-testid="history">History content</div>,
+    });
+
+    const container = screen.getByText('History content').closest('div');
+    expect(container).toBeTruthy();
+    const headings = screen.getAllByRole('heading');
+    expect(headings.map((h) => h.textContent)).toContain('Uploaded files');
+    expect(screen.getByText('History content')).toBeTruthy();
+  });
+
+  it('renders additionalSections instead of the global empty state when there are no files or sources', () => {
+    renderPanel({
+      additionalSections: <div>History content</div>,
+    });
+
+    expect(screen.getByText('History content')).toBeTruthy();
+    expect(screen.queryByText('No data')).toBeNull();
+  });
+
+  it('does not render search or download-all when only additionalSections is present', () => {
+    renderPanel({
+      additionalSections: <div>History content</div>,
+    });
+
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Download all' })).toBeNull();
+  });
+
+  it('keeps additionalSections visible when a search query matches no files or sources', async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      uploaded: [makeAttachment('upload.pdf')],
+      additionalSections: <div>History content</div>,
+    });
+
+    await user.type(screen.getByRole('searchbox'), 'zzznomatch');
+
+    expect(screen.getByText('History content')).toBeTruthy();
+    expect(screen.getAllByText('No results')).toBeTruthy();
   });
 });

@@ -3,6 +3,7 @@ import type {
   AttachmentErrorReason,
   DeploymentItem,
   DisplayAttachment,
+  ToolMenuItem,
 } from '@epam/ai-dial-chat-shared';
 import type { ReactNode } from 'react';
 import type {
@@ -11,12 +12,11 @@ import type {
   InputTypography,
   ModelSelectorLabels,
   SendOnEnter,
+  ToolsChipLabels,
 } from './Input';
 
 /** CSS custom-property overrides for the `ConversationInput` component. */
 export interface ConversationInputColors {
-  /** Root container background color. */
-  background?: string;
   /** Welcome heading text color. */
   welcomeText?: string;
   /** Color overrides forwarded to the inner `Input` component. */
@@ -47,12 +47,7 @@ export interface EditMessageInputProps {
   initialAttachments?: DisplayAttachment[];
   /** Called when the user clicks the Cancel button. */
   onCancel: () => void;
-  /**
-   * Called when the user clicks Save & Submit.
-   * @param message - The edited message text.
-   * @param keptAttachments - Pre-existing attachments the user did not remove.
-   * @param newAttachments - New attachments added during editing.
-   */
+  /** Called when the user clicks Save & Submit. */
   onSave: (
     message: string,
     keptAttachments: DisplayAttachment[],
@@ -93,9 +88,47 @@ export interface EditMessageInputProps {
     attachment: Attachment,
   ) => AttachmentErrorReason | undefined;
   /**
-   * When `true`, the "Attach file" button is hidden.
+   * When `false`, long pasted plain text is inserted inline instead of being
+   * converted to a text attachment. Set to `false` when the selected model
+   * does not support attachments. Defaults to `true`.
    */
+  isAttachmentsEnabled?: boolean;
+  /** Maximum total kept-plus-new attachments; unlimited when `undefined`, `0`, or non-finite. */
+  maximumAttachmentsAmount?: number;
+  /** Called when adding a batch would exceed `maximumAttachmentsAmount`. */
+  onAttachmentsLimitExceeded?: (count: number, limit: number) => void;
+  /** When `true`, the "Attach file" button is hidden. */
   hideAttachFile?: boolean;
+  /**
+   * Value applied verbatim as the `accept` attribute on the native device
+   * file picker (`<input type="file">`), hinting the OS dialog to grey out or
+   * hide unsupported file types. Resolved by the host from the selected
+   * model's supported attachment types. When absent, every file type is
+   * selectable.
+   */
+  fileAccept?: string;
+  /** Called when user selects "DIAL file system" from the attach menu. When absent, the menu item is not rendered. */
+  onDialFileSystemClick?: () => void;
+  /** Label for the "DIAL file system" menu item. Defaults to `'DIAL file system'`. */
+  dialFileSystemLabel?: string;
+  /** Already-uploaded attachments supplied by the host and awaiting insertion into the local tray. */
+  pendingAttachments?: Attachment[];
+  /** Called after `pendingAttachments` have been inserted into the local tray. */
+  onPendingAttachmentsConsumed?: () => void;
+  /**
+   * Called when the user clicks or keyboard-activates an attachment card in the tray.
+   * Covers both newly-added and pre-existing (kept) attachments.
+   * When absent the cards are not rendered as interactive.
+   */
+  onAttachmentClick?: (attachment: DisplayAttachment) => void;
+  /** Character count above which pasted plain-text triggers `onMessageTooLong` when attachments are disabled. Defaults to `4000`. */
+  pasteTextThreshold?: number;
+  /**
+   * Called when the user pastes text whose length is ≥ `pasteTextThreshold` while
+   * `isAttachmentsEnabled` is `false`. The text is still inserted inline — the
+   * host is responsible for surfacing the error to the user.
+   */
+  onMessageTooLong?: (length: number, max: number) => void;
 }
 
 /** Props accepted by the `ConversationInput` component. */
@@ -104,9 +137,14 @@ export interface ConversationInputProps {
   placeholder?: string;
   /**
    * Message value. Sets the initial textarea content on mount and syncs the
-   * textarea whenever the value changes to a non-empty string.
+   * textarea whenever the value changes.
    */
   message?: string;
+  /**
+   * Optional token that forces the textarea to resync from `message`, even
+   * when `message` itself is the same string as before.
+   */
+  messageRevision?: number;
   /** Optional welcome heading rendered above the input. */
   welcomeText?: string;
   /** Called when the user submits a message (Enter or send button). Receives the current local attachments as the second argument. */
@@ -150,7 +188,7 @@ export interface ConversationInputProps {
   sendTitle?: string;
   /** Accessible label for the stop button. */
   stopLabel?: string;
-  /** When `true`, blocks all text input, send, attach, and drop interactions. Starter/action buttons remain usable. Defaults to `false`. */
+  /** When `true`, blocks all text input, send, attach, and drop interactions. Starter/action buttons and the model selector remain usable. Defaults to `false`. */
   isInputDisabled?: boolean;
   /**
    * When `true`, the model selector renders in a disabled, non-interactive
@@ -160,24 +198,28 @@ export interface ConversationInputProps {
    */
   isModelSelectorDisabled?: boolean;
   /**
+   * When `true`, disables the send action without removing or dimming the
+   * send button itself. Independent of `isInputDisabled`. Defaults to `false`.
+   */
+  isSendDisabled?: boolean;
+  /**
+   * Extra class name(s) merged onto the inner `Input` wrapper element (the
+   * bordered container around the textarea/model-selector/send-button row),
+   * distinct from `className` which styles this component's own outer root.
+   */
+  inputClassName?: string;
+  /**
    * When `true`, the mic button is rendered and voice recording is enabled.
    * The host app derives this from the selected deployment's `inputAttachmentTypes`.
    * When `false` or absent, the mic button is hidden and the voice bar is never shown.
    */
-  isTranscriptionSupported?: boolean;
-  /**
-   * Called when the user confirms a voice recording.
-   * Receives the recorded `File` and its detected MIME type.
-   * Should resolve with the DIAL storage URL for the uploaded audio.
-   */
-  onUploadAudio?: (file: File, contentType: string) => Promise<string>;
-  /**
-   * Called after successful audio upload with the returned DIAL storage URL.
-   * Should resolve with the transcript text.
-   */
-  onTranscribeAudio?: (audioUrl: string) => Promise<string>;
+  isAudioMessageSupported?: boolean;
   /** Accessible label for the mic button. Defaults to `'Record voice message'`. */
   micLabel?: string;
+  /** Accessible label for the stop-recording button inside the voice bar. Defaults to `'Stop recording'`. */
+  stopRecordingLabel?: string;
+  /** Accessible label for the discard / X button inside the voice bar. Defaults to `'Discard recording'`. */
+  discardRecordingLabel?: string;
   /**
    * Controls which key combination submits the message.
    * - `SendOnEnter.Enter` (default): Enter submits; Shift+Enter inserts a newline.
@@ -206,6 +248,14 @@ export interface ConversationInputProps {
   /** Accessible label for the `+` trigger button. Defaults to `'Add'`. */
   addMenuTitle?: string;
   /**
+   * Value applied verbatim as the `accept` attribute on the native device
+   * file picker (`<input type="file">`), hinting the OS dialog to grey out or
+   * hide unsupported file types. Resolved by the host from the selected
+   * model's supported attachment types. When absent, every file type is
+   * selectable. Forwarded to the inner `Input`.
+   */
+  fileAccept?: string;
+  /**
    * Called synchronously for each attachment after it is added, before upload begins.
    * Return an `AttachmentErrorReason` to reject the attachment (it enters error state
    * and `onUploadAttachment` is NOT called). Return `undefined` to allow normal upload.
@@ -214,6 +264,22 @@ export interface ConversationInputProps {
     attachment: Attachment,
   ) => AttachmentErrorReason | undefined;
   /**
+   * When `false`, long pasted plain text is inserted inline instead of being
+   * converted to a text attachment. Set to `false` when the selected model
+   * does not support attachments. Defaults to `true`.
+   */
+  isAttachmentsEnabled?: boolean;
+  /**
+   * Maximum number of attachments allowed in the input tray. Undefined, `0`,
+   * or non-finite values mean there is no count limit.
+   */
+  maximumAttachmentsAmount?: number;
+  /**
+   * Called when adding a file/drop/pending attachment batch would exceed
+   * `maximumAttachmentsAmount`.
+   */
+  onAttachmentsLimitExceeded?: (count: number, limit: number) => void;
+  /**
    * When `true`, the "Attach file" item is removed from the attach menu.
    * Other menu items (e.g. DIAL file system) remain visible. When no items
    * remain in the menu the entire attach (+) button is hidden automatically.
@@ -221,10 +287,10 @@ export interface ConversationInputProps {
   hideAttachFile?: boolean;
   /**
    * Called when the user clicks or keyboard-activates an attachment card.
-   * Receives the full `Attachment` object (including the local `File`).
+   * Receives a `DisplayAttachment` (covers both new and pre-existing attachments).
    * When absent the card is not rendered as interactive.
    */
-  onAttachmentClick?: (attachment: Attachment) => void;
+  onAttachmentClick?: (attachment: DisplayAttachment) => void;
   /**
    * When provided, the desktop model-selector chip opens this panel instead of
    * the flat deployment list. Receives `onClose` so the panel can close the
@@ -232,4 +298,22 @@ export interface ConversationInputProps {
    */
   // TODO: review usage
   modelPickerOverlay?: (onClose: () => void) => ReactNode;
+  /** Resolved tool toggle items rendered in a "Tools" submenu. When empty or absent, no Tools item is shown. */
+  toolsMenuItems?: ToolMenuItem[];
+  /** Called when a tool row is toggled. Receives the tool id. */
+  onToolToggle?: (toolId: string) => void;
+  /** Label for the "Tools" menu item and mobile sheet title. Defaults to `'Tools'`. */
+  toolsMenuTitle?: string;
+  /** Accessible label for the back arrow in the mobile tools bottom sheet. Defaults to `'Back'`. */
+  toolsBackLabel?: string;
+  /** Labels for the selected-tools chip row shown in the input when tools are active. */
+  toolsChipLabels?: ToolsChipLabels;
+  /** Arbitrary slot rendered in the action row before the model selector. Use to inject app-level controls (e.g. a token-usage indicator). */
+  usageLimitsSlot?: ReactNode;
+  /**
+   * Called when the user pastes text whose length is ≥ `pasteTextThreshold` while
+   * `isAttachmentsEnabled` is `false`. The text is still inserted inline — the
+   * host is responsible for surfacing the error to the user.
+   */
+  onMessageTooLong?: (length: number, max: number) => void;
 }

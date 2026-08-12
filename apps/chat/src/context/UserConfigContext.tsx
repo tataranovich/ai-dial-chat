@@ -1,4 +1,4 @@
-import { DialSpinner, NotificationVariant } from '@epam/ai-dial-ui-kit';
+import { Spinner, NotificationVariant } from '@epam/ai-dial-ui-kit';
 import {
   createContext,
   type ReactNode,
@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { UserConfigI18nKeys } from '../constants/translation-keys';
+import { getApiErrorDetails } from '../server-api/api-error';
 import {
   getUserConfig,
   pinConversation as apiPinConversation,
@@ -18,6 +19,7 @@ import {
   updateSelectedDeployment as apiUpdateSelectedDeployment,
 } from '../server-api/user-config.api';
 import { UserConfigStatus } from '../types/user-config-status';
+import { useUser } from './auth/UserContext';
 import { useNotification } from './NotificationContext';
 
 interface UserConfigContextType {
@@ -39,6 +41,8 @@ const UserConfigContext = createContext<UserConfigContextType | undefined>(
 export const UserConfigProvider = ({ children }: { children: ReactNode }) => {
   const { t } = useTranslation();
   const { showNotification } = useNotification();
+  const { user } = useUser();
+  const userSub = user?.sub;
 
   const [status, setStatus] = useState<UserConfigStatus>(
     UserConfigStatus.Loading,
@@ -54,10 +58,22 @@ export const UserConfigProvider = ({ children }: { children: ReactNode }) => {
     string | null
   >(null);
 
+  /*
+   * userSub is included so that if the authenticated identity changes while
+   * this provider stays mounted (an in-place identity adoption — see
+   * spa-auth-session's identity revalidation requirement), the user config
+   * is reset and refetched instead of continuing to serve the previous
+   * identity's snapshot.
+   */
   useEffect(() => {
     const guard = { isCancelled: false };
 
     const load = async () => {
+      setStatus(UserConfigStatus.Loading);
+      setPinnedConversationIds([]);
+      setInstalledToolsetIds([]);
+      setInstalledDeploymentIds([]);
+      setSelectedDeploymentId(null);
       try {
         const config = await getUserConfig();
         if (guard.isCancelled) return;
@@ -69,9 +85,11 @@ export const UserConfigProvider = ({ children }: { children: ReactNode }) => {
       } catch (err) {
         if (guard.isCancelled) return;
         console.error('[UserConfigContext] Failed to load user config', err);
+        const { traceId } = await getApiErrorDetails(err);
         showNotification({
           variant: NotificationVariant.Error,
           message: t(UserConfigI18nKeys.LoadError),
+          requestId: traceId,
         });
         setStatus(UserConfigStatus.Error);
       }
@@ -83,7 +101,7 @@ export const UserConfigProvider = ({ children }: { children: ReactNode }) => {
       guard.isCancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [userSub]);
 
   const setPinnedConversation = useCallback(
     async (id: string, isPinned: boolean) => {
@@ -185,7 +203,7 @@ export const UserConfigProvider = ({ children }: { children: ReactNode }) => {
   if (status === UserConfigStatus.Loading) {
     return (
       <div className="flex size-full items-center justify-center">
-        <DialSpinner />
+        <Spinner />
       </div>
     );
   }

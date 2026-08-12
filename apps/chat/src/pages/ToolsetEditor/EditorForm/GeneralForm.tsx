@@ -6,49 +6,71 @@ import { DeploymentCreationForm } from '@epam/ai-dial-deployment-creation-form';
 import type { FC } from 'react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ToolsetEditorI18nKeys } from '../../../constants/translation-keys';
-import type {
-  ToolsetFormData,
-  ToolsetFormErrors,
-} from '../../../types/toolsets';
+import {
+  BasicI18nKeys,
+  EditorI18nKeys,
+} from '../../../constants/translation-keys';
+import type { CustomAppGeneralFormData } from '../../../models/custom-apps';
+import type { ToolsetFormErrors } from '../../../models/toolsets';
+import {
+  appendLocaleCode,
+  buildAdditionalLocaleOptions,
+  buildLocaleFieldLabels,
+  PRIMARY_LOCALE,
+} from '../../../utils/locale';
 
 interface Props {
-  form: ToolsetFormData;
+  form: CustomAppGeneralFormData;
   errors: ToolsetFormErrors;
-  onChange: (patch: Partial<ToolsetFormData>) => void;
+  namePlaceholder: string;
+  descriptionPlaceholder: string;
+  onChange: (patch: Partial<CustomAppGeneralFormData>) => void;
+  onNameBlur?: () => void;
+  onVersionBlur?: () => void;
 }
 
-const GeneralForm: FC<Props> = ({ form, errors, onChange }) => {
+const GeneralForm: FC<Props> = ({
+  form,
+  errors,
+  namePlaceholder,
+  descriptionPlaceholder,
+  onChange,
+  onNameBlur,
+  onVersionBlur,
+}) => {
   const { t } = useTranslation();
+
+  const localeOptions = useMemo(() => buildAdditionalLocaleOptions(), []);
 
   const labels: DeploymentCreationFormLabels = useMemo(
     () => ({
       name: {
-        label: t(ToolsetEditorI18nKeys.NameLabel),
-        placeholder: t(ToolsetEditorI18nKeys.NamePlaceholder),
+        label: appendLocaleCode(t(EditorI18nKeys.NameLabel), PRIMARY_LOCALE),
+        placeholder: namePlaceholder,
       },
       description: {
-        label: t(ToolsetEditorI18nKeys.DescriptionLabel),
-        placeholder: t(ToolsetEditorI18nKeys.DescriptionPlaceholder),
+        label: appendLocaleCode(
+          t(EditorI18nKeys.DescriptionLabel),
+          PRIMARY_LOCALE,
+        ),
+        placeholder: descriptionPlaceholder,
       },
       iconUrl: {
-        label: t(ToolsetEditorI18nKeys.IconUrlLabel),
-        placeholder: t(ToolsetEditorI18nKeys.IconUrlPlaceholder),
+        label: t(EditorI18nKeys.IconUrlLabel),
+        placeholder: t(BasicI18nKeys.UrlPlaceholder),
       },
       version: {
-        label: t(ToolsetEditorI18nKeys.VersionLabel),
-        placeholder: t(ToolsetEditorI18nKeys.VersionPlaceholder),
+        label: t(EditorI18nKeys.VersionLabel),
+        placeholder: t(EditorI18nKeys.VersionPlaceholder),
       },
       topics: {
-        label: t(ToolsetEditorI18nKeys.TopicsLabel),
-        placeholder: t(ToolsetEditorI18nKeys.TopicsPlaceholder),
+        label: t(EditorI18nKeys.TopicsLabel),
+        placeholder: t(EditorI18nKeys.TopicsPlaceholder),
       },
-      intro: {
-        label: t(ToolsetEditorI18nKeys.IntroLabel),
-        placeholder: t(ToolsetEditorI18nKeys.IntroPlaceholder),
-      },
+      otherLocales: buildLocaleFieldLabels(t),
+      ariaLabel: t(EditorI18nKeys.StepGeneral),
     }),
-    [t],
+    [t, namePlaceholder, descriptionPlaceholder],
   );
 
   const values: DeploymentCreationFormValues = {
@@ -57,7 +79,7 @@ const GeneralForm: FC<Props> = ({ form, errors, onChange }) => {
     iconUrl: form.iconUrl,
     version: form.version,
     topics: form.topics,
-    intro: form.intro,
+    otherLocales: form.otherLocales,
   };
 
   return (
@@ -65,7 +87,10 @@ const GeneralForm: FC<Props> = ({ form, errors, onChange }) => {
       values={values}
       errors={errors}
       onChange={onChange}
+      onNameBlur={onNameBlur}
+      onVersionBlur={onVersionBlur}
       labels={labels}
+      availableLocaleOptions={localeOptions}
     />
   );
 };

@@ -18,10 +18,12 @@ import {
   ApiOperation,
   ApiParam,
   ApiResponse,
+  ApiSecurity,
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
+import { decodeJwt } from 'jose';
 import { generators, type AuthorizationParameters } from 'openid-client';
 import { Public } from '../common/decorators/public.decorator';
 import type { EnvironmentVariables } from '../config/environment.config';
@@ -29,6 +31,7 @@ import {
   ProviderInfoDto,
   UserProfileDto,
 } from '../openapi/openapi-response.dto';
+import { AuthSource } from './auth-source.enum';
 import { BucketService } from './bucket/bucket.service';
 import {
   clearCookieValue,
@@ -42,6 +45,7 @@ import { AuthCallbackQueryDto } from './dto/auth-callback.query.dto';
 import { LoginQueryDto } from './dto/login-query.dto';
 import { ProviderIdParamDto } from './dto/provider-id-param.dto';
 import { ProviderRegistryService } from './providers/provider-registry.service';
+import type { ProviderConfig } from './providers/provider.types';
 import { SessionService } from './session/session.service';
 import type { SessionPayload, SessionUser } from './session/session.types';
 import { resolveCallbackUrl } from './utils/callback-url.util';
@@ -316,10 +320,30 @@ export class AuthController {
     for (const key of ALLOWED_CLAIM_KEYS) {
       if (key in allClaims) filteredClaims[key] = allClaims[key];
     }
-    const rolesClaim = providerConfig.rolesClaim ?? 'roles';
-    if (rolesClaim in allClaims) {
-      filteredClaims[rolesClaim] = allClaims[rolesClaim];
+    /*
+     * Roles are typically issued on the access token, not the ID token —
+     * decode it (unverified; it came directly from the IdP over TLS, same
+     * trust boundary as the ID token) and prefer that as the roles source.
+     */
+    let accessTokenClaims: Record<string, unknown> = {};
+    try {
+      accessTokenClaims = tokenSet.access_token
+        ? (decodeJwt(tokenSet.access_token) as Record<string, unknown>)
+        : {};
+    } catch {
+      accessTokenClaims = {};
     }
+
+    const rolesClaim = providerConfig.rolesClaim ?? 'roles';
+    const rolesClaimValue =
+      resolveClaimPath(accessTokenClaims, rolesClaim) ??
+      resolveClaimPath(allClaims, rolesClaim);
+    if (rolesClaimValue !== undefined) {
+      filteredClaims[rolesClaim] = rolesClaimValue;
+    }
+    this.logger.debug(
+      `callback() rolesClaim="${rolesClaim}" resolved=${rolesClaimValue !== undefined}`,
+    );
 
     const accessToken = tokenSet.access_token ?? '';
     let bucket = '';
@@ -383,8 +407,25 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({ summary: 'Log out and clear session cookie' })
   @ApiResponse({ status: 302, description: 'Redirect after logout' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'No-op success for a header-authenticated caller (no session to clear)',
+  })
   async logout(@Req() req: Request, @Res() res: Response): Promise<void> {
     this.logger.debug('logout() start');
+
+    /*
+     * A header-authenticated caller never had a session created for it — no
+     * cookie to clear, no RP-initiated logout flow tied to a stored ID token.
+     * Respond as a plain no-op success rather than the CSRF-protected
+     * cookie/redirect flow below, which assumes a browser caller.
+     */
+    if (req.headers['authorization']) {
+      res.status(200).send();
+      return;
+    }
+
     /*
      * Protect against CSRF logout even though this route is @Public().
      * Native HTML form POSTs always carry an Origin header the browser sets.
@@ -461,6 +502,7 @@ export class AuthController {
 
   @Get('me')
   @ApiCookieAuth('session')
+  @ApiSecurity('bearer')
   @Throttle({ default: { limit: 60, ttl: 60000 } })
   @ApiOperation({ summary: 'Get current user profile' })
   @ApiResponse({
@@ -474,12 +516,77 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const user = req.user as SessionUser;
-    res.setHeader('X-CSRF-Token', user.csrf);
+    if (req.authSource === AuthSource.Cookie && user.csrf) {
+      res.setHeader('X-CSRF-Token', user.csrf);
+    }
     return {
       sub: user.sub,
       providerId: user.providerId,
       claims: user.claims,
       bucket: user.bucket,
+      isAdmin: this.computeIsAdmin(user),
     };
   }
+
+  /**
+   * Admin status is not persisted in the session — computed on each request
+   * from the provider's currently configured `adminRoles`, so a config
+   * change takes effect without requiring re-login.
+   */
+  private computeIsAdmin(user: SessionUser): boolean {
+    let config: ProviderConfig;
+    try {
+      ({ config } = this.registry.getProvider(user.providerId));
+    } catch {
+      this.logger.debug(
+        `computeIsAdmin() no provider config for providerId=${user.providerId}`,
+      );
+
+      return false;
+    }
+
+    if (!config.adminRoles?.length) {
+      this.logger.debug(
+        `computeIsAdmin() providerId=${user.providerId} has no adminRoles configured`,
+      );
+
+      return false;
+    }
+
+    const rolesClaim = config.rolesClaim ?? 'roles';
+    /* `user.claims` stores the resolved roles claim under the flat
+     * `rolesClaim` key (see callback()) — not as a nested path. */
+    const rolesValue = user.claims[rolesClaim];
+    const roles = Array.isArray(rolesValue)
+      ? rolesValue.map(String)
+      : typeof rolesValue === 'string'
+        ? [rolesValue]
+        : [];
+
+    const isAdmin = roles.some((role) => config.adminRoles?.includes(role));
+    this.logger.debug(
+      `computeIsAdmin() providerId=${user.providerId} rolesClaim="${rolesClaim}" adminRoles=${JSON.stringify(config.adminRoles)} userRoles=${JSON.stringify(roles)} isAdmin=${isAdmin}`,
+    );
+
+    return isAdmin;
+  }
 }
+
+/**
+ * Resolves a dot-notation claim path (e.g. "realm_access.roles") against a
+ * claims object. Falls back to a flat key lookup when the path has no dots.
+ */
+const resolveClaimPath = (
+  claims: Record<string, unknown>,
+  path: string,
+): unknown => {
+  return path
+    .split('.')
+    .reduce<unknown>(
+      (value, segment) =>
+        value != null && typeof value === 'object'
+          ? (value as Record<string, unknown>)[segment]
+          : undefined,
+      claims,
+    );
+};

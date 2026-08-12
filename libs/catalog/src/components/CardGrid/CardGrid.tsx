@@ -1,5 +1,9 @@
-import { mergeClasses, PanelEmptyState } from '@epam/ai-dial-chat-shared';
-import { DialSkeleton, DialSkeletonAvatarShape } from '@epam/ai-dial-ui-kit';
+import {
+  buildCssVars,
+  mergeClasses,
+  PanelEmptyState,
+} from '@epam/ai-dial-chat-shared';
+import { Skeleton, SkeletonAvatarShape } from '@epam/ai-dial-ui-kit';
 import { type FC, memo, useMemo } from 'react';
 import { CARD_HEIGHT, SKELETON_ROW_COUNT } from '../../constants/virtual-grid';
 import type { CardRowData } from '../../models/card-row-data';
@@ -18,6 +22,8 @@ export const CardGrid: FC<CardGridProps> = memo(
     titles,
     isLoading,
     selectedItemId,
+    skeletonColor = styles.skeletonColor,
+    skeletonCardBackground,
   }) => {
     const noResultsTitle = titles?.noResultsTitle ?? 'No results';
     const featuredLabel = titles?.featuredLabel ?? 'Featured';
@@ -25,6 +31,8 @@ export const CardGrid: FC<CardGridProps> = memo(
       titles?.addToFavoritesAriaLabel ?? 'Add to favorites';
     const removeFromFavoritesAriaLabel =
       titles?.removeFromFavoritesAriaLabel ?? 'Remove from favorites';
+    const credentialsBadgeLoggedOutLabel =
+      titles?.credentialsBadgeLoggedOutLabel ?? 'LOGGED OUT';
 
     const { containerRef, startRow, endRow, columnCount, totalHeight } =
       useScrollVirtualizer(items.length);
@@ -40,6 +48,7 @@ export const CardGrid: FC<CardGridProps> = memo(
         addToFavoritesAriaLabel,
         removeFromFavoritesAriaLabel,
         selectedItemId,
+        credentialsBadgeLoggedOutLabel,
       }),
       [
         items,
@@ -51,6 +60,7 @@ export const CardGrid: FC<CardGridProps> = memo(
         addToFavoritesAriaLabel,
         removeFromFavoritesAriaLabel,
         selectedItemId,
+        credentialsBadgeLoggedOutLabel,
       ],
     );
 
@@ -60,23 +70,26 @@ export const CardGrid: FC<CardGridProps> = memo(
           className="grid gap-5 p-5"
           style={{
             gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
+            ...buildCssVars({
+              '--cg-skeleton-card-bg': skeletonCardBackground,
+            }),
           }}
         >
           {Array.from({ length: columnCount * SKELETON_ROW_COUNT }, (_, i) => (
             <div
               key={i}
               className={mergeClasses(
-                'rounded-[6px] border p-4',
+                'rounded-md border p-4',
                 styles.skeletonCard,
               )}
               style={{ height: CARD_HEIGHT }}
             >
-              <DialSkeleton
-                avatar={{ size: 48, shape: DialSkeletonAvatarShape.Square }}
+              <Skeleton
+                avatar={{ size: 48, shape: SkeletonAvatarShape.Square }}
                 showTitle={{ width: `${60 + ((i * 17) % 30)}%` }}
                 paragraph={{ rows: 3 }}
                 active
-                color="var(--bg-layer-4)"
+                color={skeletonColor}
               />
             </div>
           ))}
@@ -86,8 +99,8 @@ export const CardGrid: FC<CardGridProps> = memo(
 
     if (items.length === 0) {
       return (
-        <div className="flex w-full flex-col items-center justify-center gap-2 py-20">
-          <PanelEmptyState label={noResultsTitle} icon={null} />
+        <div className="flex size-full flex-col items-center justify-center">
+          <PanelEmptyState label={noResultsTitle} />
         </div>
       );
     }

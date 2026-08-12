@@ -11,12 +11,13 @@ interface AppConfigState {
   config: {
     asrModelId: string | null;
     transcribeSizeLimitBytes: number;
+    dialCoreExternalUrl: string | null;
   };
   metadata?: { resolvedAt: string; cacheTtlSeconds: number };
 }
 ```
 
-The initial value (before the API call completes) SHALL use `status='loading'`, `features={}`, and safe default values for `config`. On success, `status='ready'`. On error, `status='error'` and defaults are retained.
+The initial value (before the API call completes) SHALL use `status='loading'`, `features={}`, and safe default values for `config`, including `dialCoreExternalUrl: null`. On success, `status='ready'` and `config.dialCoreExternalUrl` is set from the `GET /api/v1/client-config` response's `config.dialCoreExternalUrl` field. On error, `status='error'` and defaults are retained.
 
 Pattern MUST follow `ThemeContext.tsx`: `createContext<AppConfigState | undefined>(undefined)`, context value wrapped in `useMemo`, guard hook throws `Error` when used outside provider.
 
@@ -30,6 +31,7 @@ Pattern MUST follow `ThemeContext.tsx`: `createContext<AppConfigState | undefine
 
 - **WHEN** `AppConfigProvider` mounts and the API call has not yet resolved
 - **THEN** `useAppConfig().status` returns `'loading'`
+- **AND** `useAppConfig().config.dialCoreExternalUrl` returns `null`
 - **AND** `useFeatureFlag('features.asrEnabled')` returns `false`
 
 #### Scenario: Status is ready after successful API call
@@ -42,12 +44,22 @@ Pattern MUST follow `ThemeContext.tsx`: `createContext<AppConfigState | undefine
 
 - **WHEN** the API call rejects (network error, 4xx, 5xx)
 - **THEN** `useAppConfig().status` returns `'error'`
-- **AND** `useAppConfig().config` retains safe defaults (`asrModelId: null`, `transcribeSizeLimitBytes: 5242880`)
+- **AND** `useAppConfig().config` retains safe defaults (`asrModelId: null`, `transcribeSizeLimitBytes: 5242880`, `dialCoreExternalUrl: null`)
 
 #### Scenario: useAppConfig throws when used outside provider
 
 - **WHEN** `useAppConfig()` is called in a component that is not wrapped in `AppConfigProvider`
 - **THEN** it throws an `Error` with a descriptive message (e.g. `'useAppConfig must be used within AppConfigProvider'`)
+
+#### Scenario: dialCoreExternalUrl is populated from a successful response
+
+- **WHEN** the API call resolves with `config.dialCoreExternalUrl: 'https://dial.example.com'`
+- **THEN** `useAppConfig().config.dialCoreExternalUrl` returns `'https://dial.example.com'`
+
+#### Scenario: dialCoreExternalUrl stays null when the backend omits it
+
+- **WHEN** the API call resolves with `config.dialCoreExternalUrl: null`
+- **THEN** `useAppConfig().config.dialCoreExternalUrl` returns `null`
 
 ---
 
@@ -129,3 +141,145 @@ Callers currently access `useAppConfig().asrModelId` and `useAppConfig().transcr
 
 - **WHEN** `grep -r 'useAppConfig()\.asrModelId\|useAppConfig()\.transcribeSizeLimitBytes' apps/chat/src` is run
 - **THEN** it returns no results
+
+---
+
+### Requirement: AppConfigContext exposes overlay eligibility fields
+
+`AppConfigState.config` SHALL add `overlayEnabled: boolean` and `overlayAllowedOrigins: string[]`, populated from the corresponding `client-config-endpoint` response fields, with safe defaults (`overlayEnabled: false`, `overlayAllowedOrigins: []`) in both the initial (`loading`) and `error` states — no change to `AppConfigState.status`'s existing three-value shape or to any other existing field.
+
+**RTL impact:** None. **i18n impact:** None. **Memoization:** Covered by the existing context-value `useMemo` — no additional memoization needed for these two fields.
+
+#### Scenario: Defaults while loading
+
+- **WHEN** `AppConfigProvider` mounts and the API call has not yet resolved
+- **THEN** `useAppConfig().config.overlayEnabled` returns `false` and `useAppConfig().config.overlayAllowedOrigins` returns `[]`
+
+#### Scenario: Populated on success
+
+- **WHEN** the API call resolves with `config.overlayEnabled: true` and `config.overlayAllowedOrigins: ["https://partner.example.com"]`
+- **THEN** `useAppConfig().config.overlayEnabled` returns `true` and `useAppConfig().config.overlayAllowedOrigins` returns `["https://partner.example.com"]`
+
+#### Scenario: Defaults on error
+
+- **WHEN** the API call rejects
+- **THEN** `useAppConfig().config.overlayEnabled` returns `false` and `useAppConfig().config.overlayAllowedOrigins` returns `[]`, alongside the existing error-state defaults for the other config fields
+
+---
+
+### Requirement: AppConfigContext exposes the announcement message
+
+`AppConfigState.config` SHALL include an `announcementHtml: string | null` field. The initial (loading) value SHALL be `null`. On a successful `GET /api/v1/client-config` response, `config.announcementHtml` SHALL be populated from the response's `config.announcementHtml` field. On error, or when the backend omits the field, `config.announcementHtml` SHALL retain the `null` default.
+
+#### Scenario: announcementHtml is null before config loads
+
+- **WHEN** `AppConfigProvider` has mounted but the API call has not resolved
+- **THEN** `useAppConfig().config.announcementHtml` returns `null`
+
+#### Scenario: announcementHtml is populated from a successful response
+
+- **WHEN** the API call resolves with `config.announcementHtml: "Welcome to DIAL!"`
+- **THEN** `useAppConfig().config.announcementHtml` returns `"Welcome to DIAL!"`
+
+#### Scenario: announcementHtml stays null when the backend omits it or the call fails
+
+- **WHEN** the response omits `config.announcementHtml`, or the API call rejects
+- **THEN** `useAppConfig().config.announcementHtml` returns `null`
+
+---
+
+### Requirement: AppConfigContext exposes customVisualizers
+
+`AppConfigContext` (`apps/chat/src/context/AppConfigContext.tsx`) SHALL surface the parsed `customVisualizers: CustomVisualizer[]` field from the `/api/v1/config` response to client consumers.
+
+Behaviour:
+
+- The field SHALL be readable via the existing `useAppConfig()` accessor and via a dedicated `useCustomVisualizers()` hook exported from `apps/chat/src/hooks/attachment/useCustomVisualizers.ts` (see the `custom-visualizers` capability).
+- While the config request is loading OR on error, both accessors SHALL return `[]`.
+- The returned array reference SHALL remain stable across renders as long as the underlying config has not changed (memoise the parse result).
+- The type imported by the app SHALL be the same `CustomVisualizer` type exported from `@epam/ai-dial-chat-shared`.
+
+Libs SHALL NOT read `AppConfigContext` for the registry — the app resolves the registry and passes concrete `VisualizerCanvasContent` values into libs.
+
+**Feature flag:** none. The empty-array default keeps the field dark.
+
+**RTL impact:** none.
+
+**i18n impact:** none.
+
+#### Scenario: customVisualizers is exposed when config is ready
+
+- **WHEN** `AppConfigProvider` has fetched a config with `customVisualizers: [{ contentType: 'application/x-my-viz', url: 'https://viz.example.com' }]`
+- **THEN** `useAppConfig().customVisualizers` returns that same array
+- **AND** `useCustomVisualizers()` returns the same array (identical reference)
+
+#### Scenario: customVisualizers defaults to empty during loading and on error
+
+- **WHEN** the config request is in flight
+- **THEN** both `useAppConfig().customVisualizers` and `useCustomVisualizers()` return `[]`
+- **AND** the same holds after the request rejects
+
+---
+
+### Requirement: AppConfigContext exposes the announcement title and description
+
+`AppConfigState.config` SHALL include `announcementTitle: string | null` and `announcementDescription: string | null`.
+
+The initial (loading) value of each SHALL be `null`. On a successful `GET /api/v1/client-config` response, each SHALL be populated from the response's `config.announcementTitle` and `config.announcementDescription` fields. On error, or when the backend omits a field, each SHALL retain the `null` default.
+
+The context SHALL NOT re-sanitize or otherwise transform these values — it surfaces what the backend returned, and the banner component applies its own client-side sanitization pass (see the `announcement-banner` capability).
+
+#### Scenario: Announcement fields are null before config loads
+
+- **WHEN** `AppConfigProvider` has mounted but the API call has not resolved
+- **THEN** `useAppConfig().config.announcementTitle` returns `null` and `.announcementDescription` returns `null`
+
+#### Scenario: Announcement fields are populated from a successful response
+
+- **WHEN** the API call resolves with `config.announcementTitle: "🎉 Welcome to DIAL! 🎉"` and `config.announcementDescription: "Explore our AI offerings with your data."`
+- **THEN** `useAppConfig().config` exposes those exact values
+
+#### Scenario: Announcement fields stay null when the backend omits them or the call fails
+
+- **WHEN** the response omits both fields, or the API call rejects
+- **THEN** `useAppConfig().config.announcementTitle` returns `null` and `.announcementDescription` returns `null`
+
+#### Scenario: One field populated, the other absent
+
+- **WHEN** the response carries `config.announcementTitle` but omits `config.announcementDescription`
+- **THEN** `useAppConfig().config.announcementTitle` returns the response value and `.announcementDescription` returns `null`
+
+---
+
+### Requirement: AppConfigContext exposes the announcements list
+
+`AppConfigState.config` SHALL include an `announcements: AnnouncementItem[]` field.
+
+The initial (loading) value SHALL be `[]`. On a successful `GET /api/v1/client-config` response, it SHALL be populated from the response's `config.announcements` field. On error, or when the backend omits the field, it SHALL retain the `[]` default. A `null` or non-array value SHALL be normalized to `[]`.
+
+The returned array reference SHALL remain stable across renders as long as the underlying config has not changed. The context SHALL NOT re-validate, re-sanitize, or re-order entries — the backend is the authority on which entries are safe to render.
+
+#### Scenario: Announcements default to an empty array before config loads
+
+- **WHEN** `AppConfigProvider` has mounted but the API call has not resolved
+- **THEN** `useAppConfig().config.announcements` returns `[]`
+
+#### Scenario: Announcements are populated from a successful response
+
+- **WHEN** the API call resolves with an entry in `config.announcements`
+- **THEN** `useAppConfig().config.announcements` returns that entry
+
+#### Scenario: Announcements stay empty when the backend omits them or the call fails
+
+- **WHEN** the response omits `config.announcements`, or the API call rejects
+- **THEN** `useAppConfig().config.announcements` returns `[]`
+
+#### Scenario: A non-array announcements value is normalized
+
+- **WHEN** the response carries `config.announcements: null`
+- **THEN** `useAppConfig().config.announcements` returns `[]` rather than `null`
+
+#### Scenario: The announcements array reference is stable across renders
+
+- **WHEN** a consumer re-renders without the underlying config changing
+- **THEN** `useAppConfig().config.announcements` returns the same array reference as the previous render

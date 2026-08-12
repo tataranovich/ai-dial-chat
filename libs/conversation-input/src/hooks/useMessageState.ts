@@ -9,8 +9,10 @@ import {
 
 /** Parameters for the {@link useMessageState} hook. */
 interface UseMessageStateParams {
-  /** Controlled message value from the parent. Syncs into local state whenever it changes to a non-empty string. */
+  /** Message value supplied by the parent. */
   messageProp: string;
+  /** Optional token that forces resync even when the message value is unchanged. */
+  messageRevision?: number;
 }
 
 /** Return value of the {@link useMessageState} hook. */
@@ -25,12 +27,10 @@ export interface UseMessageStateResult {
   isMultiLine: boolean;
 }
 
-/**
- * Manages textarea message value, parent-prop sync, and multi-line detection
- * for the `Input` component.
- */
+/** Manages textarea value and multi-line state for the `Input` component. */
 export const useMessageState = ({
   messageProp,
+  messageRevision,
 }: UseMessageStateParams): UseMessageStateResult => {
   const [message, setMessage] = useState(messageProp);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -38,10 +38,8 @@ export const useMessageState = ({
   const [isMultiLine, setIsMultiLine] = useState(false);
 
   useEffect(() => {
-    if (messageProp) {
-      setMessage(messageProp);
-    }
-  }, [messageProp]);
+    setMessage(messageProp);
+  }, [messageProp, messageRevision]);
 
   useEffect(() => {
     if (textareaRef.current) {

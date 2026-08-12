@@ -14,6 +14,18 @@ export default defineConfig(() => ({
       tsconfigPath: path.join(import.meta.dirname, 'tsconfig.lib.json'),
     }),
   ],
+  resolve: {
+    alias: {
+      '@epam/ai-dial-kit': path.resolve(
+        import.meta.dirname,
+        '../ai-dial-kit/src/index.ts',
+      ),
+      '@epam/ai-dial-publish-panel': path.resolve(
+        import.meta.dirname,
+        '../publish-panel/src/index.ts',
+      ),
+    },
+  },
   build: {
     outDir: './dist',
     emptyOutDir: true,

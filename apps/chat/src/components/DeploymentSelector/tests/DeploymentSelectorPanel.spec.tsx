@@ -2,8 +2,12 @@ import { CatalogEntityType, type CatalogItem } from '@epam/ai-dial-catalog';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import DeploymentSelectorPanel from '../DeploymentSelectorPanel';
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 const makeItem = (id: string, type: CatalogEntityType): CatalogItem => ({
   id,
@@ -32,7 +36,7 @@ const renderPanel = (
 
 describe('DeploymentSelectorPanel', () => {
   it('shows a favorited Application in the list', () => {
-    renderPanel([makeItem('app-1', CatalogEntityType.Application)]);
+    renderPanel([makeItem('app-1', CatalogEntityType.Agent)]);
 
     expect(screen.getByRole('button', { name: /app-1/ })).toBeTruthy();
   });
@@ -49,21 +53,21 @@ describe('DeploymentSelectorPanel', () => {
     expect(screen.getByRole('button', { name: /agent-1/ })).toBeTruthy();
   });
 
-  it.each([
-    CatalogEntityType.Toolset,
-    CatalogEntityType.Skill,
-    CatalogEntityType.Guardrail,
-    CatalogEntityType.Mcp,
-  ])('excludes a favorited %s from the list', (type) => {
-    renderPanel([makeItem('non-talkable-1', type)]);
+  it.each([CatalogEntityType.Toolset, CatalogEntityType.Skill])(
+    'excludes a favorited %s from the list',
+    (type) => {
+      renderPanel([makeItem('non-talkable-1', type)]);
 
-    expect(screen.queryByRole('button', { name: /non-talkable-1/ })).toBeNull();
-  });
+      expect(
+        screen.queryByRole('button', { name: /non-talkable-1/ }),
+      ).toBeNull();
+    },
+  );
 
   it('shows Models and Applications together', () => {
     renderPanel([
       makeItem('model-1', CatalogEntityType.Model),
-      makeItem('app-1', CatalogEntityType.Application),
+      makeItem('app-1', CatalogEntityType.Agent),
       makeItem('toolset-1', CatalogEntityType.Toolset),
     ]);
 
@@ -111,7 +115,7 @@ describe('DeploymentSelectorPanel', () => {
       });
 
       await user.type(
-        screen.getByRole('textbox', { name: 'Search models and agents' }),
+        screen.getByRole('textbox', { name: 'Search models, agents\u2026' }),
         'gpt',
       );
 

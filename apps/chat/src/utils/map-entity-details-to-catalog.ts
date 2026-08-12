@@ -1,16 +1,22 @@
 import type {
   CatalogItemApiDetails,
+  CatalogItemCredentials,
   CatalogItemPricing,
   CatalogItemTabData,
+  CatalogItemTools,
   CodeSnippet,
   EndpointOption,
   OverviewSection,
 } from '@epam/ai-dial-catalog';
-import { CodeLanguage } from '@epam/ai-dial-catalog';
+import {
+  CodeLanguage,
+  CredentialStatus,
+  ToolsetAuthenticationType,
+} from '@epam/ai-dial-catalog';
 import type {
   DeploymentDetailsDto,
   DeploymentFeaturesDetailsDto,
-} from '@epam/chat-api-client';
+} from '@epam/ai-dial-chat-api-client';
 import { AuthenticationType, ModelEndpointType } from '../types/entity-details';
 import type {
   AgentEntityDetails,
@@ -22,7 +28,9 @@ import type {
   SkillEntityDetails,
   ToolsetAuthStatus,
   ToolsetEntityDetails,
+  ToolsetSpecification,
 } from '../types/entity-details';
+import { isPublicToolsetId } from './toolsets';
 
 const ENDPOINT_LABELS: Record<ModelEndpointType, string> = {
   [ModelEndpointType.AzureOpenAI]: 'Azure OpenAI Endpoint',
@@ -174,6 +182,21 @@ const mapModelPricing = (
   return { prices, limits };
 };
 
+/**
+ * Maps endpoint-type variants (Azure OpenAI / Anthropic / Responses) shared
+ * by models and agents into the lib's endpoint-selector shape.
+ */
+const mapApiEndpoints = (
+  endpoints: ModelEndpoint[] | undefined,
+): EndpointOption[] | undefined =>
+  endpoints != null && endpoints.length > 0
+    ? endpoints.map((e) => ({
+        label: ENDPOINT_LABELS[e.type] ?? e.type,
+        url: e.url,
+        snippets: mapEndpointSnippets(e),
+      }))
+    : undefined;
+
 const mapModelApi = (
   data: ModelEntityDetails,
 ): CatalogItemApiDetails | undefined => {
@@ -181,15 +204,7 @@ const mapModelApi = (
   if (api == null) return undefined;
 
   const resource = api.modelId != null ? { modelId: api.modelId } : undefined;
-
-  const endpoints: EndpointOption[] | undefined =
-    api.endpoints != null && api.endpoints.length > 0
-      ? api.endpoints.map((e) => ({
-          label: ENDPOINT_LABELS[e.type] ?? e.type,
-          url: e.url,
-          snippets: mapEndpointSnippets(e),
-        }))
-      : undefined;
+  const endpoints = mapApiEndpoints(api.endpoints);
 
   if (resource == null && endpoints == null) return undefined;
   return { resource, endpoints };
@@ -293,6 +308,7 @@ const mapAgentDetails = (data: AgentEntityDetails): CatalogItemTabData => {
             data.api.endpointUrl != null
               ? { endpointUrl: data.api.endpointUrl }
               : undefined,
+          endpoints: mapApiEndpoints(data.api.endpoints),
           requestExample: data.api.requestExample,
           responseSchema: data.api.responseSchema,
         }
@@ -302,6 +318,71 @@ const mapAgentDetails = (data: AgentEntityDetails): CatalogItemTabData => {
     overview: sections.length > 0 ? { sections } : undefined,
     api,
   };
+};
+
+const TOOLSET_AUTHENTICATION_TYPE_MAP: Partial<
+  Record<AuthenticationType, ToolsetAuthenticationType>
+> = {
+  [AuthenticationType.None]: ToolsetAuthenticationType.None,
+  [AuthenticationType.ApiKey]: ToolsetAuthenticationType.ApiKey,
+  [AuthenticationType.OAuth]: ToolsetAuthenticationType.OAuth,
+};
+
+const TOOLSET_AUTH_STATUS_MAP: Record<string, CredentialStatus> = {
+  SIGNED_IN: CredentialStatus.SignedIn,
+  SIGNED_OUT: CredentialStatus.SignedOut,
+  FAILED: CredentialStatus.Failed,
+};
+
+/**
+ * Maps a toolset's specification into the lib's credential-status shape,
+ * for refreshing the details panel after login/logout. Includes both
+ * `USER` and `GLOBAL` status, whether the toolset is public, and whether
+ * the current user (if an admin) may manage both levels.
+ */
+export const mapToolsetCredentials = (
+  toolsetId: string,
+  data: ToolsetEntityDetails,
+  isAdmin: boolean,
+): CatalogItemCredentials | undefined => {
+  const authenticationType =
+    TOOLSET_AUTHENTICATION_TYPE_MAP[
+      data.specification?.authentication ?? AuthenticationType.None
+    ];
+  if (authenticationType == null) return undefined;
+
+  const { userLevel, global } = data.specification?.authStatus ?? {};
+  const isPublic = isPublicToolsetId(toolsetId);
+
+  return {
+    authenticationType,
+    userStatus: userLevel ? TOOLSET_AUTH_STATUS_MAP[userLevel] : undefined,
+    globalStatus: global ? TOOLSET_AUTH_STATUS_MAP[global] : undefined,
+    isPublic,
+    isManageableByAdmin: isAdmin && isPublic,
+    apiKeyHeader: data.specification?.authStatus?.apiKeyHeader,
+  };
+};
+
+/*
+ * Tool names come from the allow-listed subset when the toolset restricts
+ * them, and from every tool the MCP server reports otherwise (an empty or
+ * absent allow-list means all tools are permitted). DIAL Core exposes names
+ * only — descriptions and input schemas are not part of the details response,
+ * so `ToolDefinition` carries just `name`.
+ */
+const mapToolsetTools = (
+  specification: ToolsetSpecification | undefined,
+): CatalogItemTools | undefined => {
+  const names = specification?.permissions?.length
+    ? specification.permissions
+    : specification?.allTools;
+
+  if (!names?.length) {
+    return undefined;
+  }
+
+  return { tools: names.map((name) => ({ name })) };
 };
 
 const mapToolsetDetails = (data: ToolsetEntityDetails): CatalogItemTabData => {
@@ -315,24 +396,12 @@ const mapToolsetDetails = (data: ToolsetEntityDetails): CatalogItemTabData => {
       specs.push({ label: 'Provider', value: s.provider });
     if (s.authentication != null)
       specs.push({ label: 'Authentication', value: s.authentication });
-    if (s.permissions?.length)
-      specs.push({ label: 'Allowed tools', value: s.permissions.join(' · ') });
-    if (s.allTools?.length)
-      specs.push({
-        label: 'All supported tools',
-        value: s.allTools.join(' · '),
-      });
     if (s.hostedBy != null)
       specs.push({ label: 'Hosted by', value: s.hostedBy });
     if (s.createdAt != null)
       specs.push({
         label: 'Release date',
         value: formatReleaseDate(s.createdAt),
-      });
-    if (s.authStatus?.userLevel != null)
-      specs.push({
-        label: 'Sign-in status',
-        value: s.authStatus.userLevel,
       });
     if (s.authStatus?.scopesSupported?.length)
       specs.push({
@@ -370,6 +439,7 @@ const mapToolsetDetails = (data: ToolsetEntityDetails): CatalogItemTabData => {
 
   return {
     overview: sections.length > 0 ? { sections } : undefined,
+    tools: mapToolsetTools(data.specification),
   };
 };
 
@@ -591,6 +661,7 @@ const mapToolsetAuthStatus = (
     scopesSupported,
     authorizationEndpoint,
     tokenEndpoint,
+    apiKeyHeader,
   } = authSettings;
 
   if (
@@ -599,6 +670,7 @@ const mapToolsetAuthStatus = (
     userLevelAuthStatus == null &&
     authorizationEndpoint == null &&
     tokenEndpoint == null &&
+    apiKeyHeader == null &&
     !scopesSupported?.length
   ) {
     return undefined;
@@ -611,6 +683,7 @@ const mapToolsetAuthStatus = (
     scopesSupported,
     authorizationEndpoint,
     tokenEndpoint,
+    apiKeyHeader,
   };
 };
 

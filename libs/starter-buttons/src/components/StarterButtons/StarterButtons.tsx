@@ -1,22 +1,26 @@
+import { BASE_MD_ICON_PROPS } from '@epam/ai-dial-chat-shared';
 import type { DropdownItem } from '@epam/ai-dial-ui-kit';
 import {
-  DIAL_ICON_SIZE,
-  DialDropdown,
-  DialRoundedButton,
+  Dropdown,
+  NeutralButton,
+  ButtonAppearance,
+  NeutralIconButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconDots, IconDotsVertical } from '@tabler/icons-react';
-import { FC, useCallback, useEffect, useRef, useState } from 'react';
+import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { StarterButtonsProps } from '../../models/starter-props';
 
 const MAX_VISIBLE = 4;
 const OVERFLOW_BUTTON_WIDTH = 56;
 const GAP = 8;
 
+/** Row of starter-prompt buttons that collapses overflowing items into a dropdown menu, sized to fit the available container width. */
 export const StarterButtons: FC<StarterButtonsProps> = ({
   starters,
   onSelect,
   isMobile,
-  ariaLabels,
+  labels,
+  styles,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const pillRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -83,15 +87,26 @@ export const StarterButtons: FC<StarterButtonsProps> = ({
     return () => observer.disconnect();
   }, [computeVisibleCount, starters.length]);
 
+  /* Re-measure once the newly rendered pill set is mounted: the width cache is
+   * only refreshed when every pill up to the cap has a live ref, which is not
+   * the case on the render that collapsed them. Converges because a repeated
+   * count does not re-render. */
   useEffect(() => {
     computeVisibleCount(starters.length);
-  });
+  }, [computeVisibleCount, starters.length, visibleCount]);
+
+  const iconProps = useMemo(() => {
+    return {
+      ...BASE_MD_ICON_PROPS,
+      stroke: styles?.iconStrokeWidth ?? BASE_MD_ICON_PROPS.stroke,
+      size: styles?.iconSize ?? BASE_MD_ICON_PROPS.size,
+    };
+  }, [styles?.iconStrokeWidth, styles?.iconSize]);
 
   if (starters.length === 0) return null;
 
-  const effectiveVisible = Math.min(visibleCount, MAX_VISIBLE);
-  const visibleStarters = starters.slice(0, effectiveVisible);
-  const overflowStarters = starters.slice(effectiveVisible);
+  const visibleStarters = starters.slice(0, visibleCount);
+  const overflowStarters = starters.slice(visibleCount);
 
   const overflowItems: DropdownItem[] = overflowStarters.map(
     (starter, idx) => ({
@@ -102,10 +117,10 @@ export const StarterButtons: FC<StarterButtonsProps> = ({
   );
 
   return (
-    <div ref={containerRef} className="mt-4 w-full">
+    <div ref={containerRef} className="mb-4 w-full">
       <div
         role="list"
-        aria-label={ariaLabels.list}
+        aria-label={labels.list}
         className="flex flex-wrap justify-center gap-2"
       >
         {visibleStarters.map((starter, index) => (
@@ -116,8 +131,9 @@ export const StarterButtons: FC<StarterButtonsProps> = ({
               pillRefs.current[index] = el;
             }}
           >
-            <DialRoundedButton
+            <NeutralButton
               label={starter.title}
+              appearance={ButtonAppearance.Outlined}
               onClick={() => onSelect(starter)}
             />
           </div>
@@ -125,23 +141,23 @@ export const StarterButtons: FC<StarterButtonsProps> = ({
 
         {overflowStarters.length > 0 && (
           <div role="listitem">
-            <DialDropdown
+            <Dropdown
               items={overflowItems}
               placement="bottom-end"
               matchReferenceWidth={false}
-              listClassName="cp-dropdown-overlay"
             >
-              <DialRoundedButton
-                iconAfter={
+              <NeutralIconButton
+                appearance={ButtonAppearance.Outlined}
+                icon={
                   isMobile ? (
-                    <IconDots stroke={1.5} size={DIAL_ICON_SIZE.MD} />
+                    <IconDots {...iconProps} />
                   ) : (
-                    <IconDotsVertical stroke={1.5} size={DIAL_ICON_SIZE.MD} />
+                    <IconDotsVertical {...iconProps} />
                   )
                 }
-                aria-label={ariaLabels.overflow}
+                aria-label={labels.overflow}
               />
-            </DialDropdown>
+            </Dropdown>
           </div>
         )}
       </div>

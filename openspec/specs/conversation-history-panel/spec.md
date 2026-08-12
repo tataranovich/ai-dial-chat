@@ -42,13 +42,15 @@ When `isOpen` is `true`, `ConversationPanel` SHALL render conversation items spl
 - **Shared** — items where `source === ConversationSource.Shared` and `isPinned` is falsy.
 - **Organization** — items where `source === ConversationSource.Organization` and `isPinned` is falsy.
 
-Each section renders a disclosure button (chevron icon) as its header that toggles open/closed. All sections start expanded. A section with zero items after active search + tab filter SHALL be hidden. Each item SHALL display the conversation `title` (truncated) and its deployment icon according to the following rules:
+Each section renders a disclosure button (chevron icon) as its header that toggles open/closed. All sections start expanded. When a section is collapsed, all items in that section SHALL be hidden regardless of whether any item in that section is the currently active conversation. A section with zero items after active search + tab filter SHALL be hidden. Each item SHALL display the conversation `title` (truncated) and its deployment icon according to the following rules:
 
 - When `item.isIconLoading` is `true`, an animated skeleton placeholder MUST be shown in the icon slot instead of the deployment icon or fallback.
 - When `item.isIconLoading` is `false` or `undefined` and `item.iconUrl` is set, the resolved image MUST be shown.
 - When `item.isIconLoading` is `false` or `undefined` and `item.iconUrl` is absent, the default fallback icon MUST be shown.
 
 When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `undefined`, the deployment icon SHALL show a tooltip with that text on hover. The item SHALL call `onSelectConversation(id)` when activated. The active conversation (matching `activeConversationId`) SHALL receive `aria-current="page"`. Section headings via optional `groupLabels?: { pinned?, myChats?, shared?, organization? }` (English defaults: `"Pinned"`, `"My chats"`, `"Shared"`, `"Organization"`).
+
+`apps/chat/src/components/ConversationPanel/ConversationPanelView.tsx` computes each row's `iconTooltip` as the resolved deployment's `displayName` when `findDeploymentByIdOrReference` finds a match for the id extracted by `getModelIdFromConversationId`. When no match is found (the deployment is unavailable, or the extracted id was contaminated by real conversation-folder path segments — see the `getModelIdFromConversationId` requirement above), `iconTooltip` SHALL fall back to only the **last** `/`-separated segment of the extracted id, percent-decoded — NOT the full extracted id/path — to avoid showing a misleading or unreadable full path as the tooltip.
 
 #### Scenario: Renders pinned conversations in Pinned section
 
@@ -80,6 +82,12 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 - **WHEN** an item has `isIconLoading: false` and no `iconUrl`
 - **THEN** `DeploymentIcon` renders its fallback SVG
 
+#### Scenario: Fallback tooltip shows only the last path segment when no deployment matches
+
+- **GIVEN** `getModelIdFromConversationId` extracted `'YH folder01.1/YH folder01.2/YH folder01.3/dial-chathub-v2-gpt-5.5-2026-04-24'` for a row (contaminated by real conversation-folder segments) and no deployment in `deployments` has that `id` or `reference`
+- **WHEN** `ConversationPanelView` computes that row's `iconTooltip`
+- **THEN** `iconTooltip` is `'dial-chathub-v2-gpt-5.5-2026-04-24'` (the last segment, decoded), not the full extracted path
+
 #### Scenario: Middle mouse button click opens conversation in a new tab
 
 - **WHEN** the user middle-clicks (scroll wheel click) a conversation row
@@ -97,7 +105,7 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 ### Requirement: Panel shows a skeleton loader while conversations are loading
 
-`ConversationPanel` SHALL accept an optional `isLoading?: boolean` prop. When `isLoading` is `true`, the panel body SHALL render a column of skeleton placeholder rows instead of the conversation list, empty state, or no-results state. Each skeleton row SHALL display a 24 × 24 px circular avatar placeholder and a title rectangle beside it. Row widths vary deterministically via `60 + (i * 23 % 35)` percent. The skeleton uses `DialSkeleton` from `@epam/ai-dial-ui-kit` with `color="var(--bg-layer-4)"` for contrast against the `bg-layer-3` panel background. `ConversationPanelView` in `apps/chat` passes `isLoading` from `ConversationsContext`.
+`ConversationPanel` SHALL accept an optional `isLoading?: boolean` prop. When `isLoading` is `true`, the panel body SHALL render a column of skeleton placeholder rows instead of the conversation list, empty state, or no-results state. Each skeleton row SHALL display a 24 × 24 px circular avatar placeholder and a title rectangle beside it. Row widths vary deterministically via `60 + (i * 23 % 35)` percent. The skeleton uses `Skeleton` from `@epam/ai-dial-ui-kit` with `color="var(--bg-layer-4)"` for contrast against the `bg-layer-raised` panel background. `ConversationPanelView` in `apps/chat` passes `isLoading` from `ConversationsContext`.
 
 #### Scenario: Skeleton is shown while loading
 
@@ -115,6 +123,12 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 - **WHEN** the user clicks the My chats section disclosure button
 - **THEN** the My chats section items are no longer visible
+
+#### Scenario: Section collapses even when its active conversation is open
+
+- **WHEN** the user opens a conversation from the My chats section (making it the active conversation)
+- **AND** clicks the My chats section disclosure button to collapse the section
+- **THEN** the My chats section items are no longer visible, including the active conversation row
 
 #### Scenario: Deployment icon tooltip shown when iconTooltip is provided
 
@@ -157,7 +171,7 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 ### Requirement: Panel renders filter tabs — All / My chats / Shared / Organization
 
-`ConversationPanel` SHALL render a segmented tab control with four tabs corresponding to `FilterTab` enum values (`All`, `MyChats`, `Shared`, `Organization`). Active tab state is internal `useState<FilterTab>` (default: `FilterTab.All`). Items are filtered by `item.source === tab` (or all when `FilterTab.All`). Filtering combines with search. The active tab SHALL have `aria-selected="true"` and `role="tab"`; the tab list SHALL have `role="tablist"`. Labels via `filterLabels: FilterLabels`.
+`ConversationPanel` SHALL render a segmented tab control with four tabs corresponding to `FilterTab` enum values (`All`, `MyChats`, `Shared`, `Organization`). Active tab state is internal `useState<FilterTab>` (default: `FilterTab.All`). Items are filtered by `item.source === tab` (or all when `FilterTab.All`). Filtering combines with search. The active tab SHALL have `aria-selected="true"`; the tab list SHALL have `role="tablist"`. Labels via `filterLabels: FilterLabels`.
 
 #### Scenario: Active tab is marked aria-selected
 
@@ -171,11 +185,13 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 ---
 
-### Requirement: Panel rows expose per-item actions (pin, rename, delete)
+### Requirement: Panel rows expose per-item actions (pin, rename, delete, share)
 
 `ConversationPanel` SHALL accept `getActions?: (item: ConversationHistoryItem) => DropdownItem[]` and `actionsLabel?: string` (English default: `"More actions"`). When `getActions` returns a non-empty array for a row, an ellipsis trigger button is rendered on that row; activating it opens a dropdown built from the returned `DropdownItem[]`. When `getActions` is omitted or returns an empty array, no trigger is rendered.
 
-Row-level actions (pin/unpin, rename, delete) are wired in `ConversationPanelView` where `ConversationsContext` supplies the mutation methods.
+Row-level actions (pin/unpin, rename, duplicate, delete, share) are wired in `ConversationPanelView` where `ConversationsContext` supplies the mutation methods.
+
+For owned, non-readonly conversations (`isReadonly: false`, `sharedWithMe: false`, `publishedWithMe: false`), `getActions` SHALL include a `share` action (in addition to `pin`/`unpin`, `rename`, `duplicate`, `delete`) that opens `ShareConversationPopoverContainer` for the conversation. Readonly conversations (readonly, shared-with-me, or published-with-me) continue to receive only `pin`/`unpin` and `duplicate` — no `share` action is added for them.
 
 #### Scenario: Row actions trigger renders when getActions returns items
 
@@ -186,6 +202,24 @@ Row-level actions (pin/unpin, rename, delete) are wired in `ConversationPanelVie
 
 - **WHEN** `getActions` returns `[]` for a row
 - **THEN** no actions trigger button is rendered for that row
+
+#### Scenario: Owned conversation's action menu includes Share
+
+- **GIVEN** a conversation row where `isReadonly`, `sharedWithMe`, and `publishedWithMe` are all `false`
+- **WHEN** the row's actions trigger is activated
+- **THEN** the dropdown includes a "Share" item alongside pin, rename, duplicate, and delete
+
+#### Scenario: Readonly conversation's action menu excludes Share
+
+- **GIVEN** a conversation row where `sharedWithMe` is `true`
+- **WHEN** the row's actions trigger is activated
+- **THEN** the dropdown includes only pin/unpin and duplicate; no "Share" item is present
+
+#### Scenario: Selecting Share opens the share popover
+
+- **GIVEN** an owned conversation row's action dropdown is open
+- **WHEN** the "Share" item is clicked
+- **THEN** `ShareConversationPopoverContainer` is rendered for that conversation
 
 ---
 
@@ -219,6 +253,68 @@ Tests SHALL be in `libs/conversation-panel/src/components/ConversationPanel/test
 
 ---
 
+### Requirement: Scheduled-task conversations show a TASK badge in the history panel
+
+`ConversationHistoryItem` (exported from `@epam/ai-dial-conversation-panel`) SHALL include two optional presentational fields: `showTaskBadge?: boolean` and `taskBadgeLabel?: string`. The lib carries no knowledge of scheduler ids, feature flags, or API shapes — these are plain display props, following the same pattern as the existing `iconTooltip` field.
+
+`ConversationRow` SHALL render a compact pill badge (clock icon + uppercase label text) at the end of the row, after the title and before/alongside the row's overflow-actions trigger, whenever `showTaskBadge` is `true`. The badge uses a neutral/grey background consistent with the design system's informational-pill styling. When `showTaskBadge` is `false` or omitted, no badge is rendered and row layout is unchanged from today.
+
+The badge is **informational only**: it has no click handler, is not a link, and does not navigate anywhere. It renders regardless of whether the `scheduledTasksEnabled` navigation feature flag is enabled for the current user — the underlying conversation exists independent of that flag.
+
+**App wiring (`ConversationPanelView` in `apps/chat`).** The app maps `ConversationListItemDto.isScheduledTask` to `showTaskBadge`, and resolves `taskBadgeLabel` from the i18n key `conversationPanel.taskBadgeLabel` (English default: `"TASK"`). `scheduleId`/`runId` are not passed to the lib in this iteration since no interactive behavior consumes them yet. This mapping follows the existing pattern used for `sharedWithMe`/`publishedWithMe` → `ConversationSource`.
+
+**Row layout.** When both a task badge and the row's overflow-actions trigger (see "Panel rows expose per-item actions") are present, `ConversationRow` SHALL adjust end-padding (mirroring the existing `getButtonPaddingEnd` pattern) so the title, badge, and action trigger do not overlap and the title still truncates with ellipsis.
+
+**a11y.** The clock icon inside the badge SHALL be `aria-hidden` — the row's own accessible name already comes from the conversation title, and the badge does not need its own separate accessible name beyond the visible "TASK" text, which remains in the accessibility tree as plain text content.
+
+**RTL.** The badge SHALL use logical spacing utilities (`ms-*`/`me-*`, `end-*`) so it stays pinned to the trailing edge of the row in both LTR and RTL. The "TASK" label text itself is not mirrored or flipped.
+
+**i18n.** `conversationPanel.taskBadgeLabel` (value `"TASK"`) SHALL be added to `apps/chat/src/i18n/locales/en.json` and to the `ConversationPanelI18nKeys` type/interface consumed by `ConversationPanelView`.
+
+#### Scenario: Scheduler-created conversation row shows the TASK badge
+
+- **GIVEN** a `ConversationHistoryItem` with `showTaskBadge: true` and `taskBadgeLabel: "TASK"`
+- **WHEN** `ConversationRow` renders that item
+- **THEN** the row displays a pill badge with a clock icon and the text "TASK" at the end of the row
+
+#### Scenario: Normal conversation row shows no badge
+
+- **GIVEN** a `ConversationHistoryItem` with `showTaskBadge` omitted or `false`
+- **WHEN** `ConversationRow` renders that item
+- **THEN** no task badge is rendered and the row layout matches the current (pre-change) layout
+
+#### Scenario: Badge is shown independent of the scheduledTasksEnabled feature flag
+
+- **GIVEN** the `scheduledTasksEnabled` navigation feature flag is disabled for the current user
+- **AND** a conversation list item has `isScheduledTask: true`
+- **WHEN** the history panel renders that item
+- **THEN** the TASK badge is still shown on that row
+
+#### Scenario: Badge click does nothing
+
+- **GIVEN** a row with the TASK badge rendered
+- **WHEN** the user clicks directly on the badge
+- **THEN** no navigation occurs and the row's normal `onSelectConversation` behavior for the row click still applies (the badge has no separate click handler that stops propagation or redirects)
+
+#### Scenario: Badge icon is aria-hidden
+
+- **WHEN** `ConversationRow` renders a row with `showTaskBadge: true`
+- **THEN** the clock icon inside the badge has `aria-hidden="true"` while the "TASK" text remains in the accessible tree
+
+#### Scenario: Badge stays at the trailing edge in RTL
+
+- **GIVEN** `dir="rtl"` is set on an ancestor element
+- **WHEN** a row with `showTaskBadge: true` renders
+- **THEN** the badge appears at the visual end (left side in RTL) using logical spacing classes, and the "TASK" text is not mirrored
+
+#### Scenario: Row spacing accommodates badge and actions trigger together
+
+- **GIVEN** a row has both `showTaskBadge: true` and a non-empty `getActions` result
+- **WHEN** the row renders
+- **THEN** the title truncates with ellipsis and the badge and actions trigger are both fully visible without overlapping
+
+---
+
 ### Requirement: `getModelIdFromConversationId` correctly extracts the deployment ID from multi-segment and slash-containing conversation IDs
 
 `apps/chat/src/utils/get-model-id-from-conversation-id.ts` SHALL export `getModelIdFromConversationId(id: string): string | undefined`.
@@ -230,11 +326,15 @@ The backend encodes each `/`-separated segment of the conversation path individu
 - Deployment `uuid`, title `report 6/2/2026` (title contains slashes)
   → `conversations/bucket/uuid__report%206/2/2026`
 
-The function MUST scan the post-`conversations/{bucket}/` segments **left-to-right** and stop at the **first** segment (after URL-decoding) that contains `__`. Segments before that one form the deployment ID path prefix. The part of the separator segment before `__` is the final piece of the deployment ID. Segments after the separator segment are part of the title and MUST be ignored.
+DIAL Scheduler additionally writes scheduled-task conversations under the reserved `conversations/{bucket}/.scheduler/{scheduleId}/{filename}` path shape (matching `apps/chat-api/src/conversations/utils/parse-scheduled-task-conversation-path.ts`'s `SCHEDULER_SEGMENT = '.scheduler'`). When the segment immediately after the bucket is the literal string `.scheduler`, the function MUST treat that segment and the one immediately following it (the schedule id) as a reserved path prefix and skip both before extracting the deployment id from the remaining segments — they are never part of the deployment id.
+
+The function MUST scan the remaining segments (after skipping bucket, and after skipping the `.scheduler`/scheduleId pair when present) **left-to-right** and stop at the **first** segment (after URL-decoding) that contains `__`. Segments before that one form the deployment ID path prefix. The part of the separator segment before `__` is the final piece of the deployment ID. Segments after the separator segment are part of the title and MUST be ignored.
 
 The function MUST return `undefined` when:
 - The input has fewer than 3 `/`-separated segments.
-- No segment contains `__`.
+- No segment (after any `.scheduler` prefix skip) contains `__`.
+
+Note: outside the specifically-reserved `.scheduler/{scheduleId}` prefix, this function cannot reliably distinguish a real, user-created conversation folder from a genuine multi-segment deployment id — both appear as plain `/`-separated path segments once encoded into the resource path, and no other reserved marker exists to disambiguate them. Consumers of this function's return value MUST NOT assume the result is always a valid deployment id (see the `ConversationPanelView` icon-tooltip fallback requirement below).
 
 #### Scenario: Simple single-segment deployment
 
@@ -265,6 +365,16 @@ The function MUST return `undefined` when:
 
 - **WHEN** `getModelIdFromConversationId('bucket/gpt-4__title')` is called
 - **THEN** it returns `undefined`
+
+#### Scenario: Scheduled-task conversation strips the .scheduler/{scheduleId} prefix
+
+- **WHEN** `getModelIdFromConversationId('conversations/bucket/.scheduler/64bd658b-4258-46bd-b19e-afd9e0f3f254/gemini-3.1-flash-lite__title__run-id')` is called
+- **THEN** it returns `'gemini-3.1-flash-lite'`, not `'.scheduler/64bd658b-4258-46bd-b19e-afd9e0f3f254/gemini-3.1-flash-lite'`
+
+#### Scenario: Scheduled-task conversation with a multi-segment deployment id strips the prefix
+
+- **WHEN** `getModelIdFromConversationId('conversations/bucket/.scheduler/schedule-id/anthropic/claude-3__title__run-id')` is called
+- **THEN** it returns `'anthropic/claude-3'`
 
 ---
 
@@ -403,3 +513,57 @@ Navigation MUST occur regardless of whether the conversation is owned, shared, o
 - **AND** `activeConversationId` holds the decoded form `bucket/gpt-4__My Chat.json`
 - **WHEN** the user deletes that conversation
 - **THEN** `navigate(ROUTES.Root)` is called (the percent-encoded and decoded forms are recognized as equal)
+
+---
+
+### Requirement: Unread scheduler-created conversations show an unread dot in the history panel
+
+`ConversationHistoryItem` (exported from `@epam/ai-dial-conversation-panel`) SHALL include one optional presentational field: `isUnread?: boolean`. The lib carries no knowledge of scheduler ids, bucket storage, or API shapes — this is a plain display prop, following the same pattern as the existing `showTaskBadge`/`iconTooltip` fields.
+
+`ConversationRow` SHALL render a small filled dot immediately before the row's leading icon (the `avatar`/`iconBefore` slot) whenever `isUnread` is `true`. The dot uses the design system's accent/notification color. When `isUnread` is `false` or omitted, no dot is rendered and the leading-icon layout is unchanged from today. The dot is decorative status, not a control — it has no click handler and is not a link.
+
+**Accessible name.** Since AAA requires status to not be conveyed by color alone, the dot wrapper SHALL carry a visually-hidden (`sr-only`) label (i18n key `conversationPanel.unreadIndicatorLabel`, English default: `"Unread"`) so screen reader users hear the unread state; the visible dot element itself SHALL be `aria-hidden`.
+
+**App wiring (`ConversationPanelView` in `apps/chat`).** The app maps `ConversationListItemDto.isUnread` to `ConversationHistoryItem.isUnread` — the same mapping pattern already used for `isScheduledTask` → `showTaskBadge`.
+
+**Mark-as-viewed on open.** When the user opens (clicks, or middle-clicks to open in a new tab) a row whose item has `isScheduledTask: true` and `isUnread: true`, the app SHALL optimistically clear the row's unread dot in local state and call the mark-viewed action (`ConversationsContext.markConversationViewed(id)`, which calls `PATCH /api/v1/conversations/viewed?path=<path>`). If the call fails, the app SHALL roll back the local state to `isUnread: true` (same optimistic-update-with-rollback pattern already used for pinning). Opening a conversation directly via URL navigation (not via a history panel row click) SHALL also trigger the same mark-viewed call once the conversation is confirmed loaded.
+
+**RTL.** The dot SHALL be positioned using logical properties (`start-0` relative to its wrapper) so it stays before the icon in both LTR and RTL — "before" the icon means the visual start edge, which flips with direction.
+
+**i18n.** `conversationPanel.unreadIndicatorLabel` (value `"Unread"`) SHALL be added to `apps/chat/src/i18n/locales/en.json` and to the `ConversationPanelI18nKeys` type/interface consumed by `ConversationPanelView`.
+
+#### Scenario: Unread scheduler-created conversation row shows the unread dot
+
+- **GIVEN** a `ConversationHistoryItem` with `isUnread: true`
+- **WHEN** `ConversationRow` renders that item
+- **THEN** the row displays a dot before the leading icon, with an accessible "Unread" label
+
+#### Scenario: Read or non-scheduler conversation row shows no dot
+
+- **GIVEN** a `ConversationHistoryItem` with `isUnread` omitted or `false`
+- **WHEN** `ConversationRow` renders that item
+- **THEN** no unread dot is rendered and the leading-icon layout matches the current (pre-change) layout
+
+#### Scenario: Opening an unread task conversation clears the dot optimistically
+
+- **GIVEN** a history panel row with `isUnread: true` for a scheduler-created conversation
+- **WHEN** the user clicks the row to open it
+- **THEN** the row's dot disappears immediately (before the network call resolves) and `PATCH /api/v1/conversations/viewed?path=<path>` is called for that conversation
+
+#### Scenario: Failed mark-viewed call restores the unread dot
+
+- **GIVEN** the user opens an unread task conversation and the optimistic dot-clear has been applied
+- **WHEN** the `PATCH /api/v1/conversations/:id/viewed` call fails
+- **THEN** the row's unread dot is restored (rolled back to `isUnread: true`)
+
+#### Scenario: Dot is decorative and has no click handler
+
+- **GIVEN** a row with the unread dot rendered
+- **WHEN** the user clicks directly on the dot
+- **THEN** the row's normal `onSelectConversation` behavior for the row click still applies (the dot has no separate click handler that stops propagation or redirects)
+
+#### Scenario: Dot position respects RTL
+
+- **GIVEN** `dir="rtl"` is set on an ancestor element
+- **WHEN** a row with `isUnread: true` renders
+- **THEN** the dot appears at the visual start edge of the leading icon (right side in RTL)

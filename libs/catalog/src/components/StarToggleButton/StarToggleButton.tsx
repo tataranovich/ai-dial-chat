@@ -1,6 +1,7 @@
+import { buildCssVars } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
-  DialGhostIconButton,
+  GhostIconButton,
   ElementSize,
 } from '@epam/ai-dial-ui-kit';
 import { IconStar, IconStarFilled } from '@tabler/icons-react';
@@ -19,6 +20,8 @@ export interface StarToggleButtonProps {
   ariaLabel?: string;
   /** Additional CSS classes forwarded to the button root element. */
   className?: string;
+  /** Color of the filled (starred) icon. Fallback: `--text-warning-icon`. */
+  starFilledColor?: string;
 }
 
 /** Ghost icon button that toggles between a filled and outline star. */
@@ -28,9 +31,11 @@ export const StarToggleButton: FC<StarToggleButtonProps> = ({
   size,
   ariaLabel = 'Toggle favorite',
   className,
+  starFilledColor,
 }) => (
-  <DialGhostIconButton
+  <GhostIconButton
     size={size}
+    style={buildCssVars({ '--cat-star-filled': starFilledColor })}
     className={className}
     icon={
       isStarred ? (

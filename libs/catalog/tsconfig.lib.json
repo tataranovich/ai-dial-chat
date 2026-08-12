@@ -24,6 +24,9 @@
   ],
   "references": [
     {
+      "path": "../publish-panel/tsconfig.lib.json"
+    },
+    {
       "path": "../chat-shared/tsconfig.lib.json"
     },
     {

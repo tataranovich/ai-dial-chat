@@ -17,27 +17,74 @@ import {
  * the SDK-shaped (`handleDialSdkError`) and fetch-shaped (`handleDialFetchError`)
  * entry points so every `chat-api` domain throws the same exception subtype
  * for a given upstream status code.
+ *
+ * `upstreamMessage`, when provided, replaces the generic 400/409/413/429/5xx
+ * text with DIAL Core's own explanation (e.g. "The specified endpoint
+ * 'https://x' is invalid or unreachable") so the client can show the actual
+ * reason instead of a meaningless generic message. It's never used for
+ * 401/403/404 — those stay generic since the upstream body could describe
+ * an internal auth/resource detail that shouldn't reach the client.
  */
 export const mapDialHttpStatus = (
   status: number,
   context: string,
   logger?: Logger,
+  errorBody?: unknown,
+  upstreamMessage?: string,
 ): never => {
   logger?.warn(`DIAL Core returned ${status} for ${context}`);
+  if (errorBody !== undefined) {
+    logger?.warn(
+      `DIAL Core error body for ${context}: ${JSON.stringify(errorBody)}`,
+    );
+  }
 
   if (status === 400)
-    throw new BadRequestException('Invalid request to DIAL Core');
+    throw new BadRequestException(
+      upstreamMessage ?? 'Invalid request to DIAL Core',
+    );
   if (status === 401) throw new UnauthorizedException();
   if (status === 403) throw new ForbiddenException();
   if (status === 404) throw new NotFoundException('Resource not found');
-  if (status === 409) throw new ConflictException('Conflict');
-  if (status === 413) throw new PayloadTooLargeException('Payload too large');
+  if (status === 409)
+    throw new ConflictException(upstreamMessage ?? 'Conflict');
+  if (status === 413)
+    throw new PayloadTooLargeException(upstreamMessage ?? 'Payload too large');
   if (status === 429)
-    throw new HttpException('Too Many Requests', HttpStatus.TOO_MANY_REQUESTS);
+    throw new HttpException(
+      upstreamMessage ?? 'Too Many Requests',
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
   if (status >= 500)
-    throw new BadGatewayException('DIAL Core returned a server error');
+    throw new BadGatewayException(
+      upstreamMessage ?? 'DIAL Core returned a server error',
+    );
 
-  throw new BadGatewayException(`Unexpected upstream status ${status}`);
+  throw new BadGatewayException(
+    upstreamMessage ?? `Unexpected upstream status ${status}`,
+  );
+};
+
+interface DialErrorBody {
+  error?: { display_message?: string; message?: string };
+  message?: string;
+}
+
+// TODO: try to move this into @epam/ai-dial-typescript-sdk later.
+/**
+ * Extracts a human-readable message from an untyped DIAL Core error payload.
+ * The body may be a plain string (e.g. an endpoint-reachability failure) or
+ * an object carrying `error.display_message`, `error.message`, or `message`.
+ */
+export const extractDialErrorMessage = (error: unknown): string | undefined => {
+  if (typeof error === 'string') return error;
+  if (error != null && typeof error === 'object') {
+    const body = error as DialErrorBody;
+    const message =
+      body.error?.display_message ?? body.error?.message ?? body.message;
+    if (typeof message === 'string') return message;
+  }
+  return undefined;
 };
 
 const isTimeoutError = (error: unknown): boolean =>
@@ -100,19 +147,40 @@ export const handleDialSdkError = (
   throw new BadGatewayException('Unexpected response from DIAL Core');
 };
 
+interface HandleDialFetchError {
+  (err: unknown, context: string, logger?: Logger, timeoutMs?: number): never;
+  (
+    err: unknown,
+    context: string,
+    logger: Logger | undefined,
+    timeoutMs: number | undefined,
+    options: { swallow: true },
+  ): void;
+}
+
 /**
  * Handles errors caught in a raw-`fetch` try/catch block. Re-throws Nest
  * exceptions as-is; maps `AbortError` (timeout) and unexpected errors.
  * Call this immediately after catching a fetch rejection — for a non-ok
  * `response.ok === false`, use `mapDialHttpStatus` instead.
+ *
+ * Pass `{ swallow: true }` for failures that must only be logged and never
+ * propagated (e.g. a cache-invalidation step after the real operation already
+ * succeeded) — the error is logged with the same messages as the throwing
+ * path, but the call returns instead of throwing.
  */
-export const handleDialFetchError = (
+const handleDialFetchErrorImpl = (
   err: unknown,
   context: string,
   logger?: Logger,
   timeoutMs?: number,
-): never => {
+  options?: { swallow?: boolean },
+): void => {
   if (err instanceof HttpException) {
+    if (options?.swallow) {
+      logger?.warn(`${context} failed: ${err.message}`);
+      return;
+    }
     throw err;
   }
 
@@ -122,6 +190,9 @@ export const handleDialFetchError = (
     logger?.error(
       `DIAL Core request timed out after ${timeoutMs ?? 0}ms (${context})`,
     );
+    if (options?.swallow) {
+      return;
+    }
     throw new ServiceUnavailableException('DIAL Core request timed out');
   }
 
@@ -129,5 +200,11 @@ export const handleDialFetchError = (
     `Unexpected error during ${context}: ${error.name ?? 'Error'}`,
     error.stack,
   );
+  if (options?.swallow) {
+    return;
+  }
   throw new ServiceUnavailableException('DIAL Core is currently unavailable');
 };
+
+export const handleDialFetchError =
+  handleDialFetchErrorImpl as unknown as HandleDialFetchError;

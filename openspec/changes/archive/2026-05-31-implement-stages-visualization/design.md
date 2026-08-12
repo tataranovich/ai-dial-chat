@@ -62,7 +62,7 @@ Use `@epam/ai-dial-ui-kit` and `@tabler/icons-react`:
 
 | Condition | Icon | Note |
 |---|---|---|
-| `status === null` AND `isLive` (last running stage during streaming) | `DialSpinner` | Animated; from ui-kit |
+| `status === null` AND `isLive` (last running stage during streaming) | `Spinner` | Animated; from ui-kit |
 | `status === null` AND NOT `isLive` | `IconAlertCircle` | Stage started but not the active one |
 | `status === StageStatus.Completed` | `IconCircleCheck` | Success |
 | Any other non-null status | `IconAlertCircle` | Error / unknown |
@@ -75,7 +75,7 @@ Use `@epam/ai-dial-ui-kit` and `@tabler/icons-react`:
 
 ### 7. `StageMarkdownContent`
 
-Stage bodies are raw markdown strings. A dedicated `StageMarkdownContent` component wraps `MarkdownRenderer` from `@epam/ai-dial-conversation-messages` and applies stage-specific class names. Code blocks get an inline copy button (`StageCodeBlock` sub-component) using `DialGhostIconButton`.
+Stage bodies are raw markdown strings. A dedicated `StageMarkdownContent` component wraps `MarkdownRenderer` from `@epam/ai-dial-conversation-messages` and applies stage-specific class names. Code blocks get an inline copy button (`StageCodeBlock` sub-component) using `GhostIconButton`.
 
 ## Risks / Trade-offs
 

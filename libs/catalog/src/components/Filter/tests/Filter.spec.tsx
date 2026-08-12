@@ -18,7 +18,6 @@ vi.mock('../Filter.module.scss', () => ({
     sectionLabel: 'sectionLabel',
     topicsList: 'topicsList',
     footer: 'footer',
-    clearBtn: 'clearBtn',
     applyBtn: 'applyBtn',
     filterBtnFunnel: 'filterBtnFunnel',
     filterBtnLabel: 'filterBtnLabel',
@@ -29,7 +28,7 @@ vi.mock('../Filter.module.scss', () => ({
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
   DIAL_ICON_SIZE: { SM: 16 },
-  DialDropdown: ({
+  Dropdown: ({
     children,
     renderOverlay,
   }: {
@@ -41,6 +40,19 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {children}
       {renderOverlay?.()}
     </div>
+  ),
+  PrimaryButton: ({
+    label,
+    className,
+    onClick,
+  }: {
+    label: string;
+    className?: string;
+    onClick?: () => void;
+  }) => (
+    <button className={className} onClick={onClick}>
+      {label}
+    </button>
   ),
   DialCheckbox: ({
     id,
@@ -63,9 +75,6 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {label}
     </label>
   ),
-}));
-
-vi.mock('@epam/ai-dial-kit', () => ({
   GhostButton: ({
     label,
     className,
@@ -75,19 +84,6 @@ vi.mock('@epam/ai-dial-kit', () => ({
     iconBefore?: React.ReactNode;
     iconAfter?: React.ReactNode;
   }) => <button className={className}>{label}</button>,
-  PrimaryButton: ({
-    label,
-    className,
-    onClick,
-  }: {
-    label: string;
-    className?: string;
-    onClick?: () => void;
-  }) => (
-    <button className={className} onClick={onClick}>
-      {label}
-    </button>
-  ),
 }));
 
 vi.mock('@tabler/icons-react', () => ({
@@ -97,6 +93,10 @@ vi.mock('@tabler/icons-react', () => ({
 vi.mock('@epam/ai-dial-chat-shared', () => ({
   mergeClasses: (...args: (string | undefined)[]) =>
     args.filter(Boolean).join(' '),
+  buildCssVars: (vars: Record<string, string | undefined>) =>
+    Object.fromEntries(
+      Object.entries(vars).filter(([, v]) => v !== undefined),
+    ) as React.CSSProperties,
 }));
 
 const renderFilter = (props?: Partial<React.ComponentProps<typeof Filter>>) =>
@@ -107,17 +107,15 @@ describe('Filter', () => {
     vi.clearAllMocks();
   });
 
-  it('renders the My Apps checkbox', () => {
+  it('renders the My checkbox', () => {
     renderFilter();
-    expect(
-      screen.getByRole('menuitemcheckbox', { name: 'My Apps' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('menuitemcheckbox', { name: 'My' })).toBeTruthy();
   });
 
   it('renders topic checkboxes alphabetically when values are provided', () => {
     renderFilter({ values: new Set(['Vision', 'Code']) });
     const checkboxes = screen.getAllByRole('menuitemcheckbox');
-    // index 0: My Apps; 1: Code (alpha first); 2: Vision
+    // index 0: My; 1: Code (alpha first); 2: Vision
     expect(checkboxes[1].textContent).toContain('Code');
     expect(checkboxes[2].textContent).toContain('Vision');
   });

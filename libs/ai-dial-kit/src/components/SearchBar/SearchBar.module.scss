@@ -1,32 +1,43 @@
 .container {
-  background-color: var(--bg-layer-0, #fcfcfc);
-  border-color: var(--stroke-secondary, #d1dbea);
-  box-shadow: var(--sb-shadow, inset 0 1px 2px rgba(16, 24, 40, 0.03));
+  background-color: var(--search-bar-bg, #ffffff);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  transition:
+    border-color 150ms ease,
+    outline-color 150ms ease,
+    box-shadow 150ms ease;
 
-  &:hover,
-  &:focus-within {
-    border-color: var(--stroke-accent-primary, #124ace);
-
-    .icon {
-      color: var(--text-secondary, #575f73);
+  @media (hover: hover) {
+    &:hover:not(:focus-within) {
+      border-color: rgba(0, 0, 0, 0.12);
     }
   }
 
+  /* Focus ring is an `outline`, not a `border-color` swap — outline is painted
+   * outside the border box, so it costs no layout and is preserved in
+   * forced-colors mode. `outline-offset: -1px` keeps it in the border's place
+   * (the border itself goes transparent) so nothing grows or jitters. */
   &:focus-within {
-    border-color: var(--stroke-accent-primary, #124ace);
-    box-shadow: 0 0 0 4px var(--bg-accent-primary-alpha, #7da4ff2e);
+    border-color: transparent;
+    outline: 1px solid
+      color-mix(
+        in srgb,
+        var(--search-bar-border-focus, var(--stroke-info, #124ace)) 50%,
+        transparent
+      );
+    outline-offset: -1px;
+    box-shadow: none;
   }
 }
 
 .icon {
-  color: var(--text-tertiary, #808898);
+  color: var(--search-bar-icon, var(--text-tertiary, #848e9c));
 }
 
 .input {
-  background: var(--sb-input-bg, transparent);
-  color: var(--text-primary, #161b2d);
+  background-color: transparent;
+  color: var(--search-bar-text, var(--text-primary, #161b2d));
 
   &::placeholder {
-    color: var(--text-tertiary, #808898);
+    color: var(--search-bar-placeholder, var(--text-tertiary, #848e9c));
   }
 }

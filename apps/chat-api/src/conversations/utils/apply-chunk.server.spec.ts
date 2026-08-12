@@ -77,6 +77,20 @@ describe('applyChunkToMessage', () => {
     expect(stages[0].content).toBe('part1part2');
   });
 
+  it('normalizes a null name on the first chunk for a new stage (DIAL Core "stage opened" signal)', () => {
+    const msg = applyChunkToMessage(
+      baseMessage(),
+      makeChunk({
+        custom_content: {
+          stages: [{ index: 0, name: null, status: null }],
+        },
+      }),
+    );
+    const stages = (msg.custom_content as { stages: { name: string }[] })
+      .stages;
+    expect(stages[0].name).toBe('');
+  });
+
   it('preserves explicitly empty stage content while merging stage updates', () => {
     const msg1 = applyChunkToMessage(
       baseMessage(),
@@ -140,6 +154,20 @@ describe('applyChunkToMessage', () => {
     expect(
       (msg2.custom_content as { form_schema: unknown }).form_schema,
     ).toEqual(schema2);
+  });
+
+  it('overwrites state (last wins) rather than merging it', () => {
+    const msg1 = applyChunkToMessage(
+      baseMessage(),
+      makeChunk({ custom_content: { state: { step: 1 } } }),
+    );
+    const msg2 = applyChunkToMessage(
+      msg1,
+      makeChunk({ custom_content: { state: { step: 2 } } }),
+    );
+    expect((msg2.custom_content as { state: unknown }).state).toEqual({
+      step: 2,
+    });
   });
 
   it('sets responseId from delta.responseId', () => {

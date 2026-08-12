@@ -1,9 +1,16 @@
 # syntax=docker/dockerfile:1
 
 # ─────────────────────────────────────────────
+# Stage 0: install the patched package manager used by all stages
+# ─────────────────────────────────────────────
+FROM node:24.17-alpine AS node-base
+
+RUN npm install --global npm@12.0.1
+
+# ─────────────────────────────────────────────
 # Stage 1: install all workspace dependencies
 # ─────────────────────────────────────────────
-FROM node:24-alpine AS deps
+FROM node-base AS deps
 
 WORKDIR /workspace
 
@@ -21,8 +28,10 @@ FROM deps AS builder
 # Copy the full monorepo source on top of the installed node_modules
 COPY . .
 
-# Build the React SPA → apps/chat/dist/
-RUN npm exec nx build chat
+# Build the React SPA → apps/chat/dist/ and overlay sandbox → apps/chat-overlay-sandbox/dist/
+# Keep Docker builds deterministic: parallel Nx build/typecheck tasks can race
+# while reading and regenerating declaration outputs in a clean image layer.
+RUN npm exec -- nx run-many --target=build --projects=@epam/chat,chat-overlay-sandbox --parallel=1
 
 # Build NestJS, generate a pruned package.json/lockfile, and copy
 # workspace packages → apps/chat-api/dist/{main.js,package.json,...,workspace_modules/}
@@ -31,7 +40,7 @@ RUN npm exec nx run chat-api:prune
 # ─────────────────────────────────────────────
 # Stage 3: lean production image
 # ─────────────────────────────────────────────
-FROM node:24-alpine AS runner
+FROM node-base AS runner
 
 ENV NODE_ENV=production
 
@@ -49,8 +58,11 @@ RUN npm ci --omit=dev
 # static-assets.ts resolves __dirname(dist)/../../chat/dist → /app/apps/chat/dist
 COPY --from=builder /workspace/apps/chat/dist /app/apps/chat/dist
 
+# Overlay sandbox static files served by chat-api at /overlay-sandbox when enabled.
+COPY --from=builder /workspace/apps/chat-overlay-sandbox/dist /app/apps/chat-overlay-sandbox/dist
+
 WORKDIR /app
 
-EXPOSE 3005
+EXPOSE 5000
 
 CMD ["node", "apps/chat-api/dist/main.js"]

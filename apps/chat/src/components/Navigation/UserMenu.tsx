@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
+import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import { SendOnEnter } from '@epam/ai-dial-conversation-input';
 import {
   DIAL_ICON_SIZE,
-  DialDropdown,
+  Dropdown,
   DialEllipsisTooltip,
   DialTooltip,
   DropdownItem,
@@ -20,6 +21,7 @@ import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AuthI18nKeys,
+  ButtonsI18nKeys,
   SettingsI18nKeys,
 } from '../../constants/translation-keys';
 import { useUser } from '../../context/auth/UserContext';
@@ -35,6 +37,7 @@ import {
 import { useLogout } from '../../hooks/logout/useLogout';
 import { useThemeOptions } from '../../hooks/theme/useThemeOptions';
 import { useUserProfile } from '../../hooks/user-profile/useUserProfile';
+import { useUiFeature } from '../../hooks/useUiFeature';
 import { AuthStatus } from '../../types/auth-status';
 import { ThemeId } from '../../types/theme-id';
 import LogoutConfirmationModal from '../LogoutConfirmation/LogoutConfirmationModal';
@@ -57,6 +60,7 @@ export const UserMenu = memo(() => {
   } = useUserProfile();
   const isMobile = useIsMobile();
   const { isLogoutOpen, openLogout, closeLogout } = useLogout();
+  const isUserSettingsHidden = useUiFeature(OverlayFeature.HideUserSettings);
 
   if (status !== AuthStatus.Authenticated || !user || isMobile) {
     return null;
@@ -137,7 +141,7 @@ export const UserMenu = memo(() => {
         </div>
       ),
     },
-    ...(SUPPORTED_LANGUAGES.length > 1
+    ...(!isUserSettingsHidden && SUPPORTED_LANGUAGES.length > 1
       ? [
           {
             key: 'language',
@@ -160,43 +164,49 @@ export const UserMenu = memo(() => {
     //   icon: <IconColorSwatch size={DIAL_ICON_SIZE.SM} aria-hidden />,
     //   children: themeChildren,
     // },
-    {
-      key: 'keyboard-shortcuts',
-      label: (
-        <span className="dial-small-text">
-          {t(SettingsI18nKeys.KeyboardShortcuts)}
-        </span>
-      ),
-      icon: <IconKeyboard size={DIAL_ICON_SIZE.SM} aria-hidden />,
-      children: [
-        {
-          key: 'shortcut-enter',
-          label: (
-            <MenuItemLabel
-              label={t(SettingsI18nKeys.ShortcutEnter)}
-              isActive={preference === SendOnEnter.Enter}
-            />
-          ),
-          onClick: () => setPreference(SendOnEnter.Enter),
-        },
-        {
-          key: 'shortcut-meta-enter',
-          label: (
-            <MenuItemLabel
-              label={t(SettingsI18nKeys.ShortcutMetaEnter, {
-                modifier: metaKey,
-              })}
-              isActive={preference === SendOnEnter.MetaEnter}
-            />
-          ),
-          onClick: () => setPreference(SendOnEnter.MetaEnter),
-        },
-      ],
-    },
+    ...(!isUserSettingsHidden
+      ? [
+          {
+            key: 'keyboard-shortcuts',
+            label: (
+              <span className="dial-small-text">
+                {t(SettingsI18nKeys.KeyboardShortcuts)}
+              </span>
+            ),
+            icon: <IconKeyboard size={DIAL_ICON_SIZE.SM} aria-hidden />,
+            children: [
+              {
+                key: 'shortcut-enter',
+                label: (
+                  <MenuItemLabel
+                    label={t(SettingsI18nKeys.ShortcutEnter)}
+                    isActive={preference === SendOnEnter.Enter}
+                  />
+                ),
+                onClick: () => setPreference(SendOnEnter.Enter),
+              },
+              {
+                key: 'shortcut-meta-enter',
+                label: (
+                  <MenuItemLabel
+                    label={t(SettingsI18nKeys.ShortcutMetaEnter, {
+                      modifier: metaKey,
+                    })}
+                    isActive={preference === SendOnEnter.MetaEnter}
+                  />
+                ),
+                onClick: () => setPreference(SendOnEnter.MetaEnter),
+              },
+            ],
+          },
+        ]
+      : []),
     { key: 'divider-1', type: DropdownItemType.Divider },
     {
       key: 'logout',
-      label: <span className="dial-small-text">{t(AuthI18nKeys.LogOut)}</span>,
+      label: (
+        <span className="dial-small-text">{t(ButtonsI18nKeys.LogOut)}</span>
+      ),
       icon: <IconLogout size={DIAL_ICON_SIZE.SM} aria-hidden />,
       onClick: openLogout,
     },
@@ -205,21 +215,20 @@ export const UserMenu = memo(() => {
   return (
     <>
       <div className="flex size-[60px] items-center justify-center">
-        <DialDropdown
+        <Dropdown
           placement="top-end"
           matchReferenceWidth={false}
           items={menuItems}
-          listClassName="cp-dropdown-overlay"
         >
           <button
-            className="flex size-[44px] items-center justify-center rounded-full border border-transparent focus-within:border-focus hover:bg-accent-primary-alpha focus:border-transparent"
+            className="flex size-[44px] items-center justify-center rounded-full border border-transparent hover:bg-control-accent-alpha-hover focus-visible:outline focus-visible:-outline-offset-1 focus-visible:outline-focus-black"
             aria-label={t(AuthI18nKeys.SignedInAs, { email })}
           >
             <DialTooltip tooltip={email} hideTooltip={isMobile}>
               {avatar}
             </DialTooltip>
           </button>
-        </DialDropdown>
+        </Dropdown>
       </div>
       <LogoutConfirmationModal isOpen={isLogoutOpen} onClose={closeLogout} />
     </>

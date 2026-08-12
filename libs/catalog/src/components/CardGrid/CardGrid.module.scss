@@ -1,32 +1,11 @@
 .card {
-  background: var(--bg-layer-0, #fcfcfc);
-  box-shadow:
-    0 1px 3px rgba(16, 24, 40, 0.04),
-    0 6px 20px rgba(16, 24, 40, 0.05);
-  transition:
-    transform 200ms ease-out,
-    box-shadow 200ms ease-out;
-
   @media (hover: hover) {
-    &:hover {
-      transform: translateY(-3px);
-      box-shadow:
-        0 4px 10px rgba(16, 24, 40, 0.06),
-        0 18px 44px rgba(16, 24, 40, 0.1);
-    }
-
     &:hover .emptyStarHidden {
       opacity: 1;
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    transition: none;
-
-    &:hover {
-      transform: none;
-    }
-
     .starBtn {
       transition: none !important;
     }
@@ -53,9 +32,29 @@
 }
 
 .description {
-  color: var(--text-secondary, #575f73);
+  color: var(--cg-description-text, var(--text-secondary, #57647a));
 }
 
 .skeletonCard {
-  background: var(--bg-layer-0, #fcfcfc);
+  background: var(--cg-skeleton-card-bg, var(--bg-layer-raised, #fcfcfc));
+}
+
+.selectedCard {
+  border-color: var(--cg-selected-border, var(--stroke-info, #124ace));
+  background-color: var(
+    --cg-selected-bg,
+    var(--bg-accent-primary-alpha, #7da4ff2e)
+  ) !important;
+}
+
+.checkIcon {
+  color: var(--cg-check-icon, var(--text-accent, #1d4ed8));
+}
+
+.footer {
+  border-top-color: var(--cg-footer-border, var(--stroke-tertiary, #e0e6f0));
+}
+
+:export {
+  skeletonColor: var(--cg-skeleton-color, var(--bg-layer-4, #d1dbea));
 }

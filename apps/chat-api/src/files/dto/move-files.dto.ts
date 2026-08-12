@@ -1,9 +1,10 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsOptional,
@@ -16,12 +17,11 @@ import {
   BUCKET_NAME_PATTERN,
   BUCKET_NAME_VALIDATION_MESSAGE,
 } from '../../common/validators/bucket-name.pattern';
+import { DialFileNodeType } from './dial-file-node-type';
 import { IsValidFilePath } from './file-path.validator';
 
-export enum MoveItemNodeType {
-  Item = 'item',
-  Folder = 'folder',
-}
+export const MoveItemNodeType = DialFileNodeType;
+export type MoveItemNodeType = DialFileNodeType;
 
 export class MoveItemDto {
   @IsString()
@@ -50,6 +50,15 @@ export class MoveItemDto {
     example: 'reports/draft.pdf',
   })
   destinationPath!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  @ApiPropertyOptional({
+    description: 'Whether to overwrite an existing destination resource',
+    default: false,
+    example: true,
+  })
+  overwrite?: boolean;
 
   @IsEnum(MoveItemNodeType)
   @ApiProperty({ enum: MoveItemNodeType })

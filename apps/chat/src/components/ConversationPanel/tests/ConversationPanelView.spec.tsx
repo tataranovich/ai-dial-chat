@@ -1,7 +1,8 @@
 import {
   ConversationDeletionFailureDtoCodeEnum,
   type ConversationDeletionResultDto,
-} from '@epam/chat-api-client';
+} from '@epam/ai-dial-chat-api-client';
+import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
   act,
   fireEvent,
@@ -14,6 +15,17 @@ import { cloneElement, ReactElement, ReactNode, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useConversations } from '../../../context/ConversationsContext';
 import { useNotification } from '../../../context/NotificationContext';
+import { useConversationExport } from '../../../hooks/useConversationExport';
+import { useConversationImport } from '../../../hooks/useConversationImport';
+import { useUiFeature } from '../../../hooks/useUiFeature';
+import {
+  discardSharedCatalogItem,
+  revokeSharedAccess,
+} from '../../../server-api/share.api';
+import {
+  ConversationExportMode,
+  ExportJobStatus,
+} from '../../../types/conversation-export';
 import ConversationPanelView from '../ConversationPanelView';
 
 vi.mock('@epam/ai-dial-conversation-panel', async (importOriginal) => {
@@ -25,24 +37,64 @@ vi.mock('@epam/ai-dial-conversation-panel', async (importOriginal) => {
       headerActions,
       conversations: panelConversations,
       getActions,
+      onActionMenuOpen,
+      className,
     }: {
       headerActions?: ReactNode;
-      conversations?: Array<{ id: string }>;
+      conversations?: Array<{ id: string; isUnread?: boolean }>;
       getActions?: (item: { id: string }) => Array<{
         key: string;
         label: ReactNode;
         onClick?: () => void;
+        children?: Array<{
+          key: string;
+          label: ReactNode;
+          onClick?: () => void;
+        }>;
       }>;
+      onActionMenuOpen?: (
+        item: { id: string },
+        trigger: HTMLButtonElement,
+      ) => void;
+      className?: string;
     }) => (
-      <div role="region" aria-label="conversation panel">
+      <div role="region" aria-label="conversation panel" className={className}>
         {headerActions}
         {panelConversations?.map((item) => (
           <div key={item.id}>
-            {(getActions?.(item) ?? []).map((action) => (
-              <button key={action.key} onClick={action.onClick}>
-                {action.label}
-              </button>
-            ))}
+            <button
+              id={`action-trigger-${item.id}`}
+              aria-label={`action trigger ${item.id}`}
+            />
+            {item.isUnread && (
+              <span aria-label={`unread indicator ${item.id}`} />
+            )}
+            {(getActions?.(item) ?? []).map((action) =>
+              action.children ? (
+                // Simulates the hover-revealed submenu: children render as sibling buttons.
+                <div key={action.key}>
+                  <span>{action.label}</span>
+                  {action.children.map((child) => (
+                    <button key={child.key} onClick={child.onClick}>
+                      {child.label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <button
+                  key={action.key}
+                  onClick={() => {
+                    const trigger = document.getElementById(
+                      `action-trigger-${item.id}`,
+                    ) as HTMLButtonElement | null;
+                    if (trigger) onActionMenuOpen?.(item, trigger);
+                    action.onClick?.();
+                  }}
+                >
+                  {action.label}
+                </button>
+              ),
+            )}
           </div>
         ))}
       </div>
@@ -54,7 +106,7 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
   return {
     ...actual,
-    DialConfirmationPopup: ({
+    ConfirmationPopup: ({
       open,
       header,
       confirmLabel,
@@ -90,7 +142,7 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
         </div>
       );
     },
-    DialDropdown: ({
+    Dropdown: ({
       children,
       items,
     }: {
@@ -116,20 +168,7 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
         </div>
       );
     },
-    DialIconButton: ({
-      'aria-label': ariaLabel,
-      onClick,
-      icon,
-    }: {
-      'aria-label': string;
-      onClick?: () => void;
-      icon?: ReactNode;
-    }) => (
-      <button aria-label={ariaLabel} onClick={onClick}>
-        {icon}
-      </button>
-    ),
-    DialNotification: ({
+    ErrorMessageNotification: ({
       message,
       onClose,
       closable,
@@ -143,46 +182,50 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
         {closable && <button onClick={onClose}>Close notification</button>}
       </div>
     ),
+    Popup: ({ open, children }: { open: boolean; children?: ReactNode }) => {
+      if (!open) return null;
+      return <div role="dialog">{children}</div>;
+    },
   };
 });
 
 vi.mock('@tabler/icons-react', () => ({
   IconCopy: () => null,
   IconDotsVertical: () => null,
+  IconDownload: () => null,
+  IconFileArrowLeft: () => null,
+  IconFileArrowRight: () => null,
   IconPencilMinus: () => null,
   IconPin: () => null,
   IconPinnedFilled: () => null,
+  IconShare: () => null,
   IconTrashX: () => null,
+  IconUserOff: () => null,
+  IconWorldShare: () => null,
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router', () => ({
   useNavigate: () => mockNavigate,
 }));
 
 vi.mock('../../../context/ConversationsContext');
 vi.mock('../../../context/NotificationContext');
+vi.mock('../../../server-api/share.api');
 vi.mock('../../../context/DeploymentsContext', () => ({
   useDeployments: () => ({ items: [] }),
 }));
+const mockUseIsMobile = vi.hoisted(() => vi.fn(() => false));
 vi.mock('../../../hooks/breakpoint/useBreakpoint', () => ({
-  useIsMobile: () => false,
+  useIsMobile: mockUseIsMobile,
 }));
-vi.mock('../../../hooks/use-viewport-width', () => ({
-  default: () => 1440,
-}));
-vi.mock('../../../hooks/useLocalStorage', () => ({
-  default: () => [325, vi.fn()],
-}));
+vi.mock('../../../hooks/useUiFeature');
 vi.mock('../../../constants/routes', () => ({
   getConversationRoute: (id: string) => `/conversations/${id}`,
   normalizeConversationId: (id: string) => id,
-}));
-vi.mock('../../../constants/storage', () => ({
-  StorageKey: { ConversationPanelWidth: 'dial:cpw' },
 }));
 vi.mock('../../../utils/get-model-id-from-conversation-id', () => ({
   getModelIdFromConversationId: () => undefined,
@@ -216,25 +259,119 @@ vi.mock('../../RenameConversationPopup/RenameConversationPopup', () => ({
     );
   },
 }));
+vi.mock(
+  '../../PublishConversationPanelContainer/PublishConversationPanelContainer',
+  () => ({
+    default: ({
+      conversationPath,
+      conversationTitle,
+      onClose,
+      returnFocusRef,
+    }: {
+      conversationPath: string;
+      conversationTitle: string;
+      onClose: () => void;
+      returnFocusRef?: { current: HTMLElement | null };
+    }) => (
+      <div role="dialog" aria-label="publish conversation">
+        <span>{conversationPath}</span>
+        <span>{conversationTitle}</span>
+        <span>{returnFocusRef?.current?.getAttribute('aria-label')}</span>
+        <button onClick={onClose}>Close</button>
+      </div>
+    ),
+  }),
+);
+vi.mock('../../ImportExportQueue/ImportExportQueue', () => ({
+  default: ({
+    title,
+    jobs,
+    onDismiss,
+    onRetry,
+  }: {
+    title: string;
+    jobs: Array<{ id: string; label: string; status: string }>;
+    onClose: () => void;
+    onDismiss: (jobId: string) => void;
+    onRetry: (jobId: string) => void;
+  }) => {
+    if (jobs.length === 0) return null;
+    return (
+      <div role="status">
+        <span>{title}</span>
+        {jobs.map((job) => (
+          <div key={job.id}>
+            <span>{job.label}</span>
+            {job.status === 'failed' && (
+              <button onClick={() => onRetry(job.id)}>Retry</button>
+            )}
+            <button onClick={() => onDismiss(job.id)}>Close</button>
+          </div>
+        ))}
+      </div>
+    );
+  },
+}));
+vi.mock('../../../hooks/useConversationExport');
+vi.mock('../../../hooks/useConversationImport');
 vi.mock('../get-conversation-source', () => ({
   getConversationSource: () => undefined,
 }));
+vi.mock(
+  '../../ShareConversationPopoverContainer/ShareConversationPopoverContainer',
+  () => ({
+    default: ({
+      conversationPath,
+      onClose,
+    }: {
+      conversationPath: string;
+      onClose: () => void;
+    }) => (
+      <div aria-label="share conversation">
+        <span>{conversationPath}</span>
+        <button onClick={onClose}>Close share</button>
+      </div>
+    ),
+  }),
+);
 
 const mockNavigate = vi.fn();
 
 const PANEL_ACTIONS_LABEL = 'conversationPanel.panelActionsLabel';
-const DELETE_ALL_LABEL = 'conversationPanel.deleteAllChatsLabel';
-const CONFIRM_TITLE = 'conversationPanel.deleteAllConfirmTitle';
+const DELETE_ALL_LABEL = 'conversationPanel.deleteAll.deleteAllChatsLabel';
+const CONFIRM_TITLE = 'conversationPanel.deleteAll.deleteAllConfirmTitle';
 const CONFIRM_BUTTON = 'buttons.deleteAll';
 const CANCEL_BUTTON = 'buttons.cancel';
-const DELETE_ALL_ERROR = 'conversationPanel.deleteAllError';
-const PARTIAL_ERROR = 'conversationPanel.deleteAllPartialError';
+const DELETE_ALL_ERROR = 'conversationPanel.deleteAll.deleteAllError';
+const PARTIAL_ERROR = 'conversationPanel.deleteAll.deleteAllPartialError';
 
 const DELETE_CONFIRM_BUTTON = 'buttons.delete';
+const SHARE_LABEL = 'share.title';
+const PUBLISH_LABEL = 'buttons.publish';
+
+const UNSHARE_BUTTON = 'buttons.removeFromMyList';
+const UNSHARE_CONFIRM_TITLE = 'conversationPanel.unshare.unshareConfirmTitle';
+const UNSHARE_ERROR = 'conversationPanel.unshare.unshareError';
+
+const REVOKE_BUTTON = 'buttons.revokeAccess';
+const REVOKE_BUTTON_WITH_COUNT = 'buttons.revokeAccessWithCount';
+const REVOKE_CONFIRM_TITLE = 'conversationPanel.revoke.revokeConfirmTitle';
+const REVOKE_ERROR = 'conversationPanel.revoke.revokeError';
 
 const mockDeleteAllConversations =
   vi.fn<() => Promise<ConversationDeletionResultDto>>();
 const mockShowNotification = vi.fn();
+const mockExportSingle = vi.fn().mockResolvedValue(undefined);
+const mockExportAll = vi.fn().mockResolvedValue(undefined);
+const mockDismissJob = vi.fn();
+const mockRetryJob = vi.fn();
+const mockImportConversations = vi.fn().mockResolvedValue(undefined);
+const mockDismissImportJob = vi.fn();
+const mockRetryImportJob = vi.fn();
+
+const EXPORT_LABEL = 'conversationExport.exportLabel';
+const EXPORT_ALL_LABEL = 'conversationExport.exportAllLabel';
+const IMPORT_LABEL = 'conversationImport.importLabel';
 
 const baseContextValue = {
   conversations: [
@@ -250,6 +387,7 @@ const baseContextValue = {
   isLoading: false,
   error: null,
   pinConversation: vi.fn(),
+  markConversationViewed: vi.fn(),
   deleteConversation: vi.fn(),
   renameConversation: vi.fn(),
   duplicateConversation: vi.fn(),
@@ -276,12 +414,29 @@ const openDeleteAllPopup = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockUseIsMobile.mockReturnValue(false);
+  vi.mocked(useUiFeature).mockReturnValue(true);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   vi.mocked(useConversations).mockReturnValue(baseContextValue as any);
   vi.mocked(useNotification).mockReturnValue({
     notifications: [],
     showNotification: mockShowNotification,
     dismissNotification: vi.fn(),
+  });
+  vi.mocked(useConversationExport).mockReturnValue({
+    jobs: [],
+    exportSingle: mockExportSingle,
+    exportAll: mockExportAll,
+    dismissJob: mockDismissJob,
+    retryJob: mockRetryJob,
+    dismissAll: vi.fn(),
+  });
+  vi.mocked(useConversationImport).mockReturnValue({
+    jobs: [],
+    importConversations: mockImportConversations,
+    dismissJob: mockDismissImportJob,
+    retryJob: mockRetryImportJob,
+    dismissAll: vi.fn(),
   });
 });
 
@@ -293,11 +448,24 @@ describe('ConversationPanelView — delete-all header action', () => {
     ).toBeTruthy();
   });
 
-  it('dropdown contains exactly one item: Delete all conversations', () => {
+  it('dropdown contains Export all conversations and Delete all conversations', () => {
     render(<ConversationPanelView {...defaultProps} />);
     openDropdown();
-    const items = screen.getAllByRole('button', { name: DELETE_ALL_LABEL });
-    expect(items).toHaveLength(1);
+    expect(
+      screen.getAllByRole('button', { name: DELETE_ALL_LABEL }),
+    ).toHaveLength(1);
+    expect(
+      screen.getAllByRole('button', { name: EXPORT_ALL_LABEL }),
+    ).toHaveLength(1);
+  });
+
+  it('clicking Export all conversations starts export-all without a modal', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    openDropdown();
+    fireEvent.click(screen.getByRole('button', { name: EXPORT_ALL_LABEL }));
+
+    expect(mockExportAll).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('clicking the item opens the confirmation popup without calling the API', () => {
@@ -494,8 +662,8 @@ describe('ConversationPanelView — delete-all header action', () => {
     });
     expect(mockShowNotification).toHaveBeenCalledWith({
       variant: 'success',
-      title: 'conversationPanel.deleteAllSuccessTitle',
-      message: 'conversationPanel.deleteAllSuccess',
+      title: 'conversationPanel.deleteAll.deleteAllSuccessTitle',
+      message: 'conversationPanel.deleteAll.deleteAllSuccess',
     });
   });
 
@@ -556,6 +724,109 @@ describe('ConversationPanelView — delete-all header action', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
     expect(mockNavigate).toHaveBeenCalledWith('/');
+  });
+});
+
+describe('ConversationPanelView — mark conversation viewed on open', () => {
+  const unreadTaskConversation = {
+    id: 'task1',
+    title: 'Task 1',
+    isPinned: false,
+    updatedAt: 0,
+    sharedWithMe: false,
+    publishedWithMe: false,
+    isScheduledTask: true,
+    isUnread: true,
+  };
+
+  it('calls markConversationViewed when an unread task conversation becomes active (row click / initial render)', () => {
+    const mockMarkConversationViewed = vi.fn();
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [unreadTaskConversation],
+      markConversationViewed: mockMarkConversationViewed,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView {...defaultProps} activeConversationId="task1" />,
+    );
+
+    expect(mockMarkConversationViewed).toHaveBeenCalledWith('task1');
+  });
+
+  it('calls markConversationViewed again when activeConversationId changes to another unread task conversation (direct navigation)', () => {
+    const secondUnreadTask = {
+      ...unreadTaskConversation,
+      id: 'task2',
+    };
+    const mockMarkConversationViewed = vi.fn();
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [unreadTaskConversation, secondUnreadTask],
+      markConversationViewed: mockMarkConversationViewed,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    const { rerender } = render(
+      <ConversationPanelView {...defaultProps} activeConversationId="task1" />,
+    );
+    expect(mockMarkConversationViewed).toHaveBeenCalledWith('task1');
+
+    rerender(
+      <ConversationPanelView {...defaultProps} activeConversationId="task2" />,
+    );
+
+    expect(mockMarkConversationViewed).toHaveBeenCalledWith('task2');
+  });
+
+  it('does not call markConversationViewed when no conversation is active', () => {
+    const mockMarkConversationViewed = vi.fn();
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      markConversationViewed: mockMarkConversationViewed,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView
+        {...defaultProps}
+        activeConversationId={undefined}
+      />,
+    );
+
+    expect(mockMarkConversationViewed).not.toHaveBeenCalled();
+  });
+
+  it('passes isUnread through to the ConversationPanel item for a scheduler-created, unread conversation', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [unreadTaskConversation],
+      markConversationViewed: vi.fn(),
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView
+        {...defaultProps}
+        activeConversationId={undefined}
+      />,
+    );
+
+    expect(screen.getByLabelText('unread indicator task1')).toBeTruthy();
+  });
+
+  it('does not pass isUnread through for a read scheduler-created conversation', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [{ ...unreadTaskConversation, isUnread: false }],
+      markConversationViewed: vi.fn(),
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView
+        {...defaultProps}
+        activeConversationId={undefined}
+      />,
+    );
+
+    expect(screen.queryByLabelText('unread indicator task1')).toBeNull();
   });
 });
 
@@ -696,5 +967,904 @@ describe('ConversationPanelView — rename', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
+  });
+});
+
+describe('ConversationPanelView — share', () => {
+  it('owned conversation menu includes Share', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.getByRole('button', { name: SHARE_LABEL })).toBeTruthy();
+  });
+
+  it('readonly (shared-with-me) conversation menu excludes Share', () => {
+    const sharedConversation = {
+      id: 'conv2',
+      title: 'Shared chat',
+      isPinned: false,
+      updatedAt: 0,
+      sharedWithMe: true,
+      publishedWithMe: false,
+    };
+
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView {...defaultProps} activeConversationId="conv2" />,
+    );
+
+    expect(screen.queryByRole('button', { name: SHARE_LABEL })).toBeNull();
+  });
+
+  it('clicking Share opens the popover for the conversation path', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: SHARE_LABEL }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('conv1')).toBeTruthy();
+  });
+
+  it('closing the popover clears the pending share state', async () => {
+    render(<ConversationPanelView {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: SHARE_LABEL }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Close share' }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  it('excludes Share from the menu when conversations-sharing is disabled', () => {
+    vi.mocked(useUiFeature).mockImplementation(
+      (feature) => feature !== OverlayFeature.ConversationsSharing,
+    );
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: SHARE_LABEL })).toBeNull();
+  });
+});
+
+describe('ConversationPanelView — publish', () => {
+  it('owned conversation menu includes Publish', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.getByRole('button', { name: PUBLISH_LABEL })).toBeTruthy();
+  });
+
+  it('readonly (shared-with-me) conversation menu excludes Publish', () => {
+    const sharedConversation = {
+      id: 'conv2',
+      title: 'Shared chat',
+      isPinned: false,
+      updatedAt: 0,
+      sharedWithMe: true,
+      publishedWithMe: false,
+    };
+
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView {...defaultProps} activeConversationId="conv2" />,
+    );
+
+    expect(screen.queryByRole('button', { name: PUBLISH_LABEL })).toBeNull();
+  });
+
+  it('published-with-me conversation menu excludes Publish', () => {
+    const publishedConversation = {
+      id: 'conv3',
+      title: 'Published chat',
+      isPinned: false,
+      updatedAt: 0,
+      sharedWithMe: false,
+      publishedWithMe: true,
+    };
+
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [publishedConversation],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView {...defaultProps} activeConversationId="conv3" />,
+    );
+
+    expect(screen.queryByRole('button', { name: PUBLISH_LABEL })).toBeNull();
+  });
+
+  it('clicking Publish opens the panel for the conversation path and title', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: PUBLISH_LABEL }));
+
+    const dialog = screen.getByRole('dialog', {
+      name: 'publish conversation',
+    });
+    expect(within(dialog).getByText('conv1')).toBeTruthy();
+    expect(within(dialog).getByText('action trigger conv1')).toBeTruthy();
+  });
+
+  it('closing the panel clears the pending publish state', async () => {
+    render(<ConversationPanelView {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: PUBLISH_LABEL }));
+    const dialog = screen.getByRole('dialog', {
+      name: 'publish conversation',
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog', { name: 'publish conversation' }),
+      ).toBeNull();
+    });
+  });
+
+  it('excludes Publish from the menu when conversations-publishing is disabled', () => {
+    vi.mocked(useUiFeature).mockImplementation(
+      (feature) => feature !== OverlayFeature.ConversationsPublishing,
+    );
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: PUBLISH_LABEL })).toBeNull();
+  });
+});
+
+describe('ConversationPanelView — export', () => {
+  it('row action list contains an Export item (submenu trigger, no onClick of its own)', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.getByText(EXPORT_LABEL)).toBeTruthy();
+  });
+
+  it('the Export submenu offers "with attachments" and "without attachments" — no modal', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(
+      screen.getByRole('button', {
+        name: 'conversationExport.withAttachmentsOption',
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: 'conversationExport.withoutAttachmentsOption',
+      }),
+    ).toBeTruthy();
+    expect(mockExportSingle).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('choosing "with attachments" calls exportSingle with the conversation id, title, and mode', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'conversationExport.withAttachmentsOption',
+      }),
+    );
+
+    expect(mockExportSingle).toHaveBeenCalledWith(
+      'conv1',
+      'Chat 1',
+      ConversationExportMode.WithAttachments,
+    );
+  });
+
+  it('choosing "without attachments" calls exportSingle with the conversation id, title, and mode', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'conversationExport.withoutAttachmentsOption',
+      }),
+    );
+
+    expect(mockExportSingle).toHaveBeenCalledWith(
+      'conv1',
+      'Chat 1',
+      ConversationExportMode.WithoutAttachments,
+    );
+  });
+
+  it('shows the non-modal export queue while jobs are present', () => {
+    vi.mocked(useConversationExport).mockReturnValue({
+      jobs: [
+        {
+          id: 'job-1',
+          label: 'Chat 1',
+          status: ExportJobStatus.InProgress,
+        },
+      ],
+      exportSingle: mockExportSingle,
+      exportAll: mockExportAll,
+      dismissJob: mockDismissJob,
+      retryJob: mockRetryJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+
+    expect(screen.getByRole('status')).toBeTruthy();
+    expect(screen.getByText('Chat 1')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('hides the export queue when there are no jobs', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('clicking close on a queue job calls dismissJob with its id', () => {
+    vi.mocked(useConversationExport).mockReturnValue({
+      jobs: [
+        { id: 'job-2', label: 'Chat 2', status: ExportJobStatus.InProgress },
+      ],
+      exportSingle: mockExportSingle,
+      exportAll: mockExportAll,
+      dismissJob: mockDismissJob,
+      retryJob: mockRetryJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(mockDismissJob).toHaveBeenCalledWith('job-2');
+  });
+
+  it('clicking retry on a failed queue job calls retryJob with its id', () => {
+    vi.mocked(useConversationExport).mockReturnValue({
+      jobs: [{ id: 'job-3', label: 'Chat 3', status: ExportJobStatus.Failed }],
+      exportSingle: mockExportSingle,
+      exportAll: mockExportAll,
+      dismissJob: mockDismissJob,
+      retryJob: mockRetryJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(mockRetryJob).toHaveBeenCalledWith('job-3');
+  });
+});
+
+describe('ConversationPanelView — import header action', () => {
+  it('dropdown contains an Import item positioned after Export all', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    openDropdown();
+    expect(screen.getAllByRole('button', { name: IMPORT_LABEL })).toHaveLength(
+      1,
+    );
+  });
+
+  it('clicking Import triggers the hidden file input', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const clickSpy = vi.spyOn(fileInput, 'click');
+
+    openDropdown();
+    fireEvent.click(screen.getByRole('button', { name: IMPORT_LABEL }));
+
+    expect(clickSpy).toHaveBeenCalledOnce();
+  });
+
+  it('accepts .json, .dial, and .zip files', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    expect(fileInput.accept).toBe(
+      '.json,.dial,.zip,application/json,application/zip',
+    );
+  });
+
+  it('leaves the import picker unfiltered on mobile', () => {
+    mockUseIsMobile.mockReturnValue(true);
+    render(<ConversationPanelView {...defaultProps} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    expect(fileInput.hasAttribute('accept')).toBe(false);
+  });
+
+  it('selecting a file calls importConversations with that file', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(['{}'], 'export.json', {
+      type: 'application/json',
+    });
+
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(mockImportConversations).toHaveBeenCalledWith(file);
+  });
+
+  it('resets the file input value after selection so the same file can be re-picked', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(['{}'], 'export.json');
+
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(fileInput.value).toBe('');
+  });
+});
+
+describe('ConversationPanelView — separate import/export transfer queues', () => {
+  it('shows an import job in its own non-modal queue', () => {
+    vi.mocked(useConversationImport).mockReturnValue({
+      jobs: [
+        {
+          id: 'imp-1',
+          label: 'Imported Chat',
+          status: ExportJobStatus.InProgress,
+        },
+      ],
+      importConversations: mockImportConversations,
+      dismissJob: mockDismissImportJob,
+      retryJob: mockRetryImportJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+
+    expect(screen.getByRole('status')).toBeTruthy();
+    expect(screen.getByText('Imported Chat')).toBeTruthy();
+  });
+
+  it('renders two separate queues with their own titles when both import and export jobs are present', () => {
+    vi.mocked(useConversationExport).mockReturnValue({
+      jobs: [
+        { id: 'job-1', label: 'Chat 1', status: ExportJobStatus.InProgress },
+      ],
+      exportSingle: mockExportSingle,
+      exportAll: mockExportAll,
+      dismissJob: mockDismissJob,
+      retryJob: mockRetryJob,
+      dismissAll: vi.fn(),
+    });
+    vi.mocked(useConversationImport).mockReturnValue({
+      jobs: [
+        {
+          id: 'imp-1',
+          label: 'Imported Chat',
+          status: ExportJobStatus.InProgress,
+        },
+      ],
+      importConversations: mockImportConversations,
+      dismissJob: mockDismissImportJob,
+      retryJob: mockRetryImportJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+
+    expect(screen.getAllByRole('status')).toHaveLength(2);
+    expect(screen.getByText('conversationExport.queueTitle')).toBeTruthy();
+    expect(screen.getByText('conversationImport.queueTitle')).toBeTruthy();
+  });
+
+  it('shows the Importing title when only import jobs are present', () => {
+    vi.mocked(useConversationImport).mockReturnValue({
+      jobs: [
+        {
+          id: 'imp-1',
+          label: 'Imported Chat',
+          status: ExportJobStatus.InProgress,
+        },
+      ],
+      importConversations: mockImportConversations,
+      dismissJob: mockDismissImportJob,
+      retryJob: mockRetryImportJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+
+    expect(screen.getByText('conversationImport.queueTitle')).toBeTruthy();
+  });
+
+  it('shows the Exporting title when only export jobs are present', () => {
+    vi.mocked(useConversationExport).mockReturnValue({
+      jobs: [
+        { id: 'job-1', label: 'Chat 1', status: ExportJobStatus.InProgress },
+      ],
+      exportSingle: mockExportSingle,
+      exportAll: mockExportAll,
+      dismissJob: mockDismissJob,
+      retryJob: mockRetryJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+
+    expect(screen.getByText('conversationExport.queueTitle')).toBeTruthy();
+  });
+
+  it('wires the import queue dismiss button to the import hook', () => {
+    vi.mocked(useConversationImport).mockReturnValue({
+      jobs: [
+        {
+          id: 'imp-1',
+          label: 'Imported Chat',
+          status: ExportJobStatus.InProgress,
+        },
+      ],
+      importConversations: mockImportConversations,
+      dismissJob: mockDismissImportJob,
+      retryJob: mockRetryImportJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(mockDismissImportJob).toHaveBeenCalledWith('imp-1');
+    expect(mockDismissJob).not.toHaveBeenCalled();
+  });
+
+  it('wires the import queue retry button to the import hook', () => {
+    vi.mocked(useConversationImport).mockReturnValue({
+      jobs: [
+        { id: 'imp-1', label: 'Imported Chat', status: ExportJobStatus.Failed },
+      ],
+      importConversations: mockImportConversations,
+      dismissJob: mockDismissImportJob,
+      retryJob: mockRetryImportJob,
+      dismissAll: vi.fn(),
+    });
+
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(mockRetryImportJob).toHaveBeenCalledWith('imp-1');
+    expect(mockRetryJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConversationPanelView — unshare (Remove from My List)', () => {
+  const sharedConversation = {
+    id: 'conv1',
+    title: 'Shared chat',
+    isPinned: false,
+    updatedAt: 0,
+    sharedWithMe: true,
+    publishedWithMe: false,
+  };
+
+  beforeEach(() => {
+    vi.mocked(discardSharedCatalogItem).mockResolvedValue({ success: true });
+  });
+
+  it('shared-with-me row menu includes Remove from My List', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.getByRole('button', { name: UNSHARE_BUTTON })).toBeTruthy();
+  });
+
+  it('owned row menu renders exactly one Delete action (the owner-delete, not an extra unshare one)', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(
+      screen.getAllByRole('button', { name: DELETE_CONFIRM_BUTTON }),
+    ).toHaveLength(1);
+  });
+
+  it('published-with-me (not shared-with-me) row menu does not include Remove from My List', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [
+        { ...sharedConversation, sharedWithMe: false, publishedWithMe: true },
+      ],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: UNSHARE_BUTTON })).toBeNull();
+  });
+
+  it('clicking Remove from My List opens confirmation without calling the discard API', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: UNSHARE_BUTTON }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(UNSHARE_CONFIRM_TITLE)).toBeTruthy();
+    expect(discardSharedCatalogItem).not.toHaveBeenCalled();
+  });
+
+  it('confirm calls discardSharedCatalogItem exactly once and disables the button while pending', async () => {
+    let resolveDiscard: (value: { success: boolean }) => void = () => undefined;
+    vi.mocked(discardSharedCatalogItem).mockReturnValue(
+      new Promise((resolve) => {
+        resolveDiscard = resolve;
+      }),
+    );
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: UNSHARE_BUTTON }));
+    const dialog = screen.getByRole('dialog');
+    const confirmButton = within(dialog).getByRole('button', {
+      name: UNSHARE_BUTTON,
+    });
+
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    expect(discardSharedCatalogItem).toHaveBeenCalledOnce();
+    expect(discardSharedCatalogItem).toHaveBeenCalledWith('conv1');
+    expect(confirmButton.hasAttribute('disabled')).toBe(true);
+
+    await act(async () => {
+      resolveDiscard({ success: true });
+    });
+  });
+
+  it('successful discard of a non-active conversation refreshes and notifies without navigating', async () => {
+    const otherConversation = {
+      id: 'other',
+      title: 'Other chat',
+      isPinned: false,
+      updatedAt: 0,
+      sharedWithMe: false,
+      publishedWithMe: false,
+    };
+    const mockRefresh = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation, otherConversation],
+      refreshConversations: mockRefresh,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView {...defaultProps} activeConversationId="other" />,
+    );
+    mockRefresh.mockClear();
+
+    /* sharedConversation is listed first, so its Remove from My List button is the first match. */
+    fireEvent.click(screen.getAllByRole('button', { name: UNSHARE_BUTTON })[0]);
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: UNSHARE_BUTTON }),
+      );
+    });
+
+    expect(discardSharedCatalogItem).toHaveBeenCalledWith('conv1');
+    await waitFor(() => {
+      expect(mockRefresh).toHaveBeenCalledOnce();
+    });
+    expect(mockShowNotification).toHaveBeenCalledOnce();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  it('successful discard of the active conversation navigates to root', async () => {
+    const mockRefresh = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+      refreshConversations: mockRefresh,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(
+      <ConversationPanelView {...defaultProps} activeConversationId="conv1" />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: UNSHARE_BUTTON }));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: UNSHARE_BUTTON }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/');
+    });
+  });
+
+  it('a refreshConversations rejection after a successful discard still shows success, not an error', async () => {
+    const mockRefresh = vi.fn().mockRejectedValue(new Error('refresh failed'));
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+      refreshConversations: mockRefresh,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: UNSHARE_BUTTON }));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: UNSHARE_BUTTON }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(mockShowNotification).toHaveBeenCalledOnce();
+  });
+
+  it('failed discard keeps the popup open with an inline error and does not refresh or navigate', async () => {
+    vi.mocked(discardSharedCatalogItem).mockRejectedValue(new Error('403'));
+    const mockRefresh = vi.fn();
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+      refreshConversations: mockRefresh,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: UNSHARE_BUTTON }));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: UNSHARE_BUTTON }),
+      );
+    });
+
+    expect(within(dialog).getByText(UNSHARE_ERROR)).toBeTruthy();
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('cancel closes the popup without calling the discard API', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedConversation],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: UNSHARE_BUTTON }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: CANCEL_BUTTON }),
+    );
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(discardSharedCatalogItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConversationPanelView — revoke access', () => {
+  const sharedWithMeConversation = {
+    id: 'conv1',
+    title: 'Shared chat',
+    isPinned: false,
+    updatedAt: 0,
+    sharedWithMe: true,
+    publishedWithMe: false,
+  };
+
+  beforeEach(() => {
+    vi.mocked(revokeSharedAccess).mockResolvedValue({ success: true });
+  });
+
+  const openRevokeConfirmation = () => {
+    fireEvent.click(screen.getByRole('button', { name: REVOKE_BUTTON }));
+    return screen.getByRole('dialog');
+  };
+
+  it('owned row menu includes Revoke access', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.getByRole('button', { name: REVOKE_BUTTON })).toBeTruthy();
+  });
+
+  it('shared-with-me row menu does not include Revoke access', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [sharedWithMeConversation],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: REVOKE_BUTTON })).toBeNull();
+    expect(screen.getByRole('button', { name: UNSHARE_BUTTON })).toBeTruthy();
+  });
+
+  it('published-with-me row menu does not include Revoke access', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [
+        {
+          ...sharedWithMeConversation,
+          sharedWithMe: false,
+          publishedWithMe: true,
+        },
+      ],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: REVOKE_BUTTON })).toBeNull();
+  });
+
+  it('hides Revoke access for an owned conversation nobody currently holds access to', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [
+        { ...baseContextValue.conversations[0], recipientsCount: 0 },
+      ],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: REVOKE_BUTTON })).toBeNull();
+  });
+
+  it('shows the recipient count in the Revoke access label when it is known', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [
+        { ...baseContextValue.conversations[0], recipientsCount: 2 },
+      ],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(
+      screen.getByRole('button', { name: REVOKE_BUTTON_WITH_COUNT }),
+    ).toBeTruthy();
+  });
+
+  it('clicking Revoke access opens confirmation without calling the revoke API', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    const dialog = openRevokeConfirmation();
+
+    expect(within(dialog).getByText(REVOKE_CONFIRM_TITLE)).toBeTruthy();
+    expect(revokeSharedAccess).not.toHaveBeenCalled();
+  });
+
+  it('confirm calls revokeSharedAccess exactly once and disables the button while pending', async () => {
+    let resolveRevoke: (value: { success: boolean }) => void = () => undefined;
+    vi.mocked(revokeSharedAccess).mockReturnValue(
+      new Promise((resolve) => {
+        resolveRevoke = resolve;
+      }),
+    );
+
+    render(<ConversationPanelView {...defaultProps} />);
+    const dialog = openRevokeConfirmation();
+    const confirmButton = within(dialog).getByRole('button', {
+      name: REVOKE_BUTTON,
+    });
+
+    fireEvent.click(confirmButton);
+    expect(confirmButton.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(confirmButton);
+
+    await act(async () => {
+      resolveRevoke({ success: true });
+    });
+
+    expect(revokeSharedAccess).toHaveBeenCalledOnce();
+    expect(revokeSharedAccess).toHaveBeenCalledWith('conv1');
+  });
+
+  it('successful revoke of the active conversation refreshes, notifies, and does not navigate', async () => {
+    const mockRefresh = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      refreshConversations: mockRefresh,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    const dialog = openRevokeConfirmation();
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: REVOKE_BUTTON }),
+      );
+    });
+
+    expect(mockRefresh).toHaveBeenCalledOnce();
+    expect(mockShowNotification).toHaveBeenCalledOnce();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('a refresh failure after a successful revoke still notifies success', async () => {
+    const mockRefresh = vi.fn().mockRejectedValue(new Error('offline'));
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      refreshConversations: mockRefresh,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    const dialog = openRevokeConfirmation();
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: REVOKE_BUTTON }),
+      );
+    });
+
+    expect(mockShowNotification).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('failed revoke keeps the popup open with an inline error and does not refresh', async () => {
+    vi.mocked(revokeSharedAccess).mockRejectedValue(new Error('403'));
+    const mockRefresh = vi.fn();
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      refreshConversations: mockRefresh,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    render(<ConversationPanelView {...defaultProps} />);
+    const dialog = openRevokeConfirmation();
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: REVOKE_BUTTON }),
+      );
+    });
+
+    expect(within(dialog).getByText(REVOKE_ERROR)).toBeTruthy();
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('cancel closes the popup without calling the revoke API', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    const dialog = openRevokeConfirmation();
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: CANCEL_BUTTON }),
+    );
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(revokeSharedAccess).not.toHaveBeenCalled();
+  });
+
+  it('keeps the action and its confirmation reachable under dir="rtl"', () => {
+    document.documentElement.dir = 'rtl';
+    try {
+      render(<ConversationPanelView {...defaultProps} />);
+      const dialog = openRevokeConfirmation();
+      expect(within(dialog).getByText(REVOKE_CONFIRM_TITLE)).toBeTruthy();
+      expect(
+        within(dialog).getByRole('button', { name: REVOKE_BUTTON }),
+      ).toBeTruthy();
+    } finally {
+      document.documentElement.dir = 'ltr';
+    }
+  });
+});
+
+describe('ConversationPanelView — UI feature gates', () => {
+  it('does not render the panel when conversations-section is disabled', () => {
+    vi.mocked(useUiFeature).mockImplementation(
+      (feature) => feature !== OverlayFeature.ConversationsSection,
+    );
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(
+      screen.queryByRole('region', { name: 'conversation panel' }),
+    ).toBeNull();
+  });
+
+  it('renders the panel when conversations-section is enabled', () => {
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(
+      screen.getByRole('region', { name: 'conversation panel' }),
+    ).toBeTruthy();
   });
 });

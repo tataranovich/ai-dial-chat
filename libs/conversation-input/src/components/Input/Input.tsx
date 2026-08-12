@@ -10,11 +10,12 @@ import {
 import {
   BASE_ICON_SIZE,
   DIAL_ICON_SIZE,
-  DialGhostIconButton,
+  StaticIconButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconFile, IconMicrophone } from '@tabler/icons-react';
 import {
   ChangeEvent,
+  ClipboardEvent,
   type FC,
   KeyboardEvent,
   useCallback,
@@ -23,20 +24,26 @@ import {
   useState,
 } from 'react';
 import { useAttachments } from '../../hooks/useAttachments';
+import { useDelayedUnmount } from '../../hooks/useDelayedUnmount';
 import { useInputHistoryNavigation } from '../../hooks/useInputHistoryNavigation';
 import { useMessageState } from '../../hooks/useMessageState';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { SendOnEnter } from '../../models/Input';
 import type { InputProps } from '../../models/Input';
 import { AddAttachmentButton } from '../AddAttachmentButton/AddAttachmentButton';
+import { SelectedToolsChips } from '../SelectedToolsChips/SelectedToolsChips';
 import { VoiceBar } from '../VoiceBar/VoiceBar';
 import { SendButton } from './Buttons/SendButton';
 import { StopButton } from './Buttons/StopButton';
 import styles from './Input.module.scss';
 import { ModelSelectorControl } from './ModelSelectorControl';
 
+const SEND_BUTTON_EXIT_MS = 160;
+
+/** Full conversation input field: textarea, send/stop, model selector, attachment menu, voice recording, and chat-settings controls. */
 export const Input: FC<InputProps> = ({
   message: messageProp = '',
+  messageRevision,
   onSend,
   onUploadAttachment,
   onStop,
@@ -46,6 +53,7 @@ export const Input: FC<InputProps> = ({
   placeholder = 'Type a message...',
   ariaLabel,
   attachLabel = 'Attach file',
+  fileAccept,
   addMenuTitle = 'Add',
   menuTitle = 'Menu',
   menuCloseLabel = 'Close',
@@ -54,6 +62,8 @@ export const Input: FC<InputProps> = ({
   sendLabel,
   stopLabel,
   micLabel = 'Record voice message',
+  stopRecordingLabel,
+  discardRecordingLabel,
   colors,
   typography,
   className,
@@ -74,13 +84,17 @@ export const Input: FC<InputProps> = ({
   renderFooterActions,
   isInputDisabled = false,
   isModelSelectorDisabled = false,
-  isTranscriptionSupported = false,
-  onUploadAudio,
-  onTranscribeAudio,
+  isSendDisabled = false,
+  isAudioMessageSupported = false,
   sendOnEnter = SendOnEnter.Enter,
   prefixAttachments = [],
   onRemovePrefixAttachment,
   chatSettings,
+  toolsMenuItems,
+  onToolToggle,
+  toolsMenuTitle,
+  toolsBackLabel,
+  toolsChipLabels,
   autoFocus = false,
   messageHistory,
   onDialFileSystemClick,
@@ -88,6 +102,11 @@ export const Input: FC<InputProps> = ({
   validateAttachment,
   onAttachmentClick,
   modelPickerOverlay,
+  maximumAttachmentsAmount,
+  onAttachmentsLimitExceeded,
+  isAttachmentsEnabled = true,
+  usageLimitsSlot,
+  onMessageTooLong,
 }) => {
   const isMobile = useIsMobile();
   const [isPickerOpen, setIsPickerOpen] = useState(false);
@@ -99,14 +118,15 @@ export const Input: FC<InputProps> = ({
         '--ci-bg': colors?.background,
         '--ci-text': colors?.text,
         '--ci-border': colors?.border,
-        '--ci-border-hover': colors?.borderHover,
         '--ci-border-focus': colors?.borderFocus,
         '--ci-placeholder': colors?.placeholder,
-        '--ci-shadow': colors?.shadow,
-        '--ci-shadow-focus': colors?.shadowFocus,
-        '--ci-send-bg': colors?.sendBackground,
-        '--ci-send-text': colors?.sendText,
-        '--ci-stop-color': colors?.stopColor,
+        '--ci-text-disabled': colors?.textDisabled,
+        '--ci-model-selector-caret-color': colors?.modelSelectorCaret,
+        '--ci-model-selector-hover-bg': colors?.modelSelectorHoverBg,
+        '--ci-model-selector-disabled-color': colors?.modelSelectorDisabled,
+        '--ci-voice-error': colors?.voiceError,
+        '--ci-voice-waveform': colors?.voiceWaveform,
+        '--ci-voice-accent': colors?.voiceAccent,
       }),
     [colors],
   );
@@ -128,6 +148,7 @@ export const Input: FC<InputProps> = ({
 
   const { message, setMessage, textareaRef, isMultiLine } = useMessageState({
     messageProp,
+    messageRevision,
   });
 
   const handleExpandPastedText = useCallback(
@@ -156,52 +177,96 @@ export const Input: FC<InputProps> = ({
     pendingAttachments,
     onPendingAttachmentsConsumed,
     onExpandPastedText: handleExpandPastedText,
+    maximumAttachmentsAmount,
+    baseAttachmentsAmount: prefixAttachments.length,
+    onAttachmentsLimitExceeded,
   });
 
-  const handleTranscript = useCallback(
-    (transcript: string) => {
-      setMessage(transcript);
-      onChange?.(transcript);
+  const handleAttachAudio = useCallback(
+    (file: File) => {
+      addAttachments(buildAttachments([file]));
     },
-    [onChange, setMessage],
+    [addAttachments, buildAttachments],
   );
 
   const {
     state: voiceState,
-    waveformData,
+    analyserNodeRef,
     errorMessage: voiceError,
     startRecording,
     stopRecording,
-    confirmRecording,
     discardRecording,
   } = useVoiceRecorder({
-    onUploadAudio,
-    onTranscribeAudio,
-    onTranscript: handleTranscript,
+    onAttachAudio: handleAttachAudio,
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { handlePaste } = useClipboardPaste(addAttachments, pasteTextThreshold);
+  const { handlePaste: handleClipboardPaste } = useClipboardPaste(
+    addAttachments,
+    isAttachmentsEnabled ? pasteTextThreshold : Infinity,
+  );
+
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!isAttachmentsEnabled) {
+        const text = e.clipboardData.getData('text/plain');
+        if (text.length >= pasteTextThreshold) {
+          onMessageTooLong?.(text.length, pasteTextThreshold);
+        }
+      }
+      handleClipboardPaste(e);
+    },
+    [
+      isAttachmentsEnabled,
+      pasteTextThreshold,
+      onMessageTooLong,
+      handleClipboardPaste,
+    ],
+  );
 
   const hasSendableContent =
     message.trim().length > 0 || attachments.length > 0;
-  const canSend = hasSendableContent && !hasBlockedAttachments;
+  const canSend =
+    hasSendableContent && !hasBlockedAttachments && !isSendDisabled;
+  /*
+   * Keeps the send button mounted just long enough to play its exit
+   * animation (`.sendButtonExiting` in Input.module.scss) after content is
+   * cleared, instead of vanishing instantly.
+   */
+  const {
+    shouldRender: shouldRenderSendButton,
+    isExiting: isSendButtonExiting,
+    instanceKey: sendButtonKey,
+  } = useDelayedUnmount(
+    !isStreaming && hasSendableContent,
+    SEND_BUTTON_EXIT_MS,
+  );
+  const hasSelectedTools =
+    (toolsMenuItems?.some((t) => t.isSelected) ?? false) &&
+    onToolToggle != null;
   /*
    * Stacked layout: textarea on its own row above the action bar. Used when the
-   * caller opts in (edit mode), whenever attachments are present, or when the
-   * message spans multiple visual lines (either explicit newlines or word-wrap).
+   * caller opts in (edit mode), whenever the
+   * message spans multiple visual lines, or when one or more tools are selected
+   * (chips need the row between textarea and buttons).
    */
   const isStackedLayout =
-    isStacked ||
-    attachments.length > 0 ||
-    message.includes('\n') ||
-    isMultiLine;
+    isStacked || message.includes('\n') || isMultiLine || hasSelectedTools;
   const hasModelSelected =
     deployments === undefined || selectedDeploymentId != null;
+  const shouldShowMicButton = useMemo(
+    () => isAudioMessageSupported && !isSendButtonExiting && !isStreaming,
+    [isAudioMessageSupported, isSendButtonExiting, isStreaming],
+  );
 
   const handleSend = async () => {
-    if (isInputDisabled) return;
+    if (isSendDisabled) return;
+    if (!isAttachmentsEnabled && message.length >= pasteTextThreshold) {
+      onMessageTooLong?.(message.length, pasteTextThreshold);
+      return;
+    }
+
     const currentMessage = message;
     const currentAttachments = attachments;
     setMessage('');
@@ -210,6 +275,7 @@ export const Input: FC<InputProps> = ({
       await onSend?.(currentMessage, currentAttachments);
       currentAttachments.forEach((a) => {
         if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+        if (a.playUrl) URL.revokeObjectURL(a.playUrl);
       });
       resetAttachments([]);
     } catch {
@@ -245,7 +311,7 @@ export const Input: FC<InputProps> = ({
 
     if (shouldSend) {
       e.preventDefault();
-      if (!isStreaming && canSend && hasModelSelected) {
+      if (!isStreaming && canSend && hasModelSelected && !isInputDisabled) {
         handleSend();
       }
     }
@@ -264,11 +330,12 @@ export const Input: FC<InputProps> = ({
     return (
       <VoiceBar
         state={voiceState}
-        waveformData={waveformData}
+        analyserNodeRef={analyserNodeRef}
         errorMessage={voiceError}
         onStop={stopRecording}
-        onConfirm={confirmRecording}
         onDiscard={discardRecording}
+        stopLabel={stopRecordingLabel}
+        discardLabel={discardRecordingLabel}
         style={cssVars}
         className={className}
       />
@@ -279,7 +346,7 @@ export const Input: FC<InputProps> = ({
     <textarea
       className={mergeClasses(
         styles.textarea,
-        typography?.fontClassName,
+        typography?.fontClassName || 'dial-body-paragraph-text',
         'max-h-[272px] w-full resize-none overflow-y-auto border-0 bg-transparent outline-none [field-sizing:content]',
       )}
       ref={textareaRef}
@@ -299,15 +366,16 @@ export const Input: FC<InputProps> = ({
     />
   );
 
-  const inputBox = (
+  return (
     <div
       ref={containerRef}
       style={cssVars}
       className={mergeClasses(
         styles.wrapper,
         isInputDisabled && styles.wrapperDisabled,
-        'flex min-h-[56px] w-full max-w-[748px] flex-col justify-center gap-3 rounded-xl border',
-        attachments.length > 6 ? 'py-3 pl-3' : 'p-3',
+        'flex min-h-[64px] w-full max-w-[748px] flex-col justify-center gap-3 rounded-xl border shadow-md',
+        'focus-within:outline focus-within:-outline-offset-1 active:outline active:-outline-offset-1',
+        attachments.length > 6 ? 'py-3 ps-3' : 'p-3',
         className,
       )}
     >
@@ -323,12 +391,13 @@ export const Input: FC<InputProps> = ({
           }}
           onRetry={handleRetry}
           onExpand={handleExpand}
-          removeLabel={removeLabel}
-          retryLabel={retryLabel}
+          labels={{ removeLabel, retryLabel }}
           onAttachmentClick={
             onAttachmentClick != null
-              ? (att) => {
-                  const found = attachments.find((a) => a.id === att.id);
+              ? (id) => {
+                  const found = [...prefixAttachments, ...attachments].find(
+                    (a) => a.id === id,
+                  );
                   if (found != null) onAttachmentClick(found);
                 }
               : undefined
@@ -347,7 +416,8 @@ export const Input: FC<InputProps> = ({
           {!hideAddButton && (
             <div
               className={mergeClasses(
-                'order-2 flex',
+                'flex',
+                'order-2',
                 !isStackedLayout && 'desktop:order-1',
               )}
             >
@@ -355,6 +425,7 @@ export const Input: FC<InputProps> = ({
                 ref={fileInputRef}
                 type="file"
                 multiple
+                accept={fileAccept}
                 className="sr-only"
                 aria-hidden
                 tabIndex={-1}
@@ -374,6 +445,21 @@ export const Input: FC<InputProps> = ({
                 isDisabled={isInputDisabled}
                 chatSettings={chatSettings}
                 extraMenuItems={dialFileSystemMenuItem}
+                toolsMenuItems={toolsMenuItems}
+                onToolToggle={onToolToggle}
+                toolsMenuTitle={toolsMenuTitle}
+                toolsBackLabel={toolsBackLabel}
+              />
+            </div>
+          )}
+          {isStackedLayout && hasSelectedTools && (
+            <div className="order-3 min-w-0 flex-1">
+              <SelectedToolsChips
+                items={toolsMenuItems ?? []}
+                onToolToggle={onToolToggle!}
+                isMobile={isMobile}
+                countLabel={toolsChipLabels?.countLabel}
+                removeLabel={toolsChipLabels?.removeLabel}
               />
             </div>
           )}
@@ -389,7 +475,8 @@ export const Input: FC<InputProps> = ({
           <div
             className={mergeClasses(
               'flex flex-shrink-0 items-center gap-2',
-              'order-3 ms-auto',
+              isStackedLayout && hasSelectedTools ? 'order-4' : 'order-3',
+              'ms-auto',
               !isStackedLayout && 'desktop:ms-0',
             )}
           >
@@ -397,6 +484,7 @@ export const Input: FC<InputProps> = ({
               renderFooterActions({ canSend, onSend: handleSend })
             ) : (
               <>
+                {usageLimitsSlot}
                 <ModelSelectorControl
                   deployments={deployments}
                   selectedDeploymentId={selectedDeploymentId}
@@ -404,7 +492,6 @@ export const Input: FC<InputProps> = ({
                   modelSelectorLabels={modelSelectorLabels}
                   isStreaming={isStreaming}
                   isMobile={isMobile}
-                  isInputDisabled={isInputDisabled}
                   isDisabled={isModelSelectorDisabled}
                   style={cssVars}
                   modelPickerOverlay={modelPickerOverlay}
@@ -416,25 +503,28 @@ export const Input: FC<InputProps> = ({
                   <StopButton onStop={onStop} ariaLabel={stopLabel} />
                 ) : (
                   !isStreaming &&
-                  hasSendableContent && (
+                  shouldRenderSendButton && (
                     <SendButton
+                      key={sendButtonKey}
                       onSend={handleSend}
                       isDisabled={
-                        isInputDisabled ||
                         !hasModelSelected ||
-                        hasBlockedAttachments
+                        hasBlockedAttachments ||
+                        isSendDisabled
                       }
                       ariaLabel={sendLabel}
+                      isExiting={isSendButtonExiting}
                     />
                   )
                 )}
               </>
             )}
-            {isTranscriptionSupported && !message.trim() && (
-              <DialGhostIconButton
+
+            {shouldShowMicButton && (
+              <StaticIconButton
                 icon={<IconMicrophone size={DIAL_ICON_SIZE.LG} aria-hidden />}
                 aria-label={micLabel}
-                className="size-10 flex-shrink-0"
+                className="size-8 flex-shrink-0"
                 onClick={startRecording}
                 disabled={isInputDisabled || isStreaming}
               />
@@ -444,6 +534,4 @@ export const Input: FC<InputProps> = ({
       )}
     </div>
   );
-
-  return inputBox;
 };

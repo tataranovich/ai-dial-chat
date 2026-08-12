@@ -3,7 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  Header,
   HttpCode,
   Param,
   Patch,
@@ -34,13 +33,14 @@ export class ToolsetsController {
 
   @Get()
   @Throttle({ default: { limit: 60, ttl: 60000 } })
-  @Header('Cache-Control', 'private, max-age=30')
   @ApiOperation({
     summary: 'List available toolsets',
     description:
       'Returns the list of DIAL Core toolsets visible to the authenticated session user. ' +
       "Proxies GET /openai/toolsets using the caller's session access token. " +
-      'Results are cached server-side for 30 seconds per user.',
+      'Results are cached server-side for 30 seconds per user; the response ' +
+      'carries no client-facing Cache-Control so a browser never serves a ' +
+      'stale copy across a login/logout that already invalidated that cache.',
   })
   @ApiResponse({
     status: 200,
@@ -72,13 +72,15 @@ export class ToolsetsController {
 
   @Get(':toolsetName')
   @Throttle({ default: { limit: 60, ttl: 60000 } })
-  @Header('Cache-Control', 'private, max-age=60')
   @ApiOperation({
     summary: 'Get toolset by name',
     description:
       'Returns a single DIAL Core toolset by name for the authenticated session user. ' +
       "Proxies GET /openai/toolsets/{toolset_name} using the caller's session access token. " +
-      'Results are cached server-side for 60 seconds per user per toolset.',
+      'Results are cached server-side for 60 seconds per user per toolset; ' +
+      'the response carries no client-facing Cache-Control so a browser ' +
+      'never serves a stale copy across a login/logout that already ' +
+      'invalidated that cache.',
   })
   @ApiResponse({
     status: 200,
@@ -286,7 +288,9 @@ export class ToolsetsController {
     operationId: 'logoutToolset',
     summary: 'Revoke toolset credentials',
     description:
-      "Revokes a toolset's credentials by proxying DIAL Core (POST /v1/ops/toolset/signout).",
+      "Revokes a toolset's credentials by proxying DIAL Core (POST /v1/ops/toolset/signout). " +
+      "When the request body omits `authenticationType`, the toolset's own stored " +
+      'authentication type is looked up first (same lookup as `GET /api/v1/toolsets/{toolsetName}`).',
   })
   @ApiBody({ type: ToolsetLogoutBodyDto })
   @ApiResponse({
@@ -300,6 +304,11 @@ export class ToolsetsController {
     description: 'Not authenticated — valid session cookie required',
   })
   @ApiResponse({ status: 403, description: 'Caller lacks permission' })
+  @ApiResponse({
+    status: 404,
+    description:
+      'Toolset not found (only reachable when `authenticationType` is omitted and the lookup fails)',
+  })
   @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
@@ -314,8 +323,14 @@ export class ToolsetsController {
     @Param() params: GetToolsetDto,
     @Body() body: ToolsetLogoutBodyDto,
   ): Promise<ToolsetAuthResultDto> {
-    const { sub, at } = req.user as SessionUser;
-    await this.toolsetsService.logoutToolset(sub, at, params.toolsetName, body);
+    const { sub, at, bucket } = req.user as SessionUser;
+    await this.toolsetsService.logoutToolset(
+      sub,
+      at,
+      bucket,
+      params.toolsetName,
+      body,
+    );
     return { success: true };
   }
 }

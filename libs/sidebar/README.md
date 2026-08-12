@@ -20,6 +20,7 @@ Resizable sidebar panel container with a header, search input, and empty/no-resu
 
 - `react`
 - `@epam/ai-dial-chat-shared`
+- `@epam/ai-dial-kit`
 - `@epam/ai-dial-ui-kit`
 - `@tabler/icons-react`
 
@@ -34,9 +35,13 @@ import { SidebarPanel, SidebarOrientation } from '@epam/ai-dial-sidebar';
 import type { SidebarPanelProps } from '@epam/ai-dial-sidebar';
 
 <SidebarPanel
+  isOpen={isOpen}
   title="Conversations"
   orientation={SidebarOrientation.Left}
+  labels={{ ariaLabel: 'Conversations', closeLabel: 'Close' }}
+  resizable
   onClose={handleClose}
+  onResizeStop={setStoredWidth}
 >
   {children}
 </SidebarPanel>;
@@ -52,7 +57,10 @@ import { SearchInput } from '@epam/ai-dial-sidebar';
 <SearchInput
   value={query}
   onChange={setQuery}
-  placeholder="Search conversations..."
+  labels={{
+    placeholder: 'Search conversations...',
+    clearLabel: 'Clear search',
+  }}
 />;
 ```
 
@@ -63,10 +71,7 @@ Empty-state component shown when a panel has no items to display.
 ```tsx
 import { PanelEmpty } from '@epam/ai-dial-sidebar';
 
-<PanelEmpty
-  title="No conversations"
-  description="Start a new chat to see it here."
-/>;
+<PanelEmpty label="No conversations" />;
 ```
 
 ### PanelNoResults
@@ -76,7 +81,7 @@ No-results state shown when a search or filter returns nothing.
 ```tsx
 import { PanelNoResults } from '@epam/ai-dial-sidebar';
 
-<PanelNoResults query={searchQuery} />;
+<PanelNoResults label="No results" />;
 ```
 
 ## Enums
@@ -95,7 +100,12 @@ import type {
   SidebarPanelProps,
   SidebarPanelStyles,
   SidebarPanelColors,
+  SidebarPanelLabels,
+  SidebarPanelTypography,
   SearchInputProps,
+  SearchInputLabels,
+  SearchInputColors,
+  SearchInputStyles,
   PanelEmptyProps,
   PanelNoResultsProps,
 } from '@epam/ai-dial-sidebar';

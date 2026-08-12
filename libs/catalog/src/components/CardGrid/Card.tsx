@@ -1,13 +1,25 @@
-import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { DIAL_ICON_SIZE, ElementSize } from '@epam/ai-dial-ui-kit';
+import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  CardShell,
+  DIAL_ICON_SIZE,
+  ElementSize,
+  FolderPath,
+} from '@epam/ai-dial-ui-kit';
 import { IconCheck } from '@tabler/icons-react';
-import { FC, KeyboardEvent, MouseEvent, useCallback, useState } from 'react';
-import { ENTITY_TYPE_COLOR } from '../../constants/entity-colors';
+import {
+  FC,
+  KeyboardEvent,
+  MouseEvent,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 import type { CardProps } from '../../models/card-props';
+import { DeploymentSize } from '../../types/deployment-icon-size';
 import { getFeaturedEntityStyle } from '../../utils/styles';
 import { AppIdentity } from '../AppIdentity/AppIdentity';
+import { CredentialsBadge } from '../CredentialsBadge/CredentialsBadge';
 import { FeaturedChip } from '../FeaturedChip/FeaturedChip';
-import { FolderPath } from '../FolderPath/FolderPath';
 import { StarToggleButton } from '../StarToggleButton/StarToggleButton';
 import { TopicsLine } from '../TopicTag/TopicTag';
 import styles from './CardGrid.module.scss';
@@ -25,17 +37,36 @@ export const Card: FC<CardProps> = ({
   isSelected = false,
   className,
   styles: cardStyles,
+  credentialsBadgeLoggedOutLabel,
 }) => {
   const [isStarred, setIsStarred] = useState(initialIsStarred);
 
+  /*
+   * Resyncs local optimistic state when the caller's `favoriteIds` reverts
+   * after a failed toggle request — without this, the star stays stuck on
+   * whatever the user last clicked (issue #7924).
+   */
+  useEffect(() => {
+    setIsStarred(initialIsStarred);
+  }, [item.id, initialIsStarred]);
+
   const descriptionClassName =
-    cardStyles?.typography?.descriptionClassName ??
-    'dial-small-text text-secondary';
+    cardStyles?.typography?.descriptionClassName ?? 'dial-small-text';
+
   const featuredChipClassName = cardStyles?.typography?.featuredChipClassName;
   const folderLabelClassName =
     cardStyles?.typography?.folderLabelClassName ?? 'dial-tiny-text';
   const folderLeafClassName =
     cardStyles?.typography?.folderLeafClassName ?? 'dial-tiny-semi-text';
+
+  const cssVars = buildCssVars({
+    '--cg-description-text': cardStyles?.colors?.textSecondary,
+    '--cg-selected-border': cardStyles?.colors?.selectedBorder,
+    '--cg-selected-bg': cardStyles?.colors?.selectedBackground,
+    '--cg-check-icon': cardStyles?.colors?.checkIcon,
+    '--cg-footer-border': cardStyles?.colors?.footerBorder,
+  });
+
   const handleClick = onClick ? () => onClick(item) : undefined;
 
   const handleKeyDown = useCallback(
@@ -60,7 +91,7 @@ export const Card: FC<CardProps> = ({
   );
 
   return (
-    <article
+    <CardShell
       {...(onClick
         ? {
             role: 'button' as const,
@@ -70,15 +101,12 @@ export const Card: FC<CardProps> = ({
           }
         : {})}
       aria-label={item.name}
-      style={getFeaturedEntityStyle(item)}
+      style={{ ...getFeaturedEntityStyle(item), ...cssVars }}
       className={mergeClasses(
-        'relative box-border flex cursor-pointer flex-col gap-[14px]',
-        'rounded-[20px] border-2 p-[22px]',
+        'box-border cursor-pointer',
         styles.card,
         item.isFeatured ? styles.featuredCard : undefined,
-        isSelected
-          ? 'border-accent-primary !bg-accent-primary-alpha'
-          : 'border-transparent',
+        isSelected ? styles.selectedCard : undefined,
         className,
       )}
     >
@@ -94,7 +122,10 @@ export const Card: FC<CardProps> = ({
       {isSelected && (
         <IconCheck
           size={DIAL_ICON_SIZE.SM}
-          className="absolute end-3 top-3 shrink-0 text-accent-primary"
+          className={mergeClasses(
+            'absolute end-3 top-3 shrink-0',
+            styles.checkIcon,
+          )}
           aria-hidden
         />
       )}
@@ -104,10 +135,9 @@ export const Card: FC<CardProps> = ({
         type={item.type}
         name={item.name}
         version={item.version}
-        size="sm"
+        size={DeploymentSize.SM}
         query={query}
         className="min-w-0 flex-1"
-        typeColor={ENTITY_TYPE_COLOR[item.type]}
         iconClassName={styles.cardIcon}
       />
 
@@ -122,11 +152,15 @@ export const Card: FC<CardProps> = ({
         {item.description}
       </p>
 
-      <div className="min-h-[28px]">
+      <div className="flex min-h-[28px] items-center justify-between gap-2">
         <TopicsLine topics={item.topics} />
+        <CredentialsBadge
+          credentials={item.credentials}
+          loggedOutLabel={credentialsBadgeLoggedOutLabel}
+        />
       </div>
 
-      <div className="mt-auto border-t border-tertiary pt-3">
+      <div className={mergeClasses('mt-auto border-t pt-3', styles.footer)}>
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             {item.folder.length > 0 && (
@@ -151,6 +185,6 @@ export const Card: FC<CardProps> = ({
           />
         </div>
       </div>
-    </article>
+    </CardShell>
   );
 };

@@ -1,8 +1,7 @@
-import { DialNeutralButton } from '@epam/ai-dial-ui-kit';
-import type { ProviderInfoDto } from '@epam/chat-api-client';
+import type { ProviderInfoDto } from '@epam/ai-dial-chat-api-client';
+import { NeutralButton } from '@epam/ai-dial-ui-kit';
 import {
   memo,
-  SyntheticEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -10,20 +9,14 @@ import {
   type FC,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
+import ProviderIcon from '../../components/ProviderIcon/ProviderIcon';
 import { AuthI18nKeys } from '../../constants/translation-keys';
 import { useUser } from '../../context/auth/UserContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuthRedirect } from '../../hooks/auth/useAuthRedirect';
 import { getProviders } from '../../server-api/auth.api';
 import { getIconPath } from '../../utils/icon-path';
-
-const getProviderIconUrl = (id: string) =>
-  `https://authjs.dev/img/providers/${id.replace(/[1-9]\d*$/, '')}.svg`;
-
-const handleIconError = (e: SyntheticEvent<HTMLImageElement>) => {
-  e.currentTarget.style.display = 'none';
-};
 
 const renderProviders = (
   providers: ProviderInfoDto[],
@@ -36,23 +29,14 @@ const renderProviders = (
       {providers.map((provider) => {
         const href = `/api/v1/auth/login/${encodeURIComponent(provider.id)}?callbackUrl=${encodeURIComponent(callbackUrl)}`;
         return (
-          <DialNeutralButton
-            key={provider.id}
-            className="w-full"
-            iconBefore={
-              <img
-                src={getProviderIconUrl(provider.id)}
-                alt=""
-                aria-hidden="true"
-                className="size-5 shrink-0"
-                onError={handleIconError}
-              />
-            }
-            label={provider.label}
-            onClick={() => {
-              window.location.href = href;
-            }}
-          />
+          <a key={provider.id} href={href} className="w-full">
+            <NeutralButton
+              className="w-full"
+              tabIndex={-1}
+              iconBefore={<ProviderIcon providerId={provider.id} />}
+              label={provider.label}
+            />
+          </a>
         );
       })}
     </div>
@@ -107,7 +91,7 @@ const LoginPage: FC = () => {
   }, [loadProviders]);
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-layer-2 mobile:bg-layer-0 mobile:px-6">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-layer-sunken mobile:bg-layer-raised mobile:px-6">
       <div
         className="pointer-events-none absolute inset-0 size-full mobile:hidden"
         aria-hidden="true"

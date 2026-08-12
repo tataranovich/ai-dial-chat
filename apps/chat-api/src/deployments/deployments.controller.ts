@@ -1,7 +1,15 @@
-import { Controller, Get, Header, Param, Query, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Header,
+  Param,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import type { SessionUser } from '../auth/session/session.types';
 import { DeploymentLimitsResponseDto } from '../openapi/openapi-response.dto';
 import { DeploymentsService } from './deployments.service';
@@ -9,6 +17,7 @@ import { DeploymentConfigurationDto } from './dto/deployment-configuration.dto';
 import { DeploymentDetailsDto } from './dto/deployment-details.dto';
 import { DeploymentsResponseDto } from './dto/deployment-item.dto';
 import { DeploymentsQueryDto } from './dto/deployments-query.dto';
+import { GetDeploymentDto } from './dto/get-deployment.dto';
 
 @ApiTags('deployments')
 @Controller({ path: 'deployments', version: '1' })
@@ -17,7 +26,6 @@ export class DeploymentsController {
 
   @Get()
   @Throttle({ default: { limit: 60, ttl: 60000 } })
-  @Header('Cache-Control', 'private, max-age=30')
   @ApiOperation({
     operationId: 'listDeployments',
     summary: 'List deployments by interface type',
@@ -29,6 +37,13 @@ export class DeploymentsController {
     enum: ['chat', 'embedding', 'mcp', 'custom_ui', 'all'],
     description: 'Filter by interface type (repeatable)',
     example: ['chat', 'mcp'],
+  })
+  @ApiQuery({
+    name: 'refresh',
+    required: false,
+    type: Boolean,
+    description:
+      'Bypass the short server-side deployments list cache and refresh from DIAL Core',
   })
   @ApiResponse({ status: 200, type: DeploymentsResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid query parameter' })
@@ -46,13 +61,22 @@ export class DeploymentsController {
     status: 503,
     description: 'DIAL Core is unavailable or timed out',
   })
-  listDeployments(@Query() query: DeploymentsQueryDto, @Req() req: Request) {
+  listDeployments(
+    @Query() query: DeploymentsQueryDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const { sub, at, bucket } = req.user as SessionUser;
+    res.setHeader(
+      'Cache-Control',
+      query.refresh ? 'private, no-store' : 'private, max-age=30',
+    );
     return this.deploymentsService.listDeployments(
       sub,
       at,
       bucket,
       query.interface_type,
+      query.refresh,
     );
   }
 
@@ -65,6 +89,7 @@ export class DeploymentsController {
       'Results are cached server-side for 60 seconds per user.',
   })
   @ApiResponse({ status: 200, type: DeploymentConfigurationDto })
+  @ApiResponse({ status: 400, description: 'Invalid deployment identifier' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({
     status: 404,
@@ -77,11 +102,11 @@ export class DeploymentsController {
   @ApiResponse({ status: 503, description: 'DIAL Core is unreachable' })
   getDeploymentConfiguration(
     @Req() req: Request,
-    @Param('deployment') deployment: string,
+    @Param() params: GetDeploymentDto,
   ) {
     const { at, sub } = req.user as SessionUser;
     return this.deploymentsService.getDeploymentConfiguration(
-      deployment,
+      params.deployment,
       sub,
       at,
     );
@@ -103,6 +128,7 @@ export class DeploymentsController {
     description: 'Successfully retrieved deployment limits',
     type: DeploymentLimitsResponseDto,
   })
+  @ApiResponse({ status: 400, description: 'Invalid deployment identifier' })
   @ApiResponse({
     status: 401,
     description: 'Not authenticated — valid session cookie required',
@@ -125,17 +151,13 @@ export class DeploymentsController {
     status: 503,
     description: 'DIAL Core is unavailable or timed out',
   })
-  getDeploymentLimits(
-    @Req() req: Request,
-    @Param('deployment') deployment: string,
-  ) {
+  getDeploymentLimits(@Req() req: Request, @Param() params: GetDeploymentDto) {
     const { at } = req.user as SessionUser;
-    return this.deploymentsService.getDeploymentLimits(deployment, at);
+    return this.deploymentsService.getDeploymentLimits(params.deployment, at);
   }
 
   @Get(':deployment/details')
   @Throttle({ default: { limit: 60, ttl: 60000 } })
-  @Header('Cache-Control', 'private, max-age=60')
   @ApiOperation({
     operationId: 'getDeploymentDetails',
     summary: 'Get full details for a single deployment',
@@ -143,9 +165,13 @@ export class DeploymentsController {
       'Fetches the full per-entity payload for a model, application, or toolset by id ' +
       "(dispatching to DIAL Core's getModel/getApplication/getToolset based on the " +
       'resolved deployment type) and maps it into a frontend-safe DeploymentDetailsDto. ' +
-      'Results are cached server-side for 60 seconds.',
+      'Results are cached server-side for 60 seconds per user; the response ' +
+      'carries no client-facing Cache-Control so a browser never serves a ' +
+      "stale copy of another user's cache window or of credentials that " +
+      'changed since the last fetch.',
   })
   @ApiResponse({ status: 200, type: DeploymentDetailsDto })
+  @ApiResponse({ status: 400, description: 'Invalid deployment identifier' })
   @ApiResponse({
     status: 401,
     description: 'Not authenticated — valid session cookie required',
@@ -160,11 +186,12 @@ export class DeploymentsController {
     status: 503,
     description: 'DIAL Core is unavailable or timed out',
   })
-  getDeploymentDetails(
-    @Req() req: Request,
-    @Param('deployment') deployment: string,
-  ) {
-    const { at } = req.user as SessionUser;
-    return this.deploymentsService.getDeploymentDetails(deployment, at);
+  getDeploymentDetails(@Req() req: Request, @Param() params: GetDeploymentDto) {
+    const { sub, at } = req.user as SessionUser;
+    return this.deploymentsService.getDeploymentDetails(
+      sub,
+      params.deployment,
+      at,
+    );
   }
 }

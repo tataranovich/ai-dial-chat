@@ -9,10 +9,13 @@ import {
 } from 'react';
 
 const NEAR_BOTTOM_THRESHOLD = 80;
+const SPACER_CLEAR_TOLERANCE = 1;
+const SCROLL_CLAMP_TOLERANCE = 1;
 
 interface Params {
   messages: MessageType[];
   isAssistantTyping: boolean;
+  conversationId: string;
 }
 
 interface Result {
@@ -45,18 +48,22 @@ interface Result {
  * the position stable while the response streams, and reports whether the
  * scroll-to-bottom button should be shown.
  *
- * The temporary spacer stays fixed during a turn. Shrinking it while rendered
- * markdown is still growing can reduce total scroll height and make the
- * browser clamp `scrollTop`, which is visible as a jump.
+ * The temporary spacer is technical scroll room, not user-visible content:
+ * it is sized to the minimum required to make the anchor reachable and manual
+ * scrolling is clamped before the user can move past the real message content.
  */
 export const useConversationScroll = ({
   messages,
   isAssistantTyping,
+  conversationId,
 }: Params): Result => {
   const [isScrollButtonVisible, setIsScrollButtonVisible] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const spacerRef = useRef<HTMLDivElement>(null);
+  const isSpacerActiveRef = useRef(false);
+  const isSpacerSettledRef = useRef(false);
+  const anchorScrollTopRef = useRef<number | null>(null);
 
   /*
    * Message DOM nodes keyed by index, used to anchor the acted-on message
@@ -92,6 +99,15 @@ export const useConversationScroll = ({
     });
   }, []);
 
+  const clearSpacer = useCallback(() => {
+    if (spacerRef.current) {
+      spacerRef.current.style.height = '0px';
+    }
+    isSpacerActiveRef.current = false;
+    isSpacerSettledRef.current = false;
+    anchorScrollTopRef.current = null;
+  }, []);
+
   /*
    * ScrollTop where the real content bottom, excluding spacer space, aligns
    * with the viewport bottom.
@@ -118,22 +134,103 @@ export const useConversationScroll = ({
     [performScroll, getContentBottomScrollTop],
   );
 
+  const getDistanceFromContentBottom = useCallback(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return null;
+    const containerRect = container.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    return contentRect.bottom - containerRect.top - container.clientHeight;
+  }, []);
+
+  const clearSettledSpacerIfPossible = useCallback(() => {
+    if (!isSpacerSettledRef.current) return;
+
+    const distanceFromContentBottom = getDistanceFromContentBottom();
+    if (
+      distanceFromContentBottom == null ||
+      distanceFromContentBottom < -SPACER_CLEAR_TOLERANCE
+    ) {
+      return;
+    }
+
+    clearSpacer();
+  }, [clearSpacer, getDistanceFromContentBottom]);
+
   /*
    * Uses rects instead of `offsetTop` because message internals can introduce
    * positioned ancestors for action controls.
    */
+  const getMessageTopScrollTarget = useCallback((index: number) => {
+    const container = containerRef.current;
+    const el = messageRefsMap.current.get(index);
+    if (!container || !el) return null;
+
+    const containerRect = container.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const targetTop = container.scrollTop + (elRect.top - containerRect.top);
+    return Math.max(targetTop, 0);
+  }, []);
+
   const scrollMessageToTop = useCallback(
     (index: number, instant = false) => {
-      const container = containerRef.current;
-      const el = messageRefsMap.current.get(index);
-      if (!container || !el) return;
+      const targetTop = getMessageTopScrollTarget(index);
+      if (targetTop == null) return;
 
-      const containerRect = container.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
-      const targetTop = container.scrollTop + (elRect.top - containerRect.top);
-      performScroll(Math.max(targetTop, 0), instant);
+      performScroll(targetTop, instant);
     },
-    [performScroll],
+    [getMessageTopScrollTarget, performScroll],
+  );
+
+  const getMaxScrollTopExcludingSpacer = useCallback(() => {
+    const target = getContentBottomScrollTop();
+    return target == null ? null : Math.max(target, 0);
+  }, [getContentBottomScrollTop]);
+
+  const getMaxAllowedScrollTop = useCallback(() => {
+    if (!isSpacerActiveRef.current) return null;
+
+    const anchorScrollTop = anchorScrollTopRef.current;
+    const contentBottomScrollTop = getMaxScrollTopExcludingSpacer();
+    if (anchorScrollTop == null || contentBottomScrollTop == null) return null;
+
+    return Math.max(anchorScrollTop, contentBottomScrollTop);
+  }, [getMaxScrollTopExcludingSpacer]);
+
+  const clampScrollToVisibleContent = useCallback(() => {
+    const container = containerRef.current;
+    const maxAllowedScrollTop = getMaxAllowedScrollTop();
+    if (!container || maxAllowedScrollTop == null) return;
+
+    if (container.scrollTop > maxAllowedScrollTop + SCROLL_CLAMP_TOLERANCE) {
+      container.scrollTop = maxAllowedScrollTop;
+    }
+  }, [getMaxAllowedScrollTop]);
+
+  const applyAnchorSpacer = useCallback(
+    (targetTop: number) => {
+      const spacer = spacerRef.current;
+      const maxScrollTopExcludingSpacer = getMaxScrollTopExcludingSpacer();
+      if (!spacer || maxScrollTopExcludingSpacer == null) return;
+
+      const spacerHeight = Math.max(targetTop - maxScrollTopExcludingSpacer, 0);
+      spacer.style.height = `${spacerHeight}px`;
+      isSpacerActiveRef.current = spacerHeight > 0;
+      isSpacerSettledRef.current = false;
+      anchorScrollTopRef.current = spacerHeight > 0 ? targetTop : null;
+    },
+    [getMaxScrollTopExcludingSpacer],
+  );
+
+  const scrollMessageToTopWithReservation = useCallback(
+    (index: number) => {
+      const targetTop = getMessageTopScrollTarget(index);
+      if (targetTop == null) return;
+
+      applyAnchorSpacer(targetTop);
+      scrollMessageToTop(index, false);
+    },
+    [applyAnchorSpacer, getMessageTopScrollTarget, scrollMessageToTop],
   );
 
   /*
@@ -141,17 +238,12 @@ export const useConversationScroll = ({
    * keep the scroll-to-bottom button visible.
    */
   const updateScrollButtonVisibility = useCallback(() => {
-    const container = containerRef.current;
-    const content = contentRef.current;
-    if (!container || !content) return;
-    const containerRect = container.getBoundingClientRect();
-    const contentRect = content.getBoundingClientRect();
-    const distanceFromContentBottom =
-      contentRect.bottom - containerRect.top - container.clientHeight;
+    const distanceFromContentBottom = getDistanceFromContentBottom();
+    if (distanceFromContentBottom == null) return;
     setIsScrollButtonVisible(
       distanceFromContentBottom >= NEAR_BOTTOM_THRESHOLD,
     );
-  }, []);
+  }, [getDistanceFromContentBottom]);
 
   /*
    * Anchor an armed turn once. Other non-streaming length changes, such as
@@ -159,47 +251,74 @@ export const useConversationScroll = ({
    * behavior.
    */
   const prevLengthRef = useRef(messages.length);
+  const prevConversationIdRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const lengthChanged = messages.length !== prevLengthRef.current;
-    prevLengthRef.current = messages.length;
+    const conversationChanged =
+      conversationId !== prevConversationIdRef.current;
 
-    const container = containerRef.current;
-    const spacer = spacerRef.current;
+    const commitObservedScrollState = () => {
+      prevLengthRef.current = messages.length;
+      prevConversationIdRef.current = conversationId;
+    };
+
+    if (conversationChanged) {
+      clearSpacer();
+    }
 
     const anchorIndex = pendingAnchorIndexRef.current;
     if (anchorIndex != null && messageRefsMap.current.has(anchorIndex)) {
       pendingAnchorIndexRef.current = null;
-      if (container && spacer) {
-        spacer.style.height = `${container.clientHeight}px`;
-      }
-      scrollMessageToTop(anchorIndex, false);
+      scrollMessageToTopWithReservation(anchorIndex);
+      commitObservedScrollState();
       return;
     }
 
-    if (!isAssistantTyping && lengthChanged) {
+    if (isAssistantTyping) return;
+
+    if (lengthChanged || conversationChanged) {
       scrollToBottom(false);
     }
-  }, [messages, isAssistantTyping, scrollToBottom, scrollMessageToTop]);
+
+    commitObservedScrollState();
+  }, [
+    messages,
+    isAssistantTyping,
+    conversationId,
+    scrollToBottom,
+    scrollMessageToTopWithReservation,
+    clearSpacer,
+  ]);
 
   /*
-   * MarkdownRenderer flushes buffered typewriter content synchronously when
-   * streaming stops, so clearing the spacer cannot race a growing reply.
+   * Keep a completed short reply anchored with its reserved room until the
+   * user scrolls far enough up that removing the spacer cannot clamp scrollTop.
    */
   useLayoutEffect(() => {
-    if (!isAssistantTyping && spacerRef.current) {
-      spacerRef.current.style.height = '0px';
+    if (!isAssistantTyping && isSpacerActiveRef.current) {
+      isSpacerSettledRef.current = true;
+      clearSettledSpacerIfPossible();
     }
-  }, [isAssistantTyping]);
+  }, [isAssistantTyping, clearSettledSpacerIfPossible]);
+
+  const handleScroll = useCallback(() => {
+    clampScrollToVisibleContent();
+    clearSettledSpacerIfPossible();
+    updateScrollButtonVisibility();
+  }, [
+    clampScrollToVisibleContent,
+    clearSettledSpacerIfPossible,
+    updateScrollButtonVisibility,
+  ]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    container.addEventListener('scroll', updateScrollButtonVisibility, {
+    container.addEventListener('scroll', handleScroll, {
       passive: true,
     });
-    return () =>
-      container.removeEventListener('scroll', updateScrollButtonVisibility);
-  }, [updateScrollButtonVisibility]);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [handleScroll]);
 
   /*
    * Streaming grows content without firing a native scroll event. Observe
@@ -208,10 +327,18 @@ export const useConversationScroll = ({
   useEffect(() => {
     const content = contentRef.current;
     if (!content) return;
-    const observer = new ResizeObserver(() => updateScrollButtonVisibility());
+    const observer = new ResizeObserver(() => {
+      clampScrollToVisibleContent();
+      clearSettledSpacerIfPossible();
+      updateScrollButtonVisibility();
+    });
     observer.observe(content);
     return () => observer.disconnect();
-  }, [updateScrollButtonVisibility]);
+  }, [
+    clampScrollToVisibleContent,
+    clearSettledSpacerIfPossible,
+    updateScrollButtonVisibility,
+  ]);
 
   const handleScrollToBottom = useCallback(() => {
     scrollToBottom(false);

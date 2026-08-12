@@ -1,8 +1,8 @@
 import { DeploymentIcon, mergeClasses } from '@epam/ai-dial-chat-shared';
 import { FC, ReactNode } from 'react';
-import { ENTITY_TYPE_COLOR } from '../../constants/entity-colors';
 import { CatalogItem } from '../../models/catalog-item';
 import { getFeaturedEntityStyle } from '../../utils/styles';
+import { EntityTypeLabel } from '../EntityTypeLabel/EntityTypeLabel';
 import { FeaturedChip } from '../FeaturedChip/FeaturedChip';
 import { ItemHeader } from '../ItemHeader/ItemHeader';
 
@@ -10,14 +10,16 @@ import { ItemHeader } from '../ItemHeader/ItemHeader';
 export interface EntityHeaderProps {
   /** The favorite item to display. */
   item: CatalogItem;
-  /** CSS class for the item name. Default: 'dial-h3-text text-primary'. */
+  /** Typography CSS class for the item name. Falls back to `ItemHeader`'s own default when omitted. */
   nameClassName?: string;
-  /** CSS class for the entity type label. Default: 'dial-caption-text font-semibold'. */
+  /** CSS class for the entity type label. Default: 'dial-caption-semi-text'. */
   typeClassName?: string;
   /** CSS class applied to the icon badge, e.g. to set border-radius. Default: 'rounded-[14px]'. */
   iconBadgeClassName?: string;
-  /** CSS class for the version text. Default: 'dial-tiny-text text-secondary'. */
+  /** Typography CSS class for the version text. Falls back to `ItemHeader`'s own default when omitted. */
   versionClassName?: string;
+  /** Whether to show `item.version` next to the title. Default: true. */
+  showVersion?: boolean;
   /** Label for the featured tag shown when item.isFeatured is true. Default: 'Featured'. */
   featuredLabel?: string;
   /** Whether to render the featured tag. Default: true. */
@@ -26,18 +28,19 @@ export interface EntityHeaderProps {
   iconSize?: number;
   /** Search query string; when provided, matching text in the title is highlighted. */
   query?: string;
-  /** Content pinned to the bottom of the text column via `mt-auto`, aligning its baseline with the avatar bottom. When provided, `gap-1` between type and name is removed so the column fills the icon height exactly. */
+  /** Content pinned to the bottom of the text column via `mt-auto`, aligning its baseline with the avatar bottom. When provided, the column stretches to fill the icon height exactly. */
   footer?: ReactNode;
   /** CSS class for the featured chip. */
   featuredChipClassName?: string;
 }
 
-/** Compact card for the Favorites strip with hover lift and star toggle. */
+/** Reusable entity identity block: deployment icon, type label, name, version, and optional featured chip. */
 export const EntityHeader: FC<EntityHeaderProps> = ({
   item,
   nameClassName,
   versionClassName,
-  typeClassName = 'dial-caption-text font-semibold',
+  showVersion = true,
+  typeClassName = 'dial-caption-semi-text',
   iconBadgeClassName = 'rounded-[14px]',
   featuredChipClassName,
   featuredLabel = 'Featured',
@@ -54,25 +57,17 @@ export const EntityHeader: FC<EntityHeaderProps> = ({
         src={item.iconUrl}
         size={iconSize}
         initialsName={item.name}
-        badgeClassName={iconBadgeClassName}
+        styles={{ badgeClassName: iconBadgeClassName }}
       />
 
       <div
         className={mergeClasses(
-          'flex min-w-0 flex-1 flex-col',
-          footer == null ? 'gap-1' : 'self-stretch',
+          'flex min-w-0 flex-1 flex-col gap-1',
+          footer != null && 'self-stretch',
         )}
       >
         <div className="relative flex flex-row items-center justify-between">
-          <span
-            className={mergeClasses(
-              'uppercase tracking-[0.06em]',
-              typeClassName,
-            )}
-            style={{ color: ENTITY_TYPE_COLOR[item.type] }}
-          >
-            {item.type}
-          </span>
+          <EntityTypeLabel type={item.type} className={typeClassName} />
           {hasFeaturedTag && item.isFeatured && (
             <div className="absolute end-0 top-[-6px]">
               <FeaturedChip
@@ -84,7 +79,7 @@ export const EntityHeader: FC<EntityHeaderProps> = ({
         </div>
         <ItemHeader
           title={item.name}
-          postfix={item.version}
+          postfix={showVersion ? item.version : undefined}
           postfixClassName={versionClassName}
           titleClassName={nameClassName}
           query={query}

@@ -1,31 +1,39 @@
+import { useAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
+import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
   DisplayAttachment,
   isStatusMessage,
   MessageRole,
   StatusEvent,
+  type Annotation,
   type Attachment,
   type Conversation,
   type MessageRating,
   type Message as MessageType,
   type StarterOption,
+  type ToolMenuItem,
 } from '@epam/ai-dial-chat-shared';
-import { FileDndOverlay } from '@epam/ai-dial-conversation-input';
+import {
+  FileDndOverlay,
+  type ToolsChipLabels,
+} from '@epam/ai-dial-conversation-input';
 import type {
   MessageActionAriaLabels,
   MessageActionTooltips,
 } from '@epam/ai-dial-conversation-messages';
-import { NeutralButton } from '@epam/ai-dial-kit';
 import {
-  DialFabButton,
-  DialNotification,
-  NotificationVariant,
   DIAL_ICON_SIZE,
+  ErrorMessageNotification,
+  FabButton,
+  NeutralButton,
+  NotificationVariant,
 } from '@epam/ai-dial-ui-kit';
 import { IconCopy } from '@tabler/icons-react';
 import {
   FC,
   lazy,
   memo,
+  type ReactNode,
   Suspense,
   useCallback,
   useMemo,
@@ -33,18 +41,20 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MAX_SELECTABLE_FILE_SIZE_BYTES } from '../../constants/files';
-import { CONVERSATION_VIEW_INPUT_STYLES } from '../../constants/input-styles';
 import {
+  BasicI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
-  DeploymentSelectorI18nKeys,
   ConversationI18nKeys,
+  ConversationInputI18nKeys,
   ConversationPanelI18nKeys,
   DialFileManagerI18nKeys,
   FileDndI18nKeys,
+  VoiceRecordingI18nKeys,
 } from '../../constants/translation-keys';
 import { useUser } from '../../context/auth/UserContext';
 import { useDeployments } from '../../context/DeploymentsContext';
+import { useNotification } from '../../context/NotificationContext';
 import { useAttachmentValidation } from '../../hooks/attachment/useAttachmentValidation';
 import { useOpenAttachmentCanvas } from '../../hooks/attachment/useOpenAttachmentCanvas';
 import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
@@ -52,17 +62,23 @@ import { useChatSettingsFormConfig } from '../../hooks/conversation/useChatSetti
 import { useConversationScroll } from '../../hooks/conversation/useConversationScroll';
 import { useModelSelectorLabels } from '../../hooks/conversation/useModelSelectorLabels';
 import { useKeyboardShortcutPreference } from '../../hooks/keyboard-shortcut/useKeyboardShortcutPreference';
-import useFavoriteApplications from '../../hooks/useFavoriteApplications/useFavoriteApplications';
+import { useLanguage } from '../../hooks/language/useLanguage';
 import { usePageFileDrag } from '../../hooks/usePageFileDrag';
+import { useUiFeature } from '../../hooks/useUiFeature';
+import { referenceAttachmentToPdfCanvasContent } from '../../utils/attachment-canvas';
+import { findDeploymentByIdOrReference } from '../../utils/deployment-id';
 import {
   dialFilesToAttachments,
   dialFolderPathToAttachment,
 } from '../../utils/dial-file-to-attachment';
 import { resolveCatalogIconUrl } from '../../utils/icon-path';
-import { mapDeploymentToCatalogItem } from '../../utils/map-deployment-to-catalog-item';
+import { resolveLocalizedText } from '../../utils/locale';
 import { isMessageChanged } from '../../utils/message-utils';
-import DeploymentSelectorPanel from '../DeploymentSelector/DeploymentSelectorPanel';
+import { getQuickAppConversationStarters } from '../../utils/quick-app-conversation-starters';
+import { useDeploymentSelectorOverlay } from '../DeploymentSelector/useDeploymentSelectorOverlay';
 import type { AttachResult } from '../DialFileManagerModal/types/attach-result';
+import FooterMessage from '../FooterMessage/FooterMessage';
+import UsageLimitsControl from '../UsageLimitsControl/UsageLimitsControl';
 import ConversationMessageItem from './ConversationMessageItem';
 
 const ConversationInput = lazy(async () => {
@@ -103,24 +119,37 @@ interface Props {
   isAssistantTyping?: boolean;
   canStopAssistant?: boolean;
   initialModelId: string;
-  streamErrorText: string;
   stoppedGeneratingText: string;
   isReadOnly?: boolean;
   onDuplicateConversation?: () => void;
   duplicateError?: string;
-  isTranscriptionSupported?: boolean;
-  onUploadAudio?: (file: File, contentType: string) => Promise<string>;
-  onTranscribeAudio?: (audioUrl: string) => Promise<string>;
+  isAudioMessageSupported?: boolean;
   conversation: Conversation;
   onConversationChange: (conv: Conversation) => void;
-  /** Called when the user clicks "Browse full catalog" inside the model picker. */
-  onBrowseCatalog?: () => void;
+  /**
+   * Externally-driven text to seed into the message input (e.g. overlay
+   * mode's `setInputContent`). Applies once on content/revision change; the
+   * user's own typing after that is not overridden until this changes again.
+   */
+  inputContent?: string;
+  /** Token that forces `inputContent` to re-apply even if its string is unchanged. */
+  inputContentRevision?: number;
   /**
    * When provided, the model selector shows this model only and renders
    * disabled (dimmed, does not open) instead of allowing a different model
    * to be picked. The chip stays visible — it is not hidden.
    */
   fixedModel?: { id: string; displayName?: string; iconUrl?: string };
+  toolsMenuItems?: ToolMenuItem[];
+  onToolToggle?: (toolId: string) => void;
+  toolsMenuTitle?: string;
+  toolsChipLabels?: ToolsChipLabels;
+  /**
+   * Neutral content rendered inside the scrollable message container, above
+   * the message list (e.g. the scheduled-task conversation summary banner).
+   * Never persisted as a message.
+   */
+  topContent?: ReactNode;
 }
 
 const ConversationView: FC<Props> = ({
@@ -142,31 +171,64 @@ const ConversationView: FC<Props> = ({
   isAssistantTyping = false,
   canStopAssistant = false,
   initialModelId,
-  streamErrorText,
   stoppedGeneratingText,
   isReadOnly = false,
   onDuplicateConversation,
   duplicateError,
-  isTranscriptionSupported = false,
-  onUploadAudio,
-  onTranscribeAudio,
+  isAudioMessageSupported = false,
   conversation,
   onConversationChange,
-  onBrowseCatalog,
   fixedModel,
+  inputContent,
+  inputContentRevision,
+  toolsMenuItems,
+  onToolToggle,
+  toolsMenuTitle,
+  toolsChipLabels,
+  topContent,
 }) => {
   const isModelFixed = !!fixedModel;
+  const { renderOverlay, catalogModal } = useDeploymentSelectorOverlay();
   const { t } = useTranslation();
+  const { language } = useLanguage();
+  const { showNotification } = useNotification();
   const isMobile = useIsMobile();
   const { preference: sendOnEnter } = useKeyboardShortcutPreference();
   const { user } = useUser();
+  const isDisallowChangeAgentEnabled = useUiFeature(
+    OverlayFeature.DisallowChangeAgent,
+  );
+  const isDisabledSendEnabled = useUiFeature(OverlayFeature.DisabledSend);
+  const isSkipFocusChatInputOnloadEnabled = useUiFeature(
+    OverlayFeature.SkipFocusChatInputOnload,
+  );
+  const isInputFilesEnabled = useUiFeature(OverlayFeature.InputFiles);
   // bucket is the authenticated user's DIAL Core storage bucket from their profile
   const bucket = user?.bucket ?? '';
   const [isDialFileManagerOpen, setIsDialFileManagerOpen] = useState(false);
   const [pendingDialAttachments, setPendingDialAttachments] = useState<
     Attachment[]
   >([]);
+  const [attachmentsAmount, setAttachmentsAmount] = useState(0);
   const { openAttachmentCanvas } = useOpenAttachmentCanvas();
+  const { openCanvas, attachmentId: selectedAttachmentKey } =
+    useAttachmentCanvas();
+
+  const handlePreviewReference = useCallback(
+    (annotation: Annotation) => {
+      const attachment = annotation.body?.source?.attachment;
+      if (!attachment) return;
+      const canvasContent = referenceAttachmentToPdfCanvasContent(attachment);
+      if (canvasContent) openCanvas(canvasContent, attachment.title);
+    },
+    [openCanvas],
+  );
+
+  const stepsLabel = useCallback(
+    (count: number) => t(ConversationI18nKeys.StagesStep, { count }),
+    [t],
+  );
+
   const isEditActive = !!editingMessageIndexes?.size;
   const {
     items,
@@ -176,31 +238,25 @@ const ConversationView: FC<Props> = ({
     isLoading,
     error,
   } = useDeployments();
-  const { favoriteIds, toggleFavorite } = useFavoriteApplications();
+  const activeDeploymentId = fixedModel?.id ?? selectedItemId;
 
-  const favoriteCatalogItems = useMemo(
-    () =>
-      items
-        .filter((d) => favoriteIds.has(d.id))
-        .map((d) => mapDeploymentToCatalogItem(d, favoriteIds)),
-    [items, favoriteIds],
-  );
+  const selectedDeployment = useMemo(() => {
+    const deployment = findDeploymentByIdOrReference(items, activeDeploymentId);
+    return deployment
+      ? {
+          ...deployment,
+          displayName: resolveLocalizedText(deployment.displayName, language),
+          description: resolveLocalizedText(deployment.description, language),
+        }
+      : undefined;
+  }, [items, activeDeploymentId, language]);
 
-  const selectedDeployment = useMemo(
-    () => items.find((item) => item.id === selectedItemId),
-    [items, selectedItemId],
-  );
-
-  const selectedCatalogItem = useMemo(
-    () =>
-      selectedDeployment
-        ? mapDeploymentToCatalogItem(selectedDeployment, favoriteIds)
-        : undefined,
-    [selectedDeployment, favoriteIds],
-  );
-
-  const { inputAttachmentTypes, isAttachmentsAllowed, validateAttachment } =
-    useAttachmentValidation(selectedDeployment);
+  const {
+    inputAttachmentTypes,
+    isAttachmentsAllowed,
+    validateAttachment,
+    fileAccept,
+  } = useAttachmentValidation(selectedDeployment);
 
   const { isDragging, pendingFiles, onFilesConsumed } = usePageFileDrag(
     isAttachmentsAllowed,
@@ -219,14 +275,14 @@ const ConversationView: FC<Props> = ({
           features,
         }) => ({
           id,
-          displayName,
+          displayName: resolveLocalizedText(displayName, language),
           iconUrl: iconUrl ? resolveCatalogIconUrl(iconUrl) : undefined,
           type,
           inputAttachmentTypes,
           features,
         }),
       ),
-    [items],
+    [items, language],
   );
 
   const fixedDeploymentItems = useMemo(
@@ -243,9 +299,18 @@ const ConversationView: FC<Props> = ({
     [fixedModel],
   );
 
+  const hasQuickAppStarters = useMemo(
+    () =>
+      getQuickAppConversationStarters(selectedDeployment?.conversationStarters)
+        .starters.length > 0,
+    [selectedDeployment?.conversationStarters],
+  );
+
   const isInputDisabled = useMemo(
-    () => !!selectedDeploymentConfiguration?.isChatMessageInputDisabled,
-    [selectedDeploymentConfiguration],
+    () =>
+      !hasQuickAppStarters &&
+      !!selectedDeploymentConfiguration?.isChatMessageInputDisabled,
+    [hasQuickAppStarters, selectedDeploymentConfiguration],
   );
 
   const deploymentLookup = useMemo<
@@ -256,12 +321,12 @@ const ConversationView: FC<Props> = ({
         items.map((d) => [
           d.id,
           {
-            displayName: d.displayName,
+            displayName: resolveLocalizedText(d.displayName, language),
             iconUrl: resolveCatalogIconUrl(d.iconUrl),
           },
         ]),
       ),
-    [items],
+    [items, language],
   );
 
   /*
@@ -330,6 +395,20 @@ const ConversationView: FC<Props> = ({
     itemCount: items.length,
   });
 
+  const usageLimitsLabels = useMemo(
+    () => ({
+      triggerAriaLabel: ({ value }: { value: string }) =>
+        t(ConversationInputI18nKeys.TriggerAriaLabel, { value }),
+      popoverTitle: t(ConversationInputI18nKeys.PopoverTitle),
+      error: t(ConversationInputI18nKeys.Error),
+      tokensRemaining: ({ count }: { count: string }) =>
+        t(ConversationInputI18nKeys.TokensRemaining, { count }),
+      progressAriaLabel: ({ used, total }: { used: string; total: string }) =>
+        t(ConversationInputI18nKeys.ProgressAriaLabel, { used, total }),
+    }),
+    [t],
+  );
+
   const formatStatusModelChangedBody = useCallback(
     (from: string, to: string) =>
       t(ConversationI18nKeys.StatusModelChangedBody, {
@@ -347,13 +426,17 @@ const ConversationView: FC<Props> = ({
     isScrollButtonVisible,
     scrollToBottom,
     armAnchor,
-  } = useConversationScroll({ messages, isAssistantTyping });
+  } = useConversationScroll({
+    messages,
+    isAssistantTyping,
+    conversationId: conversation.id,
+  });
 
   const handleSendWithAnchor = useCallback(
     async (message: string, attachments: Attachment[]) => {
       armAnchor(messages.length);
-      // ConversationInput awaits this to know whether to restore the draft
-      // on failure — forward onSend's result rather than discarding it.
+      /* ConversationInput awaits this to know whether to restore the draft
+       * on failure — forward onSend's result rather than discarding it. */
       await onSend(message, attachments);
     },
     [onSend, messages.length, armAnchor],
@@ -418,16 +501,54 @@ const ConversationView: FC<Props> = ({
     [bucket],
   );
 
+  const handleAttachmentsChange = useCallback(
+    (attachments: Attachment[]) => {
+      setAttachmentsAmount(attachments.length);
+      onAttachmentsChange?.(attachments);
+    },
+    [onAttachmentsChange],
+  );
+
+  const handleAttachmentsLimitExceeded = useCallback(
+    (count: number, limit: number) => {
+      showNotification({
+        variant: NotificationVariant.Error,
+        title: t(DialFileManagerI18nKeys.TooManyFilesSelected),
+        message: t(DialFileManagerI18nKeys.TooManyFilesDescription, {
+          count,
+          limit,
+        }),
+      });
+    },
+    [showNotification, t],
+  );
+
+  const handleMessageTooLong = useCallback(
+    (_length: number, max: number) => {
+      showNotification({
+        variant: NotificationVariant.Error,
+        message: t(ConversationI18nKeys.MessageTooLong, { max }),
+      });
+    },
+    [showNotification, t],
+  );
+
   const handleInputAttachmentClick = useCallback(
-    (attachment: Attachment) => {
+    (attachment: DisplayAttachment) => {
       void openAttachmentCanvas(attachment);
     },
     [openAttachmentCanvas],
   );
 
   const handleMessageAttachmentClick = useCallback(
-    (attachment: DisplayAttachment) => {
-      void openAttachmentCanvas(attachment);
+    (attachment: DisplayAttachment, messageIndex: number) => {
+      /*
+       * DisplayAttachment.id is derived from content (url/data/title), so the
+       * same id can recur across different messages (e.g. the same file
+       * attached twice) — prefix with the message index so the "selected"
+       * tile highlight can't spuriously match a different message's tile.
+       */
+      void openAttachmentCanvas(attachment, `${messageIndex}:${attachment.id}`);
     },
     [openAttachmentCanvas],
   );
@@ -437,16 +558,18 @@ const ConversationView: FC<Props> = ({
       <FileDndOverlay
         isVisible={isDragging}
         isAttachmentsAllowed={isAttachmentsAllowed}
-        title={t(
-          isAttachmentsAllowed
-            ? FileDndI18nKeys.OverlayTitle
-            : FileDndI18nKeys.OverlayDeniedTitle,
-        )}
-        subtitle={t(
-          isAttachmentsAllowed
-            ? FileDndI18nKeys.OverlaySubtitle
-            : FileDndI18nKeys.OverlayDeniedSubtitle,
-        )}
+        labels={{
+          title: t(
+            isAttachmentsAllowed
+              ? BasicI18nKeys.AttachFiles
+              : FileDndI18nKeys.OverlayDeniedTitle,
+          ),
+          subtitle: t(
+            isAttachmentsAllowed
+              ? FileDndI18nKeys.OverlaySubtitle
+              : FileDndI18nKeys.OverlayDeniedSubtitle,
+          ),
+        }}
       />
       <div className="relative flex w-full flex-1 flex-col overflow-hidden">
         <div
@@ -461,6 +584,7 @@ const ConversationView: FC<Props> = ({
             ref={contentRef}
             className="mx-auto flex w-full min-w-0 max-w-[760px] shrink-0 flex-col gap-[26px] px-6 pt-7"
           >
+            {topContent}
             {messages.map((msg, index) => {
               const isThisMessageEditing = editingMessageIndexes?.has(index);
               return (
@@ -507,13 +631,11 @@ const ConversationView: FC<Props> = ({
                       ConversationI18nKeys.StatusModelChangedTitle,
                     )}
                     formatStatusModelChangedBody={formatStatusModelChangedBody}
-                    streamErrorText={streamErrorText}
                     stoppedGeneratingText={stoppedGeneratingText}
                     thinkingLabel={t(ChatI18nKeys.Thinking)}
                     executedLabel={t(ConversationI18nKeys.StagesExecuted)}
-                    stepsLabel={(count) =>
-                      t(ConversationI18nKeys.StagesStep, { count })
-                    }
+                    stepsLabel={stepsLabel}
+                    onPreviewReference={handlePreviewReference}
                     pendingDropFiles={
                       isEditActive && isThisMessageEditing
                         ? pendingFiles
@@ -529,8 +651,42 @@ const ConversationView: FC<Props> = ({
                         ? validateAttachment
                         : undefined
                     }
-                    hideAttachFile={!isAttachmentsAllowed}
-                    onAttachmentClick={handleMessageAttachmentClick}
+                    isAttachmentsEnabled={
+                      selectedDeployment != null
+                        ? isAttachmentsAllowed
+                        : undefined
+                    }
+                    maximumAttachmentsAmount={
+                      selectedDeployment?.maxInputAttachments
+                    }
+                    onAttachmentsLimitExceeded={handleAttachmentsLimitExceeded}
+                    hideAttachFile={
+                      !isAttachmentsAllowed || !isInputFilesEnabled
+                    }
+                    fileAccept={fileAccept}
+                    onAttachmentClick={(attachment) =>
+                      handleMessageAttachmentClick(attachment, index)
+                    }
+                    selectedAttachmentKey={selectedAttachmentKey}
+                    onDialFileSystemClick={
+                      isAttachmentsAllowed
+                        ? () => setIsDialFileManagerOpen(true)
+                        : undefined
+                    }
+                    dialFileSystemLabel={t(
+                      ConversationI18nKeys.AttachMenuDialFileSystem,
+                    )}
+                    pendingAttachments={
+                      isEditActive && isThisMessageEditing
+                        ? pendingDialAttachments
+                        : undefined
+                    }
+                    onPendingAttachmentsConsumed={
+                      isEditActive && isThisMessageEditing
+                        ? () => setPendingDialAttachments([])
+                        : undefined
+                    }
+                    onMessageTooLong={handleMessageTooLong}
                   />
                 </div>
               );
@@ -545,7 +701,7 @@ const ConversationView: FC<Props> = ({
         </div>
 
         {isScrollButtonVisible && (
-          <DialFabButton
+          <FabButton
             aria-label={t(ChatI18nKeys.ScrollToBottom)}
             onClick={scrollToBottom}
             className="absolute bottom-0 left-1/2 -translate-x-1/2"
@@ -556,15 +712,12 @@ const ConversationView: FC<Props> = ({
       <div
         role="region"
         aria-label={t(ChatI18nKeys.MessageInput)}
-        className="relative z-10 w-full px-6 pb-4"
+        className="relative z-10 w-full px-6"
       >
         {isReadOnly ? (
           <div className="flex flex-col items-center justify-center gap-2 p-4">
             {duplicateError && (
-              <DialNotification
-                variant={NotificationVariant.Error}
-                message={duplicateError}
-              />
+              <ErrorMessageNotification message={duplicateError} />
             )}
             <NeutralButton
               label={t(ConversationPanelI18nKeys.DuplicateReadOnlyDescription)}
@@ -576,33 +729,46 @@ const ConversationView: FC<Props> = ({
           <>
             <Suspense fallback={null}>
               <ConversationInput
-                styles={CONVERSATION_VIEW_INPUT_STYLES}
+                message={inputContent}
+                messageRevision={inputContentRevision}
                 onSend={handleSendWithAnchor}
                 onUploadAttachment={onUploadAttachment}
                 onStop={canStopAssistant ? onStop : undefined}
                 isStreaming={isAssistantTyping}
-                onAttachmentsChange={onAttachmentsChange}
+                onAttachmentsChange={handleAttachmentsChange}
                 placeholder={placeholder}
                 deployments={
                   fixedModel ? fixedDeploymentItems : deploymentItems
                 }
                 selectedDeploymentId={
-                  fixedModel ? fixedModel.id : selectedItemId
+                  selectedDeployment?.id ?? activeDeploymentId
                 }
                 onDeploymentChange={fixedModel ? undefined : setSelectedItemId}
-                isModelSelectorDisabled={isModelFixed}
+                isModelSelectorDisabled={
+                  isModelFixed || isDisallowChangeAgentEnabled
+                }
+                isSendDisabled={isDisabledSendEnabled}
                 isInputDisabled={isInputDisabled}
                 modelSelectorLabels={modelSelectorLabels}
                 addMenuTitle={t(ConversationI18nKeys.AddMenuTitle)}
                 sendLabel={t(ChatI18nKeys.SendMessage)}
                 sendTitle={t(ChatI18nKeys.SendMessage)}
                 stopLabel={t(ChatI18nKeys.StopStreaming)}
-                isTranscriptionSupported={isTranscriptionSupported}
+                isAudioMessageSupported={isAudioMessageSupported}
+                micLabel={t(VoiceRecordingI18nKeys.MicLabel)}
+                stopRecordingLabel={t(
+                  VoiceRecordingI18nKeys.StopRecordingLabel,
+                )}
+                discardRecordingLabel={t(
+                  VoiceRecordingI18nKeys.DiscardRecordingLabel,
+                )}
                 messageHistory={messageHistory}
-                onUploadAudio={onUploadAudio}
-                onTranscribeAudio={onTranscribeAudio}
                 sendOnEnter={sendOnEnter}
                 chatSettings={chatSettings}
+                toolsMenuItems={toolsMenuItems}
+                onToolToggle={onToolToggle}
+                toolsMenuTitle={toolsMenuTitle}
+                toolsChipLabels={toolsChipLabels}
                 pendingDropFiles={!isEditActive ? pendingFiles : undefined}
                 pendingAttachments={
                   !isEditActive ? pendingDialAttachments : undefined
@@ -615,7 +781,7 @@ const ConversationView: FC<Props> = ({
                     ? () => setPendingDialAttachments([])
                     : undefined
                 }
-                autoFocus={!isMobile}
+                autoFocus={!isMobile && !isSkipFocusChatInputOnloadEnabled}
                 onDialFileSystemClick={
                   isAttachmentsAllowed
                     ? () => setIsDialFileManagerOpen(true)
@@ -627,46 +793,26 @@ const ConversationView: FC<Props> = ({
                 validateAttachment={
                   selectedDeployment != null ? validateAttachment : undefined
                 }
-                hideAttachFile={!isAttachmentsAllowed}
+                isAttachmentsEnabled={
+                  selectedDeployment != null ? isAttachmentsAllowed : undefined
+                }
+                maximumAttachmentsAmount={
+                  selectedDeployment?.maxInputAttachments
+                }
+                onAttachmentsLimitExceeded={handleAttachmentsLimitExceeded}
+                hideAttachFile={!isAttachmentsAllowed || !isInputFilesEnabled}
+                fileAccept={fileAccept}
                 onAttachmentClick={handleInputAttachmentClick}
-                modelPickerOverlay={
-                  isModelFixed
-                    ? undefined
-                    : (onClose) => (
-                        <DeploymentSelectorPanel
-                          favorites={favoriteCatalogItems}
-                          selectedId={selectedItemId}
-                          selectedItem={selectedCatalogItem}
-                          onSelect={setSelectedItemId}
-                          onToggleFavorite={toggleFavorite}
-                          onBrowseCatalog={onBrowseCatalog}
-                          onClose={onClose}
-                          labels={{
-                            searchPlaceholder: t(
-                              DeploymentSelectorI18nKeys.SearchPlaceholder,
-                            ),
-                            searchAriaLabel: t(
-                              DeploymentSelectorI18nKeys.SearchAriaLabel,
-                            ),
-                            favoritesLabel: t(
-                              DeploymentSelectorI18nKeys.FavoritesLabel,
-                            ),
-                            emptyHint: t(DeploymentSelectorI18nKeys.EmptyHint),
-                            browseCatalogLabel: t(
-                              DeploymentSelectorI18nKeys.BrowseCatalog,
-                            ),
-                            removeFromFavoritesLabel: t(
-                              DeploymentSelectorI18nKeys.RemoveFromFavorites,
-                            ),
-                            currentlySelectedLabel: t(
-                              DeploymentSelectorI18nKeys.CurrentlySelectedLabel,
-                            ),
-                            addToFavoritesLabel: t(
-                              DeploymentSelectorI18nKeys.AddToFavorites,
-                            ),
-                          }}
-                        />
-                      )
+                modelPickerOverlay={isModelFixed ? undefined : renderOverlay}
+                onMessageTooLong={handleMessageTooLong}
+                usageLimitsSlot={
+                  <UsageLimitsControl
+                    deploymentId={
+                      selectedDeployment?.id ?? activeDeploymentId ?? undefined
+                    }
+                    isGenerationInProgress={isAssistantTyping}
+                    labels={usageLimitsLabels}
+                  />
                 }
               />
             </Suspense>
@@ -682,10 +828,11 @@ const ConversationView: FC<Props> = ({
                   maximumAttachmentsAmount={
                     selectedDeployment?.maxInputAttachments
                   }
+                  existingAttachmentsAmount={attachmentsAmount}
                   canAttachFolders={
                     selectedDeployment?.features?.folderAttachments
                   }
-                  title={t(DialFileManagerI18nKeys.Title)}
+                  title={t(BasicI18nKeys.AttachFiles)}
                   attachLabel={t(DialFileManagerI18nKeys.Attach)}
                   emptyTitle={t(DialFileManagerI18nKeys.Empty)}
                   emptyDescription=""
@@ -703,9 +850,9 @@ const ConversationView: FC<Props> = ({
                   }
                   uploadFilesLabel={t(DialFileManagerI18nKeys.Upload)}
                   newFolderLabel={t(DialFileManagerI18nKeys.NewFolder)}
-                  downloadLabel={t(DialFileManagerI18nKeys.Download)}
+                  downloadLabel={t(ButtonsI18nKeys.Download)}
                   downloadingLabel={t(DialFileManagerI18nKeys.Downloading)}
-                  deleteLabel={t(DialFileManagerI18nKeys.DeleteAction)}
+                  deleteLabel={t(ButtonsI18nKeys.Delete)}
                   deletingLabel={t(DialFileManagerI18nKeys.DeletingLabel)}
                   deleteConfirmTitle={(names) =>
                     names.length === 1
@@ -717,7 +864,7 @@ const ConversationView: FC<Props> = ({
                       <p className="mb-3 text-secondary">
                         {names.length === 1 ? (
                           <>
-                            {t(DialFileManagerI18nKeys.DeleteConfirmBodySingle)}{' '}
+                            {t(BasicI18nKeys.DeleteConfirmDescription)}{' '}
                             <span className="break-all text-primary">
                               &quot;{names[0].split('/').pop()}&quot;?
                             </span>
@@ -738,9 +885,7 @@ const ConversationView: FC<Props> = ({
                       </p>
                     </div>
                   )}
-                  deleteConfirmLabel={t(
-                    DialFileManagerI18nKeys.DeleteConfirmButton,
-                  )}
+                  deleteConfirmLabel={t(ButtonsI18nKeys.Delete)}
                   deleteCancelLabel={t(ButtonsI18nKeys.Cancel)}
                   uploadProgressTitle={t(
                     DialFileManagerI18nKeys.UploadProgressTitle,
@@ -752,6 +897,16 @@ const ConversationView: FC<Props> = ({
           </>
         )}
       </div>
+      {/*
+       * FooterMessage is intentionally co-located with each view that can
+       * render a footer message (ConversationView, NewConversationComposer,
+       * NavPageContent). Only one view is visible at a time, so at most one
+       * instance is active. If the footer feature grows to require shared
+       * dialog state across views, lift FooterMessage to a single top-level
+       * provider instead.
+       */}
+      <FooterMessage />
+      {catalogModal}
     </>
   );
 };

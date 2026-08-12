@@ -39,6 +39,12 @@ interface UseAttachmentsParams {
    * Receives the plain-text content of the attachment.
    */
   onExpandPastedText?: (text: string) => void;
+  /** Maximum number of attachments allowed in the tray. Undefined means unlimited. */
+  maximumAttachmentsAmount?: number;
+  /** Attachments rendered outside this hook but counted against the same limit. */
+  baseAttachmentsAmount?: number;
+  /** Called when adding a batch would exceed `maximumAttachmentsAmount`. */
+  onAttachmentsLimitExceeded?: (count: number, limit: number) => void;
 }
 
 /** Return value of the {@link useAttachments} hook. */
@@ -61,11 +67,7 @@ export interface UseAttachmentsResult {
   hasBlockedAttachments: boolean;
 }
 
-/**
- * Manages all attachment state and side-effects for the `Input` component:
- * building, uploading, adding, removing, retrying, expanding, and consuming
- * pending drop/attachment queues.
- */
+/** Manages attachment state and lifecycle for the `Input` component. */
 export const useAttachments = ({
   initialAttachments,
   onUploadAttachment,
@@ -76,6 +78,9 @@ export const useAttachments = ({
   pendingAttachments,
   onPendingAttachmentsConsumed,
   onExpandPastedText,
+  maximumAttachmentsAmount,
+  baseAttachmentsAmount = 0,
+  onAttachmentsLimitExceeded,
 }: UseAttachmentsParams): UseAttachmentsResult => {
   const [attachments, setAttachments] =
     useState<Attachment[]>(initialAttachments);
@@ -89,6 +94,7 @@ export const useAttachments = ({
     return () => {
       attachmentsRef.current.forEach((a) => {
         if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+        if (a.playUrl) URL.revokeObjectURL(a.playUrl);
       });
     };
   }, []);
@@ -96,37 +102,58 @@ export const useAttachments = ({
   const buildAttachments = useCallback((files: File[]): Attachment[] => {
     return files.map((file) => {
       const isImage = file.type.startsWith('image/');
+      const isAudio = file.type.startsWith('audio/');
       const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
+      const playUrl = isAudio ? URL.createObjectURL(file) : undefined;
       return {
         id: generateAttachmentId(),
         name: file.name,
         contentType: file.type,
         file,
-        type: isImage ? AttachmentType.Image : AttachmentType.File,
+        type: isImage
+          ? AttachmentType.Image
+          : isAudio
+            ? AttachmentType.Audio
+            : AttachmentType.File,
         status: RequestStatus.Idle,
         previewUrl,
+        playUrl,
       };
     });
   }, []);
+
+  const onAttachmentsChangeRef = useRef(onAttachmentsChange);
+  useEffect(() => {
+    onAttachmentsChangeRef.current = onAttachmentsChange;
+  }, [onAttachmentsChange]);
+
+  /* Track whether the current attachments value came from an explicit update
+   * (not the initial mount) so the notification effect below skips the mount. */
+  const isInitialMountRef = useRef(true);
 
   const updateAttachments = useCallback(
     (updater: (current: Attachment[]) => Attachment[]) => {
       setAttachments((prev) => {
         const updated = updater(prev);
-        onAttachmentsChange?.(updated);
-        return updated;
+        return updated !== prev ? updated : prev;
       });
     },
-    [onAttachmentsChange],
+    [],
   );
 
-  const resetAttachments = useCallback(
-    (items: Attachment[]) => {
-      setAttachments(items);
-      onAttachmentsChange?.(items);
-    },
-    [onAttachmentsChange],
-  );
+  /* Call onAttachmentsChange after state settles, outside the render phase. */
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    onAttachmentsChangeRef.current?.(attachments);
+    // attachments identity changes only when updateAttachments/resetAttachments produce a new array.
+  }, [attachments]);
+
+  const resetAttachments = useCallback((items: Attachment[]) => {
+    setAttachments(items);
+  }, []);
 
   const uploadAttachment = useCallback(
     async (attachment: Attachment) => {
@@ -177,12 +204,36 @@ export const useAttachments = ({
 
   const addAttachments = useCallback(
     (newAttachments: Attachment[], upload = true) => {
-      let toAdd: Attachment[] = [];
-      updateAttachments((prev) => {
-        const existingIds = new Set(prev.map((a) => a.id));
-        toAdd = newAttachments.filter((a) => !existingIds.has(a.id));
-        return [...prev, ...toAdd];
-      });
+      /* Compute toAdd from the ref rather than inside the state updater.
+       * React 18 StrictMode double-invokes updaters; a side-effect assignment
+       * inside the updater would produce toAdd=[] on the second call (the
+       * attachment is already in prev), causing runAtRate to receive an empty
+       * array and skipping upload entirely. */
+      const existingIds = new Set(attachmentsRef.current.map((a) => a.id));
+      const toAdd = newAttachments.filter((a) => !existingIds.has(a.id));
+
+      if (toAdd.length === 0) return;
+
+      if (
+        maximumAttachmentsAmount != null &&
+        maximumAttachmentsAmount > 0 &&
+        Number.isFinite(maximumAttachmentsAmount)
+      ) {
+        const count =
+          baseAttachmentsAmount + attachmentsRef.current.length + toAdd.length;
+        if (count > maximumAttachmentsAmount) {
+          toAdd.forEach((attachment) => {
+            if (attachment.previewUrl)
+              URL.revokeObjectURL(attachment.previewUrl);
+            if (attachment.playUrl) URL.revokeObjectURL(attachment.playUrl);
+          });
+          onAttachmentsLimitExceeded?.(count, maximumAttachmentsAmount);
+          return;
+        }
+      }
+
+      updateAttachments((prev) => [...prev, ...toAdd]);
+
       if (upload) {
         const validToUpload: Attachment[] = [];
         toAdd.forEach((attachment) => {
@@ -202,7 +253,14 @@ export const useAttachments = ({
         void runAtRate(validToUpload, MAX_UPLOADS_PER_MINUTE, uploadAttachment);
       }
     },
-    [updateAttachments, uploadAttachment, validateAttachment],
+    [
+      baseAttachmentsAmount,
+      maximumAttachmentsAmount,
+      onAttachmentsLimitExceeded,
+      updateAttachments,
+      uploadAttachment,
+      validateAttachment,
+    ],
   );
 
   useEffect(() => {
@@ -218,11 +276,50 @@ export const useAttachments = ({
     onPendingAttachmentsConsumed?.();
   }, [addAttachments, onPendingAttachmentsConsumed, pendingAttachments]);
 
+  useEffect(() => {
+    if (!validateAttachment) return;
+
+    let changed = false;
+    const toUpload: Attachment[] = [];
+    const next = attachmentsRef.current.map((attachment) => {
+      if (attachment.status === RequestStatus.Loading) return attachment;
+
+      const errorReason = validateAttachment(attachment);
+      if (errorReason != null) {
+        if (
+          attachment.status === RequestStatus.Error &&
+          attachment.errorReason === errorReason
+        ) {
+          return attachment;
+        }
+        changed = true;
+        return { ...attachment, status: RequestStatus.Error, errorReason };
+      }
+
+      if (attachment.errorReason === AttachmentErrorReason.UnsupportedType) {
+        changed = true;
+        const restored: Attachment = {
+          ...attachment,
+          status: RequestStatus.Idle,
+          errorReason: undefined,
+        };
+        if (restored.url == null) toUpload.push(restored);
+        return restored;
+      }
+
+      return attachment;
+    });
+
+    if (changed) updateAttachments(() => next);
+    toUpload.forEach((attachment) => void uploadAttachment(attachment));
+  }, [validateAttachment, updateAttachments, uploadAttachment]);
+
   const handleRemove = useCallback(
     (id: string) => {
       updateAttachments((prev) => {
         const target = prev.find((a) => a.id === id);
         if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+        if (target?.playUrl) URL.revokeObjectURL(target.playUrl);
         return prev.filter((a) => a.id !== id);
       });
     },

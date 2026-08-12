@@ -1,4 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { LOCALIZED_TEXT_SCHEMA } from '../common/types/localized-text';
+import type { LocalizedText } from '../common/types/localized-text';
 import { ConversationMessageDto } from '../conversations/dto/conversation-message.dto';
 
 export class ProviderInfoDto {
@@ -16,11 +18,25 @@ export class UserProfileDto {
   @ApiProperty({ example: 'local' })
   providerId!: string;
 
-  @ApiProperty({ type: 'object', additionalProperties: true })
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'Allowlisted claims keyed by claim name. A dot-notation rolesClaim ' +
+      '(e.g. "realm_access.roles") is stored under one flat key equal to ' +
+      'that literal string, never as a nested object.',
+  })
   claims!: Record<string, unknown>;
 
   @ApiProperty({ example: 'default-bucket' })
   bucket!: string;
+
+  @ApiProperty({
+    example: false,
+    description:
+      "Whether the user's roles claim intersects the provider's configured adminRoles",
+  })
+  isAdmin!: boolean;
 }
 
 export class DialModelFeaturesDto {
@@ -146,8 +162,11 @@ export class DialModelDto {
   @ApiPropertyOptional({ example: 'dial.gemini-3-flash-preview' })
   model?: string;
 
-  @ApiPropertyOptional({ example: 'Gemini 3 Flash' })
-  display_name?: string;
+  @ApiPropertyOptional({
+    example: 'Gemini 3 Flash',
+    ...LOCALIZED_TEXT_SCHEMA,
+  })
+  display_name?: LocalizedText;
 
   @ApiPropertyOptional({ example: 'test' })
   display_version?: string;
@@ -157,8 +176,9 @@ export class DialModelDto {
 
   @ApiPropertyOptional({
     example: 'A multimodal model combining reasoning and efficiency.',
+    ...LOCALIZED_TEXT_SCHEMA,
   })
-  description?: string;
+  description?: LocalizedText;
 
   @ApiPropertyOptional({ example: 'dial.gemini-3-flash-preview' })
   reference?: string;
@@ -226,45 +246,126 @@ export class DialModelListResponseDto {
   data!: DialModelDto[];
 }
 
+export class DialToolsetFeaturesDto {
+  @ApiPropertyOptional({ example: false })
+  rate?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  tokenize?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  truncatePrompt?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  configuration?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  systemPrompt?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  tools?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  seed?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  urlAttachments?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  folderAttachments?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  allowResume?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  accessibleByPerRequestKey?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  contentParts?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  temperature?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  cache?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  autoCaching?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  parallelToolCalls?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  assistantAttachmentsInRequest?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  mcp?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  chatCompletion?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  responsesApi?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  maxTokensSupported?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  maxCompletionTokensSupported?: boolean;
+
+  @ApiPropertyOptional({ example: false })
+  customTemperatureSupported?: boolean;
+
+  @ApiPropertyOptional({ type: [String], example: ['low', 'medium', 'high'] })
+  reasoningEfforts?: string[];
+}
+
 export class DialToolsetAuthSettingsDto {
   @ApiProperty({ example: 'OAUTH', enum: ['OAUTH', 'API_KEY', 'NONE'] })
-  authentication_type!: string;
+  authenticationType!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether DIAL Core dynamically registered the OAuth client instead of using user-provided client configuration',
+    example: true,
+  })
+  dynamicallyRegistered?: boolean;
 
   @ApiPropertyOptional({ example: 'X-Api-Key' })
-  api_key_header?: string;
+  apiKeyHeader?: string;
 
   @ApiPropertyOptional({ example: 'my-client-id' })
-  client_id?: string;
+  clientId?: string;
 
   @ApiPropertyOptional({ example: '' })
-  redirect_uri?: string;
+  redirectUri?: string;
 
   @ApiPropertyOptional({ example: '' })
-  authorization_endpoint?: string;
+  authorizationEndpoint?: string;
 
   @ApiPropertyOptional({ example: '' })
-  token_endpoint?: string;
+  tokenEndpoint?: string;
 
   @ApiPropertyOptional({ example: 'base64-url-code-challenge' })
-  code_challenge?: string;
+  codeChallenge?: string;
 
   @ApiPropertyOptional({ example: 'S256' })
-  code_challenge_method?: string;
+  codeChallengeMethod?: string;
 
   @ApiPropertyOptional({ type: [String], example: ['scope1', 'scope2'] })
-  scopes_supported?: string[];
+  scopesSupported?: string[];
 
   @ApiPropertyOptional({
     example: 'SIGNED_OUT',
     enum: ['SIGNED_IN', 'SIGNED_OUT'],
   })
-  global_auth_status?: string;
+  globalAuthStatus?: string;
 
   @ApiPropertyOptional({
     example: 'SIGNED_OUT',
     enum: ['SIGNED_IN', 'SIGNED_OUT'],
   })
-  user_level_auth_status?: string;
+  userLevelAuthStatus?: string;
 }
 
 export class DialToolsetDto {
@@ -278,23 +379,25 @@ export class DialToolsetDto {
   })
   toolset!: string;
 
-  @ApiPropertyOptional({ example: 'Toolset display name' })
-  display_name?: string;
+  @ApiPropertyOptional({
+    description:
+      'Human-readable name. In `listToolsets` results this is always populated: `displayName` when set, otherwise the last path segment of `id`. Either a plain string, or a map of locale code to translated value when additional locales are configured.',
+    example: 'Toolset display name',
+    ...LOCALIZED_TEXT_SCHEMA,
+  })
+  displayName?: LocalizedText;
 
   @ApiPropertyOptional({ example: '0.0.1' })
-  display_version?: string;
-
-  @ApiPropertyOptional({ example: 'My toolset description' })
-  description?: string;
+  displayVersion?: string;
 
   @ApiPropertyOptional({
-    example: 'Runs your toolset in one line.',
-    maxLength: 90,
+    example: 'My toolset description',
+    ...LOCALIZED_TEXT_SCHEMA,
   })
-  intro?: string;
+  description?: LocalizedText;
 
   @ApiPropertyOptional({ example: '' })
-  icon_url?: string;
+  iconUrl?: string;
 
   @ApiPropertyOptional({ example: "Owner's name" })
   owner?: string;
@@ -309,7 +412,7 @@ export class DialToolsetDto {
     type: [String],
     example: ['keyword1', 'keyword2'],
   })
-  description_keywords?: string[];
+  descriptionKeywords?: string[];
 
   @ApiPropertyOptional({
     example: 'ff5584b7-a82b-4f4f-bf42-5bf74a3893d6',
@@ -317,16 +420,16 @@ export class DialToolsetDto {
   reference?: string;
 
   @ApiPropertyOptional({ example: 2 })
-  max_retry_attempts?: number;
+  maxRetryAttempts?: number;
 
   @ApiPropertyOptional({ example: 1672534800 })
-  created_at?: number;
+  createdAt?: number;
 
   @ApiPropertyOptional({ example: 1672534900 })
-  updated_at?: number;
+  updatedAt?: number;
 
-  @ApiPropertyOptional({ type: () => DialModelFeaturesDto })
-  features?: DialModelFeaturesDto;
+  @ApiPropertyOptional({ type: () => DialToolsetFeaturesDto })
+  features?: DialToolsetFeaturesDto;
 
   @ApiPropertyOptional({ example: 'https://my-toolset.example.com/mcp' })
   endpoint?: string;
@@ -335,21 +438,40 @@ export class DialToolsetDto {
   transport?: string;
 
   @ApiPropertyOptional({ type: [String], example: ['tool1', 'tool2'] })
-  allowed_tools?: string[];
+  allowedTools?: string[];
 
   @ApiPropertyOptional({ type: () => DialToolsetAuthSettingsDto })
-  auth_settings?: DialToolsetAuthSettingsDto;
+  authSettings?: DialToolsetAuthSettingsDto;
 
   @ApiPropertyOptional({
     description: 'Whether this toolset is installed by the current user',
   })
-  is_installed?: boolean;
+  isInstalled?: boolean;
 
   @ApiPropertyOptional({
     description:
       'True when the toolset id/path belongs to the current session user bucket',
   })
-  is_my?: boolean;
+  isMy?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'True when the current user may edit this toolset — owns it, or was granted WRITE access via a share invitation',
+  })
+  canEdit?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'True when this toolset is shared with the current user (READ or WRITE) and not owned by them',
+  })
+  sharedWithMe?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'How many other users currently hold shared access to this toolset, for toolsets the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.',
+    example: 3,
+  })
+  recipientsCount?: number;
 }
 
 export class DialToolsetListResponseDto {
@@ -526,6 +648,19 @@ export class ConversationResponseDto {
 
   @ApiProperty({ example: 1 })
   temperature!: number;
+
+  @ApiPropertyOptional({
+    example: 4096,
+    description:
+      'Optional Responses-API output-token cap, forwarded verbatim as ' +
+      'max_output_tokens. Never derived from deployment limits or Chat ' +
+      'Completions defaults. Documentation-only decorator — the actual ' +
+      'positive-safe-integer check runs at the Responses request-building ' +
+      'boundary (ResponsesAdapter.buildRequest via isValidMaxOutputTokens), ' +
+      'not through nested DTO validation on save (see design.md Decision 4 ' +
+      'of the support-responses-generation-parameters change).',
+  })
+  maxOutputTokens?: number;
 
   @ApiProperty({ type: () => [ConversationMessageDto] })
   messages!: ConversationMessageDto[];

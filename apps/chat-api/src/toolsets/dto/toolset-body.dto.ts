@@ -1,15 +1,26 @@
 ﻿import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
+  IsDefined,
   IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
-  MaxLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { LocaleTextEntryDto } from '../../common/dto/locale-text-entry.dto';
+import {
+  DISPLAY_NAME_PATTERN,
+  DISPLAY_NAME_VALIDATION_MESSAGE,
+} from '../../common/validators/display-name.pattern';
+import {
+  LOCALE_CODE_PATTERN,
+  LOCALE_CODE_VALIDATION_MESSAGE,
+} from '../../common/validators/locale-code.pattern';
 
 export enum ToolsetTransport {
   Http = 'HTTP',
@@ -28,14 +39,6 @@ export enum ToolsetAuthType {
  */
 const ENDPOINT_URL_PATTERN = /^(https?|sse):\/\/[^\s]+$/;
 const ENDPOINT_URL_MESSAGE = 'Must be a valid http(s) or sse URL';
-
-/*
- * Display name: excludes ASCII control characters (Unicode Cc category) and
- * surrogates to prevent log-injection through names that appear in log lines.
- */
-const DISPLAY_NAME_PATTERN = /^[^\p{Cc}\p{Cs}]{1,255}$/u;
-const DISPLAY_NAME_MESSAGE =
-  'Must not contain control characters and must be 1-255 characters';
 
 const VERSION_PATTERN = /^[\w.+-]{1,64}$/;
 const VERSION_MESSAGE =
@@ -83,7 +86,7 @@ export class ToolsetAuthSettingsBodyDto {
   scopesSupported?: string[];
 
   @ApiPropertyOptional({
-    example: 'https://chat.example.com/toolset-editor/callback',
+    example: 'https://chat.example.com/auth/toolset-signin',
   })
   @IsString()
   @IsOptional()
@@ -104,7 +107,7 @@ export class ToolsetBodyDto {
   @ApiProperty({ example: 'My toolset' })
   @IsString()
   @IsNotEmpty()
-  @Matches(DISPLAY_NAME_PATTERN, { message: DISPLAY_NAME_MESSAGE })
+  @Matches(DISPLAY_NAME_PATTERN, { message: DISPLAY_NAME_VALIDATION_MESSAGE })
   name!: string;
 
   @ApiPropertyOptional({ example: '0.0.1' })
@@ -130,18 +133,39 @@ export class ToolsetBodyDto {
   @IsOptional()
   topics?: string[];
 
-  @ApiPropertyOptional({
-    example: 'Runs your toolset in one line.',
-    maxLength: 90,
-  })
-  @IsString()
+  /*
+   * Additional (non-primary) locale translations for `name`/`description`.
+   * Absent/empty means DIAL Core stores plain strings, unchanged from today.
+   */
+  @ApiPropertyOptional({ type: () => [LocaleTextEntryDto] })
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => LocaleTextEntryDto)
   @IsOptional()
-  @MaxLength(90)
-  intro?: string;
+  locales?: LocaleTextEntryDto[];
 
+  /*
+   * Locale that `name`/`description` are written in. Required when `locales`
+   * is non-empty so the backend knows which map key seeds from them;
+   * defaults to `'en'` when `locales` is absent.
+   */
+  @ApiPropertyOptional({ example: 'en' })
+  @ValidateIf((o: ToolsetBodyDto) => o.locales != null && o.locales.length > 0)
+  @IsString()
+  @Matches(LOCALE_CODE_PATTERN, { message: LOCALE_CODE_VALIDATION_MESSAGE })
+  primaryLocale?: string;
+
+  /*
+   * Empty string is allowed: the toolset editor creates a draft toolset
+   * right after its first (General) step, before the endpoint is collected
+   * on the second (Settings) step. `ValidateIf` makes every validator below
+   * conditional, so a missing `endpoint` (not the same as an empty string)
+   * still fails `@IsString()` and is rejected.
+   */
   @ApiProperty({ example: 'https://my-toolset.example.com/mcp' })
   @IsString()
-  @IsNotEmpty()
+  @ValidateIf((o: ToolsetBodyDto) => o.endpoint !== '')
   @Matches(ENDPOINT_URL_PATTERN, { message: ENDPOINT_URL_MESSAGE })
   endpoint!: string;
 
@@ -161,6 +185,7 @@ export class ToolsetBodyDto {
   reference?: string;
 
   @ApiProperty({ type: () => ToolsetAuthSettingsBodyDto })
+  @IsDefined()
   @ValidateNested()
   @Type(() => ToolsetAuthSettingsBodyDto)
   authSettings!: ToolsetAuthSettingsBodyDto;

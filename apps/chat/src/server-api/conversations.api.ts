@@ -1,7 +1,7 @@
 import type {
   AttachmentDto,
   ConversationResponseDto,
-} from '@epam/chat-api-client';
+} from '@epam/ai-dial-chat-api-client';
 import { conversationsApi } from './api-client';
 
 export const createConversation = (
@@ -29,20 +29,33 @@ export const createConversation = (
     },
   });
 
-export const getConversation = (conversationPath: string) =>
-  conversationsApi.getConversation({ path: conversationPath });
+export const getConversation = (
+  conversationPath: string,
+  signal?: AbortSignal,
+) =>
+  conversationsApi.getConversation(
+    { path: conversationPath },
+    ...(signal ? [{ signal }] : []),
+  );
 
 export const saveConversation = (
   conversationPath: string,
   conversation: ConversationResponseDto,
+  signal?: AbortSignal,
 ) =>
-  conversationsApi.saveConversation({
-    path: conversationPath,
-    saveConversationBodyDto: { conversation },
-  });
+  conversationsApi.saveConversation(
+    {
+      path: conversationPath,
+      saveConversationBodyDto: { conversation },
+    },
+    ...(signal ? [{ signal }] : []),
+  );
 
 export const deleteConversation = (conversationPath: string) =>
   conversationsApi.deleteConversation({ path: conversationPath });
+
+export const markConversationViewed = (conversationPath: string) =>
+  conversationsApi.markConversationViewed({ path: conversationPath });
 
 export const getConversationMetadata = (
   conversationPath: string,
@@ -53,16 +66,20 @@ export const getConversationMetadata = (
     permissions: options?.permissions,
   });
 
-export const listConversations = (params?: {
-  limit?: number;
-  nextToken?: string;
-  path?: string;
-}) =>
-  conversationsApi.listConversations({
-    limit: params?.limit ?? 1000,
-    nextToken: params?.nextToken,
-    path: params?.path,
-  });
+export const listConversations = (
+  params?: {
+    limit?: number;
+    nextToken?: string;
+  },
+  signal?: AbortSignal,
+) =>
+  conversationsApi.listConversations(
+    {
+      limit: params?.limit ?? 1000,
+      nextToken: params?.nextToken,
+    },
+    ...(signal ? [{ signal }] : []),
+  );
 
 export const renameConversation = (path: string, newTitle: string) =>
   conversationsApi.renameConversation({

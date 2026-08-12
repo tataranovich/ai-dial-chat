@@ -105,7 +105,7 @@ Specifically:
 - The send button SHALL be disabled (non-interactive) in this state.
 - Pressing Enter in the textarea SHALL NOT call `onSend` in this state.
 - Loading, error, and empty states SHALL NOT expand the toolbar with long visible text.
-- While loading, the trigger SHALL show a circular `DialSkeleton` from `@epam/ai-dial-ui-kit`. The opened selector SHALL show exactly seven disabled rows, each with a circular icon skeleton and a text skeleton for the item name. The mobile bottom sheet SHALL use the same seven-row loading presentation.
+- While loading, the trigger SHALL show a circular `Skeleton` from `@epam/ai-dial-ui-kit`. The opened selector SHALL show exactly seven disabled rows, each with a circular icon skeleton and a text skeleton for the item name. The mobile bottom sheet SHALL use the same seven-row loading presentation.
 - Error and empty states SHALL be represented by a disabled dropdown menu item with the appropriate accessible label or tooltip.
 
 The `isStreaming === true` stop-button path is unaffected — streaming stop always works regardless of selection state.
@@ -123,7 +123,7 @@ The `isStreaming === true` stop-button path is unaffected — streaming stop alw
 #### Scenario: Loading skeletons displayed
 
 - **WHEN** `modelSelectorLoadingLabel` is set, including a reload where `catalogItems` still contains previously loaded items
-- **THEN** the selector trigger renders a circular `DialSkeleton`
+- **THEN** the selector trigger renders a circular `Skeleton`
 - **AND** the opened selector renders seven disabled rows containing circular icon and text skeletons
 - **AND** the loading label remains exposed to assistive technology
 
@@ -191,7 +191,7 @@ Tests MUST use role, label, and text queries instead of implementation-specific 
 
 ### Requirement: Favorited Applications included in selector's talkable items
 
-`ModelPickerPanel.tsx` (`apps/chat/src/components/ModelPicker/`) SHALL build the `catalogItems` passed into the model selector from the user's favorited catalog items, filtered to conversational entity types only. The talkable-type allowlist SHALL include `CatalogEntityType.Model`, `CatalogEntityType.Agent`, and `CatalogEntityType.Application`. Non-conversational types (`Toolset`, `Skill`, `Guardrail`, `Mcp`, and any other non-conversational `CatalogEntityType`) SHALL continue to be excluded.
+`ModelPickerPanel.tsx` (`apps/chat/src/components/ModelPicker/`) SHALL build the `catalogItems` passed into the model selector from the user's favorited catalog items, filtered to conversational entity types only. The talkable-type allowlist SHALL include `CatalogEntityType.Model`, `CatalogEntityType.Agent`. Non-conversational types (`Toolset`, `Skill`, `Guardrail`, `Mcp`, and any other non-conversational `CatalogEntityType`) SHALL continue to be excluded.
 
 Note: `CatalogEntityType.Agent` is a frontend-only display category (used for catalog tabs/badges); DIAL Core has no "agent" concept, and `mapDeploymentToCatalogItem` never assigns it to real deployment data — only `Model` and `Application` are produced from Core deployments today. The allowlist keeps the `Agent` check for forward compatibility but this requirement's observable behavior change is that `Application` items now pass the filter.
 
@@ -199,7 +199,7 @@ This filter SHALL be memoized (`useMemo`) keyed on the favorites list, consisten
 
 #### Scenario: Favorited Application appears in the dropdown
 
-- **WHEN** the user has favorited an Application in the Catalog (entity mapped to `CatalogEntityType.Application`)
+- **WHEN** the user has favorited an Application in the Catalog (entity mapped to `CatalogEntityType.Agent`)
 - **THEN** `ModelPickerPanel`'s `talkableItems` includes that Application
 - **AND** the Application appears as a selectable item in the model selector dropdown alongside favorited Models and Agents
 

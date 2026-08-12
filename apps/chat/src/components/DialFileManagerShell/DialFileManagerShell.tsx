@@ -1,25 +1,88 @@
-import { PrimaryButton } from '@epam/ai-dial-kit';
 import {
   DialFileManager,
   DialFileManagerActions,
   DialFileManagerTabs,
-  DialSpinner,
   GridSelectionMode,
-  NOT_ALLOWED_SYMBOLS_REGEXP,
   type DialFileAcceptType,
   type FileManagerGridRow,
   type ToolbarOptions,
+} from '@epam/ai-dial-react-file-manager';
+import {
+  NOT_ALLOWED_SYMBOLS_REGEXP,
+  PrimaryButton,
+  Spinner,
 } from '@epam/ai-dial-ui-kit';
-import { memo, useMemo, type FC } from 'react';
+import { memo, useEffect, useMemo, useState, type FC } from 'react';
 import OperationLoaderModal from '../../components/DialFileManagerModal/OperationLoaderModal';
 import { FileUploadStatus } from '../../components/DialFileManagerModal/types/upload';
 import UploadProgressModal from '../../components/DialFileManagerModal/UploadProgressModal';
 import type { UseDialFileManagerResult } from '../../hooks/files/useDialFileManager';
+import { useGridEditingScroll } from '../../hooks/files/useGridEditingScroll';
+import {
+  DialFileManagerActionProfile,
+  DialFileManagerVariant,
+} from '../../types/file-manager-variant';
 import { getParentFolderPath } from '../../utils/resolve-dial-file-api-path';
 import type {
   DialFileManagerDestinationFolderPopupOptions,
   DialFileManagerShellLabels,
+  EmptyStateCopy,
 } from './types/labels';
+
+type DestinationFolderPopupOptions =
+  DialFileManagerDestinationFolderPopupOptions & {
+    sourceFolder?: string;
+    destinationFolderPath?: string;
+    setDestinationFolderPath?: (path?: string) => void;
+    filesLoading?: boolean;
+  };
+
+const normalizeVirtualFolderPath = (value: string): string => {
+  const trimmed = value.replace(/\/+$/, '');
+  return trimmed || '/';
+};
+
+interface OverlayFlags {
+  isDownloading: boolean;
+  isDeleting: boolean;
+  isRenaming: boolean;
+  isMoving: boolean;
+  isUnsharing: boolean;
+  isRemovingAccess: boolean;
+}
+
+type OverlayLabels = Pick<
+  DialFileManagerShellLabels,
+  | 'downloadingLabel'
+  | 'deletingLabel'
+  | 'renamingLabel'
+  | 'unsharingLabel'
+  | 'removingAccessLabel'
+>;
+
+/**
+ * Resolves the consolidated overlay's ariaLabel with a fixed precedence
+ * (isDownloading -> isDeleting -> isRenaming && !isMoving -> isUnsharing ->
+ * isRemovingAccess), used only if more than one flag is unexpectedly true
+ * simultaneously.
+ */
+const resolveOverlayAriaLabel = (
+  flags: OverlayFlags,
+  labels: OverlayLabels,
+): string | undefined => {
+  if (flags.isDownloading) {
+    return labels.downloadingLabel;
+  } else if (flags.isDeleting) {
+    return labels.deletingLabel;
+  } else if (flags.isRenaming && !flags.isMoving) {
+    return labels.renamingLabel;
+  } else if (flags.isUnsharing) {
+    return labels.unsharingLabel;
+  } else if (flags.isRemovingAccess) {
+    return labels.removingAccessLabel;
+  }
+  return undefined;
+};
 
 interface Props {
   hookResult: UseDialFileManagerResult;
@@ -29,6 +92,10 @@ interface Props {
   onTabChange: (tab: DialFileManagerTabs) => void;
   selectedPaths: Set<string>;
   onSelectedPathsChange: (paths: Set<string>) => void;
+  /** Host driving this shell instance — gates the upload-archive toolbar entry (standalone-only). */
+  variant: DialFileManagerVariant;
+  /** Action-set gate for the upload-archive toolbar entry (Full-only). */
+  actionProfile: DialFileManagerActionProfile;
   autoSelectUploadedItems?: boolean;
   allowedFileTypes?: DialFileAcceptType[];
   maxSelectableFileSize?: number;
@@ -52,7 +119,9 @@ const DialFileManagerShell: FC<Props> = ({
   onTabChange,
   selectedPaths,
   onSelectedPathsChange,
-  autoSelectUploadedItems = true,
+  variant,
+  actionProfile,
+  autoSelectUploadedItems = false,
   allowedFileTypes,
   maxSelectableFileSize,
   isRowSelectable,
@@ -73,7 +142,10 @@ const DialFileManagerShell: FC<Props> = ({
     expandedPaths,
     loadedPaths,
     onExpandedPathsChange,
+    onFolderPopupPathChange,
+    folderPopupLoadingPaths,
     onUploadFiles,
+    onUploadArchive,
     onValidateUpload,
     uploadBatchState,
     cancelUpload,
@@ -99,7 +171,27 @@ const DialFileManagerShell: FC<Props> = ({
     dateOptions,
     actionLabels: tabActionLabels,
     sharedWithMeIds,
+    sharedByMePaths,
+    onUnshareFiles,
+    isUnsharing,
+    onRemoveFilesAccess,
+    isRemovingAccess,
+    fileMetadata,
+    isFileMetadataLoading,
+    onGetInfo,
+    clearMetadata,
   } = hookResult;
+
+  const [destinationFolderPath, setDestinationFolderPath] = useState<
+    string | undefined
+  >(undefined);
+
+  const { handleGridApiChange, reset: resetGridEditingScroll } =
+    useGridEditingScroll();
+
+  useEffect(() => {
+    resetGridEditingScroll();
+  }, [activeTab, resetGridEditingScroll]);
 
   const actionLabels = useMemo(() => {
     const result: Partial<Record<DialFileManagerActions, string>> = {};
@@ -121,6 +213,12 @@ const DialFileManagerShell: FC<Props> = ({
     if (DialFileManagerActions.Duplicate in tabActionLabels) {
       result[DialFileManagerActions.Duplicate] = labels.duplicateLabel;
     }
+    if (DialFileManagerActions.Unshare in tabActionLabels) {
+      result[DialFileManagerActions.Unshare] = labels.unshareLabel;
+    }
+    if (DialFileManagerActions.RemoveAccess in tabActionLabels) {
+      result[DialFileManagerActions.RemoveAccess] = labels.removeAccessLabel;
+    }
     return result;
   }, [
     tabActionLabels,
@@ -130,7 +228,44 @@ const DialFileManagerShell: FC<Props> = ({
     labels.copyLabel,
     labels.moveLabel,
     labels.duplicateLabel,
+    labels.unshareLabel,
+    labels.removeAccessLabel,
   ]);
+
+  /*
+   * Info is grid-only — the installed ui-kit exposes no tree or bulk-toolbar
+   * surface for it (FileTreeOptions/BulkActionsToolbarOptions.actionLabels
+   * have no Info key), so it is kept out of the shared `actionLabels` above
+   * and layered onto a grid-specific variant instead.
+   */
+  const gridActionLabels = useMemo(() => {
+    if (!(DialFileManagerActions.Info in tabActionLabels)) return actionLabels;
+    return { ...actionLabels, [DialFileManagerActions.Info]: labels.infoLabel };
+  }, [actionLabels, tabActionLabels, labels.infoLabel]);
+
+  /*
+   * Bulk toolbar never shows Share (single-item only, no bulk affordance);
+   * Remove access is additionally hidden unless every selected path is
+   * present in sharedByMePaths (mirrors legacy allSelectedItemsShared).
+   */
+  const allSelectedItemsSharedByMe = useMemo(() => {
+    if (selectedPaths.size === 0) return false;
+    for (const selectedPath of selectedPaths) {
+      if (!sharedByMePaths.has(selectedPath)) return false;
+    }
+    return true;
+  }, [selectedPaths, sharedByMePaths]);
+
+  const bulkActionLabels = useMemo(() => {
+    if (allSelectedItemsSharedByMe) {
+      return actionLabels;
+    }
+    const {
+      [DialFileManagerActions.RemoveAccess]: _removeAccess,
+      ...withoutRemoveAccess
+    } = actionLabels;
+    return withoutRemoveAccess;
+  }, [actionLabels, allSelectedItemsSharedByMe]);
 
   const gridOptions = useMemo(
     () => ({
@@ -145,9 +280,15 @@ const DialFileManagerShell: FC<Props> = ({
           isRowSelectable: isRowSelectable ?? ((): boolean => true),
         },
       },
-      actionLabels,
+      actionLabels: gridActionLabels,
     }),
-    [visibleColumns, dateLocale, dateOptions, actionLabels, isRowSelectable],
+    [
+      visibleColumns,
+      dateLocale,
+      dateOptions,
+      gridActionLabels,
+      isRowSelectable,
+    ],
   );
 
   const treeOptions = useMemo(
@@ -168,6 +309,17 @@ const DialFileManagerShell: FC<Props> = ({
     ],
   );
 
+  /*
+   * uploadArchive is standalone-only, my_files-only, WRITE-gated, and
+   * Full-profile-only — absent on shared/organization tabs and in the
+   * attach modal (file-manager-tabs spec).
+   */
+  const showUploadArchiveAction =
+    variant === DialFileManagerVariant.Standalone &&
+    actionProfile === DialFileManagerActionProfile.Full &&
+    activeTab === DialFileManagerTabs.MyFiles &&
+    uploadEnabled;
+
   const toolbarOptions = useMemo(
     () => ({
       tabs,
@@ -182,6 +334,9 @@ const DialFileManagerShell: FC<Props> = ({
       newActions: {
         uploadFiles: { label: labels.uploadFilesLabel },
         newFolder: { label: labels.newFolderLabel },
+        ...(showUploadArchiveAction
+          ? { uploadArchive: { label: labels.uploadArchiveAction } }
+          : {}),
       },
     }),
     [
@@ -195,15 +350,17 @@ const DialFileManagerShell: FC<Props> = ({
       disabledNewButtonTooltip,
       labels.uploadFilesLabel,
       labels.newFolderLabel,
+      showUploadArchiveAction,
+      labels.uploadArchiveAction,
     ],
   );
 
   const bulkActionsToolbarOptions = useMemo(
     () => ({
       getSelectionLabel: labels.getSelectionLabel,
-      actionLabels,
+      actionLabels: bulkActionLabels,
     }),
-    [labels.getSelectionLabel, actionLabels],
+    [labels.getSelectionLabel, bulkActionLabels],
   );
 
   const deleteConfirmationOptions = useMemo(
@@ -234,20 +391,33 @@ const DialFileManagerShell: FC<Props> = ({
     return commonParent;
   }, [selectedPaths]);
 
+  const isDestinationFolderLoading =
+    destinationFolderPath != null &&
+    folderPopupLoadingPaths.has(
+      normalizeVirtualFolderPath(destinationFolderPath),
+    );
+
+  const disabledDestinationPath = isDestinationFolderLoading
+    ? destinationFolderPath
+    : commonSelectedParentFolder;
+
   const destinationFolderPopupOptions = useMemo(
-    (): DialFileManagerDestinationFolderPopupOptions & {
-      sourceFolder?: string;
-    } => ({
+    (): DestinationFolderPopupOptions => ({
       copyLabel: labels.copyLabel,
       moveLabel: labels.moveLabel,
       addFolderLabel: labels.addFolderLabel,
       hiddenFilesSwitcherLabel: labels.hiddenFilesSwitcherLabel,
       getCopyHeader: labels.getCopyHeader,
       getMoveHeader: labels.getMoveHeader,
-      disabledPathTooltip: labels.moveSourceDisabledTooltip,
+      disabledPathTooltip: isDestinationFolderLoading
+        ? labels.folderPickerLoadingTooltip
+        : labels.moveSourceDisabledTooltip,
       emptyStateTitle: labels.folderPickerEmptyStateTitle,
       emptyStateDescription: labels.folderPickerEmptyStateDescription,
-      sourceFolder: commonSelectedParentFolder,
+      sourceFolder: disabledDestinationPath,
+      destinationFolderPath,
+      setDestinationFolderPath,
+      filesLoading: isDestinationFolderLoading,
     }),
     [
       labels.copyLabel,
@@ -256,10 +426,13 @@ const DialFileManagerShell: FC<Props> = ({
       labels.hiddenFilesSwitcherLabel,
       labels.getCopyHeader,
       labels.getMoveHeader,
+      labels.folderPickerLoadingTooltip,
       labels.moveSourceDisabledTooltip,
       labels.folderPickerEmptyStateTitle,
       labels.folderPickerEmptyStateDescription,
-      commonSelectedParentFolder,
+      isDestinationFolderLoading,
+      disabledDestinationPath,
+      destinationFolderPath,
     ],
   );
 
@@ -267,6 +440,43 @@ const DialFileManagerShell: FC<Props> = ({
     cancelUpload();
     clearUploadBatch();
   };
+
+  const fileMetadataPopupOptions = useMemo(
+    () => ({
+      fileMetadata,
+      loading: isFileMetadataLoading,
+      clearMetadata,
+      header: labels.metadataHeader,
+      nameLabel: labels.metadataNameLabel,
+      pathLabel: labels.metadataPathLabel,
+      modifiedDateLabel: labels.metadataModifiedDateLabel,
+      sizeLabel: labels.metadataSizeLabel,
+      authorLabel: labels.metadataAuthorLabel,
+    }),
+    [
+      fileMetadata,
+      isFileMetadataLoading,
+      clearMetadata,
+      labels.metadataHeader,
+      labels.metadataNameLabel,
+      labels.metadataPathLabel,
+      labels.metadataModifiedDateLabel,
+      labels.metadataSizeLabel,
+      labels.metadataAuthorLabel,
+    ],
+  );
+
+  const overlayLabel = resolveOverlayAriaLabel(
+    {
+      isDownloading,
+      isDeleting,
+      isRenaming,
+      isMoving,
+      isUnsharing,
+      isRemovingAccess,
+    },
+    labels,
+  );
 
   const uploadProgressText = useMemo(() => {
     if (uploadBatchState == null) {
@@ -278,6 +488,25 @@ const DialFileManagerShell: FC<Props> = ({
     return labels.getUploadProgressText(done, uploadBatchState.files.length);
   }, [uploadBatchState, labels]);
 
+  const emptyStateCopy = useMemo((): EmptyStateCopy => {
+    if (searchResults != null && !isSearching) {
+      return { title: labels.searchEmptyStateTitle, description: '' };
+    }
+    const isInSubfolder = path.split('/').filter(Boolean).length > 1;
+    if (isInSubfolder) {
+      return { title: labels.folderEmptyStateTitle, description: '' };
+    }
+    return labels.emptyStateByTab[activeTab];
+  }, [
+    searchResults,
+    isSearching,
+    path,
+    labels.searchEmptyStateTitle,
+    labels.folderEmptyStateTitle,
+    labels.emptyStateByTab,
+    activeTab,
+  ]);
+
   return (
     <>
       {error != null ? (
@@ -286,13 +515,14 @@ const DialFileManagerShell: FC<Props> = ({
           <PrimaryButton label={labels.retryLabel} onClick={retry} />
         </div>
       ) : (
-        <div className="relative flex min-h-0 w-full grow overflow-auto bg-layer-2">
+        <div className="relative flex min-h-0 w-full grow overflow-auto bg-layer-sunken">
           <DialFileManager
-            className="min-h-0 w-full grow bg-layer-2"
+            className="min-h-0 w-full grow bg-layer-sunken"
             gridClassName="size-full"
             items={items}
             path={path}
             onPathChange={onPathChange}
+            onGridApiChange={handleGridApiChange}
             filesLoading={isLoading}
             allowedFileTypes={allowedFileTypes}
             maxSelectableFileSize={maxSelectableFileSize}
@@ -308,22 +538,21 @@ const DialFileManagerShell: FC<Props> = ({
             clearSearchResults={clearSearchResults}
             gridOptions={gridOptions}
             treeOptions={treeOptions}
+            onFolderPopupPathChange={onFolderPopupPathChange}
             toolbarOptions={toolbarOptions}
             bulkActionsToolbarOptions={bulkActionsToolbarOptions}
             autoSelectUploadedItems={autoSelectUploadedItems}
-            emptyStateTitle={
-              searchResults != null && !isSearching
-                ? labels.searchEmptyStateTitle
-                : labels.emptyStateByTab[activeTab].title
-            }
-            emptyStateDescription={
-              searchResults != null && !isSearching
-                ? ''
-                : labels.emptyStateByTab[activeTab].description
-            }
+            emptyStateTitle={emptyStateCopy.title}
+            emptyStateDescription={emptyStateCopy.description}
             uploadEnabled={uploadEnabled}
             sharedWithMeIds={sharedWithMeIds}
+            sharedByMePaths={sharedByMePaths}
+            onUnshareFiles={onUnshareFiles}
+            onRemoveFilesAccess={onRemoveFilesAccess}
+            fileMetadataPopupOptions={fileMetadataPopupOptions}
+            onGetInfo={onGetInfo}
             onUploadFiles={onUploadFiles}
+            onUploadArchive={onUploadArchive}
             onValidateUpload={onValidateUpload}
             onCreateFolder={onCreateFolder}
             onCreateFolderValidate={onCreateFolderValidate}
@@ -344,40 +573,12 @@ const DialFileManagerShell: FC<Props> = ({
             getDisabledTooltip={getDisabledTooltip}
             unsupportedFileTypeTooltip={unsupportedFileTypeTooltip}
           />
-          {isDownloading && (
+          {overlayLabel != null && (
             <div
               aria-live="polite"
-              className="absolute inset-0 z-[52] flex items-center justify-center bg-blackout desktop:p-4"
+              className="absolute inset-0 z-[52] flex items-center justify-center bg-backdrop desktop:p-4"
             >
-              <DialSpinner
-                size={32}
-                fullWidth={false}
-                ariaLabel={labels.downloadingLabel}
-              />
-            </div>
-          )}
-          {isDeleting && (
-            <div
-              aria-live="polite"
-              className="absolute inset-0 z-[52] flex items-center justify-center bg-blackout desktop:p-4"
-            >
-              <DialSpinner
-                size={32}
-                fullWidth={false}
-                ariaLabel={labels.deletingLabel}
-              />
-            </div>
-          )}
-          {isRenaming && !isMoving && (
-            <div
-              aria-live="polite"
-              className="absolute inset-0 z-[52] flex items-center justify-center bg-blackout desktop:p-4"
-            >
-              <DialSpinner
-                size={32}
-                fullWidth={false}
-                ariaLabel={labels.renamingLabel}
-              />
+              <Spinner size={32} fullWidth={false} ariaLabel={overlayLabel} />
             </div>
           )}
         </div>

@@ -6,17 +6,22 @@ import { CatalogEntityType } from '../../../types/entity-type';
 import { ListView } from '../ListView';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   mergeClasses: (...args: (string | undefined)[]) =>
     args.filter(Boolean).join(' '),
+  DialNoDataContent: ({ title }: { title?: string }) => <span>{title}</span>,
   DialGrid: ({
     rowData,
     emptyStateTitle,
     additionalGridOptions,
     ariaLabel,
+    withoutHeaderBorders,
+    alternateOddRowColors,
   }: {
     rowData: CatalogItem[];
     emptyStateTitle?: string;
     additionalGridOptions?: {
+      rowHeight?: number;
       context?: {
         onToggleFavorite?: (id: string, isStarred: boolean) => void;
         selectedItemId?: string;
@@ -24,11 +29,18 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       getRowClass?: (params: { data: CatalogItem }) => string | undefined;
     };
     ariaLabel?: string;
+    withoutHeaderBorders?: boolean;
+    alternateOddRowColors?: boolean;
     [key: string]: unknown;
   }) => {
     const ctx = additionalGridOptions?.context;
     return (
-      <div aria-label={ariaLabel}>
+      <div
+        aria-label={ariaLabel}
+        data-row-height={additionalGridOptions?.rowHeight}
+        data-without-header-borders={String(Boolean(withoutHeaderBorders))}
+        data-alternate-odd-row-colors={String(Boolean(alternateOddRowColors))}
+      >
         {!rowData?.length && emptyStateTitle && <span>{emptyStateTitle}</span>}
         {rowData?.map((item) => (
           <div
@@ -74,6 +86,7 @@ describe('ListView', () => {
         <ListView
           items={[]}
           query=""
+          type={CatalogEntityType.Model}
           ariaLabel="Catalog"
           emptyStateTitle="No items"
         />,
@@ -86,6 +99,7 @@ describe('ListView', () => {
       <ListView
         items={[]}
         query=""
+        type={CatalogEntityType.Model}
         ariaLabel="Catalog"
         emptyStateTitle="No items"
       />,
@@ -100,6 +114,7 @@ describe('ListView', () => {
       <ListView
         items={[item]}
         query=""
+        type={CatalogEntityType.Model}
         ariaLabel="Catalog"
         onToggleFavorite={onToggleFavorite}
       />,
@@ -115,6 +130,7 @@ describe('ListView', () => {
       <ListView
         items={[item1, item2]}
         query=""
+        type={CatalogEntityType.Model}
         ariaLabel="Catalog"
         selectedItemId="item-2"
       />,
@@ -131,11 +147,58 @@ describe('ListView', () => {
       <ListView
         items={[item]}
         query=""
+        type={CatalogEntityType.Model}
         ariaLabel="Catalog"
         selectedItemId="item-1"
       />,
     );
 
     expect(screen.getByText('selected')).toBeTruthy();
+  });
+
+  it('uses a fixed dense row height — constant across every row regardless of content', () => {
+    render(
+      <ListView
+        type={CatalogEntityType.Model}
+        items={[makeItem({ id: 'x', name: 'x' })]}
+        query=""
+        ariaLabel="Catalog"
+      />,
+    );
+    expect(
+      screen.getByLabelText('Catalog').getAttribute('data-row-height'),
+    ).toBe('60');
+  });
+
+  it('removes ag-grid header column dividers (no vertical dividers in this view)', () => {
+    render(
+      <ListView
+        type={CatalogEntityType.Model}
+        items={[makeItem({ id: 'x', name: 'x' })]}
+        query=""
+        ariaLabel="Catalog"
+      />,
+    );
+    expect(
+      screen
+        .getByLabelText('Catalog')
+        .getAttribute('data-without-header-borders'),
+    ).toBe('true');
+  });
+
+  it("does not enable ag-grid's built-in alternating row colors (zebra striping is done via CSS override instead, to avoid stacking with it)", () => {
+    render(
+      <ListView
+        type={CatalogEntityType.Model}
+        items={[makeItem({ id: 'x', name: 'x' })]}
+        query=""
+        ariaLabel="Catalog"
+      />,
+    );
+    expect(
+      screen
+        .getByLabelText('Catalog')
+        .getAttribute('data-alternate-odd-row-colors'),
+    ).toBe('false');
   });
 });

@@ -1,4 +1,5 @@
 import type { CodeLanguage } from '../types/code-language';
+import type { CatalogItemCredentials } from './catalog-item-credentials';
 import type { CatalogItemOverview } from './item-overview';
 
 /** A code snippet for one programming language in the API tab. */
@@ -57,6 +58,28 @@ export interface UsageLimitRow {
   value: string;
 }
 
+/** A single progress row in the Limits tab. */
+export interface UsageLimitProgressRow {
+  /** Row label, e.g. "Tokens per day". */
+  label: string;
+  /** Consumed amount for the limit period. */
+  used: number;
+  /** Total allowed amount for the limit period. Ignored when `isUnlimited` is true. */
+  total: number;
+  /** Whether the backend reports this row as effectively unlimited. */
+  isUnlimited?: boolean;
+  /** Preformatted visible value, e.g. "1,200 / 5,000". */
+  valueLabel?: string;
+  /** Accessible label for the progress bar. */
+  ariaLabel?: string;
+}
+
+/** Complete data for the Limits tab. */
+export interface CatalogItemLimits {
+  /** Ordered progress rows to render. */
+  rows: UsageLimitProgressRow[];
+}
+
 /** Complete data for the Pricing tab. */
 export interface CatalogItemPricing {
   /** Token price rows (input, output, cached, batch). */
@@ -101,17 +124,37 @@ export interface CatalogItemTools {
   tools: ToolDefinition[];
 }
 
+/** Complete data for the Content tab (long-form text entities such as prompts). */
+export interface CatalogItemPromptContent {
+  /** The item's full text body, already resolved by the host. */
+  content: string;
+}
+
 /**
  * All tab-specific detail data for a catalog item.
  * A tab is shown only when its corresponding field is non-null.
  */
 export interface CatalogItemTabData {
+  /** Content tab data. When absent the Content tab is hidden. */
+  promptContent?: CatalogItemPromptContent;
   /** Overview tab data. When absent the Overview tab is hidden. */
   overview?: CatalogItemOverview;
   /** Pricing tab data. When absent the Pricing tab is hidden. */
   pricing?: CatalogItemPricing;
+  /** Usage limits tab data. When absent the Limits tab is hidden. */
+  limits?: CatalogItemLimits;
   /** API tab data. When absent the API tab is hidden. */
   api?: CatalogItemApiDetails;
   /** Tools tab data (Toolset only). When absent the Tools tab is hidden. */
   tools?: CatalogItemTools;
+}
+
+/**
+ * Result returned by `onFetchDetails`: tab data plus the item's refreshed
+ * credential status, so the details panel can update sign-in state after a
+ * login/logout without a separate fetch path.
+ */
+export interface CatalogItemDetailsFetchResult extends CatalogItemTabData {
+  /** Credential status for the item's own authentication, refreshed alongside tab data. */
+  credentials?: CatalogItemCredentials;
 }

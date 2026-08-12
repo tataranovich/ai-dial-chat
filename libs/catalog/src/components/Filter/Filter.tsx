@@ -1,6 +1,10 @@
-import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { PrimaryButton } from '@epam/ai-dial-kit';
-import { DialDropdown } from '@epam/ai-dial-ui-kit';
+import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  DIAL_ICON_SIZE,
+  Dropdown,
+  PrimaryButton,
+  GhostButton,
+} from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconFilter } from '@tabler/icons-react';
 import {
   FC,
@@ -11,10 +15,43 @@ import {
   useRef,
   useState,
 } from 'react';
+import { ToolbarTypography } from '../../models/toolbar-props';
 import { getFromLabel } from '../../utils/catalog-filter';
 import styles from './Filter.module.scss';
 
 /** Props for Filter. */
+/** Color overrides for `Filter`, applied as CSS custom properties. */
+export interface FilterColors {
+  /** Trigger button background. Fallback: `#ffffff`. */
+  buttonBackground?: string;
+  /** Trigger button border color while the dropdown has focus. Fallback: `--stroke-info`. */
+  buttonBorderFocus?: string;
+  /** Trigger button border color while a filter is applied. Fallback: `--stroke-info`. */
+  buttonBorderActive?: string;
+  /** Trigger button border color while the dropdown is open. Fallback: `--stroke-info`. */
+  buttonBorderOpen?: string;
+  /** Trigger button label color. Fallback: `--text-primary`. */
+  buttonLabel?: string;
+  /** Funnel icon color in the trigger button. Fallback: `--text-secondary`. */
+  buttonFunnel?: string;
+  /** Chevron icon color in the trigger button. Fallback: `--text-tertiary`. */
+  buttonChevron?: string;
+  /** Dropdown overlay background. Fallback: `#ffffff`. */
+  overlayBackground?: string;
+  /** Row background on hover. Fallback: `--bg-layer-raised`. */
+  rowHoverBackground?: string;
+  /** Background of a checked row. Fallback: `--bg-accent-primary-alpha`. */
+  rowCheckedBackground?: string;
+  /** Row label text color. Fallback: `--text-primary`. */
+  rowLabel?: string;
+  /** Checkbox border color in its unchecked state. Fallback: `--stroke-tertiary`. */
+  checkboxBorder?: string;
+  /** Checkbox background in its unchecked state. Fallback: `#ffffff`. */
+  checkboxBackground?: string;
+  /** Section heading ("Topics") text color. Fallback: `--text-tertiary`. */
+  sectionLabel?: string;
+}
+
 export interface FilterProps {
   /** Set of topic strings currently selected for filtering. Empty = no topic filter. */
   checked: Set<string>;
@@ -26,18 +63,20 @@ export interface FilterProps {
   isMyAppsActive?: boolean;
   /** Called when the "My Apps" toggle changes. */
   onMyAppsChange?: (isActive: boolean) => void;
-  /** Label for the "My Apps" checkbox. Default: 'My Apps'. */
+  /** Label for the "My Apps" checkbox. Default: 'My'. */
   myAppsLabel?: string;
   /** Label for the Topics section heading. Default: 'Topics'. */
   topicsLabel?: string;
-  /** @deprecated No longer applied — section style is set by the DS spec. */
-  topicsSectionClassName?: string;
   /** Button label when nothing is filtered. Default: 'From'. */
   defaultLabel?: string;
   /** Label for the footer Clear button. Default: 'Clear'. */
   clearLabel?: string;
   /** Label for the footer Apply button. Default: 'Apply'. */
   applyLabel?: string;
+  /** Optional typography overrides for the filter button and section label. */
+  typography?: ToolbarTypography;
+  /** Color overrides applied as CSS custom properties. */
+  colors?: FilterColors;
 }
 
 const getFilterButtonLabel = (
@@ -64,24 +103,42 @@ const toggleTopic = (topic: string, checked: Set<string>): Set<string> => {
   return next;
 };
 
-/**
- * Source-filter dropdown with checkbox list, keyboard navigation, and a
- * footer with Clear + Apply buttons (buffered — changes are committed on Apply).
- */
+/** Source-filter dropdown: checkbox list for topics and My Apps toggle, with buffered Clear/Apply controls. */
 export const Filter: FC<FilterProps> = ({
   checked,
   onChange,
   values,
   isMyAppsActive,
   onMyAppsChange,
-  myAppsLabel = 'My Apps',
+  myAppsLabel = 'My',
   topicsLabel = 'Topics',
   defaultLabel = 'From',
   clearLabel = 'Clear',
   applyLabel = 'Apply',
+  typography,
+  colors,
 }) => {
   const isActive = (isMyAppsActive ?? false) || checked.size > 0;
   const [isOpen, setIsOpen] = useState(false);
+
+  /* Applied to the trigger and the overlay separately — the dropdown portals
+   * its overlay, so it is not a DOM descendant of the trigger. */
+  const cssVars = buildCssVars({
+    '--cat-filter-btn-bg': colors?.buttonBackground,
+    '--cat-filter-btn-border-focus': colors?.buttonBorderFocus,
+    '--cat-filter-btn-border-active': colors?.buttonBorderActive,
+    '--cat-filter-btn-border-open': colors?.buttonBorderOpen,
+    '--cat-filter-btn-label': colors?.buttonLabel,
+    '--cat-filter-btn-funnel': colors?.buttonFunnel,
+    '--cat-filter-btn-chevron': colors?.buttonChevron,
+    '--cat-filter-overlay-bg': colors?.overlayBackground,
+    '--cat-filter-row-hover-bg': colors?.rowHoverBackground,
+    '--cat-filter-row-checked-bg': colors?.rowCheckedBackground,
+    '--cat-filter-row-label': colors?.rowLabel,
+    '--cat-filter-checkbox-border': colors?.checkboxBorder,
+    '--cat-filter-checkbox-bg': colors?.checkboxBackground,
+    '--cat-filter-section-label': colors?.sectionLabel,
+  });
 
   const topics = useMemo(
     () => (values != null ? [...values].sort() : []),
@@ -188,7 +245,7 @@ export const Filter: FC<FilterProps> = ({
   };
 
   return (
-    <DialDropdown
+    <Dropdown
       matchReferenceWidth={false}
       placement="bottom-start"
       open={isOpen}
@@ -199,6 +256,7 @@ export const Filter: FC<FilterProps> = ({
           role="menu"
           aria-label={defaultLabel}
           tabIndex={-1}
+          style={cssVars}
           className={mergeClasses(
             'min-w-[360px] rounded-xl p-[6px]',
             styles.overlay,
@@ -223,13 +281,20 @@ export const Filter: FC<FilterProps> = ({
           >
             <span
               className={mergeClasses(
-                'flex size-5 shrink-0 items-center justify-center rounded-[6px]',
+                'flex size-5 shrink-0 items-center justify-center rounded-md',
                 styles.checkbox,
                 pendingMyApps && styles.checkboxChecked,
               )}
               aria-hidden
             />
-            <span className={styles.rowLabel}>{myAppsLabel}</span>
+            <span
+              className={mergeClasses(
+                styles.rowLabel,
+                typography?.filterButtonClassName ?? 'dial-small-semi-text',
+              )}
+            >
+              {myAppsLabel}
+            </span>
           </div>
 
           {topics.length > 0 && (
@@ -242,13 +307,15 @@ export const Filter: FC<FilterProps> = ({
               <div
                 className={mergeClasses(
                   'px-[10px] pb-1 pt-[10px] uppercase tracking-[0.06em]',
+                  typography?.filterSectionLabelClassName ??
+                    'dial-tiny-semi-text',
                   styles.sectionLabel,
                 )}
                 aria-hidden
               >
                 {topicsLabel}
               </div>
-              <div className="max-h-[220px] overflow-y-auto">
+              <div className="flex max-h-[220px] flex-col gap-1 overflow-y-auto">
                 {topics.map((topic, i) => {
                   const isChecked = pendingChecked.has(topic);
                   const idx = i + 1;
@@ -273,7 +340,7 @@ export const Filter: FC<FilterProps> = ({
                     >
                       <span
                         className={mergeClasses(
-                          'flex size-5 shrink-0 items-center justify-center rounded-[6px]',
+                          'flex size-5 shrink-0 items-center justify-center rounded-md',
                           styles.checkbox,
                           isChecked && styles.checkboxChecked,
                         )}
@@ -298,16 +365,8 @@ export const Filter: FC<FilterProps> = ({
               }
             }}
           >
-            <button
-              type="button"
-              className={mergeClasses(
-                'cursor-pointer rounded-lg border-none bg-transparent px-3 py-[7px]',
-                styles.clearBtn,
-              )}
-              onClick={handleClear}
-            >
-              {clearLabel}
-            </button>
+            <GhostButton label={clearLabel} onClick={handleClear} />
+
             <PrimaryButton
               label={applyLabel}
               className="ms-auto"
@@ -323,6 +382,7 @@ export const Filter: FC<FilterProps> = ({
         aria-haspopup="menu"
         aria-expanded={isOpen}
         onKeyDown={handleTriggerKeyDown}
+        style={cssVars}
         className={mergeClasses(
           'flex h-[50px] shrink-0 cursor-pointer items-center gap-[7px] whitespace-nowrap rounded-xl px-[18px]',
           styles.filterBtn,
@@ -331,12 +391,19 @@ export const Filter: FC<FilterProps> = ({
         )}
       >
         <IconFilter
-          size={16}
+          size={DIAL_ICON_SIZE.SM}
           strokeWidth={1.8}
           className={mergeClasses('shrink-0', styles.filterBtnFunnel)}
           aria-hidden
         />
-        <span className={styles.filterBtnLabel}>{buttonLabel}</span>
+        <span
+          className={mergeClasses(
+            styles.filterBtnLabel,
+            typography?.filterButtonClassName ?? 'dial-small-semi-text',
+          )}
+        >
+          {buttonLabel}
+        </span>
         <IconChevronDown
           size={14}
           strokeWidth={2.2}
@@ -348,6 +415,6 @@ export const Filter: FC<FilterProps> = ({
           aria-hidden
         />
       </button>
-    </DialDropdown>
+    </Dropdown>
   );
 };

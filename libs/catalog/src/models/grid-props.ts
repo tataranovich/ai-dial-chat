@@ -10,6 +10,8 @@ export interface CardGridTitles {
   addToFavoritesAriaLabel?: string;
   /** Accessible label for the star button when the item is already starred. Default: `'Remove from favorites'`. */
   removeFromFavoritesAriaLabel?: string;
+  /** Credentials-status badge label shown on cards when signed out. Default: `'LOGGED OUT'`. */
+  credentialsBadgeLoggedOutLabel?: string;
 }
 
 /** Props for `CardGrid`. */
@@ -28,4 +30,8 @@ export interface CardGridProps {
   isLoading?: boolean;
   /** ID of an item to visually mark as selected (border, tint, and checkmark). */
   selectedItemId?: string;
+  /** Skeleton bar/shape color while loading. Defaults to `--cg-skeleton-color`. */
+  skeletonColor?: string;
+  /** Background color of a skeleton placeholder card. Fallback: `--bg-layer-raised`. */
+  skeletonCardBackground?: string;
 }

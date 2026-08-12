@@ -1,10 +1,10 @@
 import type {
   FileMetadataResponseDto,
   ListFilesResponseDto,
-} from '@epam/chat-api-client';
+} from '@epam/ai-dial-chat-api-client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { filesApi } from '../api-client';
-import { getFileMetadata, listFiles } from '../files.api';
+import { downloadFile, getFileMetadata, listFiles } from '../files.api';
 
 const MOCK_RESPONSE: ListFilesResponseDto = {
   bucket: 'my-bucket',
@@ -24,7 +24,7 @@ describe('listFiles', () => {
 
     const result = await listFiles({ bucket: 'my-bucket' });
 
-    expect(spy).toHaveBeenCalledWith({ bucket: 'my-bucket' });
+    expect(spy).toHaveBeenCalledWith({ bucket: 'my-bucket' }, undefined);
     expect(result).toEqual(MOCK_RESPONSE);
   });
 
@@ -41,13 +41,30 @@ describe('listFiles', () => {
       permissions: true,
     });
 
-    expect(spy).toHaveBeenCalledWith({
-      bucket: 'my-bucket',
-      path: 'folder/',
-      limit: 10,
-      recursive: false,
-      permissions: true,
-    });
+    expect(spy).toHaveBeenCalledWith(
+      {
+        bucket: 'my-bucket',
+        path: 'folder/',
+        limit: 10,
+        recursive: false,
+        permissions: true,
+      },
+      undefined,
+    );
+  });
+
+  it('passes an AbortSignal through to the generated client when provided', async () => {
+    const spy = vi
+      .spyOn(filesApi, 'listFiles')
+      .mockResolvedValue(MOCK_RESPONSE);
+    const controller = new AbortController();
+
+    await listFiles({ bucket: 'my-bucket' }, controller.signal);
+
+    expect(spy).toHaveBeenCalledWith(
+      { bucket: 'my-bucket' },
+      { signal: controller.signal },
+    );
   });
 
   it('propagates rejection from the generated client', async () => {
@@ -108,5 +125,41 @@ describe('getFileMetadata', () => {
     await expect(
       getFileMetadata({ bucket: 'my-bucket', path: 'missing.pdf' }),
     ).rejects.toBe(error);
+  });
+});
+
+describe('downloadFile', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('delegates to downloadFileRaw and returns the raw Response', async () => {
+    const rawResponse = new Response(new Blob(['bytes']));
+    vi.spyOn(filesApi, 'downloadFileRaw').mockResolvedValue({
+      raw: rawResponse,
+    } as never);
+
+    const result = await downloadFile('my-bucket', 'reports/file.pdf');
+
+    expect(filesApi.downloadFileRaw).toHaveBeenCalledWith({
+      bucket: 'my-bucket',
+      path: 'reports/file.pdf',
+    });
+    expect(result).toBe(rawResponse);
+  });
+
+  it('passes an AbortSignal through to the generated client when provided', async () => {
+    const rawResponse = new Response(new Blob(['bytes']));
+    vi.spyOn(filesApi, 'downloadFileRaw').mockResolvedValue({
+      raw: rawResponse,
+    } as never);
+    const controller = new AbortController();
+
+    await downloadFile('my-bucket', 'reports/file.pdf', controller.signal);
+
+    expect(filesApi.downloadFileRaw).toHaveBeenCalledWith(
+      { bucket: 'my-bucket', path: 'reports/file.pdf' },
+      { signal: controller.signal },
+    );
   });
 });

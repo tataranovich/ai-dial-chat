@@ -1,5 +1,5 @@
-import type { DialFileManagerTabs } from '@epam/ai-dial-ui-kit';
-import { DialFileManager } from '@epam/ai-dial-ui-kit';
+import type { DialFileManagerTabs } from '@epam/ai-dial-react-file-manager';
+import { DialFileManager } from '@epam/ai-dial-react-file-manager';
 import type { ComponentProps, ReactNode } from 'react';
 
 type DialFileManagerComponentProps = ComponentProps<typeof DialFileManager>;
@@ -34,6 +34,7 @@ export interface DialFileManagerShellLabels {
   hideHiddenFilesLabel: string;
   getSelectionLabel: (count: number) => string;
   uploadFilesLabel: string;
+  uploadArchiveAction: string;
   newFolderLabel: string;
   downloadLabel: string;
   downloadingLabel: string;
@@ -49,6 +50,7 @@ export interface DialFileManagerShellLabels {
   getCopyHeader: (count: number, name?: string) => string;
   getMoveHeader: (count: number, name?: string) => string;
   moveSourceDisabledTooltip: string;
+  folderPickerLoadingTooltip: string;
   folderPickerEmptyStateTitle: string;
   folderPickerEmptyStateDescription: string;
   copyingLabel: string;
@@ -64,9 +66,21 @@ export interface DialFileManagerShellLabels {
   cancelLabel: string;
   getUploadProgressText: (done: number, total: number) => string;
   searchEmptyStateTitle: string;
+  folderEmptyStateTitle: string;
   forbiddenSymbolsTooltip: string;
   emptyStateByTab: Record<DialFileManagerTabs, EmptyStateCopy>;
   treeHeaderByTab: Record<DialFileManagerTabs, string>;
   renameValidationMessages: RenameValidationMessages;
   conflictResolutionPopupOptions: ConflictResolutionPopupOptions;
+  unshareLabel: string;
+  unsharingLabel: string;
+  removeAccessLabel: string;
+  removingAccessLabel: string;
+  infoLabel: string;
+  metadataHeader: string;
+  metadataNameLabel: string;
+  metadataPathLabel: string;
+  metadataModifiedDateLabel: string;
+  metadataSizeLabel: string;
+  metadataAuthorLabel: string;
 }

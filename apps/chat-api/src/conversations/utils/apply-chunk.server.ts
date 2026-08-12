@@ -37,6 +37,7 @@ interface SseDelta {
     attachments?: unknown[];
     stages?: Stage[];
     annotations?: Annotation[];
+    state?: Record<string, unknown>;
   };
 }
 
@@ -48,6 +49,39 @@ interface SseChunk {
   id?: string;
   choices?: SseChoice[];
 }
+
+/** DIAL Core's in-band mid-stream error chunk shape: `{ error: {...} }` instead of `{ choices: [...] }`. */
+export interface DialStreamErrorPayload {
+  message: string;
+  type?: string;
+  code?: string;
+  displayMessage?: string;
+}
+
+interface RawDialStreamError {
+  message?: string;
+  type?: string;
+  code?: string;
+  display_message?: string;
+}
+
+/**
+ * Detects DIAL Core's mid-stream error chunk (no `choices`, just an `error`
+ * object) — e.g. emitted when a QuickApp's downstream tool call can't reach
+ * its upstream server. Returns `null` for a normal delta chunk.
+ */
+export const extractDialStreamError = (
+  rawChunk: unknown,
+): DialStreamErrorPayload | null => {
+  const error = (rawChunk as { error?: RawDialStreamError })?.error;
+  if (!error || typeof error.message !== 'string') return null;
+  return {
+    message: error.message,
+    type: error.type,
+    code: error.code,
+    displayMessage: error.display_message,
+  };
+};
 
 const mergeStageAttachments = (
   existing: StageAttachment[],
@@ -100,7 +134,14 @@ const mergeStages = (existing: Stage[], incoming: Stage[]): Stage[] => {
           : result[idx].attachments,
       };
     } else {
-      result.push(stage);
+      /*
+       * A brand-new stage's first chunk can carry `name: null` (DIAL Core's
+       * "stage opened, name pending" signal, before the name text streams
+       * in) — normalize it the same way the merge branch above already
+       * coalesces `null` to `''`, so a persisted stage never carries a
+       * `null` name if the frontend renders it directly after reload.
+       */
+      result.push({ ...stage, name: stage.name ?? '' });
     }
   }
   return result;
@@ -139,7 +180,9 @@ const mergeAnnotations = (
 /**
  * Applies a single parsed DIAL Core SSE chunk to an assistant message,
  * accumulating text content, attachments, stages, annotations, form_schema,
- * and responseId. Pure function — returns a new message object.
+ * and responseId. `state` is overwritten rather than accumulated, matching
+ * the DIAL stateful-app contract (only the latest value is meaningful).
+ * Pure function — returns a new message object.
  */
 export const applyChunkToMessage = (
   message: ConversationMessageDto,
@@ -154,13 +197,15 @@ export const applyChunkToMessage = (
   const attachments = delta.custom_content?.attachments;
   const stages = delta.custom_content?.stages;
   const annotations = delta.custom_content?.annotations;
+  const state = delta.custom_content?.state;
 
   const hasContentUpdate =
     !!content ||
     !!formSchema ||
     !!attachments?.length ||
     !!stages?.length ||
-    !!annotations?.length;
+    !!annotations?.length ||
+    !!state;
 
   const responseId =
     delta.responseId ?? (hasContentUpdate ? chunk.id : undefined);
@@ -172,7 +217,8 @@ export const applyChunkToMessage = (
     !!formSchema ||
     !!attachments?.length ||
     !!stages?.length ||
-    !!annotations?.length;
+    !!annotations?.length ||
+    !!state;
 
   return {
     ...message,
@@ -200,6 +246,7 @@ export const applyChunkToMessage = (
             annotations,
           ) as never,
         }),
+        ...(state && { state }),
       },
     }),
   };

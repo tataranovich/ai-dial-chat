@@ -1,31 +1,31 @@
-import { DialNotification } from '@epam/ai-dial-ui-kit';
+import { InfoMessageNotification } from '@epam/ai-dial-ui-kit';
 import { FC } from 'react';
 
-/** Props for the model-change status message banner. */
-export interface StatusMessageBubbleProps {
-  /**
-   * Bold prefix text displayed before the description.
-   * @default "Model switched."
-   */
+/** User-visible strings for {@link StatusMessageBubble}. */
+export interface StatusMessageBubbleLabels {
+  /** Bold prefix text displayed before the description. Defaults to `'Model switched.'`. */
   titleText?: string;
   /** Full description text, e.g. "The model has been switched from GPT to Imagen." */
   bodyText: string;
 }
 
-/**
- * Full-width info banner rendered in the conversation timeline when the active
- * deployment changes. Matches Figma node 613:8730 (`section-message`).
- * Does not render message actions, ratings, or a copy button.
- */
+/** Props for the model-change status message banner. */
+export interface StatusMessageBubbleProps {
+  /** User-visible strings. */
+  labels: StatusMessageBubbleLabels;
+}
+
+/** Full-width info banner shown in the conversation timeline when the active deployment changes. */
 export const StatusMessageBubble: FC<StatusMessageBubbleProps> = ({
-  titleText = 'Model switched.',
-  bodyText,
+  labels: { titleText = 'Model switched.', bodyText },
 }) => {
   return (
-    <DialNotification
-      title={titleText}
-      message={bodyText}
-      textClassName="flex-row flex-wrap gap-1"
-    />
+    <div role="status" aria-live="polite">
+      <InfoMessageNotification
+        title={titleText}
+        message={bodyText}
+        textClassName="flex-row flex-wrap gap-1"
+      />
+    </div>
   );
 };

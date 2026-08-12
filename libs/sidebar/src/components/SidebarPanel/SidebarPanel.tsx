@@ -2,7 +2,7 @@ import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
   DialConditionalResizableContainer,
-  DialGhostIconButton,
+  GhostIconButton,
   ResizableContainerSide,
 } from '@epam/ai-dial-ui-kit';
 import { IconX } from '@tabler/icons-react';
@@ -19,6 +19,7 @@ import { SidebarOrientation } from '../../types/orientation';
 import { Header } from '../Header/Header';
 import styles from './SidebarPanel.module.scss';
 
+/** Collapsible, optionally resizable side panel with a header bar, used as the shell for sidebar content. */
 export const SidebarPanel: FC<SidebarPanelProps> = ({
   isOpen,
   orientation,
@@ -26,26 +27,32 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
   leftActions,
   rightActions,
   onClose,
-  ariaLabel,
-  closeLabel,
+  labels,
   children,
-  className,
   styles: panelStyles,
   resizable,
   defaultWidth = 360,
   minWidth = 280,
   maxWidth = 600,
-  headerClassName,
   onResizeStop,
 }) => {
-  const { colors, typography, bodyClassName, cssVars, titleClassName } =
-    panelStyles ?? {};
+  const {
+    colors,
+    typography,
+    bodyClassName,
+    cssVars,
+    titleClassName,
+    className,
+    headerClassName,
+  } = panelStyles ?? {};
 
   const panelCssVars = useMemo(
     () =>
       buildCssVars({
         '--sb-bg': colors?.background,
         '--sb-border': colors?.border,
+        '--sb-text': colors?.text,
+        '--sb-resize-handler': colors?.resizeHandler,
       }),
     [colors],
   );
@@ -64,40 +71,53 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
    * transition is still applied for the open/close animation. */
   const [isResizing, setIsResizing] = useState(false);
 
-  /* Reset to defaultWidth when the panel closes so the next open always starts
-   * at the expected proportional size, not at a previously resized value.
-   * Also clears isResizing so a close that interrupts an in-progress drag
-   * (e.g. programmatic close) doesn't leave the panel stuck at width: 'auto'. */
+  /* Stores the user's manually chosen width together with the defaultWidth it
+   * was set for. On breakpoint crossing the stored width is restored only when
+   * defaultWidth returns to the same value (e.g. desktop→mobile→desktop
+   * brings back the desktop custom size). Cleared on panel close. */
+  const userChosenWidthRef = useRef<{
+    forDefault: number;
+    width: number;
+  } | null>(null);
+
   useEffect(() => {
     if (!isOpen) {
       setAnimationMaxWidth(defaultWidth);
       currentWidthRef.current = defaultWidth;
       setIsResizing(false);
+      userChosenWidthRef.current = null;
+    } else {
+      const stored = userChosenWidthRef.current;
+      const targetWidth =
+        stored?.forDefault === defaultWidth ? stored.width : defaultWidth;
+      setAnimationMaxWidth(targetWidth);
+      currentWidthRef.current = targetWidth;
     }
   }, [isOpen, defaultWidth]);
 
-  const handleResize = useCallback(() => {
+  const handleResize = useCallback((width: number) => {
     setIsResizing(true);
+    setAnimationMaxWidth(width);
   }, []);
 
   const handleResizeStop = useCallback(
     (width: number) => {
+      userChosenWidthRef.current = { forDefault: defaultWidth, width };
       currentWidthRef.current = width;
       setAnimationMaxWidth(width);
       setIsResizing(false);
       onResizeStop?.(width);
     },
-    [onResizeStop],
+    [defaultWidth, onResizeStop],
   );
 
-  let panelWidth: number | 'auto';
-  if (isResizing) {
-    panelWidth = 'auto';
-  } else if (isOpen) {
-    panelWidth = animationMaxWidth || currentWidthRef.current;
-  } else {
-    panelWidth = 0;
-  }
+  const panelWidth = isOpen ? animationMaxWidth || currentWidthRef.current : 0;
+
+  /*
+   * Check if the className contains w-full to allow full-width override.
+   * When w-full is present, don't set inline width so the class takes effect.
+   */
+  const hasFullWidthClass = className?.includes('w-full');
 
   const dividerClass =
     orientation === SidebarOrientation.Right ? 'border-s' : 'border-e';
@@ -105,23 +125,26 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
     orientation === SidebarOrientation.Right
       ? ResizableContainerSide.Left
       : ResizableContainerSide.Right;
-
   const closeButton = onClose ? (
-    <DialGhostIconButton
-      icon={<IconX size={DIAL_ICON_SIZE.LG} stroke={1.5} />}
-      aria-label={closeLabel}
-      tooltipProps={{ tooltip: closeLabel }}
+    <GhostIconButton
+      icon={<IconX size={DIAL_ICON_SIZE.LG} stroke={1.5} aria-hidden />}
+      aria-label={labels.closeLabel}
+      tooltipProps={{ tooltip: labels.closeLabel }}
       onClick={onClose}
     />
   ) : null;
 
   return (
     <div
-      style={{
-        width: panelWidth,
-      }}
+      style={
+        hasFullWidthClass
+          ? undefined
+          : {
+              width: panelWidth,
+            }
+      }
       className={mergeClasses(
-        'h-full flex-shrink-0 overflow-hidden',
+        'h-full flex-shrink-0 gap-3 overflow-hidden shadow-sm',
         !isResizing && 'transition-[width] duration-200 ease-in-out',
         isOpen && 'relative z-50',
         className,
@@ -131,6 +154,9 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
       <DialConditionalResizableContainer
         enabled={(resizable ?? false) && isOpen}
         side={resizableSide}
+        width={
+          isOpen ? animationMaxWidth || currentWidthRef.current : undefined
+        }
         defaultWidth={defaultWidth}
         minWidth={minWidth}
         maxWidth={maxWidth}
@@ -140,12 +166,12 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
       >
         <aside
           role="complementary"
-          aria-label={ariaLabel}
-          aria-hidden={!isOpen}
+          aria-label={labels.ariaLabel}
+          inert={!isOpen}
           style={{ ...cssVars, ...panelCssVars }}
           className={mergeClasses(
             styles.wrapper,
-            'flex h-full w-full flex-col',
+            'flex h-full w-full flex-col gap-3',
             isOpen && styles.appear,
             dividerClass,
             typography?.fontClassName,

@@ -1,15 +1,30 @@
 .toggleButton {
-  color: var(--cs-cg-label, var(--text-secondary, #575f73));
+  color: var(--cs-cg-label, var(--text-secondary, #57647a));
+  width: 100%;
+  justify-content: flex-start !important;
 
   &:hover {
     color: var(--cs-cg-label-hover, var(--text-primary, #161b2d));
   }
 }
 
-.stepsCount {
-  color: var(--cs-cg-steps-count, var(--text-primary, #161b2d));
+.executedLabel {
+  color: var(--cs-cg-label, var(--text-secondary, #57647a));
 }
 
-.contentBox {
-  border-color: var(--cs-cg-border, var(--stroke-secondary, #d1dbea));
+.stepsCount {
+  color: var(--cs-cg-steps-count, var(--text-tertiary, #848e9c));
+  font-variant-numeric: tabular-nums;
+}
+
+.doneIcon {
+  color: var(--cs-cg-done, var(--text-success, #007274));
+}
+
+.failedText {
+  color: var(--cs-cg-failed, var(--text-warning, #7f6300));
+}
+
+.liveName {
+  color: var(--cs-cg-label, var(--text-primary, #161b2d));
 }

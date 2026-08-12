@@ -1,6 +1,13 @@
-import { MIMEType } from '@epam/ai-dial-chat-shared';
+import {
+  MIMEType,
+  triggerAnchorDownload,
+  triggerBlobDownload,
+} from '@epam/ai-dial-chat-shared';
 import type { AttachmentCanvasContent } from '../models/attachment-canvas';
-import { AttachmentContentType } from '../types/attachment-canvas';
+import {
+  AttachmentContentType,
+  AttachmentErrorType,
+} from '../types/attachment-canvas';
 
 /** Returns true if the given canvas content can be downloaded. */
 export const isDownloadable = (content: AttachmentCanvasContent): boolean => {
@@ -9,10 +16,21 @@ export const isDownloadable = (content: AttachmentCanvasContent): boolean => {
     case AttachmentContentType.Markdown:
     case AttachmentContentType.Json:
     case AttachmentContentType.Image:
+    case AttachmentContentType.Audio:
     case AttachmentContentType.Pdf:
+    case AttachmentContentType.Code:
       return true;
+    case AttachmentContentType.Html:
+      return content.url != null;
+    case AttachmentContentType.Visualizer:
+      return false;
     case AttachmentContentType.Unsupported:
       return content.url != null;
+    case AttachmentContentType.Error:
+      return (
+        content.errorType !== AttachmentErrorType.Forbidden &&
+        content.url != null
+      );
   }
 };
 
@@ -28,43 +46,55 @@ export const downloadAttachmentContent = (
   content: AttachmentCanvasContent,
   fileName?: string,
 ): void => {
-  let href: string;
-  let revokeAfter = false;
+  const name = fileName ?? 'attachment';
   switch (content.type) {
     case AttachmentContentType.PlainText:
       if (content.text === '') return;
-      href = URL.createObjectURL(
+      triggerBlobDownload(
         new Blob([content.text], { type: MIMEType.Plain }),
+        name,
       );
-      revokeAfter = true;
-      break;
+      return;
     case AttachmentContentType.Markdown:
       if (content.text === '') return;
-      href = URL.createObjectURL(
+      triggerBlobDownload(
         new Blob([content.text], { type: MIMEType.Markdown }),
+        name,
       );
-      revokeAfter = true;
-      break;
+      return;
     case AttachmentContentType.Json:
-      href = URL.createObjectURL(
+      triggerBlobDownload(
         new Blob([JSON.stringify(content.value, null, 2)], {
           type: MIMEType.JSON,
         }),
+        name,
       );
-      revokeAfter = true;
-      break;
+      return;
     case AttachmentContentType.Image:
+    case AttachmentContentType.Audio:
     case AttachmentContentType.Pdf:
-      href = content.url;
-      break;
+      triggerAnchorDownload(content.url, name);
+      return;
+    case AttachmentContentType.Code:
+      if (content.text === '') return;
+      triggerBlobDownload(
+        new Blob([content.text], { type: MIMEType.Plain }),
+        name,
+      );
+      return;
+    case AttachmentContentType.Html:
+      if (content.url == null) return;
+      triggerAnchorDownload(content.url, name);
+      return;
+    case AttachmentContentType.Visualizer:
+      return;
     case AttachmentContentType.Unsupported:
       if (content.url == null) return;
-      href = content.url;
-      break;
+      triggerAnchorDownload(content.url, name);
+      return;
+    case AttachmentContentType.Error:
+      if (!isDownloadable(content) || content.url == null) return;
+      triggerAnchorDownload(content.url, name);
+      return;
   }
-  const anchor = document.createElement('a');
-  anchor.href = href;
-  anchor.download = fileName ?? 'attachment';
-  anchor.click();
-  if (revokeAfter) URL.revokeObjectURL(href);
 };

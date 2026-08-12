@@ -1,31 +1,31 @@
 import { CatalogEntityType, type CatalogItem } from '@epam/ai-dial-catalog';
+import { DeploymentIcon, mergeClasses } from '@epam/ai-dial-chat-shared';
+import { SearchBar } from '@epam/ai-dial-kit';
 import {
-  DeploymentIcon,
+  DIAL_ICON_SIZE,
+  GhostButton,
+  GhostIconButton,
+  DialEllipsisTooltip,
   Highlight,
-  mergeClasses,
-} from '@epam/ai-dial-chat-shared';
-import { GhostButton, GhostIconButton, SearchBar } from '@epam/ai-dial-kit';
-import { DialEllipsisTooltip, DIAL_ICON_SIZE } from '@epam/ai-dial-ui-kit';
+} from '@epam/ai-dial-ui-kit';
 import { IconCheck, IconStar, IconStarFilled } from '@tabler/icons-react';
 import {
   memo,
-  type FC,
-  type KeyboardEvent,
-  type ReactNode,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type FC,
+  type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 import styles from './DeploymentSelectorPanel.module.scss';
 
 /** Localizable string labels for `DeploymentSelectorPanel`. */
 export interface DeploymentSelectorLabels {
-  /** Placeholder for the search input. Default: `'Search models, agents…'`. */
+  /** Placeholder and accessible label for the search input. Default: `'Search models, agents…'`. */
   searchPlaceholder?: string;
-  /** Accessible label for the search input. Default: `'Search models and agents'`. */
-  searchAriaLabel?: string;
   /** Heading above the favorites list. Default: `'Favorites'`. */
   favoritesLabel?: string;
   /** Hint shown when Favorites is empty. Default: `'Star a model or agent to pin it here.'`. */
@@ -54,7 +54,7 @@ interface Props {
   /** Called with the selected item's id. The panel closes itself after calling this. */
   onSelect: (id: string) => void;
   /** Called when the star button is clicked to add/remove an item from favorites. */
-  onToggleFavorite: (id: string, isFavorite: boolean) => void;
+  onToggleFavorite: (id: string, isFavorite: boolean) => Promise<void> | void;
   /** Called when the user clicks "Browse". */
   onBrowseCatalog?: () => void;
   /** Called by the panel to request that the parent popover close. */
@@ -63,10 +63,8 @@ interface Props {
   labels?: DeploymentSelectorLabels;
 }
 
-// Matches the conversation panel's group-header color (.groupHeader in
-// ConversationPanel.module.scss: text-tertiary at 55% opacity).
 const SECTION_HEADING_CLASS_NAME =
-  'dial-tiny-semi-text px-3 pb-0.5 pt-2 uppercase tracking-wider text-tertiary opacity-[0.55]';
+  'dial-tiny-semi-text px-3 pb-0.5 pt-2 uppercase text-tertiary';
 
 // Must match the .rowLeaving exit-animation duration in DeploymentSelectorPanel.module.scss.
 const ROW_LEAVE_ANIMATION_MS = 180;
@@ -95,7 +93,6 @@ const DeploymentSelectorPanel: FC<Props> = ({
 }) => {
   const {
     searchPlaceholder = 'Search models, agents…',
-    searchAriaLabel = 'Search models and agents',
     favoritesLabel = 'Favorites',
     emptyHint = 'Star a model or agent to pin it here.',
     browseCatalogLabel = 'Browse',
@@ -123,8 +120,7 @@ const DeploymentSelectorPanel: FC<Props> = ({
       favorites.filter(
         (f) =>
           f.type === CatalogEntityType.Model ||
-          f.type === CatalogEntityType.Agent ||
-          f.type === CatalogEntityType.Application,
+          f.type === CatalogEntityType.Agent,
       ),
     [favorites],
   );
@@ -158,6 +154,17 @@ const DeploymentSelectorPanel: FC<Props> = ({
       );
     }
   }, [filteredFavorites, showCurrentlySelected]);
+
+  /*
+   * Panel is remounted fresh each time the popover opens, so without this the
+   * scrollable list always starts scrolled to the top even when the selected
+   * item sits further down, making it look like the pick didn't take effect.
+   */
+  const selectedRowRef = useRef<HTMLLIElement>(null);
+
+  useEffect(() => {
+    selectedRowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, []);
 
   const handleSelect = (item: CatalogItem) => {
     onSelect(item.id);
@@ -204,6 +211,7 @@ const DeploymentSelectorPanel: FC<Props> = ({
     return (
       <li
         key={item.id}
+        ref={isSelected ? selectedRowRef : undefined}
         className={isLeaving ? styles.rowLeaving : styles.rowEnter}
       >
         <div
@@ -211,9 +219,9 @@ const DeploymentSelectorPanel: FC<Props> = ({
           tabIndex={0}
           className={mergeClasses(
             'flex cursor-pointer items-center gap-2 rounded-lg border px-2 py-1.5',
-            'transition-colors hover:bg-layer-2',
+            'transition-colors hover:bg-layer-sunken',
             isSelected
-              ? 'border-accent-primary bg-accent-primary-alpha'
+              ? 'border-info bg-accent-primary-alpha'
               : 'border-transparent',
           )}
           onClick={() => handleSelect(item)}
@@ -246,7 +254,7 @@ const DeploymentSelectorPanel: FC<Props> = ({
           {isSelected && (
             <IconCheck
               size={DIAL_ICON_SIZE.SM}
-              className="shrink-0 text-accent-primary"
+              className="shrink-0 text-accent"
               aria-hidden
             />
           )}
@@ -255,11 +263,10 @@ const DeploymentSelectorPanel: FC<Props> = ({
               icon={
                 <IconStarFilled
                   size={DIAL_ICON_SIZE.SM}
-                  className="text-[var(--text-warning-icon,#eec840)]"
+                  className="text-warning-icon"
                 />
               }
               aria-label={removeFromFavoritesLabel}
-              className="flex-shrink-0"
               onClick={(e) => {
                 e.stopPropagation();
                 handleToggleFavorite(item.id, false);
@@ -269,7 +276,6 @@ const DeploymentSelectorPanel: FC<Props> = ({
             <GhostIconButton
               icon={<IconStar size={DIAL_ICON_SIZE.SM} />}
               aria-label={addToFavoritesLabel}
-              className="flex-shrink-0"
               onClick={(e) => {
                 e.stopPropagation();
                 handleToggleFavorite(item.id, true);
@@ -284,16 +290,20 @@ const DeploymentSelectorPanel: FC<Props> = ({
   return (
     <div className="flex min-w-[240px] flex-col">
       {/* Sticky search header */}
-      <div className="sticky top-0 z-10 bg-layer-0 px-1 pb-3 pt-2">
+      <div className="sticky top-0 z-10 bg-layer-raised px-1 pb-3 pt-2">
         <SearchBar
           value={query}
-          placeholder={searchPlaceholder}
-          ariaLabel={searchAriaLabel}
+          labels={{
+            placeholder: searchPlaceholder,
+            ariaLabel: searchPlaceholder,
+          }}
           onChange={setQuery}
-          containerClassName={mergeClasses(
-            styles.searchBar,
-            '!bg-transparent !rounded-full !shadow-none',
-          )}
+          styles={{
+            containerClassName: mergeClasses(
+              styles.searchBar,
+              '!bg-transparent !rounded-full !shadow-none',
+            ),
+          }}
         />
       </div>
 
@@ -316,7 +326,7 @@ const DeploymentSelectorPanel: FC<Props> = ({
           )}
 
           {filteredFavorites.length > 0 ? (
-            <ul className="px-1 pb-1">
+            <ul className="flex flex-col gap-1 px-1 pb-1">
               {filteredFavorites.map((item) => renderRow(item, true))}
             </ul>
           ) : (

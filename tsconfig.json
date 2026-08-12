@@ -50,6 +50,30 @@
     },
     {
       "path": "./libs/deployment-creation-form"
+    },
+    {
+      "path": "./libs/share"
+    },
+    {
+      "path": "./libs/chat-overlay"
+    },
+    {
+      "path": "./apps/chat-overlay-sandbox"
+    },
+    {
+      "path": "./libs/scheduled-tasks"
+    },
+    {
+      "path": "./libs/publish-panel"
+    },
+    {
+      "path": "./libs/quotations"
+    },
+    {
+      "path": "./libs/builder-form"
+    },
+    {
+      "path": "./libs/prompt-editor"
     }
   ]
 }

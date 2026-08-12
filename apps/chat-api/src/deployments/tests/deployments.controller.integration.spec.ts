@@ -61,6 +61,7 @@ async function buildApp(service: unknown): Promise<INestApplication> {
     }),
   );
   await app.init();
+  await app.listen(0, '127.0.0.1');
   return app;
 }
 
@@ -95,10 +96,12 @@ describe('DeploymentsController (integration)', () => {
         .expect(200);
 
       expect(res.body).toEqual(mockResponse);
+      expect(res.headers['cache-control']).toBe('private, max-age=30');
       expect(service.listDeployments).toHaveBeenCalledWith(
         TEST_USER.sub,
         TEST_USER.at,
         TEST_USER.bucket,
+        undefined,
         undefined,
       );
     });
@@ -123,6 +126,27 @@ describe('DeploymentsController (integration)', () => {
 
       expect(res.body.deployments[0].owner).toBe('users/alice@example.com');
       expect(res.body.deployments[0].isMy).toBe(true);
+    });
+
+    it('includes sharedWithMe field when service returns it', async () => {
+      const enrichedResponse: DeploymentsResponseDto = {
+        deployments: [
+          {
+            id: 'applications/other-bucket/their-app',
+            displayName: 'Their App',
+            type: 'application',
+            isMy: false,
+            sharedWithMe: true,
+          },
+        ],
+      };
+      service.listDeployments.mockResolvedValue(enrichedResponse);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/deployments')
+        .expect(200);
+
+      expect(res.body.deployments[0].sharedWithMe).toBe(true);
     });
 
     it('includes applicationFolder when service returns it for a nested application', async () => {
@@ -168,7 +192,29 @@ describe('DeploymentsController (integration)', () => {
         TEST_USER.at,
         TEST_USER.bucket,
         ['chat'],
+        undefined,
       );
+    });
+
+    it('passes refresh=true to service', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/deployments?refresh=true')
+        .expect(200);
+
+      expect(res.headers['cache-control']).toBe('private, no-store');
+      expect(service.listDeployments).toHaveBeenCalledWith(
+        TEST_USER.sub,
+        TEST_USER.at,
+        TEST_USER.bucket,
+        undefined,
+        true,
+      );
+    });
+
+    it('returns 400 for invalid refresh value', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments?refresh=maybe')
+        .expect(400);
     });
 
     it('returns 400 with invalid interface_type', async () => {
@@ -200,6 +246,7 @@ describe('DeploymentsController (integration)', () => {
         TEST_USER.at,
         TEST_USER.bucket,
         ['embedding'],
+        undefined,
       );
     });
 
@@ -218,6 +265,42 @@ describe('DeploymentsController (integration)', () => {
         new ServiceUnavailableException(),
       );
       await request(app.getHttpServer()).get('/api/v1/deployments').expect(503);
+    });
+  });
+
+  describe('deployment path parameter validation', () => {
+    it.each([
+      ['configuration', 'getDeploymentConfiguration'],
+      ['limits', 'getDeploymentLimits'],
+      ['details', 'getDeploymentDetails'],
+    ] as const)(
+      'returns 400 for traversal before calling the %s service',
+      async (suffix, serviceMethod) => {
+        const response = await request(app.getHttpServer())
+          .get(`/api/v1/deployments/..%2Fetc%2Fpasswd/${suffix}`)
+          .expect(400);
+
+        expect(response.body.message).toContain(
+          'deployment must not contain empty, dot, dot-dot, or control-character path segments',
+        );
+        expect(service[serviceMethod]).not.toHaveBeenCalled();
+      },
+    );
+
+    it('returns 400 for an empty decoded path segment', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/deployments/applications%2F%2Fname/limits')
+        .expect(400);
+
+      expect(service.getDeploymentLimits).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a deployment identifier longer than 2048 characters', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/deployments/${'a'.repeat(2049)}/limits`)
+        .expect(400);
+
+      expect(service.getDeploymentLimits).not.toHaveBeenCalled();
     });
   });
 
@@ -296,6 +379,21 @@ describe('DeploymentsController (integration)', () => {
       );
     });
 
+    it('accepts encoded spaces and reserved characters in a deployment name', async () => {
+      service.getDeploymentLimits.mockResolvedValue(mockLimits);
+
+      await request(app.getHttpServer())
+        .get(
+          '/api/v1/deployments/applications%2Fbucket%2FMy%20App%20%231%2A/limits',
+        )
+        .expect(200);
+
+      expect(service.getDeploymentLimits).toHaveBeenCalledWith(
+        'applications/bucket/My App #1*',
+        TEST_USER.at,
+      );
+    });
+
     it('returns 404 when limits not found', async () => {
       const { NotFoundException } = await import('@nestjs/common');
       service.getDeploymentLimits.mockRejectedValue(new NotFoundException());
@@ -333,6 +431,7 @@ describe('DeploymentsController (integration)', () => {
 
       expect(res.body).toEqual(mockDetails);
       expect(service.getDeploymentDetails).toHaveBeenCalledWith(
+        TEST_USER.sub,
         'gpt-4o',
         TEST_USER.at,
       );

@@ -27,7 +27,12 @@
                     "version": {
                       "type": "string",
                       "example": "1.0.0",
-                      "description": "Application version"
+                      "description": "Application version. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Matches the appVersion reported by the client config endpoint."
+                    },
+                    "buildId": {
+                      "type": "string",
+                      "example": "3f9a1c2b8e7d",
+                      "description": "Stable identifier for the running deployment, derived from a hash of the served frontend build. Changes when a new deployment replaces the frontend static assets, letting long-lived clients detect that a reload will pick up a newer build."
                     }
                   }
                 }
@@ -127,6 +132,9 @@
         "operationId": "logout",
         "parameters": [],
         "responses": {
+          "200": {
+            "description": "No-op success for a header-authenticated caller (no session to clear)"
+          },
           "302": {
             "description": "Redirect after logout"
           }
@@ -155,6 +163,9 @@
           }
         },
         "security": [
+          {
+            "bearer": []
+          },
           {
             "session": []
           }
@@ -370,10 +381,128 @@
         "tags": ["applications"]
       }
     },
+    "/api/v1/applications/{applicationName}": {
+      "patch": {
+        "description": "Updates the General-step fields (name, description, iconUrl, topics) of an existing application for the authenticated session user, by proxying DIAL Core. Settings-step configuration (application_properties, version) is preserved untouched. Invalidates the applications and deployments list caches on success.",
+        "operationId": "updateApplication",
+        "parameters": [
+          {
+            "name": "applicationName",
+            "required": true,
+            "in": "path",
+            "description": "Application identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
+              "example": "my-app__1.0",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateApplicationBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Application updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedApplicationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid application name or body fields"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission"
+          },
+          "404": {
+            "description": "Application not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Update an application",
+        "tags": ["applications"]
+      },
+      "delete": {
+        "description": "Deletes an application for the authenticated session user by proxying DIAL Core. Invalidates the applications list cache on success.",
+        "operationId": "deleteApplication",
+        "parameters": [
+          {
+            "name": "applicationName",
+            "required": true,
+            "in": "path",
+            "description": "Application identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
+              "example": "my-app__1.0",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Application deleted successfully"
+          },
+          "400": {
+            "description": "Invalid application name"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission"
+          },
+          "404": {
+            "description": "Application not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Delete an application",
+        "tags": ["applications"]
+      }
+    },
     "/api/v1/deployments": {
       "get": {
         "operationId": "listDeployments",
         "parameters": [
+          {
+            "name": "refresh",
+            "required": false,
+            "in": "query",
+            "description": "Bypass the short server-side deployments list cache and refresh from DIAL Core",
+            "schema": {
+              "type": "boolean"
+            }
+          },
           {
             "name": "interface_type",
             "required": false,
@@ -431,7 +560,10 @@
             "name": "deployment",
             "required": true,
             "in": "path",
+            "description": "DIAL deployment identifier. Slash-separated identifiers must be percent-encoded as one request path parameter.",
             "schema": {
+              "maxLength": 2048,
+              "example": "applications/bucket/My App",
               "type": "string"
             }
           }
@@ -446,6 +578,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid deployment identifier"
           },
           "401": {
             "description": "Unauthorized"
@@ -473,7 +608,10 @@
             "name": "deployment",
             "required": true,
             "in": "path",
+            "description": "DIAL deployment identifier. Slash-separated identifiers must be percent-encoded as one request path parameter.",
             "schema": {
+              "maxLength": 2048,
+              "example": "applications/bucket/My App",
               "type": "string"
             }
           }
@@ -488,6 +626,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid deployment identifier"
           },
           "401": {
             "description": "Not authenticated — valid session cookie required"
@@ -517,14 +658,17 @@
     },
     "/api/v1/deployments/{deployment}/details": {
       "get": {
-        "description": "Fetches the full per-entity payload for a model, application, or toolset by id (dispatching to DIAL Core's getModel/getApplication/getToolset based on the resolved deployment type) and maps it into a frontend-safe DeploymentDetailsDto. Results are cached server-side for 60 seconds.",
+        "description": "Fetches the full per-entity payload for a model, application, or toolset by id (dispatching to DIAL Core's getModel/getApplication/getToolset based on the resolved deployment type) and maps it into a frontend-safe DeploymentDetailsDto. Results are cached server-side for 60 seconds per user; the response carries no client-facing Cache-Control so a browser never serves a stale copy of another user's cache window or of credentials that changed since the last fetch.",
         "operationId": "getDeploymentDetails",
         "parameters": [
           {
             "name": "deployment",
             "required": true,
             "in": "path",
+            "description": "DIAL deployment identifier. Slash-separated identifiers must be percent-encoded as one request path parameter.",
             "schema": {
+              "maxLength": 2048,
+              "example": "applications/bucket/My App",
               "type": "string"
             }
           }
@@ -539,6 +683,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid deployment identifier"
           },
           "401": {
             "description": "Not authenticated — valid session cookie required"
@@ -670,6 +817,35 @@
         "tags": ["user-config"]
       }
     },
+    "/api/v1/user-config/prompts": {
+      "patch": {
+        "operationId": "updateInstalledPrompt",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateInstalledPromptDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Prompt favorite state updated"
+          },
+          "400": {
+            "description": "Missing or invalid body"
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "summary": "Add or remove a prompt from favorites",
+        "tags": ["user-config"]
+      }
+    },
     "/api/v1/user-config/deployments/selected": {
       "patch": {
         "operationId": "updateSelectedDeployment",
@@ -793,7 +969,7 @@
     },
     "/api/v1/toolsets": {
       "get": {
-        "description": "Returns the list of DIAL Core toolsets visible to the authenticated session user. Proxies GET /openai/toolsets using the caller's session access token. Results are cached server-side for 30 seconds per user.",
+        "description": "Returns the list of DIAL Core toolsets visible to the authenticated session user. Proxies GET /openai/toolsets using the caller's session access token. Results are cached server-side for 30 seconds per user; the response carries no client-facing Cache-Control so a browser never serves a stale copy across a login/logout that already invalidated that cache.",
         "operationId": "listToolsets",
         "parameters": [],
         "responses": {
@@ -882,7 +1058,7 @@
     },
     "/api/v1/toolsets/{toolsetName}": {
       "get": {
-        "description": "Returns a single DIAL Core toolset by name for the authenticated session user. Proxies GET /openai/toolsets/{toolset_name} using the caller's session access token. Results are cached server-side for 60 seconds per user per toolset.",
+        "description": "Returns a single DIAL Core toolset by name for the authenticated session user. Proxies GET /openai/toolsets/{toolset_name} using the caller's session access token. Results are cached server-side for 60 seconds per user per toolset; the response carries no client-facing Cache-Control so a browser never serves a stale copy across a login/logout that already invalidated that cache.",
         "operationId": "getToolset",
         "parameters": [
           {
@@ -891,7 +1067,7 @@
             "in": "path",
             "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
             "schema": {
-              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
               "example": "my-toolset",
               "type": "string"
             }
@@ -946,7 +1122,7 @@
             "in": "path",
             "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
             "schema": {
-              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
               "example": "my-toolset",
               "type": "string"
             }
@@ -1008,7 +1184,7 @@
             "in": "path",
             "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
             "schema": {
-              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
               "example": "my-toolset",
               "type": "string"
             }
@@ -1055,7 +1231,7 @@
             "in": "path",
             "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
             "schema": {
-              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
               "example": "my-toolset",
               "type": "string"
             }
@@ -1107,7 +1283,7 @@
     },
     "/api/v1/toolsets/{toolsetName}/logout": {
       "post": {
-        "description": "Revokes a toolset's credentials by proxying DIAL Core (POST /v1/ops/toolset/signout).",
+        "description": "Revokes a toolset's credentials by proxying DIAL Core (POST /v1/ops/toolset/signout). When the request body omits `authenticationType`, the toolset's own stored authentication type is looked up first (same lookup as `GET /api/v1/toolsets/{toolsetName}`).",
         "operationId": "logoutToolset",
         "parameters": [
           {
@@ -1116,7 +1292,7 @@
             "in": "path",
             "description": "Toolset identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
             "schema": {
-              "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$",
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
               "example": "my-toolset",
               "type": "string"
             }
@@ -1151,6 +1327,9 @@
           },
           "403": {
             "description": "Caller lacks permission"
+          },
+          "404": {
+            "description": "Toolset not found (only reachable when `authenticationType` is omitted and the lookup fails)"
           },
           "429": {
             "description": "Rate limit exceeded"
@@ -1206,6 +1385,324 @@
         },
         "summary": "Send a chat completion request to DIAL Core",
         "tags": ["chat"]
+      }
+    },
+    "/api/v1/client-channel/subscribe": {
+      "post": {
+        "description": "Opens an SSE stream proxying DIAL Core's client-channel RPC events (e.g. `toolset/signin`) for the authenticated session. Relays the upstream stream without buffering and echoes the assigned X-DIAL-CLIENT-CHANNEL-ID response header. Send the same header on reconnect to resume an existing channel.",
+        "operationId": "subscribeClientChannel",
+        "parameters": [
+          {
+            "name": "x-dial-client-channel-id",
+            "in": "header",
+            "description": "Existing channel id — send only when reconnecting.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of client-channel RPC events"
+          },
+          "400": {
+            "description": "The reconnect channel id header is present but invalid"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The liveChatInteraction feature is not enabled for this user"
+          },
+          "502": {
+            "description": "DIAL Core rejected or failed the subscription"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable"
+          }
+        },
+        "summary": "Subscribe to the DIAL Core client channel",
+        "tags": ["client-channel"]
+      }
+    },
+    "/api/v1/client-channel/report": {
+      "post": {
+        "description": "Forwards a `{ id, result }` RPC response (e.g. a toolset sign-in success/denial) to DIAL Core for the given channel, so Core can resume or terminate the blocked tool call.",
+        "operationId": "reportClientChannel",
+        "parameters": [
+          {
+            "name": "x-dial-client-channel-id",
+            "in": "header",
+            "description": "The active client channel id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportClientChannelDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Report accepted"
+          },
+          "400": {
+            "description": "Missing/invalid channel id header or malformed body"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The liveChatInteraction feature is not enabled for this user"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          }
+        },
+        "summary": "Report an RPC response on the client channel",
+        "tags": ["client-channel"]
+      }
+    },
+    "/api/v1/client-channel/unsubscribe": {
+      "post": {
+        "description": "Closes the given client channel on DIAL Core. Treats an already-gone channel (404) as idempotent success.",
+        "operationId": "unsubscribeClientChannel",
+        "parameters": [
+          {
+            "name": "x-dial-client-channel-id",
+            "in": "header",
+            "description": "The active client channel id to close.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unsubscribed successfully"
+          },
+          "400": {
+            "description": "Missing or invalid channel id header"
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "summary": "Unsubscribe from the client channel",
+        "tags": ["client-channel"]
+      }
+    },
+    "/api/v1/external-services/{appId}/{serviceId}": {
+      "get": {
+        "description": "Returns an application external service's display metadata and authentication type by proxying DIAL Core (GET /v1/applications/{appId}/external-services/{id}) using the caller's session access token.",
+        "operationId": "getExternalService",
+        "parameters": [
+          {
+            "name": "appId",
+            "required": true,
+            "in": "path",
+            "description": "Application identifier the external service belongs to. Slash-separated paths must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
+              "example": "applications%2Fpublic%2Ffinhub-via-openapi__1.0.0",
+              "type": "string"
+            }
+          },
+          {
+            "name": "serviceId",
+            "required": true,
+            "in": "path",
+            "description": "The external service id defined in the application's `external_services` config.",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
+              "example": "finhub-api2",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved external-service metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetExternalServiceResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid appId or serviceId — disallowed characters"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission, or the liveChatInteraction feature is not enabled"
+          },
+          "404": {
+            "description": "External service not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          }
+        },
+        "summary": "Get application external-service metadata",
+        "tags": ["external-services"]
+      }
+    },
+    "/api/v1/external-services/{appId}/{serviceId}/signin": {
+      "post": {
+        "description": "Submits API key or OAuth authorization-code credentials for an application external service by proxying DIAL Core (POST /v1/ops/external-service/signin). Credential payloads are never logged.",
+        "operationId": "signInExternalService",
+        "parameters": [
+          {
+            "name": "appId",
+            "required": true,
+            "in": "path",
+            "description": "Application identifier the external service belongs to. Slash-separated paths must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
+              "example": "applications%2Fpublic%2Ffinhub-via-openapi__1.0.0",
+              "type": "string"
+            }
+          },
+          {
+            "name": "serviceId",
+            "required": true,
+            "in": "path",
+            "description": "The external service id defined in the application's `external_services` config.",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
+              "example": "finhub-api2",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalServiceSigninBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credentials submitted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalServiceAuthResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path segments or body"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission, or the liveChatInteraction feature is not enabled"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response or rejected sign-in"
+          }
+        },
+        "summary": "Submit external-service credentials",
+        "tags": ["external-services"]
+      }
+    },
+    "/api/v1/external-services/{appId}/{serviceId}/signout": {
+      "post": {
+        "description": "Revokes an application external service's credentials by proxying DIAL Core (POST /v1/ops/external-service/signout). A Core 404 (nothing to revoke) is treated as idempotent success.",
+        "operationId": "signOutExternalService",
+        "parameters": [
+          {
+            "name": "appId",
+            "required": true,
+            "in": "path",
+            "description": "Application identifier the external service belongs to. Slash-separated paths must be percent-encoded in the URL (%2F).",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
+              "example": "applications%2Fpublic%2Ffinhub-via-openapi__1.0.0",
+              "type": "string"
+            }
+          },
+          {
+            "name": "serviceId",
+            "required": true,
+            "in": "path",
+            "description": "The external service id defined in the application's `external_services` config.",
+            "schema": {
+              "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
+              "example": "finhub-api2",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalServiceLogoutBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credentials revoked successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalServiceAuthResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path segments or body"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks permission, or the liveChatInteraction feature is not enabled"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          }
+        },
+        "summary": "Revoke external-service credentials",
+        "tags": ["external-services"]
       }
     },
     "/api/v1/conversations": {
@@ -1461,16 +1958,6 @@
               "example": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9",
               "type": "string"
             }
-          },
-          {
-            "name": "path",
-            "required": false,
-            "in": "query",
-            "description": "DIAL Core subfolder path to scope the listing. Omit or pass an empty string to list all conversations from the bucket root (\"My Files\").",
-            "schema": {
-              "example": "work/project-x",
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -1698,7 +2185,10 @@
             "description": "Missing or invalid path, or conversation has no content"
           },
           "401": {
-            "description": "Not authenticated"
+            "description": "Not authenticated, or DIAL Core rejected the calling user’s token for the configured utility model"
+          },
+          "403": {
+            "description": "Not authorized to use the configured utility model"
           },
           "404": {
             "description": "Conversation not found"
@@ -1855,6 +2345,613 @@
         "tags": ["conversations"]
       }
     },
+    "/api/v1/conversations/viewed": {
+      "patch": {
+        "description": "Idempotently records that the authenticated user has opened this conversation. Used to clear the unread indicator for scheduler-created conversations.",
+        "operationId": "markConversationViewed",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Conversation path (uuid__name). May contain slashes.",
+            "schema": {
+              "example": "gpt-4o__My Conversation__UUID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Conversation marked as viewed"
+          },
+          "400": {
+            "description": "Missing or invalid path"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Mark a conversation as viewed",
+        "tags": ["conversations"]
+      }
+    },
+    "/api/v1/conversations/publish": {
+      "post": {
+        "description": "Publishes an owned conversation to a folder under the Organization/public bucket by proxying DIAL Core's Publication API (`createPublication`). This endpoint keeps no publish records of its own — DIAL Core is the sole source of truth. The conversation title is re-fetched server-side and used as the publication name.",
+        "operationId": "publishConversation",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Conversation path (uuid__name). May contain slashes.",
+            "schema": {
+              "example": "gpt-4o__My Conversation__UUID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishConversationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Conversation published successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishConversationResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid path or folderPath"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks write access to the target folder"
+          },
+          "404": {
+            "description": "Conversation not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Publish a conversation to an Organization folder",
+        "tags": ["conversations"]
+      }
+    },
+    "/api/v1/conversations/publish-history": {
+      "get": {
+        "description": "Returns every folder this conversation has been published to, most recent first, derived from DIAL Core's Publication API (`getPublications`) — never from chat-api-side storage.",
+        "operationId": "getConversationPublishHistory",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Conversation path (uuid__name). May contain slashes.",
+            "schema": {
+              "example": "gpt-4o__My Conversation__UUID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publish history for the conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublishConversationResultDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid path"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Get publish history for a conversation",
+        "tags": ["conversations"]
+      }
+    },
+    "/api/v1/prompts": {
+      "get": {
+        "description": "Returns all personal prompts and the folder hierarchy.",
+        "operationId": "listPrompts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Prompts returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptListResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "List personal prompts",
+        "tags": ["prompts"]
+      },
+      "post": {
+        "operationId": "createPrompt",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePromptDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Prompt created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "409": {
+            "description": "Prompt already exists at that path"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Create a personal prompt",
+        "tags": ["prompts"]
+      },
+      "put": {
+        "operationId": "updatePrompt",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Prompt path to update",
+            "schema": {
+              "maxLength": 2048,
+              "example": "Work/AI/my-prompt",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePromptDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Prompt updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Prompt not found"
+          },
+          "409": {
+            "description": "Rename target already exists"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Update a personal prompt",
+        "tags": ["prompts"]
+      },
+      "delete": {
+        "operationId": "deletePrompt",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Prompt path to delete",
+            "schema": {
+              "maxLength": 2048,
+              "example": "Work/AI/my-prompt",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Prompt deleted"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Prompt not found"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Delete a personal prompt",
+        "tags": ["prompts"]
+      }
+    },
+    "/api/v1/prompts/item": {
+      "get": {
+        "operationId": "getPrompt",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Prompt path within the prompts namespace",
+            "schema": {
+              "maxLength": 2048,
+              "example": "Work/AI/my-prompt",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prompt returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Prompt not found"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Get a personal prompt",
+        "tags": ["prompts"]
+      }
+    },
+    "/api/v1/prompts/public": {
+      "get": {
+        "operationId": "listPublicPrompts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Prompts returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicPromptListResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "List organisation prompts",
+        "tags": ["prompts"]
+      }
+    },
+    "/api/v1/prompts/public/item": {
+      "get": {
+        "operationId": "getPublicPrompt",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Prompt path within the prompts namespace",
+            "schema": {
+              "maxLength": 2048,
+              "example": "Work/AI/my-prompt",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prompt returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Prompt not found"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Get an organisation prompt",
+        "tags": ["prompts"]
+      }
+    },
+    "/api/v1/prompts/folders": {
+      "post": {
+        "operationId": "createPromptFolder",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePromptFolderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Folder created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptFolderResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "409": {
+            "description": "Folder already exists"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Create a prompt folder",
+        "tags": ["prompts"]
+      },
+      "put": {
+        "operationId": "renamePromptFolder",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Folder path to rename",
+            "schema": {
+              "maxLength": 2048,
+              "example": "Work/AI/my-prompt",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenamePromptFolderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Folder renamed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptFolderResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Folder not found"
+          },
+          "409": {
+            "description": "Target folder already exists"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Rename a prompt folder",
+        "tags": ["prompts"]
+      },
+      "delete": {
+        "operationId": "deletePromptFolder",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Folder path to delete",
+            "schema": {
+              "maxLength": 2048,
+              "example": "Work/AI/my-prompt",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Folder deleted"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Folder not found"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Delete a prompt folder",
+        "tags": ["prompts"]
+      }
+    },
+    "/api/v1/prompts/move": {
+      "post": {
+        "operationId": "movePrompt",
+        "parameters": [
+          {
+            "name": "path",
+            "required": true,
+            "in": "query",
+            "description": "Prompt path to move",
+            "schema": {
+              "maxLength": 2048,
+              "example": "Work/AI/my-prompt",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MovePromptDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Prompt moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Prompt not found"
+          },
+          "409": {
+            "description": "Target path already exists"
+          },
+          "502": {
+            "description": "DIAL Core error"
+          }
+        },
+        "summary": "Move a personal prompt to a different folder",
+        "tags": ["prompts"]
+      }
+    },
     "/api/v1/files": {
       "post": {
         "operationId": "uploadFile",
@@ -1923,6 +3020,70 @@
             "description": "DIAL Core unreachable or timed out"
           }
         },
+        "tags": ["files"]
+      }
+    },
+    "/api/v1/files/upload-archive": {
+      "post": {
+        "operationId": "uploadArchive",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file", "bucket", "destinationPath"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "bucket": {
+                    "type": "string"
+                  },
+                  "destinationPath": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadArchiveResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, non-ZIP file, or empty archive"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "413": {
+            "description": "Archive exceeds ARCHIVE_UPLOAD_MAX_BYTES"
+          },
+          "422": {
+            "description": "Archive exceeds ARCHIVE_UPLOAD_MAX_FILES or ARCHIVE_UPLOAD_MAX_UNCOMPRESSED_BYTES"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error"
+          },
+          "503": {
+            "description": "DIAL Core unreachable, timed out, or ARCHIVE_UPLOAD_TIMEOUT_MS exceeded"
+          }
+        },
+        "summary": "Upload a ZIP archive and extract its contents to a destination folder",
         "tags": ["files"]
       }
     },
@@ -2170,6 +3331,52 @@
           }
         },
         "summary": "List files shared with the current user",
+        "tags": ["files"]
+      }
+    },
+    "/api/v1/files/shared-by-me": {
+      "get": {
+        "operationId": "listSharedByMe",
+        "parameters": [
+          {
+            "name": "bucket",
+            "required": true,
+            "in": "query",
+            "description": "DIAL Core bucket name",
+            "schema": {
+              "example": "my-bucket",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListFilesResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error"
+          },
+          "503": {
+            "description": "DIAL Core unreachable or timed out"
+          }
+        },
+        "summary": "List files and folders shared by the caller with others",
         "tags": ["files"]
       }
     },
@@ -2525,6 +3732,108 @@
         "tags": ["files"]
       }
     },
+    "/api/v1/files/revoke-access": {
+      "post": {
+        "operationId": "revokeAccess",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeAccessDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeAccessResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Caller does not own one or more resources"
+          },
+          "404": {
+            "description": "A resource does not exist"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error"
+          },
+          "503": {
+            "description": "DIAL Core unreachable or timed out"
+          }
+        },
+        "summary": "Revoke all shared access to files and folders",
+        "tags": ["files"]
+      }
+    },
+    "/api/v1/files/discard-shared": {
+      "post": {
+        "operationId": "discardShared",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscardSharedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscardSharedResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "Resource is not shared with the caller"
+          },
+          "404": {
+            "description": "A resource does not exist"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error"
+          },
+          "503": {
+            "description": "DIAL Core unreachable or timed out"
+          }
+        },
+        "summary": "Discard resources shared with the caller",
+        "tags": ["files"]
+      }
+    },
     "/api/v1/files/download": {
       "get": {
         "operationId": "downloadFile",
@@ -2759,6 +4068,822 @@
         "summary": "Get theme icon",
         "tags": ["themes"]
       }
+    },
+    "/api/v1/share": {
+      "post": {
+        "description": "Creates a share link for a DIAL Core resource (catalog entity — agent, application, skill, toolset, or model — conversation, or prompt) by proxying DIAL Core's resource-sharing API. Returns the share URL, access level, and expiry.",
+        "operationId": "createShareLink",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateShareLinkDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Share link created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareLinkResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid itemId or access value"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Create a share link",
+        "tags": ["share"]
+      }
+    },
+    "/api/v1/share/invitations/{invitationId}": {
+      "get": {
+        "description": "Accepts a share invitation via DIAL Core, granting the authenticated user the invitation's access level, and returns the shared entity's identifier so the frontend can navigate to it.",
+        "operationId": "acceptInvitation",
+        "parameters": [
+          {
+            "name": "invitationId",
+            "required": true,
+            "in": "path",
+            "description": "Invitation identifier extracted from the share link.",
+            "schema": {
+              "pattern": "^[\\w-]+$",
+              "example": "abc123",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invitation accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptInvitationResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid invitationId"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "404": {
+            "description": "Invitation not found, expired, or already revoked"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Accept a share invitation",
+        "tags": ["share"]
+      }
+    },
+    "/api/v1/share/discard": {
+      "post": {
+        "description": "Discards the authenticated user's own access to a shared catalog entity (application or toolset) or conversation, via DIAL Core's discardSharedResources operation. Only affects the caller's own access — removing access for everyone else is a separate operation.",
+        "operationId": "discardSharedCatalogItem",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscardSharedCatalogItemDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resource discarded successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscardSharedCatalogItemResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid itemId"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Resource is not shared with the caller"
+          },
+          "404": {
+            "description": "Resource does not exist"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Discard a shared catalog resource or conversation",
+        "tags": ["share"]
+      }
+    },
+    "/api/v1/share/revoke": {
+      "post": {
+        "description": "Revokes every outstanding share grant on a catalog entity (application or toolset) or conversation the caller owns, via DIAL Core's revokeSharedResources operation. Affects all recipients at once — DIAL Core cannot target a single recipient. Discarding only the caller's own access to a resource shared with them is a separate operation.",
+        "operationId": "revokeSharedAccess",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSharedAccessDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Shared access revoked successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeSharedAccessResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid itemId"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller does not own the resource"
+          },
+          "404": {
+            "description": "Resource does not exist"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Revoke all shared access to an owned resource",
+        "tags": ["share"]
+      }
+    },
+    "/api/v1/catalog/{entityType}/{entityId}/publish": {
+      "post": {
+        "description": "Publishes a catalog entity (Toolset or Application) to a folder under the Organization/public bucket by proxying DIAL Core's Publication API (`createPublication`). This endpoint keeps no publish records of its own — DIAL Core is the sole source of truth.",
+        "operationId": "publishCatalogEntity",
+        "parameters": [
+          {
+            "name": "entityType",
+            "required": true,
+            "in": "path",
+            "description": "Catalog entity kind.",
+            "schema": {
+              "example": "toolset",
+              "type": "string",
+              "enum": ["model", "toolset", "application"]
+            }
+          },
+          {
+            "name": "entityId",
+            "required": true,
+            "in": "path",
+            "description": "The entity's DIAL Core resource path, used directly as the Publication API `sourceUrl`.",
+            "schema": {
+              "example": "tool-abc123",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishCatalogEntityDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Entity published successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid entityType, entityId, or folderPath"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "Caller lacks write access to the target folder"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Publish a catalog entity to an Organization folder",
+        "tags": ["publish"]
+      }
+    },
+    "/api/v1/catalog/{entityType}/{entityId}/publish-history": {
+      "get": {
+        "description": "Returns every folder this catalog entity has been published to, most recent first, derived from DIAL Core's Publication API (`getPublications`) — never from chat-api-side storage.",
+        "operationId": "getCatalogPublishHistory",
+        "parameters": [
+          {
+            "name": "entityType",
+            "required": true,
+            "in": "path",
+            "description": "Catalog entity kind.",
+            "schema": {
+              "example": "toolset",
+              "type": "string",
+              "enum": ["model", "toolset", "application"]
+            }
+          },
+          {
+            "name": "entityId",
+            "required": true,
+            "in": "path",
+            "description": "The entity's DIAL Core resource path, used directly as the Publication API `sourceUrl`.",
+            "schema": {
+              "example": "tool-abc123",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publish history for the entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublishHistoryEntryDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid entityType or entityId"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Get publish history for a catalog entity",
+        "tags": ["publish"]
+      }
+    },
+    "/api/v1/publish/rules": {
+      "get": {
+        "description": "Returns the exact requested folder's own access-restriction rules by proxying DIAL Core's `getPublicationRules` — ancestor-folder rules in the underlying response are discarded, never returned.",
+        "operationId": "getPublishRules",
+        "parameters": [
+          {
+            "name": "folderPath",
+            "required": true,
+            "in": "query",
+            "description": "Destination folder under the Organization/public bucket to look up existing access rules for.",
+            "schema": {
+              "example": "Organization/Data Science/Shared chats",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The folder's own rules, or an empty array when it has none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishRulesResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid folderPath"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable or timed out"
+          }
+        },
+        "summary": "Get a destination folder's already-configured access rules",
+        "tags": ["publish"]
+      }
+    },
+    "/api/v1/scheduled-tasks": {
+      "get": {
+        "description": "Returns the DIAL Scheduler schedules visible to the authenticated session user. Proxies the DIAL Scheduler routed-deployment API using the session access token. Results are cached server-side for 30 seconds per user.",
+        "operationId": "listScheduledTasks",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of scheduled tasks to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Offset of the first scheduled task to return.",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Case-insensitive substring match against the scheduled task display name.",
+            "schema": {
+              "maxLength": 200,
+              "example": "daily",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Sort order for the returned scheduled tasks. Defaults to `firstToRun`.",
+            "schema": {
+              "example": "firstToRun",
+              "type": "string",
+              "enum": ["firstToRun", "lastToRun", "newest", "nameAZ"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved scheduled task list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListScheduledTasksResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit, offset, or search query parameter"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "List scheduled tasks",
+        "tags": ["scheduled-tasks"]
+      },
+      "post": {
+        "description": "Creates a DIAL Scheduler schedule that runs a chat completion on the given model and prompt, using the OAuth external-service id configured via SCHEDULER_SERVICE_ID. Invalidates the scheduled tasks list cache on success.",
+        "operationId": "createScheduledTask",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScheduledTaskBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Scheduled task created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedScheduledTaskDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — missing or invalid fields"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "Create a scheduled task",
+        "tags": ["scheduled-tasks"]
+      }
+    },
+    "/api/v1/scheduled-tasks/{scheduleId}": {
+      "get": {
+        "description": "Returns a single DIAL Scheduler schedule by id, proxying DIAL Scheduler using the session user's access token. Not cached.",
+        "operationId": "getScheduledTask",
+        "parameters": [
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "description": "DIAL Scheduler schedule identifier.",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "example": "sched_123",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved the scheduled task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scheduleId"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+          },
+          "404": {
+            "description": "Scheduled task not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "Get a scheduled task by id",
+        "tags": ["scheduled-tasks"]
+      },
+      "put": {
+        "description": "Updates an existing DIAL Scheduler schedule for the authenticated session user. Invalidates the scheduled tasks list cache on success.",
+        "operationId": "updateScheduledTask",
+        "parameters": [
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "description": "DIAL Scheduler schedule identifier.",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "example": "sched_123",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateScheduledTaskBodyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scheduled task updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedScheduledTaskDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error — invalid scheduleId or body fields"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+          },
+          "404": {
+            "description": "Scheduled task not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "Update a scheduled task",
+        "tags": ["scheduled-tasks"]
+      }
+    },
+    "/api/v1/scheduled-tasks/{scheduleId}/runs": {
+      "get": {
+        "description": "Returns the paginated run history for a single DIAL Scheduler schedule, proxying DIAL Scheduler using the session user's access token. Always requests upstream ordering of created_at desc explicitly. Not cached.",
+        "operationId": "listScheduledTaskRuns",
+        "parameters": [
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "description": "DIAL Scheduler schedule identifier.",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "example": "sched_123",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of runs to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Offset of the first run to return.",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved the scheduled task run history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListScheduledTaskRunsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scheduleId, limit, or offset"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+          },
+          "404": {
+            "description": "Scheduled task not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "List a scheduled task run history",
+        "tags": ["scheduled-tasks"]
+      }
+    },
+    "/api/v1/scheduled-tasks/{scheduleId}/pause": {
+      "post": {
+        "description": "Pauses a DIAL Scheduler schedule for the authenticated session user. Invalidates the scheduled tasks list cache on success.",
+        "operationId": "pauseScheduledTask",
+        "parameters": [
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "description": "DIAL Scheduler schedule identifier.",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "example": "sched_123",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scheduled task paused successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scheduleId"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+          },
+          "404": {
+            "description": "Scheduled task not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "Pause a scheduled task",
+        "tags": ["scheduled-tasks"]
+      }
+    },
+    "/api/v1/scheduled-tasks/{scheduleId}/resume": {
+      "post": {
+        "description": "Resumes a paused DIAL Scheduler schedule for the authenticated session user. Invalidates the scheduled tasks list cache on success.",
+        "operationId": "resumeScheduledTask",
+        "parameters": [
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "description": "DIAL Scheduler schedule identifier.",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "example": "sched_123",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scheduled task resumed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scheduleId"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+          },
+          "404": {
+            "description": "Scheduled task not found"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "Resume a scheduled task",
+        "tags": ["scheduled-tasks"]
+      }
     }
   },
   "info": {
@@ -2795,7 +4920,7 @@
   ],
   "servers": [
     {
-      "url": "http://localhost:3005",
+      "url": "http://localhost:5000",
       "description": "Local development"
     }
   ],
@@ -2805,6 +4930,11 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "session"
+      },
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
       }
     },
     "schemas": {
@@ -2835,18 +4965,133 @@
           },
           "claims": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "description": "Allowlisted claims keyed by claim name. A dot-notation rolesClaim (e.g. \"realm_access.roles\") is stored under one flat key equal to that literal string, never as a nested object."
           },
           "bucket": {
             "type": "string",
             "example": "default-bucket"
+          },
+          "isAdmin": {
+            "type": "boolean",
+            "example": false,
+            "description": "Whether the user's roles claim intersects the provider's configured adminRoles"
           }
         },
-        "required": ["sub", "providerId", "claims", "bucket"]
+        "required": ["sub", "providerId", "claims", "bucket", "isAdmin"]
+      },
+      "AnnouncementLinkDto": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Visible label of the announcement call to action. Plain text; never interpreted as markup.",
+            "example": "Changelog"
+          },
+          "href": {
+            "type": "string",
+            "description": "Absolute http(s) URL the announcement links to. Opened in a new tab with rel=\"noopener noreferrer\". Entries carrying other schemes are dropped server-side.",
+            "example": "https://dialx.ai/changelog"
+          }
+        },
+        "required": ["label", "href"]
+      },
+      "AnnouncementItemDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Announcement heading. Plain text; never interpreted as markup. Entries without one are dropped server-side.",
+            "example": "We have upgraded to DIAL 1.43 🎉"
+          },
+          "description": {
+            "type": "string",
+            "description": "Supporting copy, sanitized to a safe HTML subset. Null when unset or when sanitization removes everything.",
+            "example": "Check what's new:",
+            "nullable": true
+          },
+          "link": {
+            "description": "Optional call to action. Null when the announcement is informational only. An entry whose link is present but invalid is dropped entirely rather than returned without it.",
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AnnouncementLinkDto"
+              }
+            ]
+          }
+        },
+        "required": ["title", "description", "link"]
+      },
+      "CustomVisualizerDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The postMessage protocol namespace, NOT a display label. Every message exchanged with the iframe is prefixed \"${title}/…\", and the visualizer application must be constructed with this identical string as its appName. A mismatch is a silent failure — the iframe loads but never receives data.",
+            "example": "my-viz"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of the visualizer. Accepted for schema parity; not consumed by the host UI.",
+            "example": "Renders a Plotly figure"
+          },
+          "icon": {
+            "type": "string",
+            "description": "Icon URL or identifier for the visualizer. Accepted for schema parity; not consumed by the host UI.",
+            "example": "https://viz.example.com/icon.svg"
+          },
+          "contentType": {
+            "type": "string",
+            "description": "MIME type(s) this entry matches. Accepts a comma-separated list of MIME types (e.g. \"application/vnd.plotly.v1+json, application/vnd.vega.v5+json\").",
+            "example": "application/vnd.plotly.v1+json"
+          },
+          "url": {
+            "type": "string",
+            "description": "Absolute HTTP(S) URL of the visualizer iframe.",
+            "example": "https://viz.example.com"
+          },
+          "requestTimeout": {
+            "type": "number",
+            "description": "Milliseconds to wait for a send() request response before rejecting. Defaults to 10000 when unset. Does not bound the initial READY_TO_INTERACT handshake.",
+            "example": 15000
+          },
+          "width": {
+            "type": "number",
+            "description": "Suggested initial width of the canvas panel in pixels.",
+            "example": 800
+          },
+          "height": {
+            "type": "number",
+            "description": "Suggested initial height of the canvas panel in pixels.",
+            "example": 600
+          },
+          "mobileHeight": {
+            "type": "number",
+            "description": "Suggested canvas panel height on mobile-sized screens in pixels.",
+            "example": 400
+          },
+          "passAuthInfo": {
+            "type": "boolean",
+            "description": "Whether the host should pass auth info to the visualizer. Accepted for schema parity; auth forwarding is not yet wired.",
+            "example": false
+          },
+          "passExplicitToken": {
+            "type": "boolean",
+            "description": "Whether the host should pass an explicit access token. Accepted for schema parity; auth forwarding is not yet wired.",
+            "example": false
+          }
+        },
+        "required": ["title", "contentType", "url"]
       },
       "ClientConfigDto": {
         "type": "object",
         "properties": {
+          "appVersion": {
+            "type": "string",
+            "description": "Version string of the running chat application. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Always a non-empty string.",
+            "example": "0.45.0"
+          },
           "asrModelId": {
             "type": "string",
             "description": "Deployment ID of the ASR model. Null when ASR is not configured.",
@@ -2863,9 +5108,113 @@
             "description": "Operator-configured default deployment ID. Null when not configured.",
             "example": "gpt-4o",
             "nullable": true
+          },
+          "dialCoreExternalUrl": {
+            "type": "string",
+            "description": "Public-facing DIAL Core base URL reachable from the browser. Null when DIAL_CORE_EXTERNAL_URL is not configured.",
+            "example": "https://dial.example.com",
+            "nullable": true
+          },
+          "fileManagerTabs": {
+            "description": "Which File Manager tabs are shown to users. Defaults to all three currently-supported tabs.",
+            "example": ["my_files", "shared", "organization"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "overlayEnabled": {
+            "type": "boolean",
+            "description": "Whether the chat-overlay embedded runtime mode is enabled. Sourced from OVERLAY_ENABLED.",
+            "example": false
+          },
+          "overlayAllowedOrigins": {
+            "description": "Host origins allowed to embed this app. Sourced from ALLOWED_IFRAME_ORIGINS, the same list used for CSP frame-ancestors/frame-src.",
+            "example": ["https://partner.example.com"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enabledUiFeatures": {
+            "description": "When set, the complete list of OverlayFeature values that are enabled (replace semantics). Sourced from ENABLED_UI_FEATURES, filtered to recognized values. When null, the compiled-in DEFAULT_ENABLED_UI_FEATURES baseline is used. Does not affect an overlay host that supplies its own enabledFeatures.",
+            "nullable": true,
+            "example": [
+              "header",
+              "likes",
+              "conversations-sharing",
+              "hide-new-conversation"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "announcementHtml": {
+            "type": "string",
+            "description": "Operator-authored HTML announcement message shown in a dismissible top-of-app banner. Null when ANNOUNCEMENT_HTML_MESSAGE is not configured.",
+            "example": "Welcome to <a href=\"https://your-site.example.com\">DIAL</a>!",
+            "nullable": true
+          },
+          "announcementTitle": {
+            "type": "string",
+            "description": "Plain-text heading shown in bold at the start of the announcement banner line. Never interpreted as markup. Null when ANNOUNCEMENT_TITLE is not configured or is blank.",
+            "example": "🎉 Welcome to DIAL! 🎉",
+            "nullable": true
+          },
+          "announcementDescription": {
+            "type": "string",
+            "description": "Supporting copy shown after the announcement banner title. Sanitized server-side to a safe HTML subset; anchors are forced to target=\"_blank\" with rel=\"noopener noreferrer\". Null when ANNOUNCEMENT_DESCRIPTION is not configured, is blank, or sanitizes away entirely.",
+            "example": "Explore our AI offerings with your data.",
+            "nullable": true
+          },
+          "announcements": {
+            "description": "Announcements listed in the popover behind the banner's \"+N announcements\" pill, in configured order. Empty when ANNOUNCEMENTS is unset or contained no valid entries. Sourced from ANNOUNCEMENTS.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnnouncementItemDto"
+            }
+          },
+          "deepResearchToolId": {
+            "type": "string",
+            "description": "Tool ID for the Deep Research deployment-configuration property. Null when DEEP_RESEARCH_TOOL_ID is not set.",
+            "example": "deep_research",
+            "nullable": true
+          },
+          "footerHtmlMessage": {
+            "type": "string",
+            "description": "Operator-authored HTML footer message shown below the chat input (desktop) and in the mobile user panel. Empty string when FOOTER_HTML_MESSAGE is not configured. Sanitized server-side; supports %%VERSION%% token.",
+            "example": "v%%VERSION%% — <a href=\"https://example.com\">Learn more</a>"
+          },
+          "customVisualizers": {
+            "description": "Registry of MIME → visualizer iframe mappings. Sourced from CUSTOM_VISUALIZERS. Empty when unset — the feature is dark by default.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomVisualizerDto"
+            }
+          },
+          "publicationFilterSources": {
+            "description": "Allowed claim/category names selectable as a publication access rule's source. Sourced from PUBLICATION_FILTER_SOURCES; falls back to the legacy default when unset or empty.",
+            "example": ["title", "role", "dial_roles"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
-        "required": ["asrModelId", "transcribeSizeLimitBytes"]
+        "required": [
+          "appVersion",
+          "asrModelId",
+          "transcribeSizeLimitBytes",
+          "fileManagerTabs",
+          "overlayEnabled",
+          "overlayAllowedOrigins",
+          "enabledUiFeatures",
+          "announcements",
+          "footerHtmlMessage",
+          "customVisualizers",
+          "publicationFilterSources"
+        ]
       },
       "ClientConfigMetadataDto": {
         "type": "object",
@@ -2983,11 +5332,6 @@
             "type": "string",
             "example": "A custom application."
           },
-          "intro": {
-            "type": "string",
-            "example": "Summarizes long documents in one line.",
-            "maxLength": 90
-          },
           "input_attachment_types": {
             "example": ["image/png"],
             "type": "array",
@@ -3014,6 +5358,24 @@
         },
         "required": ["data"]
       },
+      "LocaleTextEntryDto": {
+        "type": "object",
+        "properties": {
+          "language": {
+            "type": "string",
+            "example": "de"
+          },
+          "name": {
+            "type": "string",
+            "example": "Mein Toolset"
+          },
+          "description": {
+            "type": "string",
+            "example": "Meine Toolset-Beschreibung"
+          }
+        },
+        "required": ["language"]
+      },
       "CreateApplicationBodyDto": {
         "type": "object",
         "properties": {
@@ -3023,7 +5385,8 @@
           },
           "type": {
             "type": "string",
-            "example": "https://mydial.epam.com/custom_application_schemas/quickapps2"
+            "example": "https://mydial.epam.com/custom_application_schemas/quickapps2",
+            "description": "Omit for plain custom applications with no schema type"
           },
           "description": {
             "type": "string",
@@ -3044,11 +5407,6 @@
               "type": "string"
             }
           },
-          "intro": {
-            "type": "string",
-            "example": "Summarizes long documents in one line.",
-            "maxLength": 90
-          },
           "applicationProperties": {
             "type": "object",
             "example": {
@@ -3062,9 +5420,19 @@
               "contexts": [],
               "tool_sets": []
             }
+          },
+          "locales": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LocaleTextEntryDto"
+            }
+          },
+          "primaryLocale": {
+            "type": "string",
+            "example": "en"
           }
         },
-        "required": ["name", "type"]
+        "required": ["name"]
       },
       "CreatedApplicationDto": {
         "type": "object",
@@ -3074,8 +5442,103 @@
             "example": "users/my-user/applications/my-app"
           },
           "displayName": {
+            "example": "My App",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "object": {
+            "type": "string",
+            "example": "application"
+          }
+        },
+        "required": ["id"]
+      },
+      "UpdateApplicationBodyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
             "type": "string",
             "example": "My App"
+          },
+          "description": {
+            "type": "string",
+            "example": "A custom application."
+          },
+          "iconUrl": {
+            "type": "string",
+            "example": "https://example.com/icon.svg"
+          },
+          "topics": {
+            "example": ["nlp", "assistant"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "string",
+            "example": "1.0.0"
+          },
+          "endpoint": {
+            "type": "string",
+            "example": "https://api.example.com/chat"
+          },
+          "features": {
+            "type": "object"
+          },
+          "inputAttachmentTypes": {
+            "example": ["image/png"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maxInputAttachments": {
+            "type": "number",
+            "example": 5
+          },
+          "locales": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LocaleTextEntryDto"
+            }
+          },
+          "primaryLocale": {
+            "type": "string",
+            "example": "en"
+          }
+        },
+        "required": ["name"]
+      },
+      "UpdatedApplicationDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "users/my-user/applications/my-app"
+          },
+          "displayName": {
+            "example": "My App",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            ]
           },
           "object": {
             "type": "string",
@@ -3098,9 +5561,60 @@
           "folderAttachments": {
             "type": "boolean",
             "description": "Whether the deployment supports attaching folders from the file manager"
+          },
+          "mcp": {
+            "type": "boolean",
+            "description": "Whether the deployment supports the MCP protocol"
+          },
+          "responsesApi": {
+            "type": "boolean",
+            "description": "Whether the deployment supports the Responses API"
+          },
+          "chatCompletion": {
+            "type": "boolean",
+            "description": "Whether the deployment supports chat completion requests"
           }
         },
         "required": ["systemPrompt", "temperature"]
+      },
+      "ConversationStarterDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Starter button label"
+          },
+          "text": {
+            "type": "string",
+            "description": "Text inserted into the chat input"
+          }
+        },
+        "required": ["title", "text"]
+      },
+      "ConversationStartersDto": {
+        "type": "object",
+        "properties": {
+          "introText": {
+            "type": "string",
+            "description": "Optional text shown above the conversation starter buttons"
+          },
+          "autoSubmit": {
+            "type": "boolean",
+            "description": "When true, starter buttons submit immediately after selection"
+          },
+          "chatMessageInputDisabled": {
+            "type": "boolean",
+            "description": "When true, the chat input is disabled and users can only use starters"
+          },
+          "starters": {
+            "description": "Conversation starter buttons configured by the application",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationStarterDto"
+            }
+          }
+        },
+        "required": ["starters"]
       },
       "DeploymentItemDto": {
         "type": "object",
@@ -3110,8 +5624,18 @@
             "description": "Unique stable identifier from DIAL Core"
           },
           "displayName": {
-            "type": "string",
-            "description": "Display name, falls back to id when absent"
+            "description": "Display name, falls back to id when absent. Either a plain string, or a map of locale code to translated value when additional locales are configured.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            ]
           },
           "type": {
             "type": "string",
@@ -3122,13 +5646,18 @@
             "description": "Icon URL from DIAL Core"
           },
           "description": {
-            "type": "string",
-            "description": "Description from DIAL Core"
-          },
-          "intro": {
-            "type": "string",
-            "description": "Short catalog-friendly intro from DIAL Core",
-            "maxLength": 90
+            "description": "Description from DIAL Core",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            ]
           },
           "interfaces": {
             "description": "Interface types supported by this deployment",
@@ -3152,6 +5681,10 @@
           "updatedAt": {
             "type": "number",
             "description": "Timestamp of last update time from DIAL Core (e.g. 1714768496000)"
+          },
+          "createdAt": {
+            "type": "number",
+            "description": "Timestamp of creation time from DIAL Core (e.g. 1714768496000)"
           },
           "applicationTypeSchemaId": {
             "type": "string",
@@ -3195,9 +5728,34 @@
             "type": "boolean",
             "description": "True when the deployment owner matches the current session user (computed post-cache)"
           },
+          "canEdit": {
+            "type": "boolean",
+            "description": "True when the current user may edit this deployment — owns it, or was granted WRITE access via a share invitation"
+          },
+          "sharedWithMe": {
+            "type": "boolean",
+            "description": "True when this deployment is shared with the current user (READ or WRITE) and not owned by them"
+          },
+          "recipientsCount": {
+            "type": "number",
+            "description": "How many other users currently hold shared access to this deployment, for deployments the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.",
+            "example": 3
+          },
           "applicationFolder": {
             "type": "string",
             "description": "Parent folder path for application-type deployments (absent for root-level or non-application items)"
+          },
+          "conversationStarters": {
+            "description": "Quick Apps conversation starter settings from application properties",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStartersDto"
+              }
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "description": "Reference from DIAL Core; some conversations/messages address this deployment by reference instead of id"
           }
         },
         "required": ["id", "displayName", "type"]
@@ -3506,6 +6064,10 @@
       "ApplicationDetailsDto": {
         "type": "object",
         "properties": {
+          "displayName": {
+            "type": "string",
+            "description": "Display name reported by DIAL Core"
+          },
           "applicationProperties": {
             "type": "object",
             "additionalProperties": true,
@@ -3544,6 +6106,14 @@
             "type": "string",
             "description": "URI of the custom application type schema, when present"
           },
+          "endpoint": {
+            "type": "string",
+            "description": "Chat completion endpoint URL for custom applications"
+          },
+          "maxInputAttachments": {
+            "type": "number",
+            "description": "Maximum number of input attachments for custom applications"
+          },
           "createdAt": {
             "type": "number",
             "description": "Timestamp of creation time from DIAL Core (e.g. 1714768496000)"
@@ -3557,6 +6127,11 @@
             "type": "string",
             "description": "Type of authentication",
             "enum": ["OAUTH", "API_KEY", "NONE"]
+          },
+          "dynamicallyRegistered": {
+            "type": "boolean",
+            "description": "Whether DIAL Core dynamically registered the OAuth client instead of using user-provided client configuration",
+            "example": true
           },
           "globalAuthStatus": {
             "type": "string",
@@ -3720,6 +6295,20 @@
         },
         "required": ["installed"]
       },
+      "PromptsConfigDto": {
+        "type": "object",
+        "properties": {
+          "installed": {
+            "description": "Favorited prompt paths.",
+            "example": ["Work/AI/summarize"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["installed"]
+      },
       "UserConfigDto": {
         "type": "object",
         "properties": {
@@ -3736,9 +6325,18 @@
           },
           "deployments": {
             "$ref": "#/components/schemas/DeploymentsConfigDto"
+          },
+          "prompts": {
+            "$ref": "#/components/schemas/PromptsConfigDto"
           }
         },
-        "required": ["version", "conversations", "toolsets", "deployments"]
+        "required": [
+          "version",
+          "conversations",
+          "toolsets",
+          "deployments",
+          "prompts"
+        ]
       },
       "UpdatePinsDto": {
         "type": "object",
@@ -3767,6 +6365,23 @@
           "isInstalled": {
             "type": "boolean",
             "description": "Pass `true` to install the resource, `false` to uninstall.",
+            "example": true
+          }
+        },
+        "required": ["id", "isInstalled"]
+      },
+      "UpdateInstalledPromptDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Prompt path within the prompts namespace.",
+            "example": "Work/AI/summarize",
+            "maxLength": 2048
+          },
+          "isInstalled": {
+            "type": "boolean",
+            "description": "Pass `true` to favorite the prompt, `false` to unfavorite it.",
             "example": true
           }
         },
@@ -3964,8 +6579,18 @@
             "example": "dial.gemini-3-flash-preview"
           },
           "display_name": {
-            "type": "string",
-            "example": "Gemini 3 Flash"
+            "example": "Gemini 3 Flash",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            ]
           },
           "display_version": {
             "type": "string",
@@ -3976,8 +6601,18 @@
             "example": "Gemini.svg"
           },
           "description": {
-            "type": "string",
-            "example": "A multimodal model combining reasoning and efficiency."
+            "example": "A multimodal model combining reasoning and efficiency.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            ]
           },
           "reference": {
             "type": "string",
@@ -4071,61 +6706,170 @@
         },
         "required": ["data"]
       },
+      "DialToolsetFeaturesDto": {
+        "type": "object",
+        "properties": {
+          "rate": {
+            "type": "boolean",
+            "example": false
+          },
+          "tokenize": {
+            "type": "boolean",
+            "example": false
+          },
+          "truncatePrompt": {
+            "type": "boolean",
+            "example": false
+          },
+          "configuration": {
+            "type": "boolean",
+            "example": false
+          },
+          "systemPrompt": {
+            "type": "boolean",
+            "example": true
+          },
+          "tools": {
+            "type": "boolean",
+            "example": true
+          },
+          "seed": {
+            "type": "boolean",
+            "example": false
+          },
+          "urlAttachments": {
+            "type": "boolean",
+            "example": false
+          },
+          "folderAttachments": {
+            "type": "boolean",
+            "example": false
+          },
+          "allowResume": {
+            "type": "boolean",
+            "example": true
+          },
+          "accessibleByPerRequestKey": {
+            "type": "boolean",
+            "example": true
+          },
+          "contentParts": {
+            "type": "boolean",
+            "example": false
+          },
+          "temperature": {
+            "type": "boolean",
+            "example": true
+          },
+          "cache": {
+            "type": "boolean",
+            "example": false
+          },
+          "autoCaching": {
+            "type": "boolean",
+            "example": false
+          },
+          "parallelToolCalls": {
+            "type": "boolean",
+            "example": true
+          },
+          "assistantAttachmentsInRequest": {
+            "type": "boolean",
+            "example": true
+          },
+          "mcp": {
+            "type": "boolean",
+            "example": false
+          },
+          "chatCompletion": {
+            "type": "boolean",
+            "example": false
+          },
+          "responsesApi": {
+            "type": "boolean",
+            "example": false
+          },
+          "maxTokensSupported": {
+            "type": "boolean",
+            "example": false
+          },
+          "maxCompletionTokensSupported": {
+            "type": "boolean",
+            "example": false
+          },
+          "customTemperatureSupported": {
+            "type": "boolean",
+            "example": false
+          },
+          "reasoningEfforts": {
+            "example": ["low", "medium", "high"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "DialToolsetAuthSettingsDto": {
         "type": "object",
         "properties": {
-          "authentication_type": {
+          "authenticationType": {
             "type": "string",
             "example": "OAUTH",
             "enum": ["OAUTH", "API_KEY", "NONE"]
           },
-          "api_key_header": {
+          "dynamicallyRegistered": {
+            "type": "boolean",
+            "description": "Whether DIAL Core dynamically registered the OAuth client instead of using user-provided client configuration",
+            "example": true
+          },
+          "apiKeyHeader": {
             "type": "string",
             "example": "X-Api-Key"
           },
-          "client_id": {
+          "clientId": {
             "type": "string",
             "example": "my-client-id"
           },
-          "redirect_uri": {
+          "redirectUri": {
             "type": "string",
             "example": ""
           },
-          "authorization_endpoint": {
+          "authorizationEndpoint": {
             "type": "string",
             "example": ""
           },
-          "token_endpoint": {
+          "tokenEndpoint": {
             "type": "string",
             "example": ""
           },
-          "code_challenge": {
+          "codeChallenge": {
             "type": "string",
             "example": "base64-url-code-challenge"
           },
-          "code_challenge_method": {
+          "codeChallengeMethod": {
             "type": "string",
             "example": "S256"
           },
-          "scopes_supported": {
+          "scopesSupported": {
             "example": ["scope1", "scope2"],
             "type": "array",
             "items": {
               "type": "string"
             }
           },
-          "global_auth_status": {
+          "globalAuthStatus": {
             "type": "string",
             "example": "SIGNED_OUT",
             "enum": ["SIGNED_IN", "SIGNED_OUT"]
           },
-          "user_level_auth_status": {
+          "userLevelAuthStatus": {
             "type": "string",
             "example": "SIGNED_OUT",
             "enum": ["SIGNED_IN", "SIGNED_OUT"]
           }
         },
-        "required": ["authentication_type"]
+        "required": ["authenticationType"]
       },
       "DialToolsetDto": {
         "type": "object",
@@ -4138,24 +6882,40 @@
             "type": "string",
             "example": "toolsets/encrypted-bucket/folder/toolset-name"
           },
-          "display_name": {
-            "type": "string",
-            "example": "Toolset display name"
+          "displayName": {
+            "description": "Human-readable name. In `listToolsets` results this is always populated: `displayName` when set, otherwise the last path segment of `id`. Either a plain string, or a map of locale code to translated value when additional locales are configured.",
+            "example": "Toolset display name",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            ]
           },
-          "display_version": {
+          "displayVersion": {
             "type": "string",
             "example": "0.0.1"
           },
           "description": {
-            "type": "string",
-            "example": "My toolset description"
+            "example": "My toolset description",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            ]
           },
-          "intro": {
-            "type": "string",
-            "example": "Runs your toolset in one line.",
-            "maxLength": 90
-          },
-          "icon_url": {
+          "iconUrl": {
             "type": "string",
             "example": ""
           },
@@ -4171,7 +6931,7 @@
             "type": "string",
             "example": "succeeded"
           },
-          "description_keywords": {
+          "descriptionKeywords": {
             "example": ["keyword1", "keyword2"],
             "type": "array",
             "items": {
@@ -4182,20 +6942,20 @@
             "type": "string",
             "example": "ff5584b7-a82b-4f4f-bf42-5bf74a3893d6"
           },
-          "max_retry_attempts": {
+          "maxRetryAttempts": {
             "type": "number",
             "example": 2
           },
-          "created_at": {
+          "createdAt": {
             "type": "number",
             "example": 1672534800
           },
-          "updated_at": {
+          "updatedAt": {
             "type": "number",
             "example": 1672534900
           },
           "features": {
-            "$ref": "#/components/schemas/DialModelFeaturesDto"
+            "$ref": "#/components/schemas/DialToolsetFeaturesDto"
           },
           "endpoint": {
             "type": "string",
@@ -4205,23 +6965,36 @@
             "type": "string",
             "example": "HTTP"
           },
-          "allowed_tools": {
+          "allowedTools": {
             "example": ["tool1", "tool2"],
             "type": "array",
             "items": {
               "type": "string"
             }
           },
-          "auth_settings": {
+          "authSettings": {
             "$ref": "#/components/schemas/DialToolsetAuthSettingsDto"
           },
-          "is_installed": {
+          "isInstalled": {
             "type": "boolean",
             "description": "Whether this toolset is installed by the current user"
           },
-          "is_my": {
+          "isMy": {
             "type": "boolean",
             "description": "True when the toolset id/path belongs to the current session user bucket"
+          },
+          "canEdit": {
+            "type": "boolean",
+            "description": "True when the current user may edit this toolset — owns it, or was granted WRITE access via a share invitation"
+          },
+          "sharedWithMe": {
+            "type": "boolean",
+            "description": "True when this toolset is shared with the current user (READ or WRITE) and not owned by them"
+          },
+          "recipientsCount": {
+            "type": "number",
+            "description": "How many other users currently hold shared access to this toolset, for toolsets the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.",
+            "example": 3
           }
         },
         "required": ["id", "toolset"]
@@ -4275,7 +7048,7 @@
           },
           "redirectUri": {
             "type": "string",
-            "example": "https://chat.example.com/toolset-editor/callback"
+            "example": "https://chat.example.com/auth/toolset-signin"
           },
           "codeChallengeMethod": {
             "type": "string",
@@ -4314,10 +7087,15 @@
               "type": "string"
             }
           },
-          "intro": {
+          "locales": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LocaleTextEntryDto"
+            }
+          },
+          "primaryLocale": {
             "type": "string",
-            "example": "Runs your toolset in one line.",
-            "maxLength": 90
+            "example": "en"
           },
           "endpoint": {
             "type": "string",
@@ -4412,10 +7190,11 @@
           "authenticationType": {
             "type": "string",
             "enum": ["NONE", "API_KEY", "OAUTH"],
-            "example": "OAUTH"
+            "example": "OAUTH",
+            "description": "Authentication type used by the toolset. Optional — a caller that doesn't already have this loaded (e.g. logging out by id alone) can omit it; the server looks up the toolset's own stored authentication type instead."
           }
         },
-        "required": ["url", "credentialsLevel", "authenticationType"]
+        "required": ["url", "credentialsLevel"]
       },
       "AttachmentDto": {
         "type": "object",
@@ -4475,6 +7254,10 @@
               "field1": "value",
               "field2": 42
             }
+          },
+          "state": {
+            "type": "object",
+            "description": "Opaque app-managed state to echo back verbatim on the next turn, per the DIAL stateful-app contract."
           }
         }
       },
@@ -4587,6 +7370,128 @@
         },
         "required": ["id", "object", "choices"]
       },
+      "ReportClientChannelDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The `id` of the RPC request being answered.",
+            "example": "a1b2c3d4-e5f6-4789-a012-3456789abcde"
+          },
+          "result": {
+            "type": "string",
+            "enum": ["success", "denied"],
+            "example": "success"
+          }
+        },
+        "required": ["id", "result"]
+      },
+      "GetExternalServiceResponseDto": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "example": "FinHub API"
+          },
+          "description": {
+            "type": "string",
+            "example": "Financial data lookup service"
+          },
+          "authenticationType": {
+            "type": "string",
+            "enum": ["NONE", "API_KEY", "OAUTH"],
+            "example": "API_KEY"
+          },
+          "userLevelAuthStatus": {
+            "type": "string",
+            "example": "SIGNED_IN",
+            "description": "USER-level credential status ('SIGNED_IN' | 'SIGNED_OUT' | 'FAILED'), when Core reports one."
+          },
+          "globalAuthStatus": {
+            "type": "string",
+            "example": "SIGNED_OUT",
+            "description": "GLOBAL-level credential status ('SIGNED_IN' | 'SIGNED_OUT' | 'FAILED'), when Core reports one."
+          },
+          "clientId": {
+            "type": "string",
+            "example": "my-client-id"
+          },
+          "authorizationEndpoint": {
+            "type": "string",
+            "example": "https://auth.example.com/authorize"
+          },
+          "scopesSupported": {
+            "example": ["read", "write"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "codeChallenge": {
+            "type": "string",
+            "example": "abc123"
+          },
+          "codeChallengeMethod": {
+            "type": "string",
+            "example": "S256"
+          }
+        },
+        "required": ["displayName", "authenticationType"]
+      },
+      "ExternalServiceSigninBodyDto": {
+        "type": "object",
+        "properties": {
+          "credentialsLevel": {
+            "type": "string",
+            "enum": ["GLOBAL", "APPLICATION", "USER"],
+            "example": "USER"
+          },
+          "authenticationType": {
+            "type": "string",
+            "enum": ["NONE", "API_KEY", "OAUTH"],
+            "example": "API_KEY"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "API key value (API_KEY auth)."
+          },
+          "code": {
+            "type": "string",
+            "description": "OAuth authorization code (OAUTH auth)."
+          },
+          "redirectUri": {
+            "type": "string",
+            "description": "OAuth redirect URI used for the code exchange."
+          }
+        },
+        "required": ["credentialsLevel", "authenticationType"]
+      },
+      "ExternalServiceAuthResultDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "ExternalServiceLogoutBodyDto": {
+        "type": "object",
+        "properties": {
+          "credentialsLevel": {
+            "type": "string",
+            "enum": ["GLOBAL", "APPLICATION", "USER"],
+            "example": "USER"
+          },
+          "authenticationType": {
+            "type": "string",
+            "enum": ["NONE", "API_KEY", "OAUTH"],
+            "example": "API_KEY"
+          }
+        },
+        "required": ["credentialsLevel", "authenticationType"]
+      },
       "CreateConversationDto": {
         "type": "object",
         "properties": {
@@ -4602,7 +7507,7 @@
             "example": "applications/catalog/Untitled%20app%201__0.0.1",
             "minLength": 1,
             "maxLength": 256,
-            "pattern": "^(?:[\\w.\\-:@/]|%[\\dA-Fa-f]{2})+$"
+            "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$"
           },
           "custom_content": {
             "description": "Extra DIAL payload attached to the first user message",
@@ -4650,6 +7555,10 @@
               "field2": 42
             }
           },
+          "state": {
+            "type": "object",
+            "description": "Opaque app-managed state to echo back verbatim on the next turn, per the DIAL stateful-app contract."
+          },
           "event_type": {
             "type": "string",
             "enum": ["model_changed"],
@@ -4691,6 +7600,21 @@
           },
           "custom_content": {
             "$ref": "#/components/schemas/ConversationMessageCustomContentDto"
+          },
+          "streamErrorMessage": {
+            "type": "string",
+            "description": "Error message when the generation ended in error. Presence signals a terminal error state; absence means the generation succeeded or is still in progress.",
+            "example": "You have exceeded your daily token limit."
+          },
+          "responseId": {
+            "type": "string",
+            "description": "DIAL Responses API id for this message, set only when the generation was routed through the Responses adapter. Diagnostic only — never used to resume a generation (previous_response_id/conversation are never sent).",
+            "example": "dial-gpt-4o-3c1a7e6e-...-uuid"
+          },
+          "deploymentId": {
+            "type": "string",
+            "description": "Deployment that produced this message. Present on assistant and status messages.",
+            "example": "gpt-4o"
           }
         },
         "required": ["role", "content", "timestamp"]
@@ -4720,6 +7644,11 @@
           "temperature": {
             "type": "number",
             "example": 1
+          },
+          "maxOutputTokens": {
+            "type": "number",
+            "example": 4096,
+            "description": "Optional Responses-API output-token cap, forwarded verbatim as max_output_tokens. Never derived from deployment limits or Chat Completions defaults. Documentation-only decorator — the actual positive-safe-integer check runs at the Responses request-building boundary (ResponsesAdapter.buildRequest via isValidMaxOutputTokens), not through nested DTO validation on save (see design.md Decision 4 of the support-responses-generation-parameters change)."
           },
           "messages": {
             "type": "array",
@@ -4799,6 +7728,11 @@
             "description": "True when this conversation was published to the organisation and is visible to the current user.",
             "example": false
           },
+          "recipientsCount": {
+            "type": "number",
+            "description": "How many other users currently hold shared access to this conversation, for conversations the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.",
+            "example": 3
+          },
           "isPinned": {
             "type": "boolean",
             "description": "True when the user has pinned this conversation.",
@@ -4808,6 +7742,26 @@
             "type": "boolean",
             "description": "True when the current user does not have WRITE permission on this conversation.",
             "example": false
+          },
+          "isScheduledTask": {
+            "type": "boolean",
+            "description": "True when this conversation was created by a DIAL Scheduler run (its resource path matches the `.scheduler/{scheduleId}/{filename}` reserved segment, with `{filename}` shaped `{deploymentId}__{title}__{runId}`).",
+            "example": false
+          },
+          "scheduleId": {
+            "type": "string",
+            "description": "DIAL Scheduler schedule identifier. Present only when `isScheduledTask` is true.",
+            "example": "sched_123"
+          },
+          "runId": {
+            "type": "string",
+            "description": "DIAL Scheduler run identifier. Present only when `isScheduledTask` is true.",
+            "example": "run_001"
+          },
+          "isUnread": {
+            "type": "boolean",
+            "description": "True when this scheduler-created conversation has not yet been opened by the user. Present only when `isScheduledTask` is true.",
+            "example": true
           }
         },
         "required": [
@@ -4817,7 +7771,8 @@
           "sharedWithMe",
           "publishedWithMe",
           "isPinned",
-          "isReadonly"
+          "isReadonly",
+          "isScheduledTask"
         ]
       },
       "ConversationListResponseDto": {
@@ -4954,6 +7909,11 @@
                 "$ref": "#/components/schemas/MessageCustomContentDto"
               }
             ]
+          },
+          "clientChannelId": {
+            "type": "string",
+            "description": "Active DIAL Core client-channel id (from `POST /v1/client-channel/subscribe`), forwarded to DIAL Core so a mid-completion `toolset/signin` event can be correlated to this request. Omitted when no channel is active yet.",
+            "example": "a1b2c3d4-e5f6-4789-a012-3456789abcde"
           }
         },
         "required": ["generationId", "path", "model", "mode"]
@@ -5096,6 +8056,264 @@
         },
         "required": ["confirm"]
       },
+      "PublishRuleDto": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Claim/category name this rule matches against.",
+            "example": "roles"
+          },
+          "function": {
+            "type": "string",
+            "enum": ["EQUAL", "CONTAIN", "REGEX"],
+            "example": "CONTAIN"
+          },
+          "targets": {
+            "description": "Values combined with OR; exactly one pattern when function is REGEX.",
+            "example": ["engineering", "support"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["source", "function", "targets"]
+      },
+      "PublishConversationDto": {
+        "type": "object",
+        "properties": {
+          "folderPath": {
+            "type": "string",
+            "description": "Destination folder under the Organization/public bucket, forwarded to DIAL Core as `targetFolder`.",
+            "example": "Organization/Data Science/Shared chats"
+          },
+          "rules": {
+            "description": "Access-restriction rules combined with AND; forwarded to DIAL Core unchanged. Omitted or empty means no additional restriction.",
+            "default": [],
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishRuleDto"
+            }
+          }
+        },
+        "required": ["folderPath"]
+      },
+      "PublishConversationResultDto": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "example": "conversations/bucket-123/my-conversation-abc"
+          },
+          "folderPath": {
+            "type": "string",
+            "example": "Organization/Data Science/Shared chats"
+          },
+          "publishedAt": {
+            "type": "string",
+            "example": "2026-07-15T10:00:00.000Z"
+          },
+          "publishedBy": {
+            "type": "string",
+            "example": "Test User"
+          }
+        },
+        "required": ["path", "folderPath", "publishedAt", "publishedBy"]
+      },
+      "PromptResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Prompt path within the prompts namespace (used as stable ID)",
+            "example": "Work/AI/my-prompt"
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name",
+            "example": "My Prompt"
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional description",
+            "maxLength": 2000
+          },
+          "content": {
+            "type": "string",
+            "description": "Prompt text content",
+            "maxLength": 50000
+          },
+          "folderId": {
+            "type": "string",
+            "description": "Parent folder path; empty string means root",
+            "example": "Work/AI"
+          },
+          "createdAt": {
+            "type": "number",
+            "description": "Creation timestamp (Unix ms)",
+            "example": 1700000000000
+          },
+          "updatedAt": {
+            "type": "number",
+            "description": "Last update timestamp (Unix ms)",
+            "example": 1700000001000
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "content",
+          "folderId",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PromptFolderResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Folder path within the prompts namespace",
+            "example": "Work/AI"
+          },
+          "name": {
+            "type": "string",
+            "description": "Last path segment (display name)",
+            "example": "AI"
+          }
+        },
+        "required": ["id", "name"]
+      },
+      "PromptListResponseDto": {
+        "type": "object",
+        "properties": {
+          "prompts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptResponseDto"
+            }
+          },
+          "folders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptFolderResponseDto"
+            }
+          },
+          "sharedWithMe": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptResponseDto"
+            }
+          }
+        },
+        "required": ["prompts", "folders", "sharedWithMe"]
+      },
+      "CreatePromptDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Prompt name. Must not contain a forward slash.",
+            "example": "My Prompt",
+            "maxLength": 256
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional description",
+            "maxLength": 2000
+          },
+          "content": {
+            "type": "string",
+            "description": "Prompt text. May contain {{variableName}} placeholders.",
+            "maxLength": 50000
+          },
+          "folderId": {
+            "type": "string",
+            "description": "Parent folder path. Empty string or omit for root.",
+            "example": "Work/AI"
+          }
+        },
+        "required": ["name", "content"]
+      },
+      "UpdatePromptDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New display name. Must not contain a forward slash.",
+            "maxLength": 256
+          },
+          "description": {
+            "type": "string",
+            "description": "Updated description",
+            "maxLength": 2000
+          },
+          "content": {
+            "type": "string",
+            "description": "Updated prompt text",
+            "maxLength": 50000
+          }
+        }
+      },
+      "PublicPromptListResponseDto": {
+        "type": "object",
+        "properties": {
+          "prompts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptResponseDto"
+            }
+          },
+          "folders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptFolderResponseDto"
+            }
+          }
+        },
+        "required": ["prompts", "folders"]
+      },
+      "CreatePromptFolderDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Folder name. Must not contain a forward slash.",
+            "example": "AI",
+            "maxLength": 256
+          },
+          "parentId": {
+            "type": "string",
+            "description": "Parent folder path. Omit or leave empty to create at root.",
+            "example": "Work"
+          }
+        },
+        "required": ["name"]
+      },
+      "RenamePromptFolderDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New folder name. Must not contain a forward slash.",
+            "example": "Machine Learning",
+            "maxLength": 256
+          }
+        },
+        "required": ["name"]
+      },
+      "MovePromptDto": {
+        "type": "object",
+        "properties": {
+          "targetFolderId": {
+            "type": "string",
+            "description": "Target folder path. Empty string to move to root.",
+            "example": "Work/AI"
+          }
+        },
+        "required": ["targetFolderId"]
+      },
       "FileUploadResponseDto": {
         "type": "object",
         "properties": {
@@ -5106,6 +8324,36 @@
           }
         },
         "required": ["url"]
+      },
+      "UploadArchiveEntryResultDto": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Destination path of the extracted entry (relative to bucket)"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "true when the entry was extracted and uploaded successfully"
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable error reason when success is false"
+          }
+        },
+        "required": ["path", "success"]
+      },
+      "UploadArchiveResponseDto": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UploadArchiveEntryResultDto"
+            }
+          }
+        },
+        "required": ["results"]
       },
       "ListFilesItemDto": {
         "type": "object",
@@ -5502,6 +8750,12 @@
             "description": "Relative destination path within bucket",
             "example": "archive/q1.pdf"
           },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Whether to overwrite an existing destination resource",
+            "default": false,
+            "example": true
+          },
           "nodeType": {
             "type": "string",
             "enum": ["item", "folder"]
@@ -5584,6 +8838,12 @@
             "description": "Relative destination path within bucket",
             "example": "reports/draft.pdf"
           },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Whether to overwrite an existing destination resource",
+            "default": false,
+            "example": true
+          },
           "nodeType": {
             "type": "string",
             "enum": ["item", "folder"]
@@ -5647,6 +8907,82 @@
           }
         },
         "required": ["results"]
+      },
+      "RevokeAccessItemDto": {
+        "type": "object",
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "description": "DIAL Core bucket name",
+            "example": "my-bucket"
+          },
+          "path": {
+            "type": "string",
+            "description": "Relative path within bucket",
+            "example": "reports/q1.pdf"
+          }
+        },
+        "required": ["bucket", "path"]
+      },
+      "RevokeAccessDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevokeAccessItemDto"
+            }
+          }
+        },
+        "required": ["items"]
+      },
+      "RevokeAccessResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "true when the Core revoke call succeeded"
+          }
+        },
+        "required": ["success"]
+      },
+      "DiscardSharedItemDto": {
+        "type": "object",
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "description": "DIAL Core bucket name",
+            "example": "my-bucket"
+          },
+          "path": {
+            "type": "string",
+            "description": "Relative path within bucket",
+            "example": "reports/q1.pdf"
+          }
+        },
+        "required": ["bucket", "path"]
+      },
+      "DiscardSharedDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscardSharedItemDto"
+            }
+          }
+        },
+        "required": ["items"]
+      },
+      "DiscardSharedResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "true when the Core discard call succeeded"
+          }
+        },
+        "required": ["success"]
       },
       "RateMessageDto": {
         "type": "object",
@@ -5764,6 +9100,608 @@
           }
         },
         "required": ["themes", "images"]
+      },
+      "CreateShareLinkDto": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "description": "Identifier (DIAL Core resource path) of the entity to share.",
+            "example": "gpt-4o"
+          },
+          "resourceKind": {
+            "type": "string",
+            "description": "Set to `prompt` when `itemId` is a bucket-relative prompt path (as returned by the prompts endpoints) rather than a full DIAL Core resource path. The caller's own bucket is then used to qualify it.",
+            "enum": ["prompt"],
+            "example": "prompt"
+          },
+          "access": {
+            "type": "array",
+            "description": "Access levels granted to holders of the share link. Edit access implies view access, so this is `[View, Edit]` rather than `[Edit]` alone.",
+            "example": ["view"],
+            "items": {
+              "type": "string",
+              "enum": ["view", "edit"]
+            }
+          }
+        },
+        "required": ["itemId", "access"]
+      },
+      "ShareLinkResponseDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Absolute shareable URL for the entity.",
+            "example": "https://chat.dialx.ai/marketplace/share/gpt-4o"
+          },
+          "expiresInDays": {
+            "type": "number",
+            "description": "Number of days the link stays active before expiring.",
+            "example": 3
+          },
+          "access": {
+            "type": "array",
+            "description": "Access levels granted to holders of the share link. Edit access implies view access, so this is `[View, Edit]` rather than `[Edit]` alone.",
+            "example": ["view"],
+            "items": {
+              "type": "string",
+              "enum": ["view", "edit"]
+            }
+          }
+        },
+        "required": ["url", "expiresInDays", "access"]
+      },
+      "AcceptInvitationResponseDto": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "description": "Identifier (DIAL Core resource path) of the entity the invitation grants access to.",
+            "example": "gpt-4o"
+          },
+          "sharedDeployment": {
+            "description": "List-item summary of the shared model/application, resolved by id at accept time so the frontend can show its details panel without waiting on a bulk deployments list refresh. Omitted when itemId is a toolset, or when resolution failed (a best-effort step that never fails the accept call itself).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentItemDto"
+              }
+            ]
+          },
+          "sharedToolset": {
+            "description": "List-item summary of the shared toolset, resolved by id at accept time so the frontend can show its details panel without waiting on a bulk toolsets list refresh. Omitted when itemId is not a toolset, or when resolution failed (a best-effort step that never fails the accept call itself).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DialToolsetDto"
+              }
+            ]
+          }
+        },
+        "required": ["itemId"]
+      },
+      "DiscardSharedCatalogItemDto": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "description": "Identifier (DIAL Core resource path) of the catalog item or conversation to discard access to.",
+            "example": "applications/owner-bucket/my-app"
+          }
+        },
+        "required": ["itemId"]
+      },
+      "DiscardSharedCatalogItemResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "true when the discard call succeeded"
+          }
+        },
+        "required": ["success"]
+      },
+      "RevokeSharedAccessDto": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "description": "Identifier (DIAL Core resource path) of the owned catalog item or conversation to revoke all shared access to.",
+            "example": "applications/owner-bucket/my-app"
+          }
+        },
+        "required": ["itemId"]
+      },
+      "RevokeSharedAccessResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "true when the revoke call succeeded"
+          }
+        },
+        "required": ["success"]
+      },
+      "PublishCatalogEntityDto": {
+        "type": "object",
+        "properties": {
+          "folderPath": {
+            "type": "string",
+            "description": "Destination folder under the Organization/public bucket, forwarded to DIAL Core as `targetFolder`.",
+            "example": "Organization/Data Science/Published models"
+          },
+          "version": {
+            "type": "string",
+            "description": "Version label for this publish.",
+            "example": "1.2.0"
+          },
+          "rules": {
+            "description": "Access-restriction rules combined with AND; forwarded to DIAL Core unchanged. Omitted or empty means no additional restriction.",
+            "default": [],
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishRuleDto"
+            }
+          }
+        },
+        "required": ["folderPath", "version"]
+      },
+      "PublishResultDto": {
+        "type": "object",
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "example": "tool-abc123"
+          },
+          "entityType": {
+            "type": "string",
+            "enum": ["model", "toolset", "application"],
+            "example": "toolset"
+          },
+          "folderPath": {
+            "type": "string",
+            "example": "Organization/Data Science/Published models"
+          },
+          "version": {
+            "type": "string",
+            "example": "1.2.0"
+          },
+          "publishedAt": {
+            "type": "string",
+            "example": "2026-07-13T10:00:00.000Z"
+          },
+          "publishedBy": {
+            "type": "string",
+            "example": "user@example.com"
+          }
+        },
+        "required": [
+          "entityId",
+          "entityType",
+          "folderPath",
+          "version",
+          "publishedAt",
+          "publishedBy"
+        ]
+      },
+      "PublishHistoryEntryDto": {
+        "type": "object",
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "example": "tool-abc123"
+          },
+          "entityType": {
+            "type": "string",
+            "enum": ["model", "toolset", "application"],
+            "example": "toolset"
+          },
+          "folderPath": {
+            "type": "string",
+            "example": "Organization/Data Science/Published models"
+          },
+          "version": {
+            "type": "string",
+            "example": "1.2.0"
+          },
+          "publishedAt": {
+            "type": "string",
+            "example": "2026-07-13T10:00:00.000Z"
+          },
+          "publishedBy": {
+            "type": "string",
+            "example": "user@example.com"
+          }
+        },
+        "required": [
+          "entityId",
+          "entityType",
+          "folderPath",
+          "version",
+          "publishedAt",
+          "publishedBy"
+        ]
+      },
+      "PublishRulesResultDto": {
+        "type": "object",
+        "properties": {
+          "rules": {
+            "description": "The requested folder's own access-restriction rules, or an empty array when the folder has none configured.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishRuleDto"
+            }
+          }
+        },
+        "required": ["rules"]
+      },
+      "ScheduleCronDto": {
+        "type": "object",
+        "properties": {
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "example": {
+              "minute": "0",
+              "hour": "9"
+            },
+            "description": "Cron field map using supported Scheduler keys (year, month, day, week, day_of_week, hour, minute, second)."
+          },
+          "startDate": {
+            "type": "string",
+            "example": "2026-08-01T00:00:00.000Z",
+            "description": "Start of the activity window during which this cron trigger fires. Omitted when unset."
+          },
+          "endDate": {
+            "type": "string",
+            "example": "2026-12-31T23:59:59.999Z",
+            "description": "End of the activity window during which this cron trigger fires. Omitted when unset."
+          }
+        },
+        "required": ["fields"]
+      },
+      "ScheduleTriggerDto": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "example": "2026-07-24T09:00:00.000Z"
+          },
+          "cron": {
+            "$ref": "#/components/schemas/ScheduleCronDto"
+          }
+        }
+      },
+      "ScheduledTaskDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "sched_123"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Daily summary"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/ScheduleTriggerDto"
+          },
+          "nextRunTime": {
+            "type": "string",
+            "example": "2026-07-28T12:00:00.000Z"
+          },
+          "createdAt": {
+            "type": "string",
+            "example": "2026-07-23T21:27:07.000Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "example": "2026-07-23T21:27:07.000Z"
+          },
+          "triggerType": {
+            "type": "string",
+            "enum": ["cron", "date"],
+            "example": "cron"
+          },
+          "isActive": {
+            "type": "boolean",
+            "example": true
+          },
+          "serviceId": {
+            "type": "string",
+            "example": "dial-oauth"
+          },
+          "createdBy": {
+            "type": "string",
+            "example": "70e570e9-cc23-4ffd-9182-078d09f116ac"
+          },
+          "description": {
+            "type": "string",
+            "example": "Summarizes unread inbox items every morning"
+          },
+          "model": {
+            "type": "string",
+            "example": "gpt-4.1-mini-2025-04-14"
+          },
+          "prompt": {
+            "type": "string",
+            "example": "Summarize my inbox"
+          }
+        },
+        "required": ["id", "displayName", "trigger"]
+      },
+      "ListScheduledTasksResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduledTaskDto"
+            }
+          },
+          "count": {
+            "type": "number",
+            "example": 4,
+            "description": "Total number of schedules upstream, across all pages."
+          },
+          "limit": {
+            "type": "number",
+            "example": 20,
+            "description": "Page size used by the upstream DIAL Scheduler response."
+          },
+          "offset": {
+            "type": "number",
+            "example": 0,
+            "description": "Offset of `items` within the full upstream result set."
+          },
+          "next": {
+            "type": "string",
+            "example": null,
+            "nullable": true,
+            "description": "Upstream URL for the next page, or null if this is the last page."
+          },
+          "previous": {
+            "type": "string",
+            "example": null,
+            "nullable": true,
+            "description": "Upstream URL for the previous page, or null if this is the first page."
+          }
+        },
+        "required": ["items"]
+      },
+      "CreateScheduledTaskBodyDto": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "example": "Daily summary"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/ScheduleTriggerDto"
+          },
+          "model": {
+            "type": "string",
+            "example": "gpt-4.1-mini-2025-04-14"
+          },
+          "prompt": {
+            "type": "string",
+            "example": "Summarize my inbox"
+          },
+          "description": {
+            "type": "string",
+            "example": "Summarizes unread inbox items every morning"
+          }
+        },
+        "required": ["displayName", "trigger", "model", "prompt"]
+      },
+      "CreatedScheduledTaskDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "sched_123"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Daily summary"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/ScheduleTriggerDto"
+          },
+          "nextRunTime": {
+            "type": "string",
+            "example": "2026-07-28T12:00:00.000Z"
+          },
+          "createdAt": {
+            "type": "string",
+            "example": "2026-07-23T21:27:07.000Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "example": "2026-07-23T21:27:07.000Z"
+          },
+          "triggerType": {
+            "type": "string",
+            "enum": ["cron", "date"],
+            "example": "cron"
+          },
+          "isActive": {
+            "type": "boolean",
+            "example": true
+          },
+          "serviceId": {
+            "type": "string",
+            "example": "dial-oauth"
+          },
+          "createdBy": {
+            "type": "string",
+            "example": "70e570e9-cc23-4ffd-9182-078d09f116ac"
+          },
+          "description": {
+            "type": "string",
+            "example": "Summarizes unread inbox items every morning"
+          },
+          "model": {
+            "type": "string",
+            "example": "gpt-4.1-mini-2025-04-14"
+          },
+          "prompt": {
+            "type": "string",
+            "example": "Summarize my inbox"
+          }
+        },
+        "required": ["id", "displayName", "trigger"]
+      },
+      "ScheduledTaskRunDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "run_9f2a"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["Success", "Error", "InProgress", "Missed"],
+            "example": "Success"
+          },
+          "startTime": {
+            "type": "string",
+            "example": "2026-07-24T09:00:00.000Z"
+          },
+          "endTime": {
+            "type": "string",
+            "example": "2026-07-24T09:01:39.000Z",
+            "nullable": true
+          },
+          "durationSeconds": {
+            "type": "number",
+            "example": 99
+          }
+        },
+        "required": ["id", "status", "startTime"]
+      },
+      "ListScheduledTaskRunsResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduledTaskRunDto"
+            }
+          },
+          "count": {
+            "type": "number",
+            "example": 242,
+            "description": "Total number of runs upstream, across all pages."
+          },
+          "limit": {
+            "type": "number",
+            "example": 20,
+            "description": "Page size used by the upstream DIAL Scheduler response."
+          },
+          "offset": {
+            "type": "number",
+            "example": 40,
+            "description": "Offset of `items` within the full upstream result set."
+          },
+          "next": {
+            "type": "string",
+            "example": "/schedules/sched_123/runs?limit=20&offset=60",
+            "nullable": true,
+            "description": "Upstream URL for the next page, or null if this is the last page."
+          },
+          "previous": {
+            "type": "string",
+            "example": "/schedules/sched_123/runs?limit=20&offset=20",
+            "nullable": true,
+            "description": "Upstream URL for the previous page, or null if this is the first page."
+          }
+        },
+        "required": ["items"]
+      },
+      "UpdateScheduledTaskBodyDto": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "example": "Daily summary"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/ScheduleTriggerDto"
+          },
+          "model": {
+            "type": "string",
+            "example": "gpt-4.1-mini-2025-04-14"
+          },
+          "prompt": {
+            "type": "string",
+            "example": "Summarize my inbox"
+          },
+          "description": {
+            "type": "string",
+            "example": "Summarizes unread inbox items every morning"
+          }
+        },
+        "required": ["displayName", "trigger", "model", "prompt"]
+      },
+      "UpdatedScheduledTaskDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "sched_123"
+          },
+          "displayName": {
+            "type": "string",
+            "example": "Daily summary"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/ScheduleTriggerDto"
+          },
+          "nextRunTime": {
+            "type": "string",
+            "example": "2026-07-28T12:00:00.000Z"
+          },
+          "createdAt": {
+            "type": "string",
+            "example": "2026-07-23T21:27:07.000Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "example": "2026-07-23T21:27:07.000Z"
+          },
+          "triggerType": {
+            "type": "string",
+            "enum": ["cron", "date"],
+            "example": "cron"
+          },
+          "isActive": {
+            "type": "boolean",
+            "example": true
+          },
+          "serviceId": {
+            "type": "string",
+            "example": "dial-oauth"
+          },
+          "createdBy": {
+            "type": "string",
+            "example": "70e570e9-cc23-4ffd-9182-078d09f116ac"
+          },
+          "description": {
+            "type": "string",
+            "example": "Summarizes unread inbox items every morning"
+          },
+          "model": {
+            "type": "string",
+            "example": "gpt-4.1-mini-2025-04-14"
+          },
+          "prompt": {
+            "type": "string",
+            "example": "Summarize my inbox"
+          }
+        },
+        "required": ["id", "displayName", "trigger"]
       }
     }
   }

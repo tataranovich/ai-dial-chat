@@ -1,29 +1,33 @@
-## ADDED Requirements
+## Purpose
+
+Define how the DIAL file manager attach modal validates selectable rows and the final attach payload before files are added to a chat message.
+
+## Requirements
 
 ### Requirement: Hidden-path rows are not selectable
 
-`DialFileManagerModal` SHALL prevent selection of any grid row whose `path` contains `.dial_folder` (including files inside hidden folders). The `isRowSelectable` predicate SHALL return `false` for such rows.
+`DialFileManagerModal` SHALL prevent selection of any grid row whose `path` contains a hidden path segment. A segment is hidden when it starts with `.` (for example `.env`, `.hidden`, or the file-manager placeholder `.dial_folder`). This includes files inside hidden folders. The `isRowSelectable` predicate SHALL return `false` for such rows.
 
-A utility function `isHiddenPath(path: string): boolean` SHALL be created in `apps/chat/src/utils/file-path.ts` (or an existing app-level file-path utility) using the `HIDDEN_FILE` constant from `@epam/ai-dial-chat-shared`. This helper MUST NOT be placed inside any `libs/*` package.
+A utility function `isHiddenPath(path: string): boolean` SHALL live in `apps/chat/src/utils/file-path.ts` (or an existing app-level file-path utility) and evaluate path segments rather than relying on a single marker string. This helper MUST NOT be placed inside any `libs/*` package.
 
 i18n: tooltip key `DialFileManager.AttachingHiddenFilesNotAllowed`
 RTL: none (tooltip text only)
 Feature flag: none
 Memoisation: `isRowSelectable` is already inside `useMemo`-wrapped `gridOptions`; no additional memoisation needed.
 
-#### Scenario: Hidden marker file is not selectable
+#### Scenario: Dot-prefixed hidden file is not selectable
 
-- **WHEN** a row with `path` containing `.dial_folder` is rendered in the grid
+- **WHEN** a row with `path` containing a dot-prefixed segment such as `/My files/.env` is rendered in the grid
 - **THEN** `isRowSelectable` returns `false` for that row and the checkbox is not rendered / is disabled
 
 #### Scenario: File inside a hidden folder is not selectable
 
-- **WHEN** a file row has a `path` like `files/bucket/.dial_folder/child.txt`
+- **WHEN** a file row has a `path` like `/My files/.hidden/child.txt`
 - **THEN** `isRowSelectable` returns `false` for that row
 
 #### Scenario: Normal file is still selectable
 
-- **WHEN** a file row has a `path` that does not contain `.dial_folder`
+- **WHEN** a file row has a `path` with no dot-prefixed segments
 - **THEN** `isRowSelectable` returns `true` for that row (subject to MIME and size rules)
 
 ---
@@ -96,7 +100,7 @@ Memoisation: same `isRowSelectable` in `useMemo` grid options
 ### Requirement: Attach handler skips hidden and MIME-invalid files with info toast
 
 When the user clicks Attach, `DialFileManagerModal` SHALL:
-1. Remove from the resolved set any selected file that is hidden (`isHiddenPath`) or has a disallowed MIME type (when `allowedTypes` is provided).
+1. Remove from the resolved set any selected file that is hidden (`isHiddenPath`: any path segment starts with `.`) or has a disallowed MIME type (when `allowedTypes` is provided).
 2. If any files were removed due to unsupported type, show an info notification (title: `DialFileManager.UnsupportedFilesSkipped`, message: `DialFileManager.UnsupportedFilesDescription`).
 3. Call `onAttach` with the filtered set (modal closes).
 
@@ -126,9 +130,13 @@ Memoisation: `handleAttach` in `useCallback`
 
 ### Requirement: Attach handler blocks when count exceeds maximumAttachmentsAmount
 
-When `maximumAttachmentsAmount` is provided and greater than `0`, `DialFileManagerModal` SHALL check the count of the valid (post-filter) selection **after** applying hidden and MIME filters. If the count exceeds `maximumAttachmentsAmount`, the modal SHALL:
+When `maximumAttachmentsAmount` is provided as a finite number greater than `0`, `DialFileManagerModal` SHALL check the count of the valid (post-filter) selection **after** applying hidden and MIME filters. The count SHALL include both the valid current modal selection and `existingAttachmentsAmount` (default `0`) supplied by the host for attachments already present in the conversation input tray.
+
+If the combined count exceeds `maximumAttachmentsAmount`, the modal SHALL:
 1. Show an error notification (title: `DialFileManager.TooManyFilesSelected`, message: `DialFileManager.TooManyFilesDescription` with `{{count}}` and `{{limit}}`).
 2. **Not** call `onAttach` — the modal stays open.
+
+When `maximumAttachmentsAmount` is `undefined`, `0`, negative, or non-finite, no count restriction is applied.
 
 i18n keys: `DialFileManager.TooManyFilesSelected`, `DialFileManager.TooManyFilesDescription` (params: `count`, `limit`)
 RTL: none (toast only)
@@ -140,7 +148,15 @@ Memoisation: `handleAttach` in `useCallback`
 - **WHEN** `maximumAttachmentsAmount` is `3`, user selects 5 valid files, and clicks Attach
 - **THEN** an error toast is shown with count=5, limit=3, and `onAttach` is NOT called
 
-#### Scenario: Count at limit — attach succeeds
+#### Scenario: Previously attached files count toward limit
+
+- **WHEN** `maximumAttachmentsAmount` is `2`
+- **AND** `existingAttachmentsAmount` is `2`
+- **AND** user selects 1 valid file and clicks Attach
+- **THEN** an error toast is shown with count=3, limit=2
+- **AND** `onAttach` is NOT called
+
+#### Scenario: Count at limit
 
 - **WHEN** `maximumAttachmentsAmount` is `3` and user selects exactly 3 valid files
 - **THEN** `onAttach` is called with 3 files and the modal closes

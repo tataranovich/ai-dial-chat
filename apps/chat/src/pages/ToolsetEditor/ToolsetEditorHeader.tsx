@@ -3,15 +3,17 @@ import type { FC } from 'react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import EditorHeader from '../../components/EditorHeader/EditorHeader';
+import { ToolsetEditorSteps } from '../../constants/toolsets';
 import {
+  BasicI18nKeys,
   ButtonsI18nKeys,
-  ToolsetEditorI18nKeys,
+  EditorI18nKeys,
 } from '../../constants/translation-keys';
-import { ToolsetEditorSteps } from '../../types/toolsets';
 
 interface Props {
   step: ToolsetEditorSteps;
   isSaving: boolean;
+  isSaveDisabled: boolean;
   canOpenSettings: boolean;
   onChangeStep: (stepId: string) => void;
   onCancel: () => void;
@@ -21,6 +23,7 @@ interface Props {
 const ToolsetEditorHeader: FC<Props> = ({
   step,
   isSaving,
+  isSaveDisabled,
   canOpenSettings,
   onChangeStep,
   onCancel,
@@ -32,12 +35,12 @@ const ToolsetEditorHeader: FC<Props> = ({
     () => [
       {
         id: ToolsetEditorSteps.General,
-        name: t(ToolsetEditorI18nKeys.StepGeneral),
+        name: t(EditorI18nKeys.StepGeneral),
         status: canOpenSettings ? StepStatus.VALID : undefined,
       },
       {
         id: ToolsetEditorSteps.Settings,
-        name: t(ToolsetEditorI18nKeys.StepSettings),
+        name: t(BasicI18nKeys.Settings),
         status: canOpenSettings ? StepStatus.VALID : undefined,
       },
     ],
@@ -48,10 +51,11 @@ const ToolsetEditorHeader: FC<Props> = ({
     <EditorHeader
       steps={steps}
       currentStep={step}
-      navAriaLabel={t(ToolsetEditorI18nKeys.StepsNavAriaLabel)}
+      navAriaLabel={t(EditorI18nKeys.StepsNavAriaLabel)}
       isSaving={isSaving}
+      isSaveDisabled={isSaveDisabled}
       cancelButtonLabel={t(ButtonsI18nKeys.Cancel)}
-      saveButtonLabel={t(ToolsetEditorI18nKeys.SaveButton)}
+      saveButtonLabel={t(EditorI18nKeys.SaveButton)}
       onChangeStep={onChangeStep}
       onCancel={onCancel}
       onSave={onSave}

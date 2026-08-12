@@ -1,11 +1,13 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import { TabRow } from '@epam/ai-dial-kit';
-import { DialSpinner } from '@epam/ai-dial-ui-kit';
+import { Spinner, DropdownItem } from '@epam/ai-dial-ui-kit';
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CatalogItem } from '../../models/catalog-item';
 import type { CatalogProps } from '../../models/catalog-props';
-import type { CatalogItemTabData } from '../../models/item-details-data';
+import type { CatalogItemDetailsFetchResult } from '../../models/item-details-data';
+import { CatalogEntityType } from '../../types/entity-type';
 import { CatalogSortKey } from '../../types/sort';
+import type { CredentialsLevel } from '../../types/toolset-auth';
 import { CatalogViewMode } from '../../types/view-mode';
 import {
   filterByMyApp,
@@ -23,11 +25,7 @@ import { Toolbar } from '../Toolbar/Toolbar';
 import styles from './Catalog.module.scss';
 import { CreateButton } from './CreateButton';
 
-/**
- * Root catalog component. Owns all filter/sort/tab/pagination state and wires
- * Favorites, Toolbar, CardGrid, and ListView.
- * All data arrives via props — no direct API or context access.
- */
+/** Root catalog component: entity browsing with tabs, search, sort, filter, favorites strip, and details panel. */
 export const Catalog: FC<CatalogProps> = ({
   items,
   favorites,
@@ -36,17 +34,47 @@ export const Catalog: FC<CatalogProps> = ({
   onUseInChat,
   isPrimaryActionVisible,
   onShare,
+  isPublishVisible,
+  getPublishHistory,
+  publishFolderItems,
+  publishExpandedPaths,
+  onPublishExpandedPathsChange,
+  publishLoadingPaths,
+  hasPublishWriteAccess,
+  onPublish,
+  onPublishSuccess,
+  onPublishError,
+  onCreatePublishFolder,
+  publishLabels,
+  ruleSourceOptions,
+  onFetchExistingRules,
+  shareOverlay,
+  isShareVisible,
   onFetchDetails,
   onEdit,
+  onDelete,
+  onUnshare,
+  isUnshareVisible,
+  onRevokeShare,
+  onLogin,
+  onLogout,
   onCreateClick,
   createOptions,
   hideCreateButton = false,
   hidePageTitle = false,
+  initialViewMode = CatalogViewMode.Grid,
   selectedItemId,
   onCardClick,
   isLoading,
   styles: catalogStyles,
   detailsTexts,
+  initialDetailsItemId,
+  sortKey: controlledSortKey,
+  onSortChange,
+  filterTopics: controlledFilterTopics,
+  onFilterTopicsChange,
+  isMyAppsActive: controlledIsMyAppsActive,
+  onMyAppsActiveChange,
 }) => {
   const { typography } = catalogStyles ?? {};
   const cssVars = getStyles(catalogStyles);
@@ -64,31 +92,65 @@ export const Catalog: FC<CatalogProps> = ({
   const listViewLabel = titles?.listViewLabel ?? 'List view';
   const resolvedAriaLabel = titles?.ariaLabel ?? 'Catalog';
 
-  const sortOptions = [
+  const sortOptions: DropdownItem[] = [
     {
-      value: CatalogSortKey.RecentlyUpdated,
+      key: CatalogSortKey.RecentlyUpdated,
       label: titles?.sortRecentlyUpdatedLabel ?? 'Recently Updated',
+      onClick: () => handleSortChange?.(CatalogSortKey.RecentlyUpdated),
     },
     {
-      value: CatalogSortKey.Newest,
+      key: CatalogSortKey.Newest,
       label: titles?.sortNewestLabel ?? 'Newest',
+      onClick: () => handleSortChange?.(CatalogSortKey.Newest),
     },
     {
-      value: CatalogSortKey.NameAZ,
+      key: CatalogSortKey.NameAZ,
       label: titles?.sortNameAZLabel ?? 'Name A-Z',
+      onClick: () => handleSortChange?.(CatalogSortKey.NameAZ),
     },
   ];
 
   const [query, setQuery] = useState('');
-  const [viewMode, setViewMode] = useState<CatalogViewMode>(
-    CatalogViewMode.Grid,
+  const [viewMode, setViewMode] = useState<CatalogViewMode>(initialViewMode);
+  const [listEverShown, setListEverShown] = useState(
+    initialViewMode === CatalogViewMode.List,
   );
-  const [listEverShown, setListEverShown] = useState(false);
-  const [sortKey, setSortKey] = useState<string>(
+  const [internalSortKey, setInternalSortKey] = useState<CatalogSortKey>(
     CatalogSortKey.RecentlyUpdated,
   );
-  const [filters, setFilters] = useState<Set<string>>(new Set());
-  const [isMyAppsActive, setIsMyAppsActive] = useState(false);
+  const [internalFilters, setInternalFilters] = useState<Set<string>>(
+    new Set(),
+  );
+  const [internalIsMyAppsActive, setInternalIsMyAppsActive] = useState(false);
+
+  const sortKey = controlledSortKey ?? internalSortKey;
+  const filters = controlledFilterTopics ?? internalFilters;
+  const isMyAppsActive = controlledIsMyAppsActive ?? internalIsMyAppsActive;
+
+  const handleSortChange = useCallback(
+    (key: string) => {
+      const nextSortKey = key as CatalogSortKey;
+      setInternalSortKey(nextSortKey);
+      onSortChange?.(nextSortKey);
+    },
+    [onSortChange],
+  );
+
+  const handleFiltersChange = useCallback(
+    (topics: Set<string>) => {
+      setInternalFilters(topics);
+      onFilterTopicsChange?.(topics);
+    },
+    [onFilterTopicsChange],
+  );
+
+  const handleMyAppsActiveChange = useCallback(
+    (isActive: boolean) => {
+      setInternalIsMyAppsActive(isActive);
+      onMyAppsActiveChange?.(isActive);
+    },
+    [onMyAppsActiveChange],
+  );
 
   const filteredItems = useMemo(
     () => items.filter((item) => !item.isHidden),
@@ -131,7 +193,7 @@ export const Catalog: FC<CatalogProps> = ({
   const [selectedItem, setSelectedItem] = useState<CatalogItem | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [fetchedDetails, setFetchedDetails] = useState<
-    CatalogItemTabData | undefined
+    CatalogItemDetailsFetchResult | undefined
   >(undefined);
   const [isDetailsLoading, setIsDetailsLoading] = useState(false);
   const pendingItemIdRef = useRef<string | null>(null);
@@ -167,6 +229,60 @@ export const Catalog: FC<CatalogProps> = ({
     [onFetchDetails],
   );
 
+  const appliedInitialDetailsItemIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialDetailsItemId) {
+      appliedInitialDetailsItemIdRef.current = null;
+      return;
+    }
+    if (appliedInitialDetailsItemIdRef.current === initialDetailsItemId) {
+      return;
+    }
+    const item = items.find(
+      (catalogItem) => catalogItem.id === initialDetailsItemId,
+    );
+    if (!item) return;
+    appliedInitialDetailsItemIdRef.current = initialDetailsItemId;
+    void handleOpenDetails(item);
+  }, [initialDetailsItemId, items, handleOpenDetails]);
+
+  /*
+   * Keeps the open details panel in sync with later corrections to `items`
+   * (e.g. share-invitation resolution upgrading isMy/canEdit/sharedWithMe
+   * from the owner-context placeholder to the real shared-context values).
+   * Without this, selectedItem stays frozen on whatever snapshot was current
+   * when the panel first opened, so the Edit button and bucket label never
+   * update until the page is refreshed.
+   */
+  useEffect(() => {
+    if (selectedItem == null) return;
+    const updated = items.find(
+      (catalogItem) => catalogItem.id === selectedItem.id,
+    );
+    if (updated && updated !== selectedItem) {
+      setSelectedItem(updated);
+    }
+  }, [items, selectedItem]);
+
+  const handleLogin = useCallback(
+    async (
+      item: CatalogItem,
+      params: { level: CredentialsLevel; apiKey?: string },
+    ) => {
+      await onLogin?.(item, params);
+      await handleOpenDetails(item);
+    },
+    [onLogin, handleOpenDetails],
+  );
+
+  const handleLogout = useCallback(
+    async (item: CatalogItem, params: { level: CredentialsLevel }) => {
+      await onLogout?.(item, params);
+      await handleOpenDetails(item);
+    },
+    [onLogout, handleOpenDetails],
+  );
+
   const handleCloseDetails = useCallback(() => {
     setIsDetailsOpen(false);
     pendingItemIdRef.current = null;
@@ -179,9 +295,13 @@ export const Catalog: FC<CatalogProps> = ({
 
   const detailsPanelItem = useMemo<CatalogItem | null>(() => {
     if (selectedItem == null) return null;
-    return fetchedDetails != null
-      ? { ...selectedItem, details: fetchedDetails }
-      : selectedItem;
+    if (fetchedDetails == null) return selectedItem;
+    const { credentials, ...tabData } = fetchedDetails;
+    return {
+      ...selectedItem,
+      details: tabData,
+      credentials: credentials ?? selectedItem.credentials,
+    };
   }, [selectedItem, fetchedDetails]);
 
   const sorted = useMemo(
@@ -228,14 +348,19 @@ export const Catalog: FC<CatalogProps> = ({
 
   const emptyTitle = query ? noResultsTitle(query) : 'No items';
   const cardGridTitles = useMemo(
-    () => ({ noResultsTitle: emptyTitle, featuredLabel }),
-    [emptyTitle, featuredLabel],
+    () => ({
+      noResultsTitle: emptyTitle,
+      featuredLabel,
+      credentialsBadgeLoggedOutLabel:
+        detailsTexts?.credentialsBadgeLoggedOutLabel,
+    }),
+    [emptyTitle, featuredLabel, detailsTexts?.credentialsBadgeLoggedOutLabel],
   );
 
   if (isLoading) {
     return (
       <div className="flex size-full min-h-0 flex-1 items-center justify-center">
-        <DialSpinner />
+        <Spinner />
       </div>
     );
   }
@@ -243,7 +368,10 @@ export const Catalog: FC<CatalogProps> = ({
   return (
     <section
       aria-label={resolvedAriaLabel}
-      className={mergeClasses('flex min-h-0 flex-1 flex-col', styles.root)}
+      className={mergeClasses(
+        'flex size-full min-h-0 flex-1 flex-col',
+        styles.root,
+      )}
       style={cssVars}
     >
       {(!hidePageTitle || !hideCreateButton) && (
@@ -270,7 +398,7 @@ export const Catalog: FC<CatalogProps> = ({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {isFavoritesRendered && (
           <div className="w-full px-8">
             <Favorites
@@ -282,17 +410,19 @@ export const Catalog: FC<CatalogProps> = ({
               isLeaving={isFavoritesLeaving}
               onExitComplete={handleFavoritesExitComplete}
               selectedItemId={selectedItemId}
+              credentialsBadgeLoggedOutLabel={
+                detailsTexts?.credentialsBadgeLoggedOutLabel
+              }
             />
           </div>
         )}
 
         <div className="w-full px-4 pt-6">
           <Toolbar
-            totalCount={filteredItems.length}
+            totalCount={myAppsFiltered.length}
             viewMode={viewMode}
             onViewModeChange={handleViewModeChange}
             sortKey={sortKey}
-            onSortChange={setSortKey}
             query={query}
             onQueryChange={setQuery}
             title={browseTitle}
@@ -301,10 +431,10 @@ export const Catalog: FC<CatalogProps> = ({
             listViewLabel={listViewLabel}
             sortOptions={sortOptions}
             filters={filters}
-            onFiltersChange={setFilters}
+            onFiltersChange={handleFiltersChange}
             filterValues={allFilterValues}
             isMyAppsActive={isMyAppsActive}
-            onMyAppsChange={setIsMyAppsActive}
+            onMyAppsChange={handleMyAppsActiveChange}
             filterFromLabel={titles?.filterFromLabel}
             filterMyAppsLabel={titles?.filterMyAppsLabel}
             filterTopicsLabel={titles?.filterTopicsLabel}
@@ -323,31 +453,43 @@ export const Catalog: FC<CatalogProps> = ({
               }))}
               activeTabId={activeTab}
               onTabChange={setActiveTab}
-              activeTabClassName="text-catalog-tab-active"
-              inactiveTabClassName="text-catalog-tab-inactive hover:text-catalog-tab-hover border-transparent"
-              activeBadgeClassName="bg-catalog-badge-active text-catalog-badge-active"
-              inactiveBadgeClassName="bg-catalog-badge-inactive text-catalog-badge-inactive"
             />
           </div>
         )}
-
-        <div className="mx-auto w-full max-w-[1180px] px-8 pt-6">
-          {viewMode === CatalogViewMode.Grid && (
-            <div className="pb-8">
-              <CardGrid
-                items={tabFiltered}
-                query={query}
-                onToggleFavorite={onToggleFavorite}
-                onItemClick={onCardClick ?? handleOpenDetails}
-                titles={cardGridTitles}
-                selectedItemId={selectedItemId}
-              />
-            </div>
+        <div
+          className={mergeClasses(
+            tabFiltered.length > 0
+              ? 'mx-auto min-h-full w-full max-w-[1180px] px-8 py-6'
+              : 'min-h-[180px] flex-1',
+            tabFiltered.length === 0 && 'px-8 py-6',
           )}
+        >
+          <div
+            className={mergeClasses(
+              tabFiltered.length > 0 ? 'pb-8' : 'size-full flex-1',
+              viewMode !== CatalogViewMode.Grid && 'hidden',
+            )}
+          >
+            <CardGrid
+              items={tabFiltered}
+              query={query}
+              onToggleFavorite={onToggleFavorite}
+              onItemClick={onCardClick ?? handleOpenDetails}
+              titles={cardGridTitles}
+              selectedItemId={selectedItemId}
+            />
+          </div>
 
-          {listEverShown && viewMode === CatalogViewMode.List && (
-            <div className="pb-8">
+          {listEverShown && (
+            <div
+              className={mergeClasses(
+                'pb-8',
+                viewMode !== CatalogViewMode.List && 'hidden',
+                tabFiltered.length === 0 && 'h-full',
+              )}
+            >
               <ListView
+                type={activeTab as CatalogEntityType}
                 items={tabFiltered}
                 query={query}
                 ariaLabel={resolvedAriaLabel}
@@ -356,6 +498,9 @@ export const Catalog: FC<CatalogProps> = ({
                 onItemClick={onCardClick ?? handleOpenDetails}
                 stickyHeaderTop={0}
                 selectedItemId={selectedItemId}
+                credentialsBadgeLoggedOutLabel={
+                  detailsTexts?.credentialsBadgeLoggedOutLabel
+                }
               />
             </div>
           )}
@@ -373,7 +518,29 @@ export const Catalog: FC<CatalogProps> = ({
           onUseInChat={onUseInChat}
           isPrimaryActionVisible={isPrimaryActionVisible}
           onShare={onShare}
+          isPublishVisible={isPublishVisible}
+          getPublishHistory={getPublishHistory}
+          publishFolderItems={publishFolderItems}
+          publishExpandedPaths={publishExpandedPaths}
+          onPublishExpandedPathsChange={onPublishExpandedPathsChange}
+          publishLoadingPaths={publishLoadingPaths}
+          hasPublishWriteAccess={hasPublishWriteAccess}
+          onPublish={onPublish}
+          onPublishSuccess={onPublishSuccess}
+          onPublishError={onPublishError}
+          onCreatePublishFolder={onCreatePublishFolder}
+          publishLabels={publishLabels}
+          ruleSourceOptions={ruleSourceOptions}
+          onFetchExistingRules={onFetchExistingRules}
+          shareOverlay={shareOverlay}
+          isShareVisible={isShareVisible}
           onEdit={onEdit}
+          onDelete={onDelete}
+          onUnshare={onUnshare}
+          isUnshareVisible={isUnshareVisible}
+          onRevokeShare={onRevokeShare}
+          onLogin={handleLogin}
+          onLogout={handleLogout}
           texts={detailsTexts}
         />
       )}

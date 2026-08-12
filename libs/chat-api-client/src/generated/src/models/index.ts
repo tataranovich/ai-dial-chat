@@ -3,9 +3,84 @@
 /**
  *
  * @export
+ * @interface AcceptInvitationResponseDto
+ */
+export interface AcceptInvitationResponseDto {
+  /**
+   * Identifier (DIAL Core resource path) of the entity the invitation grants access to.
+   * @type {string}
+   * @memberof AcceptInvitationResponseDto
+   */
+  itemId: string;
+  /**
+   * List-item summary of the shared model/application, resolved by id at accept time so the frontend can show its details panel without waiting on a bulk deployments list refresh. Omitted when itemId is a toolset, or when resolution failed (a best-effort step that never fails the accept call itself).
+   * @type {DeploymentItemDto}
+   * @memberof AcceptInvitationResponseDto
+   */
+  sharedDeployment?: DeploymentItemDto;
+  /**
+   * List-item summary of the shared toolset, resolved by id at accept time so the frontend can show its details panel without waiting on a bulk toolsets list refresh. Omitted when itemId is not a toolset, or when resolution failed (a best-effort step that never fails the accept call itself).
+   * @type {DialToolsetDto}
+   * @memberof AcceptInvitationResponseDto
+   */
+  sharedToolset?: DialToolsetDto;
+}
+/**
+ *
+ * @export
+ * @interface AnnouncementItemDto
+ */
+export interface AnnouncementItemDto {
+  /**
+   * Announcement heading. Plain text; never interpreted as markup. Entries without one are dropped server-side.
+   * @type {string}
+   * @memberof AnnouncementItemDto
+   */
+  title: string;
+  /**
+   * Supporting copy, sanitized to a safe HTML subset. Null when unset or when sanitization removes everything.
+   * @type {string}
+   * @memberof AnnouncementItemDto
+   */
+  description: string | null;
+  /**
+   * Optional call to action. Null when the announcement is informational only. An entry whose link is present but invalid is dropped entirely rather than returned without it.
+   * @type {AnnouncementLinkDto}
+   * @memberof AnnouncementItemDto
+   */
+  link: AnnouncementLinkDto | null;
+}
+/**
+ *
+ * @export
+ * @interface AnnouncementLinkDto
+ */
+export interface AnnouncementLinkDto {
+  /**
+   * Visible label of the announcement call to action. Plain text; never interpreted as markup.
+   * @type {string}
+   * @memberof AnnouncementLinkDto
+   */
+  label: string;
+  /**
+   * Absolute http(s) URL the announcement links to. Opened in a new tab with rel="noopener noreferrer". Entries carrying other schemes are dropped server-side.
+   * @type {string}
+   * @memberof AnnouncementLinkDto
+   */
+  href: string;
+}
+/**
+ *
+ * @export
  * @interface ApplicationDetailsDto
  */
 export interface ApplicationDetailsDto {
+  /**
+   * Display name reported by DIAL Core
+   * @type {string}
+   * @memberof ApplicationDetailsDto
+   */
+  displayName?: string;
   /**
    * Non-secret custom application properties reported by DIAL Core
    * @type {{ [key: string]: unknown }}
@@ -55,6 +130,18 @@ export interface ApplicationDetailsDto {
    */
   applicationTypeSchemaId?: string;
   /**
+   * Chat completion endpoint URL for custom applications
+   * @type {string}
+   * @memberof ApplicationDetailsDto
+   */
+  endpoint?: string;
+  /**
+   * Maximum number of input attachments for custom applications
+   * @type {number}
+   * @memberof ApplicationDetailsDto
+   */
+  maxInputAttachments?: number;
+  /**
    * Timestamp of creation time from DIAL Core (e.g. 1714768496000)
    * @type {number}
    * @memberof ApplicationDetailsDto
@@ -103,12 +190,6 @@ export interface ApplicationDto {
    * @memberof ApplicationDto
    */
   description?: string;
-  /**
-   *
-   * @type {string}
-   * @memberof ApplicationDto
-   */
-  intro?: string;
   /**
    *
    * @type {Array<string>}
@@ -395,11 +476,17 @@ export interface Check200Response {
    */
   timestamp?: string;
   /**
-   * Application version
+   * Application version. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Matches the appVersion reported by the client config endpoint.
    * @type {string}
    * @memberof Check200Response
    */
   version?: string;
+  /**
+   * Stable identifier for the running deployment, derived from a hash of the served frontend build. Changes when a new deployment replaces the frontend static assets, letting long-lived clients detect that a reload will pick up a newer build.
+   * @type {string}
+   * @memberof Check200Response
+   */
+  buildId?: string;
 }
 /**
  *
@@ -407,6 +494,12 @@ export interface Check200Response {
  * @interface ClientConfigDto
  */
 export interface ClientConfigDto {
+  /**
+   * Version string of the running chat application. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Always a non-empty string.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  appVersion: string;
   /**
    * Deployment ID of the ASR model. Null when ASR is not configured.
    * @type {string}
@@ -425,6 +518,84 @@ export interface ClientConfigDto {
    * @memberof ClientConfigDto
    */
   defaultDeploymentId?: string | null;
+  /**
+   * Public-facing DIAL Core base URL reachable from the browser. Null when DIAL_CORE_EXTERNAL_URL is not configured.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  dialCoreExternalUrl?: string | null;
+  /**
+   * Which File Manager tabs are shown to users. Defaults to all three currently-supported tabs.
+   * @type {Array<string>}
+   * @memberof ClientConfigDto
+   */
+  fileManagerTabs: Array<string>;
+  /**
+   * Whether the chat-overlay embedded runtime mode is enabled. Sourced from OVERLAY_ENABLED.
+   * @type {boolean}
+   * @memberof ClientConfigDto
+   */
+  overlayEnabled: boolean;
+  /**
+   * Host origins allowed to embed this app. Sourced from ALLOWED_IFRAME_ORIGINS, the same list used for CSP frame-ancestors/frame-src.
+   * @type {Array<string>}
+   * @memberof ClientConfigDto
+   */
+  overlayAllowedOrigins: Array<string>;
+  /**
+   * When set, the complete list of OverlayFeature values that are enabled (replace semantics). Sourced from ENABLED_UI_FEATURES, filtered to recognized values. When null, the compiled-in DEFAULT_ENABLED_UI_FEATURES baseline is used. Does not affect an overlay host that supplies its own enabledFeatures.
+   * @type {Array<string>}
+   * @memberof ClientConfigDto
+   */
+  enabledUiFeatures: Array<string> | null;
+  /**
+   * Operator-authored HTML announcement message shown in a dismissible top-of-app banner. Null when ANNOUNCEMENT_HTML_MESSAGE is not configured.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  announcementHtml?: string | null;
+  /**
+   * Plain-text heading shown in bold at the start of the announcement banner line. Never interpreted as markup. Null when ANNOUNCEMENT_TITLE is not configured or is blank.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  announcementTitle?: string | null;
+  /**
+   * Supporting copy shown after the announcement banner title. Sanitized server-side to a safe HTML subset; anchors are forced to target="_blank" with rel="noopener noreferrer". Null when ANNOUNCEMENT_DESCRIPTION is not configured, is blank, or sanitizes away entirely.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  announcementDescription?: string | null;
+  /**
+   * Announcements listed in the popover behind the banner's "+N announcements" pill, in configured order. Empty when ANNOUNCEMENTS is unset or contained no valid entries. Sourced from ANNOUNCEMENTS.
+   * @type {Array<AnnouncementItemDto>}
+   * @memberof ClientConfigDto
+   */
+  announcements: Array<AnnouncementItemDto>;
+  /**
+   * Tool ID for the Deep Research deployment-configuration property. Null when DEEP_RESEARCH_TOOL_ID is not set.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  deepResearchToolId?: string | null;
+  /**
+   * Operator-authored HTML footer message shown below the chat input (desktop) and in the mobile user panel. Empty string when FOOTER_HTML_MESSAGE is not configured. Sanitized server-side; supports %%VERSION%% token.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  footerHtmlMessage: string;
+  /**
+   * Registry of MIME → visualizer iframe mappings. Sourced from CUSTOM_VISUALIZERS. Empty when unset — the feature is dark by default.
+   * @type {Array<CustomVisualizerDto>}
+   * @memberof ClientConfigDto
+   */
+  customVisualizers: Array<CustomVisualizerDto>;
+  /**
+   * Allowed claim/category names selectable as a publication access rule's source. Sourced from PUBLICATION_FILTER_SOURCES; falls back to the legacy default when unset or empty.
+   * @type {Array<string>}
+   * @memberof ClientConfigDto
+   */
+  publicationFilterSources: Array<string>;
 }
 /**
  *
@@ -576,6 +747,12 @@ export interface ConversationListItemDto {
    */
   publishedWithMe: boolean;
   /**
+   * How many other users currently hold shared access to this conversation, for conversations the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.
+   * @type {number}
+   * @memberof ConversationListItemDto
+   */
+  recipientsCount?: number;
+  /**
    * True when the user has pinned this conversation.
    * @type {boolean}
    * @memberof ConversationListItemDto
@@ -587,6 +764,30 @@ export interface ConversationListItemDto {
    * @memberof ConversationListItemDto
    */
   isReadonly: boolean;
+  /**
+   * True when this conversation was created by a DIAL Scheduler run (its resource path matches the `.scheduler/{scheduleId}/{filename}` reserved segment, with `{filename}` shaped `{deploymentId}__{title}__{runId}`).
+   * @type {boolean}
+   * @memberof ConversationListItemDto
+   */
+  isScheduledTask: boolean;
+  /**
+   * DIAL Scheduler schedule identifier. Present only when `isScheduledTask` is true.
+   * @type {string}
+   * @memberof ConversationListItemDto
+   */
+  scheduleId?: string;
+  /**
+   * DIAL Scheduler run identifier. Present only when `isScheduledTask` is true.
+   * @type {string}
+   * @memberof ConversationListItemDto
+   */
+  runId?: string;
+  /**
+   * True when this scheduler-created conversation has not yet been opened by the user. Present only when `isScheduledTask` is true.
+   * @type {boolean}
+   * @memberof ConversationListItemDto
+   */
+  isUnread?: boolean;
 }
 /**
  *
@@ -631,6 +832,12 @@ export interface ConversationMessageCustomContentDto {
    * @memberof ConversationMessageCustomContentDto
    */
   formValue?: object;
+  /**
+   * Opaque app-managed state to echo back verbatim on the next turn, per the DIAL stateful-app contract.
+   * @type {object}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  state?: object;
   /**
    * Status event discriminator when role is status
    * @type {string}
@@ -696,6 +903,24 @@ export interface ConversationMessageDto {
    * @memberof ConversationMessageDto
    */
   customContent?: ConversationMessageCustomContentDto;
+  /**
+   * Error message when the generation ended in error. Presence signals a terminal error state; absence means the generation succeeded or is still in progress.
+   * @type {string}
+   * @memberof ConversationMessageDto
+   */
+  streamErrorMessage?: string;
+  /**
+   * DIAL Responses API id for this message, set only when the generation was routed through the Responses adapter. Diagnostic only — never used to resume a generation (previous_response_id/conversation are never sent).
+   * @type {string}
+   * @memberof ConversationMessageDto
+   */
+  responseId?: string;
+  /**
+   * Deployment that produced this message. Present on assistant and status messages.
+   * @type {string}
+   * @memberof ConversationMessageDto
+   */
+  deploymentId?: string;
 }
 
 /**
@@ -838,6 +1063,12 @@ export interface ConversationResponseDto {
    */
   temperature: number;
   /**
+   * Optional Responses-API output-token cap, forwarded verbatim as max_output_tokens. Never derived from deployment limits or Chat Completions defaults. Documentation-only decorator — the actual positive-safe-integer check runs at the Responses request-building boundary (ResponsesAdapter.buildRequest via isValidMaxOutputTokens), not through nested DTO validation on save (see design.md Decision 4 of the support-responses-generation-parameters change).
+   * @type {number}
+   * @memberof ConversationResponseDto
+   */
+  maxOutputTokens?: number;
+  /**
    *
    * @type {Array<ConversationMessageDto>}
    * @memberof ConversationResponseDto
@@ -891,6 +1122,56 @@ export const ConversationResponseDtoResponseFormatEnum = {
 export type ConversationResponseDtoResponseFormatEnum =
   (typeof ConversationResponseDtoResponseFormatEnum)[keyof typeof ConversationResponseDtoResponseFormatEnum];
 
+/**
+ *
+ * @export
+ * @interface ConversationStarterDto
+ */
+export interface ConversationStarterDto {
+  /**
+   * Starter button label
+   * @type {string}
+   * @memberof ConversationStarterDto
+   */
+  title: string;
+  /**
+   * Text inserted into the chat input
+   * @type {string}
+   * @memberof ConversationStarterDto
+   */
+  text: string;
+}
+/**
+ *
+ * @export
+ * @interface ConversationStartersDto
+ */
+export interface ConversationStartersDto {
+  /**
+   * Optional text shown above the conversation starter buttons
+   * @type {string}
+   * @memberof ConversationStartersDto
+   */
+  introText?: string;
+  /**
+   * When true, starter buttons submit immediately after selection
+   * @type {boolean}
+   * @memberof ConversationStartersDto
+   */
+  autoSubmit?: boolean;
+  /**
+   * When true, the chat input is disabled and users can only use starters
+   * @type {boolean}
+   * @memberof ConversationStartersDto
+   */
+  chatMessageInputDisabled?: boolean;
+  /**
+   * Conversation starter buttons configured by the application
+   * @type {Array<ConversationStarterDto>}
+   * @memberof ConversationStartersDto
+   */
+  starters: Array<ConversationStarterDto>;
+}
 /**
  *
  * @export
@@ -954,6 +1235,12 @@ export interface CopyItemDto {
    * @memberof CopyItemDto
    */
   destinationPath: string;
+  /**
+   * Whether to overwrite an existing destination resource
+   * @type {boolean}
+   * @memberof CopyItemDto
+   */
+  overwrite?: boolean;
   /**
    *
    * @type {string}
@@ -1022,11 +1309,11 @@ export interface CreateApplicationBodyDto {
    */
   name: string;
   /**
-   *
+   * Omit for plain custom applications with no schema type
    * @type {string}
    * @memberof CreateApplicationBodyDto
    */
-  type: string;
+  type?: string;
   /**
    *
    * @type {string}
@@ -1053,16 +1340,22 @@ export interface CreateApplicationBodyDto {
   topics?: Array<string>;
   /**
    *
-   * @type {string}
-   * @memberof CreateApplicationBodyDto
-   */
-  intro?: string;
-  /**
-   *
    * @type {object}
    * @memberof CreateApplicationBodyDto
    */
   applicationProperties?: object;
+  /**
+   *
+   * @type {Array<LocaleTextEntryDto>}
+   * @memberof CreateApplicationBodyDto
+   */
+  locales?: Array<LocaleTextEntryDto>;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateApplicationBodyDto
+   */
+  primaryLocale?: string;
 }
 /**
  *
@@ -1160,6 +1453,138 @@ export interface CreateFolderResponseDto {
 /**
  *
  * @export
+ * @interface CreatePromptDto
+ */
+export interface CreatePromptDto {
+  /**
+   * Prompt name. Must not contain a forward slash.
+   * @type {string}
+   * @memberof CreatePromptDto
+   */
+  name: string;
+  /**
+   * Optional description
+   * @type {string}
+   * @memberof CreatePromptDto
+   */
+  description?: string;
+  /**
+   * Prompt text. May contain {{variableName}} placeholders.
+   * @type {string}
+   * @memberof CreatePromptDto
+   */
+  content: string;
+  /**
+   * Parent folder path. Empty string or omit for root.
+   * @type {string}
+   * @memberof CreatePromptDto
+   */
+  folderId?: string;
+}
+/**
+ *
+ * @export
+ * @interface CreatePromptFolderDto
+ */
+export interface CreatePromptFolderDto {
+  /**
+   * Folder name. Must not contain a forward slash.
+   * @type {string}
+   * @memberof CreatePromptFolderDto
+   */
+  name: string;
+  /**
+   * Parent folder path. Omit or leave empty to create at root.
+   * @type {string}
+   * @memberof CreatePromptFolderDto
+   */
+  parentId?: string;
+}
+/**
+ *
+ * @export
+ * @interface CreateScheduledTaskBodyDto
+ */
+export interface CreateScheduledTaskBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof CreateScheduledTaskBodyDto
+   */
+  displayName: string;
+  /**
+   *
+   * @type {ScheduleTriggerDto}
+   * @memberof CreateScheduledTaskBodyDto
+   */
+  trigger: ScheduleTriggerDto;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateScheduledTaskBodyDto
+   */
+  model: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateScheduledTaskBodyDto
+   */
+  prompt: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreateScheduledTaskBodyDto
+   */
+  description?: string;
+}
+/**
+ *
+ * @export
+ * @interface CreateShareLinkDto
+ */
+export interface CreateShareLinkDto {
+  /**
+   * Identifier (DIAL Core resource path) of the entity to share.
+   * @type {string}
+   * @memberof CreateShareLinkDto
+   */
+  itemId: string;
+  /**
+   * Set to `prompt` when `itemId` is a bucket-relative prompt path (as returned by the prompts endpoints) rather than a full DIAL Core resource path. The caller's own bucket is then used to qualify it.
+   * @type {string}
+   * @memberof CreateShareLinkDto
+   */
+  resourceKind?: CreateShareLinkDtoResourceKindEnum;
+  /**
+   * Access levels granted to holders of the share link. Edit access implies view access, so this is `[View, Edit]` rather than `[Edit]` alone.
+   * @type {Array<string>}
+   * @memberof CreateShareLinkDto
+   */
+  access: Array<CreateShareLinkDtoAccessEnum>;
+}
+
+/**
+ * @export
+ */
+export const CreateShareLinkDtoResourceKindEnum = {
+  Prompt: 'prompt',
+} as const;
+export type CreateShareLinkDtoResourceKindEnum =
+  (typeof CreateShareLinkDtoResourceKindEnum)[keyof typeof CreateShareLinkDtoResourceKindEnum];
+
+/**
+ * @export
+ */
+export const CreateShareLinkDtoAccessEnum = {
+  View: 'view',
+  Edit: 'edit',
+} as const;
+export type CreateShareLinkDtoAccessEnum =
+  (typeof CreateShareLinkDtoAccessEnum)[keyof typeof CreateShareLinkDtoAccessEnum];
+
+/**
+ *
+ * @export
  * @interface CreatedApplicationDto
  */
 export interface CreatedApplicationDto {
@@ -1171,16 +1596,193 @@ export interface CreatedApplicationDto {
   id: string;
   /**
    *
-   * @type {string}
+   * @type {CreatedApplicationDtoDisplayName}
    * @memberof CreatedApplicationDto
    */
-  displayName?: string;
+  displayName?: CreatedApplicationDtoDisplayName;
   /**
    *
    * @type {string}
    * @memberof CreatedApplicationDto
    */
   object?: string;
+}
+/**
+ * @type CreatedApplicationDtoDisplayName
+ *
+ * @export
+ */
+export type CreatedApplicationDtoDisplayName =
+  | string
+  | { [key: string]: string };
+/**
+ *
+ * @export
+ * @interface CreatedScheduledTaskDto
+ */
+export interface CreatedScheduledTaskDto {
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  displayName: string;
+  /**
+   *
+   * @type {ScheduleTriggerDto}
+   * @memberof CreatedScheduledTaskDto
+   */
+  trigger: ScheduleTriggerDto;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  nextRunTime?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  createdAt?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  updatedAt?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  triggerType?: CreatedScheduledTaskDtoTriggerTypeEnum;
+  /**
+   *
+   * @type {boolean}
+   * @memberof CreatedScheduledTaskDto
+   */
+  isActive?: boolean;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  serviceId?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  createdBy?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  model?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof CreatedScheduledTaskDto
+   */
+  prompt?: string;
+}
+
+/**
+ * @export
+ */
+export const CreatedScheduledTaskDtoTriggerTypeEnum = {
+  Cron: 'cron',
+  Date: 'date',
+} as const;
+export type CreatedScheduledTaskDtoTriggerTypeEnum =
+  (typeof CreatedScheduledTaskDtoTriggerTypeEnum)[keyof typeof CreatedScheduledTaskDtoTriggerTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface CustomVisualizerDto
+ */
+export interface CustomVisualizerDto {
+  /**
+   * The postMessage protocol namespace, NOT a display label. Every message exchanged with the iframe is prefixed "${title}/…", and the visualizer application must be constructed with this identical string as its appName. A mismatch is a silent failure — the iframe loads but never receives data.
+   * @type {string}
+   * @memberof CustomVisualizerDto
+   */
+  title: string;
+  /**
+   * Human-readable description of the visualizer. Accepted for schema parity; not consumed by the host UI.
+   * @type {string}
+   * @memberof CustomVisualizerDto
+   */
+  description?: string;
+  /**
+   * Icon URL or identifier for the visualizer. Accepted for schema parity; not consumed by the host UI.
+   * @type {string}
+   * @memberof CustomVisualizerDto
+   */
+  icon?: string;
+  /**
+   * MIME type(s) this entry matches. Accepts a comma-separated list of MIME types (e.g. "application/vnd.plotly.v1+json, application/vnd.vega.v5+json").
+   * @type {string}
+   * @memberof CustomVisualizerDto
+   */
+  contentType: string;
+  /**
+   * Absolute HTTP(S) URL of the visualizer iframe.
+   * @type {string}
+   * @memberof CustomVisualizerDto
+   */
+  url: string;
+  /**
+   * Milliseconds to wait for a send() request response before rejecting. Defaults to 10000 when unset. Does not bound the initial READY_TO_INTERACT handshake.
+   * @type {number}
+   * @memberof CustomVisualizerDto
+   */
+  requestTimeout?: number;
+  /**
+   * Suggested initial width of the canvas panel in pixels.
+   * @type {number}
+   * @memberof CustomVisualizerDto
+   */
+  width?: number;
+  /**
+   * Suggested initial height of the canvas panel in pixels.
+   * @type {number}
+   * @memberof CustomVisualizerDto
+   */
+  height?: number;
+  /**
+   * Suggested canvas panel height on mobile-sized screens in pixels.
+   * @type {number}
+   * @memberof CustomVisualizerDto
+   */
+  mobileHeight?: number;
+  /**
+   * Whether the host should pass auth info to the visualizer. Accepted for schema parity; auth forwarding is not yet wired.
+   * @type {boolean}
+   * @memberof CustomVisualizerDto
+   */
+  passAuthInfo?: boolean;
+  /**
+   * Whether the host should pass an explicit access token. Accepted for schema parity; auth forwarding is not yet wired.
+   * @type {boolean}
+   * @memberof CustomVisualizerDto
+   */
+  passExplicitToken?: boolean;
 }
 /**
  *
@@ -1562,6 +2164,24 @@ export interface DeploymentFeaturesDto {
    * @memberof DeploymentFeaturesDto
    */
   folderAttachments?: boolean;
+  /**
+   * Whether the deployment supports the MCP protocol
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  mcp?: boolean;
+  /**
+   * Whether the deployment supports the Responses API
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  responsesApi?: boolean;
+  /**
+   * Whether the deployment supports chat completion requests
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  chatCompletion?: boolean;
 }
 /**
  *
@@ -1576,11 +2196,11 @@ export interface DeploymentItemDto {
    */
   id: string;
   /**
-   * Display name, falls back to id when absent
-   * @type {string}
+   *
+   * @type {DeploymentItemDtoDisplayName}
    * @memberof DeploymentItemDto
    */
-  displayName: string;
+  displayName: DeploymentItemDtoDisplayName;
   /**
    *
    * @type {string}
@@ -1594,17 +2214,11 @@ export interface DeploymentItemDto {
    */
   iconUrl?: string;
   /**
-   * Description from DIAL Core
-   * @type {string}
+   *
+   * @type {DeploymentItemDtoDescription}
    * @memberof DeploymentItemDto
    */
-  description?: string;
-  /**
-   * Short catalog-friendly intro from DIAL Core
-   * @type {string}
-   * @memberof DeploymentItemDto
-   */
-  intro?: string;
+  description?: DeploymentItemDtoDescription;
   /**
    * Interface types supported by this deployment
    * @type {Array<string>}
@@ -1635,6 +2249,12 @@ export interface DeploymentItemDto {
    * @memberof DeploymentItemDto
    */
   updatedAt?: number;
+  /**
+   * Timestamp of creation time from DIAL Core (e.g. 1714768496000)
+   * @type {number}
+   * @memberof DeploymentItemDto
+   */
+  createdAt?: number;
   /**
    * Application type schema id from DIAL Core (present only for application deployments)
    * @type {string}
@@ -1684,11 +2304,41 @@ export interface DeploymentItemDto {
    */
   isMy?: boolean;
   /**
+   * True when the current user may edit this deployment — owns it, or was granted WRITE access via a share invitation
+   * @type {boolean}
+   * @memberof DeploymentItemDto
+   */
+  canEdit?: boolean;
+  /**
+   * True when this deployment is shared with the current user (READ or WRITE) and not owned by them
+   * @type {boolean}
+   * @memberof DeploymentItemDto
+   */
+  sharedWithMe?: boolean;
+  /**
+   * How many other users currently hold shared access to this deployment, for deployments the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.
+   * @type {number}
+   * @memberof DeploymentItemDto
+   */
+  recipientsCount?: number;
+  /**
    * Parent folder path for application-type deployments (absent for root-level or non-application items)
    * @type {string}
    * @memberof DeploymentItemDto
    */
   applicationFolder?: string;
+  /**
+   * Quick Apps conversation starter settings from application properties
+   * @type {ConversationStartersDto}
+   * @memberof DeploymentItemDto
+   */
+  conversationStarters?: ConversationStartersDto;
+  /**
+   * Reference from DIAL Core; some conversations/messages address this deployment by reference instead of id
+   * @type {string}
+   * @memberof DeploymentItemDto
+   */
+  reference?: string;
 }
 
 /**
@@ -1702,6 +2352,18 @@ export const DeploymentItemDtoTypeEnum = {
 export type DeploymentItemDtoTypeEnum =
   (typeof DeploymentItemDtoTypeEnum)[keyof typeof DeploymentItemDtoTypeEnum];
 
+/**
+ * @type DeploymentItemDtoDescription
+ * Description from DIAL Core
+ * @export
+ */
+export type DeploymentItemDtoDescription = string | { [key: string]: string };
+/**
+ * @type DeploymentItemDtoDisplayName
+ * Display name, falls back to id when absent. Either a plain string, or a map of locale code to translated value when additional locales are configured.
+ * @export
+ */
+export type DeploymentItemDtoDisplayName = string | { [key: string]: string };
 /**
  *
  * @export
@@ -1870,10 +2532,10 @@ export interface DialModelDto {
   model?: string;
   /**
    *
-   * @type {string}
+   * @type {DialModelDtoDisplayName}
    * @memberof DialModelDto
    */
-  displayName?: string;
+  displayName?: DialModelDtoDisplayName;
   /**
    *
    * @type {string}
@@ -1888,10 +2550,10 @@ export interface DialModelDto {
   iconUrl?: string;
   /**
    *
-   * @type {string}
+   * @type {DialModelDtoDescription}
    * @memberof DialModelDto
    */
-  description?: string;
+  description?: DialModelDtoDescription;
   /**
    *
    * @type {string}
@@ -2001,6 +2663,18 @@ export interface DialModelDto {
    */
   interfaces?: Array<string>;
 }
+/**
+ * @type DialModelDtoDescription
+ *
+ * @export
+ */
+export type DialModelDtoDescription = string | { [key: string]: string };
+/**
+ * @type DialModelDtoDisplayName
+ *
+ * @export
+ */
+export type DialModelDtoDisplayName = string | { [key: string]: string };
 /**
  *
  * @export
@@ -2222,6 +2896,12 @@ export interface DialToolsetAuthSettingsDto {
    */
   authenticationType: DialToolsetAuthSettingsDtoAuthenticationTypeEnum;
   /**
+   * Whether DIAL Core dynamically registered the OAuth client instead of using user-provided client configuration
+   * @type {boolean}
+   * @memberof DialToolsetAuthSettingsDto
+   */
+  dynamicallyRegistered?: boolean;
+  /**
    *
    * @type {string}
    * @memberof DialToolsetAuthSettingsDto
@@ -2334,10 +3014,10 @@ export interface DialToolsetDto {
   toolset: string;
   /**
    *
-   * @type {string}
+   * @type {DialToolsetDtoDisplayName}
    * @memberof DialToolsetDto
    */
-  displayName?: string;
+  displayName?: DialToolsetDtoDisplayName;
   /**
    *
    * @type {string}
@@ -2346,16 +3026,10 @@ export interface DialToolsetDto {
   displayVersion?: string;
   /**
    *
-   * @type {string}
+   * @type {DialToolsetDtoDescription}
    * @memberof DialToolsetDto
    */
-  description?: string;
-  /**
-   *
-   * @type {string}
-   * @memberof DialToolsetDto
-   */
-  intro?: string;
+  description?: DialToolsetDtoDescription;
   /**
    *
    * @type {string}
@@ -2412,10 +3086,10 @@ export interface DialToolsetDto {
   updatedAt?: number;
   /**
    *
-   * @type {DialModelFeaturesDto}
+   * @type {DialToolsetFeaturesDto}
    * @memberof DialToolsetDto
    */
-  features?: DialModelFeaturesDto;
+  features?: DialToolsetFeaturesDto;
   /**
    *
    * @type {string}
@@ -2452,6 +3126,187 @@ export interface DialToolsetDto {
    * @memberof DialToolsetDto
    */
   isMy?: boolean;
+  /**
+   * True when the current user may edit this toolset — owns it, or was granted WRITE access via a share invitation
+   * @type {boolean}
+   * @memberof DialToolsetDto
+   */
+  canEdit?: boolean;
+  /**
+   * True when this toolset is shared with the current user (READ or WRITE) and not owned by them
+   * @type {boolean}
+   * @memberof DialToolsetDto
+   */
+  sharedWithMe?: boolean;
+  /**
+   * How many other users currently hold shared access to this toolset, for toolsets the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.
+   * @type {number}
+   * @memberof DialToolsetDto
+   */
+  recipientsCount?: number;
+}
+/**
+ * @type DialToolsetDtoDescription
+ *
+ * @export
+ */
+export type DialToolsetDtoDescription = string | { [key: string]: string };
+/**
+ * @type DialToolsetDtoDisplayName
+ * Human-readable name. In `listToolsets` results this is always populated: `displayName` when set, otherwise the last path segment of `id`. Either a plain string, or a map of locale code to translated value when additional locales are configured.
+ * @export
+ */
+export type DialToolsetDtoDisplayName = string | { [key: string]: string };
+/**
+ *
+ * @export
+ * @interface DialToolsetFeaturesDto
+ */
+export interface DialToolsetFeaturesDto {
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  rate?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  tokenize?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  truncatePrompt?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  _configuration?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  systemPrompt?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  tools?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  seed?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  urlAttachments?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  folderAttachments?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  allowResume?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  accessibleByPerRequestKey?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  contentParts?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  temperature?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  cache?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  autoCaching?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  parallelToolCalls?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  assistantAttachmentsInRequest?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  mcp?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  chatCompletion?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  responsesApi?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  maxTokensSupported?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  maxCompletionTokensSupported?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof DialToolsetFeaturesDto
+   */
+  customTemperatureSupported?: boolean;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof DialToolsetFeaturesDto
+   */
+  reasoningEfforts?: Array<string>;
 }
 /**
  *
@@ -2465,6 +3320,77 @@ export interface DialToolsetListResponseDto {
    * @memberof DialToolsetListResponseDto
    */
   data: Array<DialToolsetDto>;
+}
+/**
+ *
+ * @export
+ * @interface DiscardSharedCatalogItemDto
+ */
+export interface DiscardSharedCatalogItemDto {
+  /**
+   * Identifier (DIAL Core resource path) of the catalog item or conversation to discard access to.
+   * @type {string}
+   * @memberof DiscardSharedCatalogItemDto
+   */
+  itemId: string;
+}
+/**
+ *
+ * @export
+ * @interface DiscardSharedCatalogItemResponseDto
+ */
+export interface DiscardSharedCatalogItemResponseDto {
+  /**
+   * true when the discard call succeeded
+   * @type {boolean}
+   * @memberof DiscardSharedCatalogItemResponseDto
+   */
+  success: boolean;
+}
+/**
+ *
+ * @export
+ * @interface DiscardSharedDto
+ */
+export interface DiscardSharedDto {
+  /**
+   *
+   * @type {Array<DiscardSharedItemDto>}
+   * @memberof DiscardSharedDto
+   */
+  items: Array<DiscardSharedItemDto>;
+}
+/**
+ *
+ * @export
+ * @interface DiscardSharedItemDto
+ */
+export interface DiscardSharedItemDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof DiscardSharedItemDto
+   */
+  bucket: string;
+  /**
+   * Relative path within bucket
+   * @type {string}
+   * @memberof DiscardSharedItemDto
+   */
+  path: string;
+}
+/**
+ *
+ * @export
+ * @interface DiscardSharedResponseDto
+ */
+export interface DiscardSharedResponseDto {
+  /**
+   * true when the Core discard call succeeded
+   * @type {boolean}
+   * @memberof DiscardSharedResponseDto
+   */
+  success: boolean;
 }
 /**
  *
@@ -2492,6 +3418,121 @@ export interface DuplicateConversationResponseDto {
    */
   newPath: string;
 }
+/**
+ *
+ * @export
+ * @interface ExternalServiceAuthResultDto
+ */
+export interface ExternalServiceAuthResultDto {
+  /**
+   *
+   * @type {boolean}
+   * @memberof ExternalServiceAuthResultDto
+   */
+  success: boolean;
+}
+/**
+ *
+ * @export
+ * @interface ExternalServiceLogoutBodyDto
+ */
+export interface ExternalServiceLogoutBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ExternalServiceLogoutBodyDto
+   */
+  credentialsLevel: ExternalServiceLogoutBodyDtoCredentialsLevelEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof ExternalServiceLogoutBodyDto
+   */
+  authenticationType: ExternalServiceLogoutBodyDtoAuthenticationTypeEnum;
+}
+
+/**
+ * @export
+ */
+export const ExternalServiceLogoutBodyDtoCredentialsLevelEnum = {
+  Global: 'GLOBAL',
+  Application: 'APPLICATION',
+  User: 'USER',
+} as const;
+export type ExternalServiceLogoutBodyDtoCredentialsLevelEnum =
+  (typeof ExternalServiceLogoutBodyDtoCredentialsLevelEnum)[keyof typeof ExternalServiceLogoutBodyDtoCredentialsLevelEnum];
+
+/**
+ * @export
+ */
+export const ExternalServiceLogoutBodyDtoAuthenticationTypeEnum = {
+  None: 'NONE',
+  ApiKey: 'API_KEY',
+  Oauth: 'OAUTH',
+} as const;
+export type ExternalServiceLogoutBodyDtoAuthenticationTypeEnum =
+  (typeof ExternalServiceLogoutBodyDtoAuthenticationTypeEnum)[keyof typeof ExternalServiceLogoutBodyDtoAuthenticationTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface ExternalServiceSigninBodyDto
+ */
+export interface ExternalServiceSigninBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ExternalServiceSigninBodyDto
+   */
+  credentialsLevel: ExternalServiceSigninBodyDtoCredentialsLevelEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof ExternalServiceSigninBodyDto
+   */
+  authenticationType: ExternalServiceSigninBodyDtoAuthenticationTypeEnum;
+  /**
+   * API key value (API_KEY auth).
+   * @type {string}
+   * @memberof ExternalServiceSigninBodyDto
+   */
+  apiKey?: string;
+  /**
+   * OAuth authorization code (OAUTH auth).
+   * @type {string}
+   * @memberof ExternalServiceSigninBodyDto
+   */
+  code?: string;
+  /**
+   * OAuth redirect URI used for the code exchange.
+   * @type {string}
+   * @memberof ExternalServiceSigninBodyDto
+   */
+  redirectUri?: string;
+}
+
+/**
+ * @export
+ */
+export const ExternalServiceSigninBodyDtoCredentialsLevelEnum = {
+  Global: 'GLOBAL',
+  Application: 'APPLICATION',
+  User: 'USER',
+} as const;
+export type ExternalServiceSigninBodyDtoCredentialsLevelEnum =
+  (typeof ExternalServiceSigninBodyDtoCredentialsLevelEnum)[keyof typeof ExternalServiceSigninBodyDtoCredentialsLevelEnum];
+
+/**
+ * @export
+ */
+export const ExternalServiceSigninBodyDtoAuthenticationTypeEnum = {
+  None: 'NONE',
+  ApiKey: 'API_KEY',
+  Oauth: 'OAUTH',
+} as const;
+export type ExternalServiceSigninBodyDtoAuthenticationTypeEnum =
+  (typeof ExternalServiceSigninBodyDtoAuthenticationTypeEnum)[keyof typeof ExternalServiceSigninBodyDtoAuthenticationTypeEnum];
+
 /**
  *
  * @export
@@ -2603,6 +3644,85 @@ export interface GenerateTitleResponseDto {
    */
   name: string;
 }
+/**
+ *
+ * @export
+ * @interface GetExternalServiceResponseDto
+ */
+export interface GetExternalServiceResponseDto {
+  /**
+   *
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  displayName: string;
+  /**
+   *
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  authenticationType: GetExternalServiceResponseDtoAuthenticationTypeEnum;
+  /**
+   * USER-level credential status ('SIGNED_IN' | 'SIGNED_OUT' | 'FAILED'), when Core reports one.
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  userLevelAuthStatus?: string;
+  /**
+   * GLOBAL-level credential status ('SIGNED_IN' | 'SIGNED_OUT' | 'FAILED'), when Core reports one.
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  globalAuthStatus?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  clientId?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  authorizationEndpoint?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof GetExternalServiceResponseDto
+   */
+  scopesSupported?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  codeChallenge?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  codeChallengeMethod?: string;
+}
+
+/**
+ * @export
+ */
+export const GetExternalServiceResponseDtoAuthenticationTypeEnum = {
+  None: 'NONE',
+  ApiKey: 'API_KEY',
+  Oauth: 'OAUTH',
+} as const;
+export type GetExternalServiceResponseDtoAuthenticationTypeEnum =
+  (typeof GetExternalServiceResponseDtoAuthenticationTypeEnum)[keyof typeof GetExternalServiceResponseDtoAuthenticationTypeEnum];
+
 /**
  *
  * @export
@@ -2758,6 +3878,117 @@ export interface ListFilesResponseDto {
 /**
  *
  * @export
+ * @interface ListScheduledTaskRunsResponseDto
+ */
+export interface ListScheduledTaskRunsResponseDto {
+  /**
+   *
+   * @type {Array<ScheduledTaskRunDto>}
+   * @memberof ListScheduledTaskRunsResponseDto
+   */
+  items: Array<ScheduledTaskRunDto>;
+  /**
+   * Total number of runs upstream, across all pages.
+   * @type {number}
+   * @memberof ListScheduledTaskRunsResponseDto
+   */
+  count?: number;
+  /**
+   * Page size used by the upstream DIAL Scheduler response.
+   * @type {number}
+   * @memberof ListScheduledTaskRunsResponseDto
+   */
+  limit?: number;
+  /**
+   * Offset of `items` within the full upstream result set.
+   * @type {number}
+   * @memberof ListScheduledTaskRunsResponseDto
+   */
+  offset?: number;
+  /**
+   * Upstream URL for the next page, or null if this is the last page.
+   * @type {string}
+   * @memberof ListScheduledTaskRunsResponseDto
+   */
+  next?: string | null;
+  /**
+   * Upstream URL for the previous page, or null if this is the first page.
+   * @type {string}
+   * @memberof ListScheduledTaskRunsResponseDto
+   */
+  previous?: string | null;
+}
+/**
+ *
+ * @export
+ * @interface ListScheduledTasksResponseDto
+ */
+export interface ListScheduledTasksResponseDto {
+  /**
+   *
+   * @type {Array<ScheduledTaskDto>}
+   * @memberof ListScheduledTasksResponseDto
+   */
+  items: Array<ScheduledTaskDto>;
+  /**
+   * Total number of schedules upstream, across all pages.
+   * @type {number}
+   * @memberof ListScheduledTasksResponseDto
+   */
+  count?: number;
+  /**
+   * Page size used by the upstream DIAL Scheduler response.
+   * @type {number}
+   * @memberof ListScheduledTasksResponseDto
+   */
+  limit?: number;
+  /**
+   * Offset of `items` within the full upstream result set.
+   * @type {number}
+   * @memberof ListScheduledTasksResponseDto
+   */
+  offset?: number;
+  /**
+   * Upstream URL for the next page, or null if this is the last page.
+   * @type {string}
+   * @memberof ListScheduledTasksResponseDto
+   */
+  next?: string | null;
+  /**
+   * Upstream URL for the previous page, or null if this is the first page.
+   * @type {string}
+   * @memberof ListScheduledTasksResponseDto
+   */
+  previous?: string | null;
+}
+/**
+ *
+ * @export
+ * @interface LocaleTextEntryDto
+ */
+export interface LocaleTextEntryDto {
+  /**
+   *
+   * @type {string}
+   * @memberof LocaleTextEntryDto
+   */
+  language: string;
+  /**
+   *
+   * @type {string}
+   * @memberof LocaleTextEntryDto
+   */
+  name?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof LocaleTextEntryDto
+   */
+  description?: string;
+}
+/**
+ *
+ * @export
  * @interface MessageCustomContentDto
  */
 export interface MessageCustomContentDto {
@@ -2779,6 +4010,12 @@ export interface MessageCustomContentDto {
    * @memberof MessageCustomContentDto
    */
   formValue?: object;
+  /**
+   * Opaque app-managed state to echo back verbatim on the next turn, per the DIAL stateful-app contract.
+   * @type {object}
+   * @memberof MessageCustomContentDto
+   */
+  state?: object;
 }
 /**
  *
@@ -3040,6 +4277,12 @@ export interface MoveItemDto {
    */
   destinationPath: string;
   /**
+   * Whether to overwrite an existing destination resource
+   * @type {boolean}
+   * @memberof MoveItemDto
+   */
+  overwrite?: boolean;
+  /**
    *
    * @type {string}
    * @memberof MoveItemDto
@@ -3097,6 +4340,19 @@ export interface MoveItemResultDto {
 /**
  *
  * @export
+ * @interface MovePromptDto
+ */
+export interface MovePromptDto {
+  /**
+   * Target folder path. Empty string to move to root.
+   * @type {string}
+   * @memberof MovePromptDto
+   */
+  targetFolderId: string;
+}
+/**
+ *
+ * @export
  * @interface MutatedToolsetDto
  */
 export interface MutatedToolsetDto {
@@ -3106,6 +4362,112 @@ export interface MutatedToolsetDto {
    * @memberof MutatedToolsetDto
    */
   id: string;
+}
+/**
+ *
+ * @export
+ * @interface PromptFolderResponseDto
+ */
+export interface PromptFolderResponseDto {
+  /**
+   * Folder path within the prompts namespace
+   * @type {string}
+   * @memberof PromptFolderResponseDto
+   */
+  id: string;
+  /**
+   * Last path segment (display name)
+   * @type {string}
+   * @memberof PromptFolderResponseDto
+   */
+  name: string;
+}
+/**
+ *
+ * @export
+ * @interface PromptListResponseDto
+ */
+export interface PromptListResponseDto {
+  /**
+   *
+   * @type {Array<PromptResponseDto>}
+   * @memberof PromptListResponseDto
+   */
+  prompts: Array<PromptResponseDto>;
+  /**
+   *
+   * @type {Array<PromptFolderResponseDto>}
+   * @memberof PromptListResponseDto
+   */
+  folders: Array<PromptFolderResponseDto>;
+  /**
+   *
+   * @type {Array<PromptResponseDto>}
+   * @memberof PromptListResponseDto
+   */
+  sharedWithMe: Array<PromptResponseDto>;
+}
+/**
+ *
+ * @export
+ * @interface PromptResponseDto
+ */
+export interface PromptResponseDto {
+  /**
+   * Prompt path within the prompts namespace (used as stable ID)
+   * @type {string}
+   * @memberof PromptResponseDto
+   */
+  id: string;
+  /**
+   * Display name
+   * @type {string}
+   * @memberof PromptResponseDto
+   */
+  name: string;
+  /**
+   * Optional description
+   * @type {string}
+   * @memberof PromptResponseDto
+   */
+  description?: string;
+  /**
+   * Prompt text content
+   * @type {string}
+   * @memberof PromptResponseDto
+   */
+  content: string;
+  /**
+   * Parent folder path; empty string means root
+   * @type {string}
+   * @memberof PromptResponseDto
+   */
+  folderId: string;
+  /**
+   * Creation timestamp (Unix ms)
+   * @type {number}
+   * @memberof PromptResponseDto
+   */
+  createdAt: number;
+  /**
+   * Last update timestamp (Unix ms)
+   * @type {number}
+   * @memberof PromptResponseDto
+   */
+  updatedAt: number;
+}
+/**
+ *
+ * @export
+ * @interface PromptsConfigDto
+ */
+export interface PromptsConfigDto {
+  /**
+   * Favorited prompt paths.
+   * @type {Array<string>}
+   * @memberof PromptsConfigDto
+   */
+  installed: Array<string>;
 }
 /**
  *
@@ -3125,6 +4487,260 @@ export interface ProviderInfoDto {
    * @memberof ProviderInfoDto
    */
   label: string;
+}
+/**
+ *
+ * @export
+ * @interface PublicPromptListResponseDto
+ */
+export interface PublicPromptListResponseDto {
+  /**
+   *
+   * @type {Array<PromptResponseDto>}
+   * @memberof PublicPromptListResponseDto
+   */
+  prompts: Array<PromptResponseDto>;
+  /**
+   *
+   * @type {Array<PromptFolderResponseDto>}
+   * @memberof PublicPromptListResponseDto
+   */
+  folders: Array<PromptFolderResponseDto>;
+}
+/**
+ *
+ * @export
+ * @interface PublishCatalogEntityDto
+ */
+export interface PublishCatalogEntityDto {
+  /**
+   * Destination folder under the Organization/public bucket, forwarded to DIAL Core as `targetFolder`.
+   * @type {string}
+   * @memberof PublishCatalogEntityDto
+   */
+  folderPath: string;
+  /**
+   * Version label for this publish.
+   * @type {string}
+   * @memberof PublishCatalogEntityDto
+   */
+  version: string;
+  /**
+   * Access-restriction rules combined with AND; forwarded to DIAL Core unchanged. Omitted or empty means no additional restriction.
+   * @type {Array<PublishRuleDto>}
+   * @memberof PublishCatalogEntityDto
+   */
+  rules?: Array<PublishRuleDto>;
+}
+/**
+ *
+ * @export
+ * @interface PublishConversationDto
+ */
+export interface PublishConversationDto {
+  /**
+   * Destination folder under the Organization/public bucket, forwarded to DIAL Core as `targetFolder`.
+   * @type {string}
+   * @memberof PublishConversationDto
+   */
+  folderPath: string;
+  /**
+   * Access-restriction rules combined with AND; forwarded to DIAL Core unchanged. Omitted or empty means no additional restriction.
+   * @type {Array<PublishRuleDto>}
+   * @memberof PublishConversationDto
+   */
+  rules?: Array<PublishRuleDto>;
+}
+/**
+ *
+ * @export
+ * @interface PublishConversationResultDto
+ */
+export interface PublishConversationResultDto {
+  /**
+   *
+   * @type {string}
+   * @memberof PublishConversationResultDto
+   */
+  path: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishConversationResultDto
+   */
+  folderPath: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishConversationResultDto
+   */
+  publishedAt: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishConversationResultDto
+   */
+  publishedBy: string;
+}
+/**
+ *
+ * @export
+ * @interface PublishHistoryEntryDto
+ */
+export interface PublishHistoryEntryDto {
+  /**
+   *
+   * @type {string}
+   * @memberof PublishHistoryEntryDto
+   */
+  entityId: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishHistoryEntryDto
+   */
+  entityType: PublishHistoryEntryDtoEntityTypeEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishHistoryEntryDto
+   */
+  folderPath: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishHistoryEntryDto
+   */
+  version: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishHistoryEntryDto
+   */
+  publishedAt: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishHistoryEntryDto
+   */
+  publishedBy: string;
+}
+
+/**
+ * @export
+ */
+export const PublishHistoryEntryDtoEntityTypeEnum = {
+  Model: 'model',
+  Toolset: 'toolset',
+  Application: 'application',
+} as const;
+export type PublishHistoryEntryDtoEntityTypeEnum =
+  (typeof PublishHistoryEntryDtoEntityTypeEnum)[keyof typeof PublishHistoryEntryDtoEntityTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface PublishResultDto
+ */
+export interface PublishResultDto {
+  /**
+   *
+   * @type {string}
+   * @memberof PublishResultDto
+   */
+  entityId: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishResultDto
+   */
+  entityType: PublishResultDtoEntityTypeEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishResultDto
+   */
+  folderPath: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishResultDto
+   */
+  version: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishResultDto
+   */
+  publishedAt: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishResultDto
+   */
+  publishedBy: string;
+}
+
+/**
+ * @export
+ */
+export const PublishResultDtoEntityTypeEnum = {
+  Model: 'model',
+  Toolset: 'toolset',
+  Application: 'application',
+} as const;
+export type PublishResultDtoEntityTypeEnum =
+  (typeof PublishResultDtoEntityTypeEnum)[keyof typeof PublishResultDtoEntityTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface PublishRuleDto
+ */
+export interface PublishRuleDto {
+  /**
+   * Claim/category name this rule matches against.
+   * @type {string}
+   * @memberof PublishRuleDto
+   */
+  source: string;
+  /**
+   *
+   * @type {string}
+   * @memberof PublishRuleDto
+   */
+  function: PublishRuleDtoFunctionEnum;
+  /**
+   * Values combined with OR; exactly one pattern when function is REGEX.
+   * @type {Array<string>}
+   * @memberof PublishRuleDto
+   */
+  targets: Array<string>;
+}
+
+/**
+ * @export
+ */
+export const PublishRuleDtoFunctionEnum = {
+  Equal: 'EQUAL',
+  Contain: 'CONTAIN',
+  Regex: 'REGEX',
+} as const;
+export type PublishRuleDtoFunctionEnum =
+  (typeof PublishRuleDtoFunctionEnum)[keyof typeof PublishRuleDtoFunctionEnum];
+
+/**
+ *
+ * @export
+ * @interface PublishRulesResultDto
+ */
+export interface PublishRulesResultDto {
+  /**
+   * The requested folder's own access-restriction rules, or an empty array when the folder has none configured.
+   * @type {Array<PublishRuleDto>}
+   * @memberof PublishRulesResultDto
+   */
+  rules: Array<PublishRuleDto>;
 }
 /**
  *
@@ -3308,6 +4924,120 @@ export interface RenameItemResultDto {
 /**
  *
  * @export
+ * @interface RenamePromptFolderDto
+ */
+export interface RenamePromptFolderDto {
+  /**
+   * New folder name. Must not contain a forward slash.
+   * @type {string}
+   * @memberof RenamePromptFolderDto
+   */
+  name: string;
+}
+/**
+ *
+ * @export
+ * @interface ReportClientChannelDto
+ */
+export interface ReportClientChannelDto {
+  /**
+   * The `id` of the RPC request being answered.
+   * @type {string}
+   * @memberof ReportClientChannelDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ReportClientChannelDto
+   */
+  result: ReportClientChannelDtoResultEnum;
+}
+
+/**
+ * @export
+ */
+export const ReportClientChannelDtoResultEnum = {
+  Success: 'success',
+  Denied: 'denied',
+} as const;
+export type ReportClientChannelDtoResultEnum =
+  (typeof ReportClientChannelDtoResultEnum)[keyof typeof ReportClientChannelDtoResultEnum];
+
+/**
+ *
+ * @export
+ * @interface RevokeAccessDto
+ */
+export interface RevokeAccessDto {
+  /**
+   *
+   * @type {Array<RevokeAccessItemDto>}
+   * @memberof RevokeAccessDto
+   */
+  items: Array<RevokeAccessItemDto>;
+}
+/**
+ *
+ * @export
+ * @interface RevokeAccessItemDto
+ */
+export interface RevokeAccessItemDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof RevokeAccessItemDto
+   */
+  bucket: string;
+  /**
+   * Relative path within bucket
+   * @type {string}
+   * @memberof RevokeAccessItemDto
+   */
+  path: string;
+}
+/**
+ *
+ * @export
+ * @interface RevokeAccessResponseDto
+ */
+export interface RevokeAccessResponseDto {
+  /**
+   * true when the Core revoke call succeeded
+   * @type {boolean}
+   * @memberof RevokeAccessResponseDto
+   */
+  success: boolean;
+}
+/**
+ *
+ * @export
+ * @interface RevokeSharedAccessDto
+ */
+export interface RevokeSharedAccessDto {
+  /**
+   * Identifier (DIAL Core resource path) of the owned catalog item or conversation to revoke all shared access to.
+   * @type {string}
+   * @memberof RevokeSharedAccessDto
+   */
+  itemId: string;
+}
+/**
+ *
+ * @export
+ * @interface RevokeSharedAccessResponseDto
+ */
+export interface RevokeSharedAccessResponseDto {
+  /**
+   * true when the revoke call succeeded
+   * @type {boolean}
+   * @memberof RevokeSharedAccessResponseDto
+   */
+  success: boolean;
+}
+/**
+ *
+ * @export
  * @interface SaveConversationBodyDto
  */
 export interface SaveConversationBodyDto {
@@ -3318,6 +5048,196 @@ export interface SaveConversationBodyDto {
    */
   conversation: ConversationResponseDto;
 }
+/**
+ *
+ * @export
+ * @interface ScheduleCronDto
+ */
+export interface ScheduleCronDto {
+  /**
+   * Cron field map using supported Scheduler keys (year, month, day, week, day_of_week, hour, minute, second).
+   * @type {{ [key: string]: string; }}
+   * @memberof ScheduleCronDto
+   */
+  fields: { [key: string]: string };
+  /**
+   * Start of the activity window during which this cron trigger fires. Omitted when unset.
+   * @type {string}
+   * @memberof ScheduleCronDto
+   */
+  startDate?: string;
+  /**
+   * End of the activity window during which this cron trigger fires. Omitted when unset.
+   * @type {string}
+   * @memberof ScheduleCronDto
+   */
+  endDate?: string;
+}
+/**
+ *
+ * @export
+ * @interface ScheduleTriggerDto
+ */
+export interface ScheduleTriggerDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduleTriggerDto
+   */
+  date?: string;
+  /**
+   *
+   * @type {ScheduleCronDto}
+   * @memberof ScheduleTriggerDto
+   */
+  cron?: ScheduleCronDto;
+}
+/**
+ *
+ * @export
+ * @interface ScheduledTaskDto
+ */
+export interface ScheduledTaskDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  displayName: string;
+  /**
+   *
+   * @type {ScheduleTriggerDto}
+   * @memberof ScheduledTaskDto
+   */
+  trigger: ScheduleTriggerDto;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  nextRunTime?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  createdAt?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  updatedAt?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  triggerType?: ScheduledTaskDtoTriggerTypeEnum;
+  /**
+   *
+   * @type {boolean}
+   * @memberof ScheduledTaskDto
+   */
+  isActive?: boolean;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  serviceId?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  createdBy?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  model?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskDto
+   */
+  prompt?: string;
+}
+
+/**
+ * @export
+ */
+export const ScheduledTaskDtoTriggerTypeEnum = {
+  Cron: 'cron',
+  Date: 'date',
+} as const;
+export type ScheduledTaskDtoTriggerTypeEnum =
+  (typeof ScheduledTaskDtoTriggerTypeEnum)[keyof typeof ScheduledTaskDtoTriggerTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface ScheduledTaskRunDto
+ */
+export interface ScheduledTaskRunDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskRunDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskRunDto
+   */
+  status: ScheduledTaskRunDtoStatusEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskRunDto
+   */
+  startTime: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskRunDto
+   */
+  endTime?: string | null;
+  /**
+   *
+   * @type {number}
+   * @memberof ScheduledTaskRunDto
+   */
+  durationSeconds?: number;
+}
+
+/**
+ * @export
+ */
+export const ScheduledTaskRunDtoStatusEnum = {
+  Success: 'Success',
+  Error: 'Error',
+  InProgress: 'InProgress',
+  Missed: 'Missed',
+} as const;
+export type ScheduledTaskRunDtoStatusEnum =
+  (typeof ScheduledTaskRunDtoStatusEnum)[keyof typeof ScheduledTaskRunDtoStatusEnum];
+
 /**
  *
  * @export
@@ -3366,6 +5286,12 @@ export interface SendCompletionDto {
    * @memberof SendCompletionDto
    */
   customContent?: MessageCustomContentDto;
+  /**
+   * Active DIAL Core client-channel id (from `POST /v1/client-channel/subscribe`), forwarded to DIAL Core so a mid-completion `toolset/signin` event can be correlated to this request. Omitted when no channel is active yet.
+   * @type {string}
+   * @memberof SendCompletionDto
+   */
+  clientChannelId?: string;
 }
 
 /**
@@ -3379,6 +5305,42 @@ export const SendCompletionDtoModeEnum = {
 } as const;
 export type SendCompletionDtoModeEnum =
   (typeof SendCompletionDtoModeEnum)[keyof typeof SendCompletionDtoModeEnum];
+
+/**
+ *
+ * @export
+ * @interface ShareLinkResponseDto
+ */
+export interface ShareLinkResponseDto {
+  /**
+   * Absolute shareable URL for the entity.
+   * @type {string}
+   * @memberof ShareLinkResponseDto
+   */
+  url: string;
+  /**
+   * Number of days the link stays active before expiring.
+   * @type {number}
+   * @memberof ShareLinkResponseDto
+   */
+  expiresInDays: number;
+  /**
+   * Access levels granted to holders of the share link. Edit access implies view access, so this is `[View, Edit]` rather than `[Edit]` alone.
+   * @type {Array<string>}
+   * @memberof ShareLinkResponseDto
+   */
+  access: Array<ShareLinkResponseDtoAccessEnum>;
+}
+
+/**
+ * @export
+ */
+export const ShareLinkResponseDtoAccessEnum = {
+  View: 'view',
+  Edit: 'edit',
+} as const;
+export type ShareLinkResponseDtoAccessEnum =
+  (typeof ShareLinkResponseDtoAccessEnum)[keyof typeof ShareLinkResponseDtoAccessEnum];
 
 /**
  *
@@ -3597,6 +5559,12 @@ export interface ToolsetAuthSettingsDto {
    */
   authenticationType?: ToolsetAuthSettingsDtoAuthenticationTypeEnum;
   /**
+   * Whether DIAL Core dynamically registered the OAuth client instead of using user-provided client configuration
+   * @type {boolean}
+   * @memberof ToolsetAuthSettingsDto
+   */
+  dynamicallyRegistered?: boolean;
+  /**
    * Whether the toolset has global (shared) credentials signed in
    * @type {string}
    * @memberof ToolsetAuthSettingsDto
@@ -3749,10 +5717,16 @@ export interface ToolsetBodyDto {
   topics?: Array<string>;
   /**
    *
+   * @type {Array<LocaleTextEntryDto>}
+   * @memberof ToolsetBodyDto
+   */
+  locales?: Array<LocaleTextEntryDto>;
+  /**
+   *
    * @type {string}
    * @memberof ToolsetBodyDto
    */
-  intro?: string;
+  primaryLocale?: string;
   /**
    *
    * @type {string}
@@ -3929,11 +5903,11 @@ export interface ToolsetLogoutBodyDto {
    */
   credentialsLevel: ToolsetLogoutBodyDtoCredentialsLevelEnum;
   /**
-   *
+   * Authentication type used by the toolset. Optional — a caller that doesn't already have this loaded (e.g. logging out by id alone) can omit it; the server looks up the toolset's own stored authentication type instead.
    * @type {string}
    * @memberof ToolsetLogoutBodyDto
    */
-  authenticationType: ToolsetLogoutBodyDtoAuthenticationTypeEnum;
+  authenticationType?: ToolsetLogoutBodyDtoAuthenticationTypeEnum;
 }
 
 /**
@@ -4006,6 +5980,79 @@ export interface TranscribeAudioDto {
 /**
  *
  * @export
+ * @interface UpdateApplicationBodyDto
+ */
+export interface UpdateApplicationBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateApplicationBodyDto
+   */
+  name: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateApplicationBodyDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateApplicationBodyDto
+   */
+  iconUrl?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof UpdateApplicationBodyDto
+   */
+  topics?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateApplicationBodyDto
+   */
+  version?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateApplicationBodyDto
+   */
+  endpoint?: string;
+  /**
+   *
+   * @type {object}
+   * @memberof UpdateApplicationBodyDto
+   */
+  features?: object;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof UpdateApplicationBodyDto
+   */
+  inputAttachmentTypes?: Array<string>;
+  /**
+   *
+   * @type {number}
+   * @memberof UpdateApplicationBodyDto
+   */
+  maxInputAttachments?: number;
+  /**
+   *
+   * @type {Array<LocaleTextEntryDto>}
+   * @memberof UpdateApplicationBodyDto
+   */
+  locales?: Array<LocaleTextEntryDto>;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateApplicationBodyDto
+   */
+  primaryLocale?: string;
+}
+/**
+ *
+ * @export
  * @interface UpdateInstalledDto
  */
 export interface UpdateInstalledDto {
@@ -4019,6 +6066,25 @@ export interface UpdateInstalledDto {
    * Pass `true` to install the resource, `false` to uninstall.
    * @type {boolean}
    * @memberof UpdateInstalledDto
+   */
+  isInstalled: boolean;
+}
+/**
+ *
+ * @export
+ * @interface UpdateInstalledPromptDto
+ */
+export interface UpdateInstalledPromptDto {
+  /**
+   * Prompt path within the prompts namespace.
+   * @type {string}
+   * @memberof UpdateInstalledPromptDto
+   */
+  id: string;
+  /**
+   * Pass `true` to favorite the prompt, `false` to unfavorite it.
+   * @type {boolean}
+   * @memberof UpdateInstalledPromptDto
    */
   isInstalled: boolean;
 }
@@ -4044,6 +6110,68 @@ export interface UpdatePinsDto {
 /**
  *
  * @export
+ * @interface UpdatePromptDto
+ */
+export interface UpdatePromptDto {
+  /**
+   * New display name. Must not contain a forward slash.
+   * @type {string}
+   * @memberof UpdatePromptDto
+   */
+  name?: string;
+  /**
+   * Updated description
+   * @type {string}
+   * @memberof UpdatePromptDto
+   */
+  description?: string;
+  /**
+   * Updated prompt text
+   * @type {string}
+   * @memberof UpdatePromptDto
+   */
+  content?: string;
+}
+/**
+ *
+ * @export
+ * @interface UpdateScheduledTaskBodyDto
+ */
+export interface UpdateScheduledTaskBodyDto {
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateScheduledTaskBodyDto
+   */
+  displayName: string;
+  /**
+   *
+   * @type {ScheduleTriggerDto}
+   * @memberof UpdateScheduledTaskBodyDto
+   */
+  trigger: ScheduleTriggerDto;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateScheduledTaskBodyDto
+   */
+  model: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateScheduledTaskBodyDto
+   */
+  prompt: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdateScheduledTaskBodyDto
+   */
+  description?: string;
+}
+/**
+ *
+ * @export
  * @interface UpdateSelectedDeploymentDto
  */
 export interface UpdateSelectedDeploymentDto {
@@ -4053,6 +6181,165 @@ export interface UpdateSelectedDeploymentDto {
    * @memberof UpdateSelectedDeploymentDto
    */
   id?: string | null;
+}
+/**
+ *
+ * @export
+ * @interface UpdatedApplicationDto
+ */
+export interface UpdatedApplicationDto {
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedApplicationDto
+   */
+  id: string;
+  /**
+   *
+   * @type {CreatedApplicationDtoDisplayName}
+   * @memberof UpdatedApplicationDto
+   */
+  displayName?: CreatedApplicationDtoDisplayName;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedApplicationDto
+   */
+  object?: string;
+}
+/**
+ *
+ * @export
+ * @interface UpdatedScheduledTaskDto
+ */
+export interface UpdatedScheduledTaskDto {
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  id: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  displayName: string;
+  /**
+   *
+   * @type {ScheduleTriggerDto}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  trigger: ScheduleTriggerDto;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  nextRunTime?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  createdAt?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  updatedAt?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  triggerType?: UpdatedScheduledTaskDtoTriggerTypeEnum;
+  /**
+   *
+   * @type {boolean}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  isActive?: boolean;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  serviceId?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  createdBy?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  model?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  prompt?: string;
+}
+
+/**
+ * @export
+ */
+export const UpdatedScheduledTaskDtoTriggerTypeEnum = {
+  Cron: 'cron',
+  Date: 'date',
+} as const;
+export type UpdatedScheduledTaskDtoTriggerTypeEnum =
+  (typeof UpdatedScheduledTaskDtoTriggerTypeEnum)[keyof typeof UpdatedScheduledTaskDtoTriggerTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface UploadArchiveEntryResultDto
+ */
+export interface UploadArchiveEntryResultDto {
+  /**
+   * Destination path of the extracted entry (relative to bucket)
+   * @type {string}
+   * @memberof UploadArchiveEntryResultDto
+   */
+  path: string;
+  /**
+   * true when the entry was extracted and uploaded successfully
+   * @type {boolean}
+   * @memberof UploadArchiveEntryResultDto
+   */
+  success: boolean;
+  /**
+   * Human-readable error reason when success is false
+   * @type {string}
+   * @memberof UploadArchiveEntryResultDto
+   */
+  error?: string;
+}
+/**
+ *
+ * @export
+ * @interface UploadArchiveResponseDto
+ */
+export interface UploadArchiveResponseDto {
+  /**
+   *
+   * @type {Array<UploadArchiveEntryResultDto>}
+   * @memberof UploadArchiveResponseDto
+   */
+  results: Array<UploadArchiveEntryResultDto>;
 }
 /**
  *
@@ -4084,6 +6371,12 @@ export interface UserConfigDto {
    * @memberof UserConfigDto
    */
   deployments: DeploymentsConfigDto;
+  /**
+   *
+   * @type {PromptsConfigDto}
+   * @memberof UserConfigDto
+   */
+  prompts: PromptsConfigDto;
 }
 /**
  *
@@ -4104,7 +6397,7 @@ export interface UserProfileDto {
    */
   providerId: string;
   /**
-   *
+   * Allowlisted claims keyed by claim name. A dot-notation rolesClaim (e.g. "realm_access.roles") is stored under one flat key equal to that literal string, never as a nested object.
    * @type {{ [key: string]: unknown }}
    * @memberof UserProfileDto
    */
@@ -4115,6 +6408,12 @@ export interface UserProfileDto {
    * @memberof UserProfileDto
    */
   bucket: string;
+  /**
+   * Whether the user's roles claim intersects the provider's configured adminRoles
+   * @type {boolean}
+   * @memberof UserProfileDto
+   */
+  isAdmin: boolean;
 }
 /**
  *

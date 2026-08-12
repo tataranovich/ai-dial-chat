@@ -7,17 +7,24 @@ export interface SidebarPanelColors {
   background?: string;
   /** Divider border color on the inner edge. */
   border?: string;
+  /** Header text color. */
+  text?: string;
+  /** Resize handle color (icon and background). */
+  resizeHandler?: string;
 }
 
 /** Typography overrides for the `SidebarPanel` component. */
 export interface SidebarPanelTypography {
-  /**
-   * A Tailwind font utility class applied to the panel root.
-   * When provided, individual `fontFamily` / `fontSize` vars are skipped.
-   */
+  /** CSS class applied to the panel root, inherited by all panel content. */
   fontClassName?: string;
-  /** Font family applied to the panel root via CSS custom property. */
-  fontFamily?: string;
+}
+
+/** Localised accessible labels for the `SidebarPanel` component. */
+export interface SidebarPanelLabels {
+  /** Accessible label for the panel region. */
+  ariaLabel: string;
+  /** Accessible label and tooltip for the close button. Required when `onClose` is provided. */
+  closeLabel?: string;
 }
 
 /** Combined style overrides (colors and typography) for the `SidebarPanel` component. */
@@ -26,77 +33,46 @@ export interface SidebarPanelStyles {
   colors?: SidebarPanelColors;
   /** Typography overrides applied via CSS custom properties. */
   typography?: SidebarPanelTypography;
-  /**
-   * CSS class applied to the title element.
-   * Defaults to `'dial-body-semi-bold-text'`.
-   */
+  /** CSS class applied to the header title element. Defaults to `'dial-h1-text'`. */
   titleClassName?: string;
   /** Extra class name(s) merged onto the scrollable body `<div>`. */
   bodyClassName?: string;
+  /** Extra class name(s) merged onto the panel width wrapper `<div>`. */
+  className?: string;
+  /** CSS class applied to the header element. */
+  headerClassName?: string;
   /** CSS custom properties applied to the panel `<aside>` element. */
   cssVars?: CSSProperties;
 }
 
 /** Props accepted by the `SidebarPanel` component. */
 export interface SidebarPanelProps {
-  /**
-   * Whether the panel is currently open.
-   * When provided, the wrapper adds a slide-in width animation and
-   * `aria-hidden` is set on the panel when closed.
-   */
+  /** Whether the panel is open; drives the slide-in animation and sets `aria-hidden` when closed. */
   isOpen: boolean;
-  /**
-   * Which edge the panel anchors to.
-   * Controls the divider side (`border-l` vs `border-r`) and
-   * the close-button placement (outer edge of the panel).
-   * `leftActions` / `rightActions` are header-bar positions and are
-   * independent of this prop.
-   */
+  /** Edge the panel anchors to; drives the divider side and close-button placement. */
   orientation: SidebarOrientation;
-  /**
-   * Title text rendered in the header bar between the action groups.
-   * Truncated with an ellipsis when the panel is too narrow.
-   */
+  /** Title rendered in the header bar between the start and end action slots. */
   title?: ReactNode;
 
   /** Rendered in the left group of the 48 px header bar. */
   leftActions?: ReactNode;
-  /**
-   * Rendered in the right group of the 48 px header bar, immediately
-   * before the built-in close button when `orientation === SidebarOrientation.Right`.
-   */
+  /** Content for the end (right) slot of the header bar. */
   rightActions?: ReactNode;
-  /**
-   * Called when the user activates the built-in close button.
-   * When omitted the close button is not rendered.
-   */
+  /** Called when the user closes the panel; omit to hide the close button. */
   onClose?: () => void;
-  /** Accessible label for the panel region. Caller supplies the localised string. */
-  ariaLabel: string;
-  /**
-   * Accessible label and tooltip for the built-in close button.
-   * Required when `onClose` is provided.
-   */
-  closeLabel?: string;
+  /** Localised accessible labels for the panel region and close button. */
+  labels: SidebarPanelLabels;
   /** Body content rendered below the header bar in the scrollable region. */
   children: ReactNode;
-  /** Extra class name(s) merged onto the panel width wrapper `<div>`. */
-  className?: string;
-  /** CSS class applied to the header element. */
-  headerClassName?: string;
   /** Style overrides for colors, typography, and element class names. */
   styles?: SidebarPanelStyles;
-  /**
-   * Enables drag-to-resize on the panel edge opposite to `orientation`.
-   * When false (default) the panel renders at a width determined by `className`.
-   * Automatically disabled when `isOpen` is false.
-   */
+  /** Enables drag-to-resize on the panel edge opposite to `orientation`. Defaults to `false`. */
   resizable?: boolean;
-  /** Initial panel width in px used when `resizable` is true. */
+  /** Initial panel width in px used when `resizable` is true. Defaults to `360`. */
   defaultWidth?: number;
-  /** Minimum panel width in px used when `resizable` is true. */
+  /** Minimum panel width in px used when `resizable` is true. Defaults to `280`. */
   minWidth?: number;
-  /** Maximum panel width in px used when `resizable` is true. */
+  /** Maximum panel width in px used when `resizable` is true. Defaults to `600`. */
   maxWidth?: number;
   /** Called with the new width in px when the user finishes a resize drag. */
   onResizeStop?: (width: number) => void;

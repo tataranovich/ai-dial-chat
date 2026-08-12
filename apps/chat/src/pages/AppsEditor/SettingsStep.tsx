@@ -1,14 +1,15 @@
+import type { ApplicationSchemaSummaryDto } from '@epam/ai-dial-chat-api-client';
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import type { ApplicationSchemaSummaryDto } from '@epam/chat-api-client';
 import { forwardRef, memo, useImperativeHandle, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AppsEditorI18nKeys } from '../../constants/translation-keys';
+import type { TriggerSaveGeneralPayload } from '../../types/apps-editor';
 import type { AppEditorIframeHandle } from './AppEditorIframe';
 import AppEditorIframe from './AppEditorIframe';
 import AppPreviewChat from './AppPreviewChat';
 
 export interface SettingsStepHandle {
-  triggerSave: () => void;
+  triggerSave: (general?: TriggerSaveGeneralPayload) => void;
 }
 
 interface Props {
@@ -17,8 +18,20 @@ interface Props {
   appDisplayName?: string;
   appIconUrl?: string;
   isPreviewing?: boolean;
-  onSaveSuccess?: () => void;
+  onUpdated?: () => void;
+  onSaveSuccess?: (hasChanges: boolean) => void;
   onSaveError?: (error: string) => void;
+  /** Notifies the host whenever the embedded editor's readiness to save changes (`AppsEditorEvent.ReadyToSave`), not merely UI-rendered readiness. */
+  onReadyChange?: (isReady: boolean) => void;
+  /** Notifies the host whenever the embedded editor reports the user is logged out (`AppsEditorEvent.LoggedOut`). */
+  onLoggedOutChange?: (isLoggedOut: boolean) => void;
+  /**
+   * Bumped by the host whenever a save reports a real configuration change
+   * (`SaveSuccessMessage.hasChanges === true`). Passed as `AppPreviewChat`'s
+   * `key`, so it remounts — discarding the previous preview conversation and
+   * composer state — the next time the preview pane is shown.
+   */
+  previewResetKey?: number;
 }
 
 const SettingsStep = forwardRef<SettingsStepHandle, Props>(
@@ -29,8 +42,12 @@ const SettingsStep = forwardRef<SettingsStepHandle, Props>(
       appDisplayName,
       appIconUrl,
       isPreviewing = false,
+      onUpdated,
       onSaveSuccess,
       onSaveError,
+      onReadyChange,
+      onLoggedOutChange,
+      previewResetKey,
     },
     ref,
   ) {
@@ -40,7 +57,8 @@ const SettingsStep = forwardRef<SettingsStepHandle, Props>(
     useImperativeHandle(
       ref,
       () => ({
-        triggerSave: () => iframeRef.current?.triggerSave(),
+        triggerSave: (general?: TriggerSaveGeneralPayload) =>
+          iframeRef.current?.triggerSave(general),
       }),
       [],
     );
@@ -53,8 +71,11 @@ const SettingsStep = forwardRef<SettingsStepHandle, Props>(
               ref={iframeRef}
               schema={schema}
               appId={appId}
+              onUpdated={onUpdated}
               onSaveSuccess={onSaveSuccess}
               onSaveError={onSaveError}
+              onReadyChange={onReadyChange}
+              onLoggedOutChange={onLoggedOutChange}
             />
           </div>
           {appId && (
@@ -65,6 +86,7 @@ const SettingsStep = forwardRef<SettingsStepHandle, Props>(
               )}
             >
               <AppPreviewChat
+                key={previewResetKey}
                 appId={appId}
                 appDisplayName={appDisplayName ?? schema.displayName}
                 appIconUrl={appIconUrl ?? schema.iconUrl}

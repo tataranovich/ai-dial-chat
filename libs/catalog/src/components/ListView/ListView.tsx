@@ -1,4 +1,5 @@
-import { mergeClasses, DialGrid } from '@epam/ai-dial-ui-kit';
+import { PanelEmptyState } from '@epam/ai-dial-chat-shared';
+import { DialGrid, mergeClasses } from '@epam/ai-dial-ui-kit';
 import type { GridApi } from 'ag-grid-community';
 import {
   type CSSProperties,
@@ -31,13 +32,10 @@ const findScrollParent = (el: Element | null): Element | null => {
   return findScrollParent(el.parentElement);
 };
 
-/**
- * ag-grid table view of catalog items.
- * Rows are windowed: starts at PAGE_SIZE and grows in PAGE_SIZE increments as
- * the user scrolls near the bottom, avoiding a costly full-list DOM render.
- */
+/** ag-grid table view of catalog items with infinite-scroll windowing. */
 export const ListView: FC<ListViewProps> = ({
   items,
+  type,
   query = '',
   ariaLabel = 'Catalog',
   emptyStateTitle,
@@ -46,12 +44,28 @@ export const ListView: FC<ListViewProps> = ({
   onItemClick,
   stickyHeaderTop,
   selectedItemId,
+  credentialsBadgeLoggedOutLabel,
 }) => {
+  if (items.length === 0) {
+    return (
+      <div className="flex size-full flex-col items-center justify-center">
+        <PanelEmptyState label={emptyStateTitle ?? 'No results'} />
+      </div>
+    );
+  }
+
   const typography = listStyles?.typography ?? {};
   const colors = listStyles?.colors;
   const cssVars = {
-    '--cat-list-name-text': colors?.nameText,
-    '--cat-list-secondary-text': colors?.secondaryText,
+    '--cat-list-bg': colors?.background,
+    '--cat-list-border': colors?.border,
+    '--cat-list-header-bg': colors?.headerBackground,
+    '--cat-list-row-divider': colors?.rowDivider,
+    '--cat-card-star-filled': colors?.starFilled,
+    '--cat-list-row-even-bg': colors?.rowEvenBackground,
+    '--cat-list-selected-border': colors?.selectedRowBorder,
+    '--cat-list-selected-bg': colors?.selectedRowBackground,
+    '--cat-list-selected-check': colors?.selectedRowCheckIcon,
     ...(stickyHeaderTop != null
       ? { '--list-header-sticky-top': `${stickyHeaderTop}px` }
       : {}),
@@ -122,46 +136,57 @@ export const ListView: FC<ListViewProps> = ({
     gridApiRef.current?.redrawRows();
   }, [selectedItemId]);
 
+  useEffect(() => {
+    gridApiRef.current?.setGridOption(
+      'domLayout',
+      items.length > 0 ? 'autoHeight' : 'normal',
+    );
+  }, [items]);
+
   return (
     <div
       style={cssVars}
-      className={mergeClasses('w-full px-4', styles.listContainer)}
+      className={mergeClasses('w-full rounded-xl border', styles.listContainer)}
     >
-      <DialGrid<CatalogItem>
-        columnDefs={CATALOG_COLUMNS()}
-        rowData={windowedItems}
-        getRowId={(r) => r.id}
-        alternateOddRowColors
-        onGridApiChange={(api) => {
-          gridApiRef.current = api;
-        }}
-        emptyStateTitle={emptyStateTitle}
-        additionalGridOptions={{
-          rowHeight: 90,
-          domLayout: 'autoHeight',
-          defaultColDef: { filter: false, floatingFilter: false },
-          context: {
-            searchQuery: query,
-            typography,
-            onToggleFavorite,
-            selectedItemId,
-          } satisfies GridContext,
-          onCellClicked: onItemClick
-            ? (event) => {
-                const col = event.column.getColDef();
-                if (col.field === 'isStarred') return; // ignore clicks on the star column
-                if (event.data) onItemClick(event.data);
-              }
-            : undefined,
-          rowClass: onItemClick ? 'cursor-pointer' : undefined,
-          getRowClass: (params) =>
-            params.data?.id === selectedItemId ? styles.selectedRow : undefined,
-        }}
-        ariaLabel={ariaLabel}
-      />
-      {visibleCount < items.length && (
-        <div ref={sentinelRef} className="h-2" aria-hidden />
-      )}
+      <div className={mergeClasses('rounded-xl', styles.gridClip)}>
+        <DialGrid<CatalogItem>
+          columnDefs={CATALOG_COLUMNS(type)}
+          rowData={windowedItems}
+          getRowId={(r) => r.id}
+          withoutHeaderBorders
+          onGridApiChange={(api) => {
+            gridApiRef.current = api;
+          }}
+          emptyStateTitle={emptyStateTitle}
+          additionalGridOptions={{
+            rowHeight: 60,
+            defaultColDef: { filter: false, floatingFilter: false },
+            context: {
+              searchQuery: query,
+              typography,
+              onToggleFavorite,
+              selectedItemId,
+              credentialsBadgeLoggedOutLabel,
+            } satisfies GridContext,
+            onCellClicked: onItemClick
+              ? (event) => {
+                  const col = event.column.getColDef();
+                  if (col.field === 'isStarred') return; // ignore clicks on the star column
+                  if (event.data) onItemClick(event.data);
+                }
+              : undefined,
+            rowClass: onItemClick ? 'cursor-pointer' : undefined,
+            getRowClass: (params) =>
+              params.data?.id === selectedItemId
+                ? styles.selectedRow
+                : undefined,
+          }}
+          ariaLabel={ariaLabel}
+        />
+        {visibleCount < items.length && (
+          <div ref={sentinelRef} className="h-2" aria-hidden />
+        )}
+      </div>
     </div>
   );
 };

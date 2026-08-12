@@ -2,7 +2,7 @@ import type {
   ConversationDeletionResultDto,
   ConversationListItemDto,
   ConversationResponseDto,
-} from '@epam/chat-api-client';
+} from '@epam/ai-dial-chat-api-client';
 import {
   createContext,
   type ReactNode,
@@ -10,6 +10,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { normalizeConversationId } from '../constants/routes';
@@ -20,11 +21,15 @@ import {
   generateConversationTitle as apiGenerateConversationTitle,
   getConversation,
   listConversations,
+  markConversationViewed as apiMarkConversationViewed,
   renameConversation as apiRenameConversation,
   watchConversation,
 } from '../server-api/conversations.api';
 import { conversationIdsMatch } from '../utils/conversation-id-match';
 import { getConversationPath } from '../utils/conversation-path';
+import { safeDecodeURIComponent } from '../utils/string-utils';
+import { useUser } from './auth/UserContext';
+import { useOptionalOverlay } from './overlay/OverlayContext';
 import { useUserConfig } from './UserConfigContext';
 
 const DISPLAY_NAME_WATCH_TIMEOUT_MS = 120_000;
@@ -38,6 +43,13 @@ interface ConversationsContextType {
   error: Error | null;
   /** Toggle the pinned state of a conversation and persist it to the backend. Reverts on failure. */
   pinConversation: (id: string, isPinned: boolean) => Promise<void>;
+  /**
+   * Marks a scheduler-created conversation as viewed, clearing its unread
+   * indicator optimistically and persisting to the backend. Reverts on
+   * failure. No-op for conversations that are not scheduler-created or
+   * already read.
+   */
+  markConversationViewed: (id: string) => Promise<void>;
   /** Delete a conversation by id, removing it from the local list on success. */
   deleteConversation: (id: string) => Promise<void>;
   /** Rename a conversation; optimistically updates title, reverts on failure. The conversation id never changes. */
@@ -82,11 +94,24 @@ export const ConversationsProvider = ({
   children: ReactNode;
 }) => {
   const { setPinnedConversation } = useUserConfig();
+  const { user } = useUser();
+  const userSub = user?.sub;
   const [conversations, setConversations] = useState<ConversationListItemDto[]>(
     [],
   );
+  const conversationsRef = useRef<ConversationListItemDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const overlay = useOptionalOverlay();
+
+  useEffect(() => {
+    overlay?.notifyConversationsUpdated();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   const refreshConversations = useCallback(async () => {
     setIsLoading(true);
@@ -124,8 +149,10 @@ export const ConversationsProvider = ({
       previousName: string,
       onUpdated: (title: string) => void,
     ) => {
-      const conversationPath = getConversationPath(
-        normalizeConversationId(conversationId),
+      const normalizedConversationId = normalizeConversationId(conversationId);
+      const conversationPath = getConversationPath(normalizedConversationId);
+      const fullConversationId = safeDecodeURIComponent(
+        normalizedConversationId,
       );
 
       const controller = new AbortController();
@@ -171,8 +198,12 @@ export const ConversationsProvider = ({
               if (event?.action !== 'UPDATE') continue;
 
               try {
+                /* `getConversation` needs the full bucket-qualified path;
+                 * `conversationPath` (stripped for `watchConversation`,
+                 * which re-qualifies server-side) would break any deployment
+                 * id containing a slash, e.g. `applications/{bucket}/{app}`. */
                 const conversation = (await getConversation(
-                  conversationPath,
+                  fullConversationId,
                 )) as ConversationResponseDto;
                 const nextName = conversation.name?.trim();
                 if (
@@ -208,12 +239,20 @@ export const ConversationsProvider = ({
     [silentRefreshConversations, updateConversationTitle],
   );
 
+  /*
+   * userSub is included so that if the authenticated identity changes while
+   * this provider stays mounted (an in-place identity adoption — see
+   * spa-auth-session's identity revalidation requirement), the conversation
+   * list is refetched instead of continuing to serve the previous identity's
+   * snapshot.
+   */
   useEffect(() => {
     let cancelled = false;
 
     const load = async () => {
       setIsLoading(true);
       setError(null);
+      setConversations([]);
       try {
         const response = await listConversations();
         if (!cancelled) setConversations(response.items);
@@ -230,7 +269,7 @@ export const ConversationsProvider = ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userSub]);
 
   const pinConversation = useCallback(
     async (id: string, isPinned: boolean) => {
@@ -248,6 +287,23 @@ export const ConversationsProvider = ({
     },
     [setPinnedConversation],
   );
+
+  const markConversationViewed = useCallback(async (id: string) => {
+    const target = conversationsRef.current.find((c) => c.id === id);
+    if (!target?.isScheduledTask || !target.isUnread) return;
+
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, isUnread: false } : c)),
+    );
+    try {
+      const conversationPath = getConversationPath(normalizeConversationId(id));
+      await apiMarkConversationViewed(conversationPath);
+    } catch {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, isUnread: true } : c)),
+      );
+    }
+  }, []);
 
   const deleteConversation = useCallback(async (id: string) => {
     let snapshot: ConversationListItemDto[] | undefined;
@@ -306,12 +362,35 @@ export const ConversationsProvider = ({
 
   const duplicateConversation = useCallback(
     async (id: string) => {
-      const conversationPath = normalizeConversationId(id);
-      const { newPath } = await apiDuplicateConversation(conversationPath);
-      await refreshConversations();
-      return newPath;
+      const source = conversationsRef.current.find((c) => c.id === id);
+      const tempId = crypto.randomUUID();
+      setConversations((prev) => [
+        {
+          id: tempId,
+          title: source?.title ?? '',
+          updatedAt: Date.now(),
+          sharedWithMe: false,
+          publishedWithMe: false,
+          isPinned: false,
+          isReadonly: false,
+          isScheduledTask: false,
+        },
+        ...prev,
+      ]);
+      try {
+        const conversationPath = normalizeConversationId(id);
+        const { newPath } = await apiDuplicateConversation(conversationPath);
+        setConversations((prev) =>
+          prev.map((c) => (c.id === tempId ? { ...c, id: newPath } : c)),
+        );
+        void silentRefreshConversations();
+        return newPath;
+      } catch (err) {
+        setConversations((prev) => prev.filter((c) => c.id !== tempId));
+        throw err;
+      }
     },
-    [refreshConversations],
+    [silentRefreshConversations],
   );
 
   const deleteAllConversations =
@@ -335,6 +414,7 @@ export const ConversationsProvider = ({
       isLoading,
       error,
       pinConversation,
+      markConversationViewed,
       deleteConversation,
       renameConversation,
       generateConversationTitle,
@@ -349,6 +429,7 @@ export const ConversationsProvider = ({
       isLoading,
       error,
       pinConversation,
+      markConversationViewed,
       deleteConversation,
       renameConversation,
       generateConversationTitle,

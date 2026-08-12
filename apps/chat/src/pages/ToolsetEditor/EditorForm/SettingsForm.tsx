@@ -1,23 +1,31 @@
+import { CatalogEntityType } from '@epam/ai-dial-catalog';
 import {
-  ButtonAppearance,
   DIAL_ICON_SIZE,
-  DialIconButton,
-  DialInput,
-  DialSelect,
   DialTagInput,
   ElementSize,
+  GhostIconButton,
+  Input,
+  Select,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck, IconCopy } from '@tabler/icons-react';
 import type { FC } from 'react';
 import { memo, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ToolsetEditorI18nKeys } from '../../../constants/translation-keys';
+import ConnectMcpUrlContent from '../../../components/ConnectMcpUrlContent/ConnectMcpUrlContent';
+import { ToolsetTransportType } from '../../../constants/toolsets';
+import {
+  ApiI18nKeys,
+  BasicI18nKeys,
+  ButtonsI18nKeys,
+  ToolsetEditorI18nKeys,
+} from '../../../constants/translation-keys';
+import { useAppConfig } from '../../../context/AppConfigContext';
 import type {
   ToolsetAuthFormData,
   ToolsetFormData,
   ToolsetFormErrors,
-} from '../../../types/toolsets';
-import { ToolsetTransportType } from '../../../types/toolsets';
+} from '../../../models/toolsets';
+import { buildToolsetMcpUrl } from '../../../utils/mcp-endpoint-url';
 import AuthSection from './AuthSection';
 
 interface Props {
@@ -25,8 +33,10 @@ interface Props {
   errors: ToolsetFormErrors;
   isSaving: boolean;
   toolsetId: string;
+  isEditMode: boolean;
   onChange: (patch: Partial<ToolsetFormData>) => void;
   onAuthChange: (patch: Partial<ToolsetAuthFormData>) => void;
+  onEnsureSaved: () => Promise<string | false>;
 }
 
 const SettingsForm: FC<Props> = ({
@@ -34,18 +44,31 @@ const SettingsForm: FC<Props> = ({
   errors,
   isSaving,
   toolsetId,
+  isEditMode,
   onChange,
   onAuthChange,
+  onEnsureSaved,
 }) => {
   const { t } = useTranslation();
+  const { config } = useAppConfig();
   const [isCopied, setIsCopied] = useState(false);
+
+  const dialCoreExternalUrl = config.dialCoreExternalUrl;
+  const isConnectVisible = Boolean(dialCoreExternalUrl) && Boolean(toolsetId);
+  const mcpUrl = isConnectVisible
+    ? buildToolsetMcpUrl(dialCoreExternalUrl ?? '', toolsetId)
+    : '';
 
   const protocolOptions = useMemo(
     () => [
       { value: ToolsetTransportType.Http, label: 'HTTP' },
-      { value: ToolsetTransportType.Sse, label: 'SSE' },
+      {
+        value: ToolsetTransportType.Sse,
+        label: 'SSE',
+        description: t(ToolsetEditorI18nKeys.ProtocolSseDeprecatedLabel),
+      },
     ],
-    [],
+    [t],
   );
 
   const handleCopyEndpoint = async () => {
@@ -69,45 +92,51 @@ const SettingsForm: FC<Props> = ({
     <div className="flex flex-col gap-4">
       <div className="flex items-end gap-2">
         <div className="flex-1">
-          <DialInput
+          <Input
             id="toolset-endpoint"
             value={form.endpoint}
             onChange={(value) => onChange({ endpoint: value ?? '' })}
             labelProps={{
-              label: t(ToolsetEditorI18nKeys.EndpointLabel),
+              label: t(ApiI18nKeys.EndpointLabel),
               required: true,
             }}
-            placeholder={t(ToolsetEditorI18nKeys.EndpointPlaceholder)}
+            placeholder={t(BasicI18nKeys.UrlPlaceholder)}
             error={errors.endpoint || undefined}
             invalid={!!errors.endpoint}
           />
         </div>
-        <DialIconButton
+        <GhostIconButton
           aria-label={t(ToolsetEditorI18nKeys.CopyUrlLabel)}
-          appearance={ButtonAppearance.Ghost}
           size={ElementSize.Standard}
           onClick={handleCopyEndpoint}
           icon={
             isCopied ? (
-              <IconCheck size={DIAL_ICON_SIZE.SM} className="text-success" />
+              <IconCheck
+                size={DIAL_ICON_SIZE.SM}
+                className="text-success"
+                aria-hidden
+              />
             ) : (
-              <IconCopy size={DIAL_ICON_SIZE.SM} className="text-secondary" />
+              <IconCopy
+                size={DIAL_ICON_SIZE.SM}
+                className="text-secondary"
+                aria-hidden
+              />
             )
           }
         />
       </div>
 
-      <div className="flex flex-col gap-1">
-        <span className="dial-small-text text-secondary">
-          {t(ToolsetEditorI18nKeys.ProtocolLabel)}
-        </span>
-        <DialSelect
-          elementId="toolset-protocol"
-          options={protocolOptions}
-          value={form.protocol}
-          onChange={handleProtocolChange}
-        />
-      </div>
+      <Select
+        labelProps={{
+          label: t(ToolsetEditorI18nKeys.ProtocolLabel),
+          required: true,
+        }}
+        id="toolset-protocol"
+        options={protocolOptions}
+        value={form.protocol}
+        onChange={handleProtocolChange}
+      />
 
       <DialTagInput
         elementId="toolset-allowed-tools"
@@ -122,9 +151,20 @@ const SettingsForm: FC<Props> = ({
         errors={errors}
         isSaving={isSaving}
         toolsetId={toolsetId}
+        isEditMode={isEditMode}
         endpoint={form.endpoint}
         onAuthChange={onAuthChange}
+        onEnsureSaved={onEnsureSaved}
       />
+
+      {isConnectVisible && (
+        <ConnectMcpUrlContent
+          entityType={CatalogEntityType.Toolset}
+          url={mcpUrl}
+          copyLabelKey={ButtonsI18nKeys.CopyUrl}
+          className="border-t border-tertiary pt-4"
+        />
+      )}
     </div>
   );
 };

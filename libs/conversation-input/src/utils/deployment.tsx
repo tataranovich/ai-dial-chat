@@ -20,10 +20,7 @@ export const filterDeployments = (
   );
 };
 
-/**
- * Builds the leading icon for a deployment. Uses the resolved image URL when
- * available (with an error fallback and lazy loading) and an initials avatar otherwise.
- */
+/** Builds the leading icon node for a deployment. */
 export const buildDeploymentIcon = (
   resolvedIconUrl: string | undefined,
   type: string | undefined,
@@ -34,7 +31,7 @@ export const buildDeploymentIcon = (
   <DeploymentIcon
     src={resolvedIconUrl}
     size={size}
-    tooltip={tooltip}
+    labels={{ tooltip }}
     initialsName={displayName}
   />
 );

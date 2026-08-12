@@ -1,65 +1,118 @@
-import type { DisplayAttachment, Stage } from '@epam/ai-dial-chat-shared';
-import {
-  mergeClasses,
-  messageAttachmentToDisplayAttachment,
-} from '@epam/ai-dial-chat-shared';
-import { AttachmentTray } from '@epam/ai-dial-conversation-input';
+import type { Stage } from '@epam/ai-dial-chat-shared';
+import { mergeClasses, StageStatus } from '@epam/ai-dial-chat-shared';
 import { DIAL_ICON_SIZE, DialEllipsisTooltip } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconChevronRight } from '@tabler/icons-react';
 import { FC, useState } from 'react';
-import type { StageTypography } from '../../models/stages-props';
+import type {
+  StagesPanelLabels,
+  StageTypography,
+} from '../../models/stages-props';
+import { cleanStageName, isIdentifierLike } from '../../utils/stage-name';
 import { StageIcon } from '../StageIcon/StageIcon';
 import { StageMarkdownContent } from '../StageMarkdownContent/StageMarkdownContent';
 import styles from '../StagesPanel/StagesPanel.module.scss';
 
-interface Props {
+/** Props for {@link StageItem}. */
+export interface StageItemProps {
   /** The stage data to render. */
   stage: Stage;
   /** Whether this stage is the currently executing (live) stage. */
   isLive: boolean;
   /** Typography configuration applied to stage text elements. */
-  typography: StageTypography;
-  /** Accessible label for the copy button inside stage content. */
-  copyAriaLabel?: string;
-  /** Accessible label for the attachments tray. Defaults to `'Stage attachments'`. */
-  attachmentsAriaLabel?: string;
-  /** Called when the user clicks an attachment card. */
-  onAttachmentClick?: (attachment: DisplayAttachment) => void;
+  typography?: StageTypography;
+  /** User-visible strings. */
+  labels?: StagesPanelLabels;
+  /** Overrides the displayed name; used to relabel individual attempts (e.g. `'Attempt 2'`) inside a `×N` group. */
+  nameOverride?: string;
 }
 
-/** A single stage row — plain when no content, collapsible when content or attachments are present. */
-export const StageItem: FC<Props> = ({
+/** Renders a single stage row, optionally expandable to show its content. */
+export const StageItem: FC<StageItemProps> = ({
   stage,
   isLive,
   typography,
-  copyAriaLabel = 'Copy stage content',
-  attachmentsAriaLabel = 'Stage attachments',
-  onAttachmentClick,
+  labels,
+  nameOverride,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const {
+    copyAriaLabel = 'Copy stage content',
+    runningAriaLabel,
+    failedAriaLabel,
+  } = labels ?? {};
+  const { name: cleanedName, durationLabel } = cleanStageName(stage.name);
+  const displayName = nameOverride ?? cleanedName;
+  const isMono = !nameOverride && isIdentifierLike(cleanedName);
+  const isFailed = stage.status === StageStatus.Failed;
+
+  const hasExpandableContent = !!stage.content;
 
   const header = (
     <>
-      <StageIcon status={stage.status} isLive={isLive} />
+      <span className="flex flex-none items-center">
+        <StageIcon
+          status={stage.status}
+          isLive={isLive}
+          runningLabel={runningAriaLabel}
+          failedLabel={failedAriaLabel}
+        />
+      </span>
       <span
         className={mergeClasses(
-          'min-w-0 flex-1 truncate capitalize',
+          'min-w-0 max-w-[22rem] truncate',
+          typography?.fontClassName ?? 'dial-small-text',
           styles.stageName,
+          isFailed && styles.stageNameFailed,
+          isMono && styles.monoName,
         )}
       >
-        <DialEllipsisTooltip text={stage.name || stage.status} />
+        <DialEllipsisTooltip text={displayName || stage.status || ''} />
       </span>
+      {stage.tag && (
+        <span
+          className={mergeClasses(
+            'flex-none uppercase',
+            typography?.countFontClassName ?? 'dial-tiny-text',
+            styles.tag,
+          )}
+        >
+          {stage.tag}
+        </span>
+      )}
+      {durationLabel && (
+        <span
+          className={mergeClasses(
+            'flex-none',
+            typography?.countFontClassName ?? 'dial-tiny-text',
+            styles.duration,
+          )}
+        >
+          {durationLabel}
+        </span>
+      )}
+      {hasExpandableContent && (
+        <span className={mergeClasses('flex-none', styles.iconSecondary)}>
+          {isOpen ? (
+            <IconChevronDown size={DIAL_ICON_SIZE.SM} aria-hidden />
+          ) : (
+            <IconChevronRight
+              size={DIAL_ICON_SIZE.SM}
+              className="rtl:scale-x-[-1]"
+              aria-hidden
+            />
+          )}
+        </span>
+      )}
     </>
   );
 
-  const displayAttachments =
-    stage.attachments?.map((attachment) =>
-      messageAttachmentToDisplayAttachment(attachment),
-    ) ?? [];
-  const hasExpandableContent = !!(stage.content || displayAttachments.length);
+  const rowClassName = mergeClasses(
+    'flex w-full items-center gap-2 px-2 py-1.5',
+    styles.row,
+  );
 
   if (!hasExpandableContent) {
-    return <div className="flex items-center gap-2">{header}</div>;
+    return <div className={rowClassName}>{header}</div>;
   }
 
   return (
@@ -67,23 +120,10 @@ export const StageItem: FC<Props> = ({
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className={mergeClasses(
-          'flex w-full cursor-pointer items-center gap-2 p-0',
-          styles.collapseButton,
-        )}
+        aria-expanded={isOpen}
+        className={mergeClasses(rowClassName, 'cursor-pointer text-start')}
       >
         {header}
-        {isOpen ? (
-          <IconChevronDown
-            size={DIAL_ICON_SIZE.MD}
-            className={styles.iconSecondary}
-          />
-        ) : (
-          <IconChevronRight
-            size={DIAL_ICON_SIZE.MD}
-            className={mergeClasses(styles.iconSecondary, 'rtl:scale-x-[-1]')}
-          />
-        )}
       </button>
       <div
         className={mergeClasses(
@@ -92,7 +132,7 @@ export const StageItem: FC<Props> = ({
         )}
       >
         <div className="overflow-hidden">
-          <div className="mt-3 flex flex-col gap-3 ps-7">
+          <div className="mt-2 flex flex-col gap-3 py-1 ps-8">
             {stage.content && (
               <div className="max-h-[300px] overflow-y-auto">
                 <StageMarkdownContent
@@ -101,14 +141,6 @@ export const StageItem: FC<Props> = ({
                   copyAriaLabel={copyAriaLabel}
                 />
               </div>
-            )}
-
-            {displayAttachments.length > 0 && (
-              <AttachmentTray
-                attachments={displayAttachments}
-                ariaLabel={attachmentsAriaLabel}
-                onAttachmentClick={onAttachmentClick}
-              />
             )}
           </div>
         </div>

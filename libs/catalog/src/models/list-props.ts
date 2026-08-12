@@ -1,13 +1,11 @@
+import type { CatalogEntityType } from '../types/entity-type';
 import { CatalogItem } from './catalog-item';
-
 /** Typography class overrides for `ListView` cells. */
 export interface ListViewTypography {
   /** Typography class for item name text. Default: `'dial-h3-text'`. */
   nameClassName?: string;
   /** Typography class for item version text. Default: `'dial-tiny-text'`. */
   versionClassName?: string;
-  /** Typography class for item description text. Default: `'dial-small-text'`. */
-  descriptionClassName?: string;
   /** Typography class for folder path text. Default: `'dial-small-text'`. */
   folderClassName?: string;
   /** Typography class for the last (deepest) folder segment. Default: `'dial-small-semi-text'`. */
@@ -16,10 +14,24 @@ export interface ListViewTypography {
 
 /** Color overrides for `ListView` cells, applied via CSS custom properties. */
 export interface ListViewColors {
-  /** Color for item name text. Fallback: `--text-primary`. */
-  nameText?: string;
-  /** Color for version/description/folder text. Fallback: `--text-secondary`. */
-  secondaryText?: string;
+  /** Grid container background. Fallback: `--bg-layer-raised`. */
+  background?: string;
+  /** Grid container border color. Fallback: `--stroke-secondary`. */
+  border?: string;
+  /** Sticky header background. Fallback: `--bg-layer-raised`. */
+  headerBackground?: string;
+  /** Divider color between header and rows. Fallback: `--stroke-tertiary`. */
+  rowDivider?: string;
+  /** Color of the filled star icon in the favorite column. Fallback: `--text-warning-icon`. */
+  starFilled?: string;
+  /** Background color of even-indexed grid rows. Fallback: `--bg-layer-base`. */
+  rowEvenBackground?: string;
+  /** Border color of the selected row. Fallback: `--stroke-info`. */
+  selectedRowBorder?: string;
+  /** Background color (tint) of the selected row. Fallback: `--bg-accent-primary-alpha`. */
+  selectedRowBackground?: string;
+  /** Color of the checkmark icon in the selected row's name cell. Fallback: `--text-accent`. */
+  selectedRowCheckIcon?: string;
 }
 
 /** Combined style overrides for `ListView`. */
@@ -32,6 +44,8 @@ export interface ListViewStyles {
 
 /** Props for ListView. */
 export interface ListViewProps {
+  /** Type of catalog items being displayed. */
+  type: CatalogEntityType;
   /** Items to display in the table. */
   items: CatalogItem[];
   /** Active search query — passed through grid context so cell renderers can highlight. */
@@ -55,4 +69,6 @@ export interface ListViewProps {
   stickyHeaderTop?: number;
   /** ID of an item to visually mark as selected (border, tint, and checkmark). */
   selectedItemId?: string;
+  /** Credentials-status badge label shown when signed out. Default: `'LOGGED OUT'`. */
+  credentialsBadgeLoggedOutLabel?: string;
 }

@@ -1,10 +1,12 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { DIAL_ICON_SIZE, ElementSize } from '@epam/ai-dial-ui-kit';
+import { CardShell, DIAL_ICON_SIZE, ElementSize } from '@epam/ai-dial-ui-kit';
 import { IconCheck } from '@tabler/icons-react';
 import { FC, KeyboardEvent, MouseEvent, useCallback, useState } from 'react';
-import { ENTITY_TYPE_COLOR } from '../../constants/entity-colors';
+import { AppIdentityColors } from '../../models/app-identity-styles';
 import { CatalogItem } from '../../models/catalog-item';
+import { DeploymentSize } from '../../types/deployment-icon-size';
 import { AppIdentity } from '../AppIdentity/AppIdentity';
+import { CredentialsBadge } from '../CredentialsBadge/CredentialsBadge';
 import { StarToggleButton } from '../StarToggleButton/StarToggleButton';
 import styles from './Favorites.module.scss';
 
@@ -18,11 +20,13 @@ export interface FavoriteCardProps {
   onToggle?: (id: string, isStarred: boolean) => void;
   /** Called when the card body is clicked. */
   onClick?: (item: CatalogItem) => void;
-  /** CSS class for the entity name. Default: 'dial-body-semi-text text-primary'. */
+  /** Typography CSS class for the entity name. Default: 'dial-body-semi-text'. */
   nameClassName?: string;
-  /** CSS class for the version string. Default: 'dial-tiny-text text-secondary'. */
+  /** Color overrides applied as CSS custom properties. */
+  colors?: AppIdentityColors;
+  /** Typography CSS class for the version string. Default: `'dial-tiny-text'`. */
   versionClassName?: string;
-  /** CSS class for the last-used text. Default: 'dial-tiny-text text-secondary'. */
+  /** Typography CSS class for the last-used text. Default: `'dial-tiny-text'`. */
   lastUsedClassName?: string;
   /** Search query string; matching text in the name is highlighted when provided. */
   query?: string;
@@ -32,6 +36,8 @@ export interface FavoriteCardProps {
   removeFromFavoritesAriaLabel?: string;
   /** Whether this card represents the currently selected item — shows an accent border, tinted background, and a checkmark. Default: false. */
   isSelected?: boolean;
+  /** Credentials-status badge label shown when signed out. Default: `'LOGGED OUT'`. */
+  credentialsBadgeLoggedOutLabel?: string;
 }
 
 /** Compact favorite card: logo + type + name + version + last-used, star aligned right. */
@@ -41,12 +47,14 @@ export const FavoriteCard: FC<FavoriteCardProps> = ({
   onToggle,
   onClick,
   nameClassName,
+  colors,
   versionClassName,
   lastUsedClassName,
   query,
   addToFavoritesAriaLabel = 'Add to favorites',
   removeFromFavoritesAriaLabel = 'Remove from favorites',
   isSelected = false,
+  credentialsBadgeLoggedOutLabel,
 }) => {
   const [isStarred, setIsStarred] = useState(initialIsStarred);
   const [isLeaving, setIsLeaving] = useState(false);
@@ -76,19 +84,15 @@ export const FavoriteCard: FC<FavoriteCardProps> = ({
   );
 
   return (
-    <article
+    <CardShell
       data-card-id={item.id}
       role={handleClick != null ? 'button' : undefined}
       tabIndex={handleClick != null ? 0 : undefined}
       aria-label={item.name}
       className={mergeClasses(
-        'relative box-border flex min-w-0 cursor-pointer items-start gap-1',
-        'rounded-[20px] border-2 p-[22px] text-start',
-        styles.card,
+        'box-border min-w-0 cursor-pointer flex-row items-start gap-1 text-start',
         isLeaving && styles.cardLeaving,
-        isSelected
-          ? 'border-accent-primary !bg-accent-primary-alpha'
-          : 'border-transparent',
+        isSelected && styles.selectedCard,
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
@@ -103,25 +107,38 @@ export const FavoriteCard: FC<FavoriteCardProps> = ({
       {isSelected && (
         <IconCheck
           size={DIAL_ICON_SIZE.SM}
-          className="absolute end-3 top-3 shrink-0 text-accent-primary"
+          className={mergeClasses(
+            'absolute end-3 top-3 shrink-0',
+            styles.selectedCheck,
+          )}
           aria-hidden
         />
       )}
 
-      <AppIdentity
-        icon={item.iconUrl}
-        type={item.type}
-        name={item.name}
-        version={item.version}
-        lastUsed={item.lastUsed}
-        size="lg"
-        query={query}
-        className="min-w-0 flex-1"
-        typeColor={ENTITY_TYPE_COLOR[item.type]}
-        nameClassName={nameClassName}
-        versionClassName={versionClassName}
-        lastUsedClassName={lastUsedClassName}
-      />
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+        <AppIdentity
+          icon={item.iconUrl}
+          type={item.type}
+          name={item.name}
+          version={item.version}
+          lastUsed={item.lastUsed}
+          size={DeploymentSize.LG}
+          query={query}
+          className="min-w-0 self-stretch"
+          styles={{
+            colors,
+            typography: {
+              nameClassName,
+              versionClassName,
+              lastUsedClassName,
+            },
+          }}
+        />
+        <CredentialsBadge
+          credentials={item.credentials}
+          loggedOutLabel={credentialsBadgeLoggedOutLabel}
+        />
+      </div>
       <StarToggleButton
         isStarred={isStarred}
         size={ElementSize.Small}
@@ -131,6 +148,6 @@ export const FavoriteCard: FC<FavoriteCardProps> = ({
         }
         className="self-end"
       />
-    </article>
+    </CardShell>
   );
 };

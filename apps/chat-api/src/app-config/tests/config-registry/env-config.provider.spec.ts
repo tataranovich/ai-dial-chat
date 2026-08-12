@@ -172,6 +172,412 @@ describe('EnvConfigProvider', () => {
     });
   });
 
+  describe('features.liveChatInteraction', () => {
+    it('returns true when LIVE_CHAT_INTERACTION_ENABLED is true', async () => {
+      const { provider } = makeProvider({
+        LIVE_CHAT_INTERACTION_ENABLED: true,
+      });
+      expect(await provider.resolve('features.liveChatInteraction', ctx)).toBe(
+        true,
+      );
+    });
+
+    it('returns undefined when LIVE_CHAT_INTERACTION_ENABLED is absent', async () => {
+      const { provider } = makeProvider({
+        LIVE_CHAT_INTERACTION_ENABLED: undefined,
+      });
+      expect(
+        await provider.resolve('features.liveChatInteraction', ctx),
+      ).toBeUndefined();
+    });
+
+    describe('role gating via LIVE_CHAT_INTERACTION_ENABLED_ROLES', () => {
+      it('returns true when the roles env var is empty (unrestricted)', async () => {
+        const { provider } = makeProvider({
+          LIVE_CHAT_INTERACTION_ENABLED: true,
+          LIVE_CHAT_INTERACTION_ENABLED_ROLES: [],
+        });
+        expect(
+          await provider.resolve('features.liveChatInteraction', ctx),
+        ).toBe(true);
+      });
+
+      it('returns true when user has a matching role', async () => {
+        const { provider } = makeProvider({
+          LIVE_CHAT_INTERACTION_ENABLED: true,
+          LIVE_CHAT_INTERACTION_ENABLED_ROLES: ['admin'],
+        });
+        const ctxWithRole: AppConfigEvalContext = { ...ctx, roles: ['admin'] };
+        expect(
+          await provider.resolve('features.liveChatInteraction', ctxWithRole),
+        ).toBe(true);
+      });
+
+      it('returns false when user roles do not intersect with the allowed roles', async () => {
+        const { provider } = makeProvider({
+          LIVE_CHAT_INTERACTION_ENABLED: true,
+          LIVE_CHAT_INTERACTION_ENABLED_ROLES: ['admin'],
+        });
+        const ctxWithRole: AppConfigEvalContext = {
+          ...ctx,
+          roles: ['viewer'],
+        };
+        expect(
+          await provider.resolve('features.liveChatInteraction', ctxWithRole),
+        ).toBe(false);
+      });
+    });
+  });
+
+  describe('features.scheduledTasksEnabled', () => {
+    it('returns true when SCHEDULED_TASKS_ENABLED is true', async () => {
+      const { provider } = makeProvider({
+        SCHEDULED_TASKS_ENABLED: true,
+      });
+      expect(
+        await provider.resolve('features.scheduledTasksEnabled', ctx),
+      ).toBe(true);
+    });
+
+    it('returns undefined when SCHEDULED_TASKS_ENABLED is absent', async () => {
+      const { provider } = makeProvider({
+        SCHEDULED_TASKS_ENABLED: undefined,
+      });
+      expect(
+        await provider.resolve('features.scheduledTasksEnabled', ctx),
+      ).toBeUndefined();
+    });
+
+    describe('role gating via SCHEDULED_TASKS_ENABLED_ROLES', () => {
+      it('returns true when the roles env var is empty (unrestricted)', async () => {
+        const { provider } = makeProvider({
+          SCHEDULED_TASKS_ENABLED: true,
+          SCHEDULED_TASKS_ENABLED_ROLES: [],
+        });
+        expect(
+          await provider.resolve('features.scheduledTasksEnabled', ctx),
+        ).toBe(true);
+      });
+
+      it('returns true when user has a matching role', async () => {
+        const { provider } = makeProvider({
+          SCHEDULED_TASKS_ENABLED: true,
+          SCHEDULED_TASKS_ENABLED_ROLES: ['admin'],
+        });
+        const ctxWithRole: AppConfigEvalContext = { ...ctx, roles: ['admin'] };
+        expect(
+          await provider.resolve('features.scheduledTasksEnabled', ctxWithRole),
+        ).toBe(true);
+      });
+
+      it('returns false when user roles do not intersect with the allowed roles', async () => {
+        const { provider } = makeProvider({
+          SCHEDULED_TASKS_ENABLED: true,
+          SCHEDULED_TASKS_ENABLED_ROLES: ['admin'],
+        });
+        const ctxWithRole: AppConfigEvalContext = {
+          ...ctx,
+          roles: ['viewer'],
+        };
+        expect(
+          await provider.resolve('features.scheduledTasksEnabled', ctxWithRole),
+        ).toBe(false);
+      });
+    });
+  });
+
+  describe('features.responsesApiEnabled', () => {
+    it('returns true when RESPONSES_API_ENABLED is true', async () => {
+      const { provider } = makeProvider({ RESPONSES_API_ENABLED: true });
+      expect(await provider.resolve('features.responsesApiEnabled', ctx)).toBe(
+        true,
+      );
+    });
+
+    it('returns false when RESPONSES_API_ENABLED is false', async () => {
+      const { provider } = makeProvider({ RESPONSES_API_ENABLED: false });
+      expect(await provider.resolve('features.responsesApiEnabled', ctx)).toBe(
+        false,
+      );
+    });
+
+    it('returns undefined when RESPONSES_API_ENABLED is absent (falls through to the registry default of false)', async () => {
+      const { provider } = makeProvider({ RESPONSES_API_ENABLED: undefined });
+      expect(
+        await provider.resolve('features.responsesApiEnabled', ctx),
+      ).toBeUndefined();
+    });
+  });
+
+  describe('dialCore.externalUrl', () => {
+    it('returns the external URL when DIAL_CORE_EXTERNAL_URL is set', async () => {
+      const { provider } = makeProvider({
+        DIAL_CORE_EXTERNAL_URL: 'https://dial.example.com',
+      });
+      expect(await provider.resolve('dialCore.externalUrl', ctx)).toBe(
+        'https://dial.example.com',
+      );
+    });
+
+    it('returns undefined when DIAL_CORE_EXTERNAL_URL is not set', async () => {
+      const { provider } = makeProvider({ DIAL_CORE_EXTERNAL_URL: undefined });
+      expect(
+        await provider.resolve('dialCore.externalUrl', ctx),
+      ).toBeUndefined();
+    });
+  });
+
+  describe('fileManager.availableTabs', () => {
+    it('returns undefined when FILE_MANAGER_AVAILABLE_TABS is not set', async () => {
+      const { provider } = makeProvider({ FILE_MANAGER_AVAILABLE_TABS: [] });
+      expect(
+        await provider.resolve('fileManager.availableTabs', ctx),
+      ).toBeUndefined();
+    });
+
+    it('returns the valid subset when a valid subset is configured', async () => {
+      const { provider } = makeProvider({
+        FILE_MANAGER_AVAILABLE_TABS: ['my_files', 'organization'],
+      });
+      expect(await provider.resolve('fileManager.availableTabs', ctx)).toEqual([
+        'my_files',
+        'organization',
+      ]);
+    });
+
+    it('drops unknown ids and keeps only recognized tabs', async () => {
+      const { provider } = makeProvider({
+        FILE_MANAGER_AVAILABLE_TABS: ['my_files', 'review', 'bogus'],
+      });
+      expect(await provider.resolve('fileManager.availableTabs', ctx)).toEqual([
+        'my_files',
+      ]);
+    });
+
+    it('returns undefined when every configured id is invalid', async () => {
+      const { provider } = makeProvider({
+        FILE_MANAGER_AVAILABLE_TABS: ['review', 'bogus'],
+      });
+      expect(
+        await provider.resolve('fileManager.availableTabs', ctx),
+      ).toBeUndefined();
+    });
+  });
+
+  describe('announcement.items', () => {
+    const ENTRY = {
+      title: 'We have upgraded to DIAL 1.43',
+      description: "Check what's new:",
+      link: { label: 'Changelog', href: 'https://dialx.ai/changelog' },
+    };
+
+    it('returns undefined when ANNOUNCEMENTS is not set', async () => {
+      const { provider } = makeProvider({ ANNOUNCEMENTS: undefined });
+      expect(await provider.resolve('announcement.items', ctx)).toBeUndefined();
+    });
+
+    /* Regression: the generic env path returns the raw string for a 'json'
+     * valueType, which reached the service as a string and silently resolved
+     * to an empty list. */
+    it('parses a JSON array into an array rather than passing the string through', async () => {
+      const { provider } = makeProvider({
+        ANNOUNCEMENTS: JSON.stringify([ENTRY]),
+      });
+
+      const resolved = await provider.resolve('announcement.items', ctx);
+
+      expect(Array.isArray(resolved)).toBe(true);
+      expect(resolved).toEqual([ENTRY]);
+    });
+
+    it('returns undefined and logs an error when ANNOUNCEMENTS is invalid JSON', async () => {
+      const { provider } = makeProvider({ ANNOUNCEMENTS: 'not-json' });
+      const loggerErrorSpy = vi.spyOn(provider['logger'], 'error');
+
+      expect(await provider.resolve('announcement.items', ctx)).toBeUndefined();
+      expect(loggerErrorSpy).toHaveBeenCalled();
+    });
+
+    it('returns undefined and logs an error when ANNOUNCEMENTS is not an array', async () => {
+      const { provider } = makeProvider({
+        ANNOUNCEMENTS: JSON.stringify(ENTRY),
+      });
+      const loggerErrorSpy = vi.spyOn(provider['logger'], 'error');
+
+      expect(await provider.resolve('announcement.items', ctx)).toBeUndefined();
+      expect(loggerErrorSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('customVisualizers', () => {
+    it('returns undefined when CUSTOM_VISUALIZERS is not set', async () => {
+      const { provider } = makeProvider({ CUSTOM_VISUALIZERS: undefined });
+      expect(await provider.resolve('customVisualizers', ctx)).toBeUndefined();
+    });
+
+    it('returns [] and logs an error when CUSTOM_VISUALIZERS is invalid JSON', async () => {
+      const { provider } = makeProvider({ CUSTOM_VISUALIZERS: 'not-json' });
+      const loggerErrorSpy = vi.spyOn(provider['logger'], 'error');
+
+      expect(await provider.resolve('customVisualizers', ctx)).toEqual([]);
+      expect(loggerErrorSpy).toHaveBeenCalled();
+    });
+
+    it('returns [] and logs an error when CUSTOM_VISUALIZERS is valid JSON but not an array', async () => {
+      const { provider } = makeProvider({
+        CUSTOM_VISUALIZERS: JSON.stringify({ contentType: 'x' }),
+      });
+      const loggerErrorSpy = vi.spyOn(provider['logger'], 'error');
+
+      expect(await provider.resolve('customVisualizers', ctx)).toEqual([]);
+      expect(loggerErrorSpy).toHaveBeenCalled();
+    });
+
+    it('accepts a valid entry and preserves its fields verbatim', async () => {
+      const { provider } = makeProvider({
+        CUSTOM_VISUALIZERS: JSON.stringify([
+          {
+            title: 'my-viz',
+            description: 'my viz description',
+
+            contentType: 'application/x-my-viz',
+            url: 'https://viz.example.com',
+          },
+        ]),
+      });
+
+      expect(await provider.resolve('customVisualizers', ctx)).toEqual([
+        {
+          title: 'my-viz',
+          description: 'my viz description',
+
+          contentType: 'application/x-my-viz',
+          url: 'https://viz.example.com',
+          requestTimeout: undefined,
+          passAuthInfo: undefined,
+          passExplicitToken: undefined,
+        },
+      ]);
+    });
+
+    it('keeps other valid entries when one entry fails validation', async () => {
+      const { provider } = makeProvider({
+        CUSTOM_VISUALIZERS: JSON.stringify([
+          {
+            title: 'my-viz',
+
+            contentType: 'application/x-my-viz',
+            url: 'https://viz.example.com',
+          },
+          { contentType: '', url: 'not-a-url', title: 'bad', icon: 'x' },
+        ]),
+      });
+      const loggerErrorSpy = vi.spyOn(provider['logger'], 'error');
+
+      const result = (await provider.resolve(
+        'customVisualizers',
+        ctx,
+      )) as unknown[];
+
+      expect(result).toHaveLength(1);
+      expect(loggerErrorSpy).toHaveBeenCalled();
+    });
+
+    it('drops an entry with a missing title', async () => {
+      const { provider } = makeProvider({
+        CUSTOM_VISUALIZERS: JSON.stringify([
+          {
+            contentType: 'application/x-my-viz',
+            url: 'https://viz.example.com',
+          },
+        ]),
+      });
+
+      expect(await provider.resolve('customVisualizers', ctx)).toEqual([]);
+    });
+
+    it('accepts a whitespace-only title (some visualizers use spaces as appName)', async () => {
+      const { provider } = makeProvider({
+        CUSTOM_VISUALIZERS: JSON.stringify([
+          {
+            contentType: 'application/x-my-viz',
+            url: 'https://viz.example.com',
+            title: ' ',
+          },
+        ]),
+      });
+
+      const result = (await provider.resolve('customVisualizers', ctx)) as {
+        title: string;
+      }[];
+      expect(result).toHaveLength(1);
+      expect(result[0].title).toBe(' ');
+    });
+
+    it('accepts a comma-separated contentType and stores it verbatim', async () => {
+      const { provider } = makeProvider({
+        CUSTOM_VISUALIZERS: JSON.stringify([
+          {
+            contentType: 'application/x-a, application/x-b',
+            url: 'https://viz.example.com',
+            title: 'multi',
+          },
+        ]),
+      });
+
+      const result = (await provider.resolve(
+        'customVisualizers',
+        ctx,
+      )) as Array<{ contentType: string }>;
+      expect(result[0].contentType).toBe('application/x-a, application/x-b');
+    });
+
+    it('keeps an entry with unrecognized fields, logging a warning listing them', async () => {
+      const { provider } = makeProvider({
+        CUSTOM_VISUALIZERS: JSON.stringify([
+          {
+            title: 'my-viz',
+            contentType: 'application/x-my-viz',
+            url: 'https://viz.example.com',
+            width: 800,
+            expanded: true,
+          },
+        ]),
+      });
+      const loggerWarnSpy = vi.spyOn(provider['logger'], 'warn');
+
+      const result = (await provider.resolve(
+        'customVisualizers',
+        ctx,
+      )) as Array<Record<string, unknown>>;
+
+      expect(result).toHaveLength(1);
+      expect(result[0].width).toBe(800);
+      expect(result[0]).not.toHaveProperty('expanded');
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('expanded'),
+      );
+    });
+  });
+
+  describe('publish.publicationFilterSources', () => {
+    it('returns undefined when PUBLICATION_FILTER_SOURCES is not set', async () => {
+      const { provider } = makeProvider({ PUBLICATION_FILTER_SOURCES: [] });
+      expect(
+        await provider.resolve('publish.publicationFilterSources', ctx),
+      ).toBeUndefined();
+    });
+
+    it('returns the parsed, trimmed array when PUBLICATION_FILTER_SOURCES is set', async () => {
+      const { provider } = makeProvider({
+        PUBLICATION_FILTER_SOURCES: ['roles', 'department', 'title'],
+      });
+      expect(
+        await provider.resolve('publish.publicationFilterSources', ctx),
+      ).toEqual(['roles', 'department', 'title']);
+    });
+  });
+
   describe('unknown key', () => {
     it('returns undefined for an unknown key', async () => {
       const { provider } = makeProvider();

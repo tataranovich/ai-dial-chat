@@ -1,7 +1,3 @@
-/* ============================================================
- * Filter trigger button
- * ============================================================ */
-
 .filterBtn {
   background-color: var(
     --cat-filter-btn-bg,
@@ -10,6 +6,7 @@
   border: 1px solid rgba(0, 0, 0, 0.05);
   transition:
     border-color 150ms ease,
+    outline-color 150ms ease,
     box-shadow 150ms ease;
 
   @media (hover: hover) {
@@ -18,43 +15,49 @@
     }
   }
 
+  /* Focus ring is an `outline`, not a `border-color` swap — outline is painted
+   * outside the border box, so it costs no layout and is preserved in
+   * forced-colors mode. `outline-offset: -1px` keeps it in the border's place
+   * (the border itself goes transparent) so nothing grows or jitters. */
   &:focus-visible {
-    outline: none;
-    border-color: color-mix(
-      in srgb,
-      var(--stroke-accent-primary, #7da4ff) 50%,
-      transparent
-    );
+    border-color: transparent;
+    outline: 1px solid
+      color-mix(
+        in srgb,
+        var(--cat-filter-btn-border-focus, var(--stroke-info, #124ace)) 50%,
+        transparent
+      );
+    outline-offset: -1px;
     box-shadow: none;
   }
 }
 
 .filterBtnActive {
-  border-color: var(--stroke-accent-primary, #7da4ff);
+  border-color: var(
+    --cat-filter-btn-border-active,
+    var(--stroke-info, #124ace)
+  );
 }
 
 .filterBtnOpen {
   border-color: color-mix(
     in srgb,
-    var(--stroke-accent-primary, #7da4ff) 50%,
+    var(--cat-filter-btn-border-open, var(--stroke-info, #124ace)) 50%,
     transparent
   );
 }
 
 /* Matches dial-small-semi-text (14px / 20px, semibold). */
 .filterBtnLabel {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 600;
-  color: var(--text-primary, #131a29);
+  color: var(--cat-filter-btn-label, var(--text-primary, #161b2d));
 }
 
 .filterBtnFunnel {
-  color: var(--text-secondary, #64748b);
+  color: var(--cat-filter-btn-funnel, var(--text-secondary, #57647a));
 }
 
 .filterBtnChevron {
-  color: var(--text-tertiary, #98a2b3);
+  color: var(--cat-filter-btn-chevron, var(--text-tertiary, #848e9c));
   transition: transform 150ms ease;
 
   @media (prefers-reduced-motion: reduce) {
@@ -80,7 +83,10 @@
 .row {
   @media (hover: hover) {
     &:hover {
-      background: var(--bg-layer-3, rgba(0, 0, 0, 0.04));
+      background: var(
+        --cat-filter-row-hover-bg,
+        var(--bg-layer-raised, #fcfcfc)
+      );
     }
   }
 
@@ -90,27 +96,30 @@
 }
 
 .rowChecked {
-  background: var(--bg-accent-primary-alpha, rgba(125, 164, 255, 0.15));
+  background: var(
+    --cat-filter-row-checked-bg,
+    var(--bg-accent-primary-alpha, #7da4ff2e)
+  );
 
   @media (hover: hover) {
     &:hover {
-      background: var(--bg-accent-primary-alpha, rgba(125, 164, 255, 0.15));
+      background: var(
+        --cat-filter-row-checked-bg,
+        var(--bg-accent-primary-alpha, #7da4ff2e)
+      );
     }
   }
 }
 
-/* Matches dial-small-text (14px / 20px, normal). */
 .rowLabel {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 400;
-  color: var(--text-primary, #131a29);
+  color: var(--cat-filter-row-label, var(--text-primary, #161b2d));
 }
 
 /* Custom 20 × 20 checkbox ------------------------------------ */
 
 .checkbox {
-  border: 1.5px solid rgba(0, 0, 0, 0.12); /* stroke-hover */
+  border: 1.5px solid
+    var(--cat-filter-checkbox-border, var(--stroke-tertiary, #e0e6f0));
   background: var(
     --cat-filter-checkbox-bg,
     #ffffff
@@ -131,8 +140,8 @@
   /* Checkmark drawn from two border sides of a rotated element.
      border-left is physical here — the ✓ glyph must not flip in RTL. */
   &::after {
+    @apply mr-[1px] mt-[1px] block;
     content: '';
-    display: block;
     width: 5px;
     height: 10px;
     border: 2px solid #ffffff;
@@ -142,43 +151,13 @@
   }
 }
 
-/* Section separator ----------------------------------------- */
-
 .divider {
   background: rgba(0, 0, 0, 0.05); /* stroke-primary */
 }
 
-/* Topics section label --------------------------------------- */
-
-/* Matches dial-tiny-semi-text (12px / 16px, semibold). */
 .sectionLabel {
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 600;
-  color: var(--text-tertiary, #98a2b3);
+  color: var(--cat-filter-section-label, var(--text-tertiary, #848e9c));
 }
-
-/* Clear — ghost style. Matches dial-small-text (14px / 20px, normal). */
-.clearBtn {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 400;
-  color: var(--text-secondary, #64748b);
-  transition: background-color 150ms ease;
-
-  @media (hover: hover) {
-    &:hover {
-      background: var(--bg-layer-3, rgba(0, 0, 0, 0.04));
-    }
-  }
-
-  &:focus-visible {
-    outline: 2px solid rgba(125, 164, 255, 0.5);
-    outline-offset: 2px;
-  }
-}
-
-/* Footer ---------------------------------------------------- */
 
 .footer {
   border-top: 1px solid rgba(0, 0, 0, 0.05); /* stroke-primary */

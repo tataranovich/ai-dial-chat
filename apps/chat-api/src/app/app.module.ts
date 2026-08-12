@@ -1,6 +1,6 @@
 import { CacheModule } from '@nestjs/cache-manager';
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -9,15 +9,23 @@ import { ApplicationSchemasModule } from '../application-schemas/application-sch
 import { ApplicationsModule } from '../applications/applications.module';
 import { AuthModule } from '../auth/auth.module';
 import { ChatModule } from '../chat/chat.module';
+import { ClientChannelModule } from '../client-channel/client-channel.module';
 import { MetricsInterceptor } from '../common/interceptors/metrics.interceptor';
+import { EnvironmentVariables } from '../config/environment.config';
 import { validate } from '../config/validation';
 import { ConversationModule } from '../conversations/conversation.module';
 import { DeploymentsModule } from '../deployments/deployments.module';
 import { DialCoreModule } from '../dial/dial-core.module';
+import { ExternalServicesModule } from '../external-services/external-services.module';
 import { FilesModule } from '../files/files.module';
 import { HealthController } from '../health/health.controller';
 import { ModelsModule } from '../models/models.module';
+import { PromptModule } from '../prompts/prompt.module';
+import { PublishModule } from '../publish/publish.module';
 import { RateModule } from '../rate/rate.module';
+import { ScheduledTasksModule } from '../scheduled-tasks/scheduled-tasks.module';
+import { ShareModule } from '../share/share.module';
+import { TelemetryShutdownService } from '../telemetry/telemetry-shutdown.service';
 import { ThemesModule } from '../themes/themes.module';
 import { ToolsetsModule } from '../toolsets/toolsets.module';
 import { TranscriptionModule } from '../transcription/transcription.module';
@@ -44,7 +52,15 @@ import { createServeStaticOptions } from './static-assets';
         limit: 100, // 100 requests per minute
       },
     ]),
-    ServeStaticModule.forRoot(createServeStaticOptions()),
+    ServeStaticModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService<EnvironmentVariables, true>) =>
+        createServeStaticOptions({
+          overlaySandboxEnabled: configService.get('OVERLAY_SANDBOX_ENABLED', {
+            infer: true,
+          }),
+        }),
+    }),
     DialCoreModule,
     AppConfigModule,
     ApplicationSchemasModule,
@@ -53,12 +69,18 @@ import { createServeStaticOptions } from './static-assets';
     ModelsModule,
     ToolsetsModule,
     ChatModule,
+    ClientChannelModule,
+    ExternalServicesModule,
     ConversationModule,
+    PromptModule,
     UserConfigModule,
     FilesModule,
     RateModule,
     TranscriptionModule,
     ThemesModule,
+    ShareModule,
+    PublishModule,
+    ScheduledTasksModule,
   ],
   controllers: [AppController, HealthController],
   providers: [
@@ -70,6 +92,7 @@ import { createServeStaticOptions } from './static-assets';
       provide: APP_INTERCEPTOR,
       useClass: MetricsInterceptor,
     },
+    TelemetryShutdownService,
   ],
 })
 export class AppModule {}

@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { DeploymentItemType } from './deployment-item.dto';
 
 export class ModelCapabilitiesDto {
   @ApiPropertyOptional({ description: 'True if the model is a completion' })
@@ -199,61 +200,19 @@ export class ModelDetailsDto {
   createdAt?: number;
 }
 
-export class ApplicationDetailsDto {
-  @ApiPropertyOptional({
-    type: 'object',
-    additionalProperties: true,
-    description:
-      'Non-secret custom application properties reported by DIAL Core',
-  })
-  applicationProperties?: Record<string, unknown>;
-
-  @ApiPropertyOptional({ description: 'Runtime environment for the function' })
-  functionRuntime?: string;
-
-  @ApiPropertyOptional({
-    description: 'Current deployment status of the function',
-  })
-  functionStatus?: string;
-
-  @ApiPropertyOptional({
-    description: 'Custom route names exposed by the application',
-    type: [String],
-  })
-  routes?: string[];
-
-  @ApiPropertyOptional({
-    description: 'Owner of the deployment as reported by DIAL Core',
-  })
-  owner?: string;
-
-  @ApiPropertyOptional({ type: DeploymentFeaturesDetailsDto })
-  features?: DeploymentFeaturesDetailsDto;
-
-  @ApiPropertyOptional({
-    description: 'Accepted MIME types for input attachments',
-    type: [String],
-  })
-  inputAttachmentTypes?: string[];
-
-  @ApiPropertyOptional({
-    description: 'URI of the custom application type schema, when present',
-  })
-  applicationTypeSchemaId?: string;
-
-  @ApiPropertyOptional({
-    description:
-      'Timestamp of creation time from DIAL Core (e.g. 1714768496000)',
-  })
-  createdAt?: number;
-}
-
 export class ToolsetAuthSettingsDto {
   @ApiPropertyOptional({
     description: 'Type of authentication',
     enum: ['OAUTH', 'API_KEY', 'NONE'],
   })
   authenticationType?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether DIAL Core dynamically registered the OAuth client instead of using user-provided client configuration',
+    example: true,
+  })
+  dynamicallyRegistered?: boolean;
 
   @ApiPropertyOptional({
     description:
@@ -317,6 +276,68 @@ export class ToolsetAuthSettingsDto {
   codeChallengeMethod?: string;
 }
 
+export class ApplicationDetailsDto {
+  @ApiPropertyOptional({ description: 'Display name reported by DIAL Core' })
+  displayName?: string;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'Non-secret custom application properties reported by DIAL Core',
+  })
+  applicationProperties?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Runtime environment for the function' })
+  functionRuntime?: string;
+
+  @ApiPropertyOptional({
+    description: 'Current deployment status of the function',
+  })
+  functionStatus?: string;
+
+  @ApiPropertyOptional({
+    description: 'Custom route names exposed by the application',
+    type: [String],
+  })
+  routes?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Owner of the deployment as reported by DIAL Core',
+  })
+  owner?: string;
+
+  @ApiPropertyOptional({ type: DeploymentFeaturesDetailsDto })
+  features?: DeploymentFeaturesDetailsDto;
+
+  @ApiPropertyOptional({
+    description: 'Accepted MIME types for input attachments',
+    type: [String],
+  })
+  inputAttachmentTypes?: string[];
+
+  @ApiPropertyOptional({
+    description: 'URI of the custom application type schema, when present',
+  })
+  applicationTypeSchemaId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Chat completion endpoint URL for custom applications',
+  })
+  endpoint?: string;
+
+  @ApiPropertyOptional({
+    description: 'Maximum number of input attachments for custom applications',
+  })
+  maxInputAttachments?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Timestamp of creation time from DIAL Core (e.g. 1714768496000)',
+  })
+  createdAt?: number;
+}
+
 export class ToolsetDetailsDto {
   @ApiPropertyOptional({
     description: 'Transport supported by the MCP server (HTTP or SSE)',
@@ -358,8 +379,8 @@ export class DeploymentDetailsDto {
   @ApiProperty({ description: 'The requested deployment id' })
   id!: string;
 
-  @ApiProperty({ enum: ['model', 'application', 'toolset'] })
-  type!: 'model' | 'application' | 'toolset';
+  @ApiProperty({ enum: DeploymentItemType })
+  type!: DeploymentItemType;
 
   @ApiPropertyOptional({ type: ModelDetailsDto })
   modelDetails?: ModelDetailsDto;

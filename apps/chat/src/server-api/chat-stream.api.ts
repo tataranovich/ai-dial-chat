@@ -1,5 +1,5 @@
+import { SendCompletionDtoModeEnum } from '@epam/ai-dial-chat-api-client';
 import { MessageCustomContent, StreamChunk } from '@epam/ai-dial-chat-shared';
-import { SendCompletionDtoModeEnum } from '@epam/chat-api-client';
 import { JSON_HEADERS } from '../constants/http';
 import { ApiEndpoints, getCsrfToken, setCsrfToken } from './base';
 
@@ -48,6 +48,7 @@ export const streamCompletion = (
   generationId?: string,
   mode?: SendCompletionDtoModeEnum,
   messageIndex?: number,
+  clientChannelId?: string,
 ): void => {
   const { onChunk, onComplete, onError, signal } = options;
 
@@ -72,6 +73,7 @@ export const streamCompletion = (
           ...(generationId != null && { generationId }),
           ...(mode != null && { mode }),
           ...(messageIndex != null && { messageIndex }),
+          ...(clientChannelId != null && { clientChannelId }),
         }),
       });
     } catch (err) {

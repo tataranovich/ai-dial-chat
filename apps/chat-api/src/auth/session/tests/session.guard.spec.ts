@@ -1,226 +1,147 @@
-import { randomUUID } from 'crypto';
-import {
-  ExecutionContext,
-  UnauthorizedException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BucketService } from '../../bucket/bucket.service';
-import { RefreshService } from '../../refresh/refresh.service';
+import { AuthSource } from '../../auth-source.enum';
+import { AUTH_STRATEGIES } from '../../strategies/auth-strategies.token';
+import type { AuthStrategy } from '../../strategies/auth-strategy.interface';
+import { AuthErrorCode } from '../auth-error-code.enum';
 import { SessionGuard } from '../session.guard';
-import { SessionService } from '../session.service';
-import type { SessionPayload } from '../session.types';
+import type { SessionUser } from '../session.types';
 
-const COOKIE_NAME = '__Host-chat.sess';
+const SESSION_USER: SessionUser = {
+  sid: 'sid-1',
+  sub: 'user-1',
+  providerId: 'keycloak',
+  claims: {},
+  at: 'access-token',
+  bucket: 'user-bucket',
+  csrf: 'csrf-secret',
+};
 
-function makePayload(overrides?: Partial<SessionPayload>): SessionPayload {
-  const now = Math.floor(Date.now() / 1000);
+function makeStrategy(overrides: Partial<AuthStrategy>): AuthStrategy {
   return {
-    v: 1,
-    sid: randomUUID(),
-    providerId: 'keycloak',
-    sub: 'user-1',
-    at: 'access-token',
-    rt: 'refresh-token',
-    at_exp: now + 3600,
-    rt_exp: now + 86400,
-    iat: now,
-    csrf: randomUUID(),
-    claims: {},
-    bucket: 'user-bucket',
+    source: AuthSource.Cookie,
+    supports: vi.fn().mockReturnValue(false),
+    authenticate: vi.fn().mockResolvedValue(null),
     ...overrides,
   };
 }
 
-function makeContext(opts: { cookieValue?: string; isPublic?: boolean }): {
+function makeContext(): {
   context: ExecutionContext;
   req: Record<string, unknown>;
-  res: {
-    cookie: ReturnType<typeof vi.fn>;
-    setHeader: ReturnType<typeof vi.fn>;
-  };
 } {
-  const req: Record<string, unknown> = {
-    cookies: opts.cookieValue ? { [COOKIE_NAME]: opts.cookieValue } : {},
-    user: undefined,
-  };
-  const res = { cookie: vi.fn(), setHeader: vi.fn() };
+  const req: Record<string, unknown> = { user: undefined };
   const context = {
     switchToHttp: () => ({
       getRequest: () => req,
-      getResponse: () => res,
+      getResponse: () => ({}),
     }),
     getHandler: () => ({}),
     getClass: () => ({}),
   } as unknown as ExecutionContext;
-  return { context, req, res };
+  return { context, req };
 }
 
 describe('SessionGuard', () => {
-  let guard: SessionGuard;
-  let sessionService: {
-    decryptFromRequest: ReturnType<typeof vi.fn>;
-    encrypt: ReturnType<typeof vi.fn>;
-  };
-  let refreshService: { refresh: ReturnType<typeof vi.fn> };
-  let bucketService: { getUserBucket: ReturnType<typeof vi.fn> };
   let reflector: { getAllAndOverride: ReturnType<typeof vi.fn> };
 
-  beforeEach(async () => {
-    sessionService = {
-      decryptFromRequest: vi.fn(),
-      encrypt: vi.fn().mockResolvedValue('new-encrypted-token'),
-    };
-    refreshService = { refresh: vi.fn() };
-    bucketService = { getUserBucket: vi.fn() };
+  beforeEach(() => {
     reflector = { getAllAndOverride: vi.fn().mockReturnValue(false) };
+  });
 
+  const buildGuard = async (
+    strategies: AuthStrategy[],
+  ): Promise<SessionGuard> => {
     const module = await Test.createTestingModule({
       providers: [
         SessionGuard,
-        { provide: SessionService, useValue: sessionService },
-        { provide: RefreshService, useValue: refreshService },
-        { provide: BucketService, useValue: bucketService },
+        { provide: AUTH_STRATEGIES, useValue: strategies },
         { provide: Reflector, useValue: reflector },
-        {
-          provide: ConfigService,
-          useValue: {
-            get: (key: string) =>
-              key === 'AUTH_SESSION_COOKIE_NAME' ? COOKIE_NAME : undefined,
-          },
-        },
       ],
     }).compile();
+    return module.get(SessionGuard);
+  };
 
-    guard = module.get(SessionGuard);
-  });
-
-  it('allows public routes without a cookie', async () => {
+  it('allows public routes without consulting any strategy', async () => {
     reflector.getAllAndOverride.mockReturnValue(true);
-    const { context } = makeContext({});
+    const strategy = makeStrategy({});
+    const guard = await buildGuard([strategy]);
+    const { context } = makeContext();
+
     await expect(guard.canActivate(context)).resolves.toBe(true);
-    expect(sessionService.decryptFromRequest).not.toHaveBeenCalled();
+    expect(strategy.supports).not.toHaveBeenCalled();
   });
 
-  it('throws UnauthorizedException when cookie is missing', async () => {
-    sessionService.decryptFromRequest.mockRejectedValue(
-      new UnauthorizedException(),
-    );
-    const { context } = makeContext({});
+  it('uses the first strategy that supports the request, in registration order', async () => {
+    const header = makeStrategy({
+      source: AuthSource.Header,
+      supports: vi.fn().mockReturnValue(true),
+      authenticate: vi.fn().mockResolvedValue(SESSION_USER),
+    });
+    const cookie = makeStrategy({ source: AuthSource.Cookie });
+    const guard = await buildGuard([header, cookie]);
+    const { context, req } = makeContext();
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(req.user).toBe(SESSION_USER);
+    expect(req.authSource).toBe(AuthSource.Header);
+    expect(cookie.supports).not.toHaveBeenCalled();
+  });
+
+  it('falls through to the next strategy when the first does not support the request', async () => {
+    const header = makeStrategy({
+      source: AuthSource.Header,
+      supports: vi.fn().mockReturnValue(false),
+    });
+    const cookie = makeStrategy({
+      source: AuthSource.Cookie,
+      supports: vi.fn().mockReturnValue(true),
+      authenticate: vi.fn().mockResolvedValue(SESSION_USER),
+    });
+    const guard = await buildGuard([header, cookie]);
+    const { context, req } = makeContext();
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(req.authSource).toBe(AuthSource.Cookie);
+  });
+
+  it('propagates an exception thrown by a supporting strategy instead of falling through', async () => {
+    const header = makeStrategy({
+      source: AuthSource.Header,
+      supports: vi.fn().mockReturnValue(true),
+      authenticate: vi.fn().mockRejectedValue(new UnauthorizedException()),
+    });
+    const cookie = makeStrategy({
+      source: AuthSource.Cookie,
+      supports: vi.fn().mockReturnValue(true),
+      authenticate: vi.fn().mockResolvedValue(SESSION_USER),
+    });
+    const guard = await buildGuard([header, cookie]);
+    const { context } = makeContext();
+
     await expect(guard.canActivate(context)).rejects.toThrow(
       UnauthorizedException,
     );
+    expect(cookie.authenticate).not.toHaveBeenCalled();
   });
 
-  it('throws UnauthorizedException when cookie is tampered', async () => {
-    sessionService.decryptFromRequest.mockRejectedValue(
-      new UnauthorizedException(),
-    );
-    const { context } = makeContext({ cookieValue: 'tampered.bad.token' });
-    await expect(guard.canActivate(context)).rejects.toThrow(
-      UnauthorizedException,
-    );
-  });
+  it('throws UnauthorizedException with AUTH_NO_CREDENTIALS when no strategy supports the request', async () => {
+    const guard = await buildGuard([makeStrategy({}), makeStrategy({})]);
+    const { context } = makeContext();
 
-  it('passes through and sets request.user when at is not near-expired', async () => {
-    const payload = makePayload(); // at_exp = now + 3600, well above threshold
-    sessionService.decryptFromRequest.mockResolvedValue(payload);
-    const { context, req } = makeContext({ cookieValue: 'valid-token' });
+    let error: unknown;
+    try {
+      await guard.canActivate(context);
+    } catch (caught) {
+      error = caught;
+    }
 
-    await expect(guard.canActivate(context)).resolves.toBe(true);
-    expect(req.user).toMatchObject({ sub: 'user-1', sid: payload.sid });
-    expect(refreshService.refresh).not.toHaveBeenCalled();
-  });
-
-  it('calls RefreshService and sets new cookie when at is near-expired', async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const payload = makePayload({ at_exp: now + 30 }); // 30s < threshold of 60s
-    const refreshed = makePayload({ at_exp: now + 3600, rt_exp: now + 86400 });
-
-    sessionService.decryptFromRequest.mockResolvedValue(payload);
-    refreshService.refresh.mockResolvedValue(refreshed);
-
-    const { context, res } = makeContext({ cookieValue: 'valid-token' });
-
-    await expect(guard.canActivate(context)).resolves.toBe(true);
-    expect(refreshService.refresh).toHaveBeenCalledWith(payload);
-    expect(sessionService.encrypt).toHaveBeenCalledWith(refreshed);
-    expect(res.cookie).toHaveBeenCalledWith(
-      COOKIE_NAME,
-      'new-encrypted-token',
-      expect.objectContaining({
-        httpOnly: true,
-        secure: true,
-        sameSite: 'lax',
-      }),
-    );
-  });
-
-  it('keeps the CSRF token stable when refreshing the session', async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const payload = makePayload({ at_exp: now + 30 });
-    const refreshed = makePayload({
-      at_exp: now + 3600,
-      rt_exp: now + 86400,
-      csrf: payload.csrf,
-    });
-
-    sessionService.decryptFromRequest.mockResolvedValue(payload);
-    refreshService.refresh.mockResolvedValue(refreshed);
-
-    const { context, req, res } = makeContext({ cookieValue: 'valid-token' });
-    await guard.canActivate(context);
-
-    expect((req.user as { csrf: string }).csrf).toBe(payload.csrf);
-    expect(res.setHeader).toHaveBeenCalledWith('X-CSRF-Token', payload.csrf);
-  });
-
-  describe('lazy bucket resolution', () => {
-    it('fetches bucket and updates session cookie when payload.bucket is empty', async () => {
-      const payload = makePayload({ bucket: '' });
-      sessionService.decryptFromRequest.mockResolvedValue(payload);
-      bucketService.getUserBucket.mockResolvedValue({
-        bucket: 'resolved-bucket',
-      });
-
-      const { context, req, res } = makeContext({ cookieValue: 'valid-token' });
-      await expect(guard.canActivate(context)).resolves.toBe(true);
-
-      expect(bucketService.getUserBucket).toHaveBeenCalledWith('access-token');
-      expect(sessionService.encrypt).toHaveBeenCalledWith(
-        expect.objectContaining({ bucket: 'resolved-bucket' }),
-      );
-      expect(res.cookie).toHaveBeenCalledWith(
-        COOKIE_NAME,
-        'new-encrypted-token',
-        expect.objectContaining({ httpOnly: true }),
-      );
-      expect((req.user as { bucket: string }).bucket).toBe('resolved-bucket');
-    });
-
-    it('throws ServiceUnavailableException when bucket fetch fails', async () => {
-      const payload = makePayload({ bucket: '' });
-      sessionService.decryptFromRequest.mockResolvedValue(payload);
-      bucketService.getUserBucket.mockRejectedValue(
-        new Error('DIAL Core down'),
-      );
-
-      const { context } = makeContext({ cookieValue: 'valid-token' });
-      await expect(guard.canActivate(context)).rejects.toThrow(
-        ServiceUnavailableException,
-      );
-    });
-
-    it('skips bucket fetch when payload already has a bucket', async () => {
-      const payload = makePayload({ bucket: 'existing-bucket' });
-      sessionService.decryptFromRequest.mockResolvedValue(payload);
-
-      const { context } = makeContext({ cookieValue: 'valid-token' });
-      await expect(guard.canActivate(context)).resolves.toBe(true);
-      expect(bucketService.getUserBucket).not.toHaveBeenCalled();
+    expect(error).toBeInstanceOf(UnauthorizedException);
+    expect((error as UnauthorizedException).getResponse()).toMatchObject({
+      code: AuthErrorCode.NoCredentials,
+      statusCode: 401,
     });
   });
 });

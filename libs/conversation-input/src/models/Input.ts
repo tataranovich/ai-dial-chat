@@ -5,14 +5,11 @@ import type {
   DeploymentItem,
   DisplayAttachment,
   ResponseFormat,
+  ToolMenuItem,
 } from '@epam/ai-dial-chat-shared';
 import type { ReactNode } from 'react';
 
-/**
- * Controls which key combination submits the message in the `Input` component.
- * - `Enter` (default): Enter submits; Shift+Enter inserts a newline.
- * - `MetaEnter`: ⌘+Enter (macOS) / Ctrl+Enter (Windows/Linux) submits; bare Enter inserts a newline.
- */
+/** Controls which key combination submits the message in the `Input` component. */
 export enum SendOnEnter {
   /** Enter submits; Shift+Enter inserts a newline. */
   Enter = 'enter',
@@ -28,22 +25,24 @@ export interface InputColors {
   text?: string;
   /** Border color in the default (unfocused) state. */
   border?: string;
-  /** Border color on hover (unfocused). */
-  borderHover?: string;
   /** Border color when the input is focused. */
   borderFocus?: string;
   /** Placeholder text color. */
   placeholder?: string;
-  /** Box-shadow in the default state (e.g. a subtle inset shadow). */
-  shadow?: string;
-  /** Box-shadow when the input is focused. Falls back to `shadow` when unset. */
-  shadowFocus?: string;
-  /** Background color of the send button. */
-  sendBackground?: string;
-  /** Icon/text color of the send button. */
-  sendText?: string;
-  /** Icon color of the stop button. Defaults to `--text-secondary` (`#9fa6bd`). */
-  stopColor?: string;
+  /** text disabled color. */
+  textDisabled?: string;
+  /** Model-selector chip caret icon color. Defaults to `--text-primary`. */
+  modelSelectorCaret?: string;
+  /** Model-selector chip hover/active background color. Defaults to `--bg-control-accent-alpha-hover`/`--bg-control-accent-alpha-active`. */
+  modelSelectorHoverBg?: string;
+  /** Model-selector chip caret color when disabled. Defaults to `--text-control-disable-beta`. */
+  modelSelectorDisabled?: string;
+  /** Voice bar error border/icon color. Defaults to `--stroke-error`/`--text-error`. */
+  voiceError?: string;
+  /** Voice bar waveform and timer text color. Defaults to `--text-primary`. */
+  voiceWaveform?: string;
+  /** Voice bar stop button and recording-dot accent color. Defaults to `--text-error`. */
+  voiceAccent?: string;
 }
 
 /** Typography overrides for the `Input` component. */
@@ -68,16 +67,29 @@ export interface ModelSelectorLabels {
   closeLabel?: string;
 }
 
+/** Labels for the selected-tools chip row that appears in the input when tools are active. */
+export interface ToolsChipLabels {
+  /** Formats the consolidated count label for the mobile chip. Receives the number of selected tools. Defaults to English pluralization. */
+  countLabel?: (count: number) => string;
+  /** Returns the accessible label for the close button on a desktop chip. Receives the tool label. Defaults to `"Remove {toolLabel}"`. */
+  removeLabel?: (toolLabel: string) => string;
+}
+
 /** Props accepted by the `Input` component. */
 export interface InputProps {
   /**
    * Message value. Sets the initial textarea content on mount and syncs the
-   * textarea whenever the value changes to a non-empty string.
+   * textarea whenever the value changes.
    */
   message?: string;
+  /**
+   * Optional token that forces the textarea to resync from `message`, even
+   * when `message` itself is the same string as before.
+   */
+  messageRevision?: number;
   /** Called on every keystroke with the current textarea value. */
   onChange?: (message: string) => void;
-  /** Called when the user submits a message (Enter or send button). Receives the current local attachments as the second argument. Returning a rejected promise transitions attachments to Error state. */
+  /** Called when the user submits a message. */
   onSend?: (message: string, attachments: Attachment[]) => Promise<void> | void;
   /** Called immediately after an attachment is added. Returns the uploaded attachment URL. */
   onUploadAttachment?: (attachment: Attachment) => Promise<string>;
@@ -97,6 +109,14 @@ export interface InputProps {
   typography?: InputTypography;
   /** Label for the attach-file menu item. */
   attachLabel?: string;
+  /**
+   * Value applied verbatim as the `accept` attribute on the native device
+   * file picker (`<input type="file">`), hinting the OS dialog to grey out or
+   * hide unsupported file types. The host resolves it from the selected
+   * model's supported attachment types; the lib treats it as an opaque string.
+   * When absent, no `accept` attribute is set and every file type is selectable.
+   */
+  fileAccept?: string;
   /** Tooltip title for the add-menu trigger button. */
   addMenuTitle?: string;
   /** Accessible label for each attachment card's remove button. */
@@ -122,6 +142,13 @@ export interface InputProps {
   /** Character count above which a pasted plain-text string is converted to an attachment rather than inserted inline. Defaults to `4000`. Pass `Infinity` to disable. */
   pasteTextThreshold?: number;
   /**
+   * When `false`, long pasted plain text is inserted inline instead of being
+   * converted to a text attachment. Set to `false` when the selected model
+   * does not support attachments so that pasting a long prompt does not
+   * trigger an "Attachments not supported" error. Defaults to `true`.
+   */
+  isAttachmentsEnabled?: boolean;
+  /**
    * List of deployment items to populate the model selector menu. When `undefined`, the selector is not rendered.
    * `iconUrl` on each item must already be a fully resolved URL usable in `<img src>` — the host app
    * resolves DIAL file IDs, theme-relative names, etc. before passing the list.
@@ -141,8 +168,8 @@ export interface InputProps {
   initialAttachments?: Attachment[];
   /**
    * When `true`, the textarea always renders on its own row above the action bar
-   * (attach button on the left, footer actions on the right), instead of the
-   * compact single-row layout used when no attachments are present. Used by the
+   * (attach button at the start, footer actions at the end), instead of the
+   * compact single-row layout. Used by the
    * edit-message UI, which always wants the stacked layout.
    */
   isStacked?: boolean;
@@ -175,7 +202,7 @@ export interface InputProps {
     canSend: boolean;
     onSend: () => void;
   }) => ReactNode;
-  /** When `true`, blocks all text input, send, attach, and drop interactions. Starter/action buttons remain usable. Defaults to `false`. */
+  /** When `true`, blocks all text input, send, attach, and drop interactions. Starter/action buttons and the model selector remain usable. Defaults to `false`. */
   isInputDisabled?: boolean;
   /**
    * When `true`, the model selector renders in a disabled, non-interactive
@@ -185,23 +212,23 @@ export interface InputProps {
    */
   isModelSelectorDisabled?: boolean;
   /**
+   * When `true`, disables the send action without removing or dimming the
+   * send button itself. Independent of `isInputDisabled`/`isStreaming`.
+   * Defaults to `false`.
+   */
+  isSendDisabled?: boolean;
+  /**
    * When `true`, the mic button is rendered and voice recording is enabled.
    * Derived by the host app from the selected deployment's `inputAttachmentTypes`.
+   * When `false` or absent, the mic button is hidden and the voice bar is never shown.
    */
-  isTranscriptionSupported?: boolean;
-  /**
-   * Called when the user confirms a voice recording.
-   * Receives the recorded `File` and its detected MIME type.
-   * Resolves with the DIAL storage URL for the uploaded audio.
-   */
-  onUploadAudio?: (file: File, contentType: string) => Promise<string>;
-  /**
-   * Called after successful audio upload with the DIAL storage URL.
-   * Resolves with the transcript text.
-   */
-  onTranscribeAudio?: (audioUrl: string) => Promise<string>;
+  isAudioMessageSupported?: boolean;
   /** Accessible label for the mic button. Defaults to `'Record voice message'`. */
   micLabel?: string;
+  /** Accessible label for the stop-recording button inside the voice bar. Defaults to `'Stop recording'`. */
+  stopRecordingLabel?: string;
+  /** Accessible label for the discard / X button inside the voice bar. Defaults to `'Discard recording'`. */
+  discardRecordingLabel?: string;
   /**
    * Controls which key combination submits the message.
    * - `SendOnEnter.Enter` (default): Enter submits; Shift+Enter inserts a newline.
@@ -218,6 +245,16 @@ export interface InputProps {
    * Modal state is managed internally by the component.
    */
   chatSettings?: ChatSettingsConfig;
+  /** Resolved tool toggle items rendered in a "Tools" submenu. When empty or absent, no Tools item is shown. */
+  toolsMenuItems?: ToolMenuItem[];
+  /** Called when a tool row is toggled. Receives the tool id. */
+  onToolToggle?: (toolId: string) => void;
+  /** Label for the "Tools" menu item and mobile sheet title. Defaults to `'Tools'`. */
+  toolsMenuTitle?: string;
+  /** Accessible label for the back arrow in the mobile tools bottom sheet. Defaults to `'Back'`. */
+  toolsBackLabel?: string;
+  /** Labels for the selected-tools chip row shown in the input when tools are active. */
+  toolsChipLabels?: ToolsChipLabels;
   /** When `true`, focuses the textarea on mount. Defaults to `false`. */
   autoFocus?: boolean;
   /**
@@ -239,17 +276,36 @@ export interface InputProps {
     attachment: Attachment,
   ) => AttachmentErrorReason | undefined;
   /**
+   * Maximum number of attachments allowed in the tray. Undefined, `0`, or
+   * non-finite values mean there is no count limit.
+   */
+  maximumAttachmentsAmount?: number;
+  /**
+   * Called when adding a file/drop/pending attachment batch would exceed
+   * `maximumAttachmentsAmount`.
+   */
+  onAttachmentsLimitExceeded?: (count: number, limit: number) => void;
+  /**
    * Called when the user clicks or keyboard-activates an attachment card.
-   * Receives the full `Attachment` object (including the local `File`).
+   * Receives a `DisplayAttachment` — covers both newly-added attachments
+   * (which carry a local `File`) and pre-existing ones (which only have a URL).
    * When absent the card is not rendered as interactive.
    */
-  onAttachmentClick?: (attachment: Attachment) => void;
+  onAttachmentClick?: (attachment: DisplayAttachment) => void;
   /**
    * When provided, the desktop model-selector chip opens this panel instead of
    * the flat deployment list. Receives `onClose` so the panel can close the
    * popover after a selection or an explicit dismiss.
    */
   modelPickerOverlay?: (onClose: () => void) => ReactNode;
+  /** Arbitrary slot rendered in the action row before the model selector. Use to inject app-level controls (e.g. a token-usage indicator). */
+  usageLimitsSlot?: ReactNode;
+  /**
+   * Called when the user pastes text whose length is ≥ `pasteTextThreshold` while
+   * `isAttachmentsEnabled` is `false`. The text is still inserted inline — the
+   * host is responsible for surfacing the error to the user.
+   */
+  onMessageTooLong?: (length: number, max: number) => void;
 }
 
 /** Values emitted by the chat-settings modal when the user clicks Save. */

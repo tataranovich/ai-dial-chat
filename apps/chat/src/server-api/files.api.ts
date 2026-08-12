@@ -6,6 +6,8 @@ import type {
   CreateFolderResponseDto,
   DeleteFilesResponseDto,
   DeleteItemDto,
+  DiscardSharedItemDto,
+  DiscardSharedResponseDto,
   FileMetadataResponseDto,
   FileUploadResponseDto,
   ListFilesResponseDto,
@@ -15,7 +17,10 @@ import type {
   MoveItemDto,
   RenameFilesResponseDto,
   RenameItemDto,
-} from '@epam/chat-api-client';
+  RevokeAccessItemDto,
+  RevokeAccessResponseDto,
+  UploadArchiveResponseDto,
+} from '@epam/ai-dial-chat-api-client';
 import { filesApi } from './api-client';
 import {
   type UploadFileWithProgressOptions,
@@ -37,14 +42,18 @@ export const listSharedFiles = (
   params: ListSharedFilesRequest,
 ): Promise<ListFilesResponseDto> => filesApi.listSharedFiles(params);
 
-export const listFiles = (params: {
-  bucket: string;
-  path?: string;
-  token?: string;
-  limit?: number;
-  recursive?: boolean;
-  permissions?: boolean;
-}): Promise<ListFilesResponseDto> => filesApi.listFiles(params);
+export const listFiles = (
+  params: {
+    bucket: string;
+    path?: string;
+    token?: string;
+    limit?: number;
+    recursive?: boolean;
+    permissions?: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<ListFilesResponseDto> =>
+  filesApi.listFiles(params, signal ? { signal } : undefined);
 
 export const uploadFile = (
   bucket: string,
@@ -68,6 +77,13 @@ export const uploadFile = (
   );
 };
 
+export const uploadArchive = (
+  file: File,
+  bucket: string,
+  destinationPath: string,
+): Promise<UploadArchiveResponseDto> =>
+  filesApi.uploadArchive({ file, bucket, destinationPath });
+
 export const getFileMetadata = (params: {
   bucket: string;
   path: string;
@@ -82,8 +98,12 @@ export const getFileMetadata = (params: {
 export const downloadFile = async (
   bucket: string,
   path: string,
+  signal?: AbortSignal,
 ): Promise<Response> => {
-  const raw = await filesApi.downloadFileRaw({ bucket, path });
+  const raw = await filesApi.downloadFileRaw(
+    { bucket, path },
+    ...(signal ? [{ signal }] : []),
+  );
   return raw.raw;
 };
 
@@ -132,3 +152,16 @@ export const downloadArchive = async (
   });
   return raw.raw;
 };
+
+export const revokeAccess = (
+  items: RevokeAccessItemDto[],
+): Promise<RevokeAccessResponseDto> =>
+  filesApi.revokeAccess({ revokeAccessDto: { items } });
+
+export const discardShared = (
+  items: DiscardSharedItemDto[],
+): Promise<DiscardSharedResponseDto> =>
+  filesApi.discardShared({ discardSharedDto: { items } });
+
+export const listSharedByMe = (bucket: string): Promise<ListFilesResponseDto> =>
+  filesApi.listSharedByMe({ bucket });

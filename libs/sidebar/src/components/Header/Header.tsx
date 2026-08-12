@@ -5,15 +5,9 @@ import styles from '../SidebarPanel/SidebarPanel.module.scss';
 
 /** Props for the `Header` component. */
 export interface HeaderProps {
-  /**
-   * Title text rendered between the two action groups.
-   * Truncated with an ellipsis when the panel is too narrow.
-   */
+  /** Title rendered between the start and end action slots. */
   title?: ReactNode;
-  /**
-   * CSS class applied to the title element.
-   * Defaults to `'dial-body-semi-bold-text'`.
-   */
+  /** CSS class applied to the title element. Defaults to `'dial-h1-text'`. */
   titleClassName?: string;
   /** CSS class applied to the root element. */
   className?: string;
@@ -34,7 +28,7 @@ export const Header: FC<HeaderProps> = memo(
   }) => (
     <div
       className={mergeClasses(
-        'flex h-12 shrink-0 items-center gap-2 px-4',
+        'flex h-12 items-center px-4',
         className,
         styles.header,
       )}

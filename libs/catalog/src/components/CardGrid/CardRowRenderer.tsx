@@ -25,19 +25,18 @@ export const CardRowRenderer: FC<CardRowRendererProps> = ({
   addToFavoritesAriaLabel,
   removeFromFavoritesAriaLabel,
   selectedItemId,
+  credentialsBadgeLoggedOutLabel,
 }) => {
   const start = rowIndex * columnCount;
   const rowItems = items.slice(start, start + columnCount);
 
   const style: CSSProperties = {
-    position: 'absolute',
     top: rowIndex * CARD_ROW_HEIGHT,
-    width: '100%',
     height: CARD_ROW_HEIGHT,
   };
 
   return (
-    <div style={style} className="flex gap-5 pb-5">
+    <div style={style} className="absolute flex w-full gap-5 pb-5">
       {Array.from({ length: columnCount }, (_, colIndex) => {
         const item = rowItems[colIndex];
         return (
@@ -57,6 +56,7 @@ export const CardRowRenderer: FC<CardRowRendererProps> = ({
                 removeFromFavoritesAriaLabel={removeFromFavoritesAriaLabel}
                 isSelected={item.id === selectedItemId}
                 className="h-full"
+                credentialsBadgeLoggedOutLabel={credentialsBadgeLoggedOutLabel}
               />
             )}
           </div>

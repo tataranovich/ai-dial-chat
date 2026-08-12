@@ -23,9 +23,20 @@ vi.mock('../../../context/auth/UserContext', () => ({
   useUser: () => ({ user: { bucket: 'test-bucket' } }),
 }));
 
-const { mockActiveTab, mockHandleTabChange } = vi.hoisted(() => ({
-  mockActiveTab: { value: undefined as string | undefined },
-  mockHandleTabChange: vi.fn(),
+const { mockActiveTab, mockHandleTabChange, mockFileManagerTabs } = vi.hoisted(
+  () => ({
+    mockActiveTab: { value: undefined as string | undefined },
+    mockHandleTabChange: vi.fn(),
+    mockFileManagerTabs: {
+      value: ['my_files', 'shared', 'organization'] as string[],
+    },
+  }),
+);
+
+vi.mock('../../../context/AppConfigContext', () => ({
+  useAppConfig: () => ({
+    config: { fileManagerTabs: mockFileManagerTabs.value },
+  }),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -36,22 +47,33 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
-  const { DialFileManagerTabs: Tabs, DialFileManagerActions: Actions } = actual;
+  const { DialFileManagerTabs: Tabs } = actual;
   return {
     ...actual,
     useDialFileManagerTabs: vi.fn().mockImplementation(() => ({
       activeTab: mockActiveTab.value ?? Tabs.MyFiles,
       handleTabChange: mockHandleTabChange,
       tabs: [
-        { id: Tabs.MyFiles, label: 'My files' },
-        { id: Tabs.Shared, label: 'Shared with me' },
+        { id: Tabs.MyFiles, label: 'My Files' },
+        { id: Tabs.Shared, label: 'Shared with Me' },
         { id: Tabs.Organization, label: 'Organization' },
       ],
     })),
+  };
+});
+
+vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-react-file-manager')>();
+  const { DialFileManagerActions: Actions } = actual;
+  return {
+    ...actual,
     DialFileManager: ({
       items,
       gridOptions,
       bulkActionsToolbarOptions,
+      toolbarOptions,
+      autoSelectUploadedItems,
     }: {
       items?: { path: string }[];
       gridOptions?: {
@@ -60,10 +82,16 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
       bulkActionsToolbarOptions?: {
         actionLabels?: Partial<Record<DialFileManagerActions, string>>;
       };
+      toolbarOptions?: {
+        tabs?: Array<{ id: string; label: string }>;
+        newActions?: { uploadArchive?: { label?: string } };
+      };
+      autoSelectUploadedItems?: boolean;
     }) => (
       <div
         role="region"
         aria-label="file manager"
+        data-tab-count={toolbarOptions?.tabs?.length}
         data-has-download={String(
           Actions.Download in (gridOptions?.actionLabels ?? {}),
         )}
@@ -96,6 +124,15 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
         )}
         data-has-unshare={String(
           Actions.Unshare in (gridOptions?.actionLabels ?? {}),
+        )}
+        data-has-remove-access={String(
+          Actions.RemoveAccess in (gridOptions?.actionLabels ?? {}),
+        )}
+        data-has-upload-archive={String(
+          toolbarOptions?.newActions?.uploadArchive != null,
+        )}
+        data-auto-select-uploaded-items={String(
+          autoSelectUploadedItems ?? true,
         )}
       >
         {items?.length ?? 0} items
@@ -131,7 +168,10 @@ const defaultHookResult: UseDialFileManagerResult = {
   expandedPaths: new Set(),
   loadedPaths: new Set(),
   onExpandedPathsChange: vi.fn(),
+  onFolderPopupPathChange: vi.fn(),
+  folderPopupLoadingPaths: new Set(),
   onUploadFiles: vi.fn(),
+  onUploadArchive: vi.fn(),
   onValidateUpload: vi.fn(),
   uploadBatchState: null,
   cancelUpload: vi.fn(),
@@ -158,10 +198,21 @@ const defaultHookResult: UseDialFileManagerResult = {
   dateOptions: {},
   actionLabels: {},
   sharedWithMeIds: undefined,
+  sharedByMePaths: new Set(),
+  onUnshareFiles: vi.fn(),
+  isUnsharing: false,
+  onRemoveFilesAccess: vi.fn(),
+  isRemovingAccess: false,
+  fileMetadata: undefined,
+  isFileMetadataLoading: false,
+  onGetInfo: vi.fn(),
+  clearMetadata: vi.fn(),
+  isAnyOperationInProgress: false,
 };
 
 beforeEach(() => {
   mockActiveTab.value = undefined;
+  mockFileManagerTabs.value = ['my_files', 'shared', 'organization'];
   mockUseDialFileManager.mockReturnValue(defaultHookResult);
 });
 
@@ -172,13 +223,13 @@ describe('DialFileManagerPage', () => {
     expect(screen.getByText('1 items')).toBeTruthy();
   });
 
-  it('calls useDialFileManager with standalone variant and browse action profile on mount, without any user interaction', () => {
+  it('calls useDialFileManager with standalone variant and full action profile on mount, without any user interaction', () => {
     render(<DialFileManagerPage />);
     expect(mockUseDialFileManager).toHaveBeenCalledWith(
       expect.objectContaining({
         bucket: 'test-bucket',
         variant: DialFileManagerVariant.Standalone,
-        actionProfile: DialFileManagerActionProfile.Browse,
+        actionProfile: DialFileManagerActionProfile.Full,
       }),
     );
   });
@@ -188,15 +239,36 @@ describe('DialFileManagerPage', () => {
     expect(screen.queryByRole('button', { name: /attach/i })).toBeNull();
   });
 
-  it('renders the tab navigation for My files, Shared, and Organization', () => {
+  it('keeps uploaded items unselected', () => {
+    render(<DialFileManagerPage />);
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
+      'false',
+    );
+  });
+
+  it('renders the tab navigation for My Files, Shared, and Organization', () => {
     mockActiveTab.value = DialFileManagerTabs.MyFiles;
     render(<DialFileManagerPage />);
     expect(screen.getByRole('region', { name: 'file manager' })).toBeTruthy();
+    expect(
+      screen
+        .getByRole('region', { name: 'file manager' })
+        .getAttribute('data-tab-count'),
+    ).toBe('3');
+  });
+
+  it('renders only the tabs allowed by the deployment-configured fileManagerTabs', () => {
+    mockFileManagerTabs.value = ['my_files', 'organization'];
+    mockActiveTab.value = DialFileManagerTabs.MyFiles;
+    render(<DialFileManagerPage />);
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-tab-count')).toBe('2');
   });
 });
 
 describe('DialFileManagerPage — full action matrix on my_files', () => {
-  it('surfaces Copy, Move, Duplicate, Rename, and Delete on my_files', () => {
+  it('surfaces the complete my_files matrix: Copy/Move/Duplicate/Rename/Delete, Share/Remove access, Info, and upload-archive', () => {
     mockActiveTab.value = DialFileManagerTabs.MyFiles;
     mockUseDialFileManager.mockReturnValue({
       ...defaultHookResult,
@@ -207,6 +279,8 @@ describe('DialFileManagerPage — full action matrix on my_files', () => {
         [DialFileManagerActions.Copy]: 'Copy',
         [DialFileManagerActions.Move]: 'Move',
         [DialFileManagerActions.Duplicate]: 'Duplicate',
+        [DialFileManagerActions.RemoveAccess]: 'Remove access',
+        [DialFileManagerActions.Info]: 'Info',
       },
     });
     render(<DialFileManagerPage />);
@@ -221,9 +295,9 @@ describe('DialFileManagerPage — full action matrix on my_files', () => {
     expect(manager.getAttribute('data-has-bulk-copy')).toBe('true');
     expect(manager.getAttribute('data-has-bulk-move')).toBe('true');
     expect(manager.getAttribute('data-has-bulk-duplicate')).toBe('true');
-    // Share/Info (#7504 legacy-parity actions) are not added by this change.
-    expect(manager.getAttribute('data-has-info')).toBe('false');
-    expect(manager.getAttribute('data-has-unshare')).toBe('false');
+    expect(manager.getAttribute('data-has-remove-access')).toBe('true');
+    expect(manager.getAttribute('data-has-info')).toBe('true');
+    expect(manager.getAttribute('data-has-upload-archive')).toBe('true');
   });
 
   it('surfaces Download only on the Shared tab', () => {

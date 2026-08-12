@@ -70,4 +70,31 @@ export class ConversationMessageDto {
   @ValidateNested()
   @Type(() => ConversationMessageCustomContentDto)
   custom_content?: ConversationMessageCustomContentDto;
+
+  @ApiPropertyOptional({
+    description:
+      'Error message when the generation ended in error. Presence signals a terminal error state; absence means the generation succeeded or is still in progress.',
+    example: 'You have exceeded your daily token limit.',
+  })
+  @IsOptional()
+  @IsString()
+  streamErrorMessage?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'DIAL Responses API id for this message, set only when the generation was routed through the Responses adapter. Diagnostic only — never used to resume a generation (previous_response_id/conversation are never sent).',
+    example: 'dial-gpt-4o-3c1a7e6e-...-uuid',
+  })
+  @IsOptional()
+  @IsString()
+  responseId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Deployment that produced this message. Present on assistant and status messages.',
+    example: 'gpt-4o',
+  })
+  @IsOptional()
+  @IsString()
+  deploymentId?: string;
 }

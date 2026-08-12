@@ -1,16 +1,18 @@
+import type { ConversationResponseDto } from '@epam/ai-dial-chat-api-client';
 import {
   MessageRating,
   MessageRole,
+  ResponseFormat,
   type Attachment,
   type Conversation,
   type Message,
+  type StarterOption,
 } from '@epam/ai-dial-chat-shared';
 import {
   ConfirmationPopupVariant,
-  DialConfirmationPopup,
+  ConfirmationPopup,
   NotificationVariant,
 } from '@epam/ai-dial-ui-kit';
-import type { ConversationResponseDto } from '@epam/chat-api-client';
 import type { FC } from 'react';
 import {
   memo,
@@ -22,24 +24,24 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { NavigateFunction } from 'react-router-dom';
+import type { NavigateFunction } from 'react-router';
 import ConversationView from '../../components/ConversationView/ConversationView';
 import NewConversationComposer, {
   type NewConversationChatSettings,
 } from '../../components/NewConversationComposer/NewConversationComposer';
-import { CONVERSATION_ROUTE_INPUT_STYLES } from '../../constants/input-styles';
+import StarterButtons from '../../components/StarterButtons/StarterButtons';
 import {
   AppsEditorI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
 } from '../../constants/translation-keys';
-import { useAppConfig } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
 import { useDeployments } from '../../context/DeploymentsContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useAudioTranscription } from '../../hooks/conversation/useAudioTranscription';
 import { useConversationHandlers } from '../../hooks/conversation/useConversationHandlers';
 import { useConversationStream } from '../../hooks/conversation/useConversationStream';
+import { getApiErrorDetails } from '../../server-api/api-error';
 import { CompletionMode } from '../../server-api/chat-stream.api';
 import {
   createConversation as apiCreateConversation,
@@ -50,8 +52,10 @@ import { ROUTES } from '../../types/routes';
 import { buildNetworkUploadErrorNotification } from '../../utils/attachment-network-error-notification';
 import { attachmentsToDtos } from '../../utils/attachment-to-dto';
 import { getConversationPath } from '../../utils/conversation-path';
-import { encodeDeploymentId } from '../../utils/deployment-id';
+import { findDeploymentByIdOrReference } from '../../utils/deployment-id';
 import { resolveCatalogIconUrl } from '../../utils/icon-path';
+import { getQuickAppConversationStarters } from '../../utils/quick-app-conversation-starters';
+import { getStarterPopulateText } from '../../utils/starter-option';
 
 interface Props {
   appId: string;
@@ -62,36 +66,40 @@ interface Props {
 const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
   const { t } = useTranslation();
   const { showNotification } = useNotification();
-  const {
-    config: { asrModelId, transcribeSizeLimitBytes },
-  } = useAppConfig();
   const { user } = useUser();
   const bucket = user?.bucket ?? '';
   const { items } = useDeployments();
 
   /*
-   * `appId` is the raw, human-readable application id used by the settings
-   * iframe's postMessage protocol (e.g. "applications/<bucket>/My App__1.0").
-   * Chat completion calls require a percent-encoded deployment id instead.
+   * `appId` is the raw, human-readable application id (e.g.
+   * "applications/<bucket>/My App__1.0") and matches `items[].id`. It is used
+   * as-is everywhere here — deploymentId/model/deployment are always sent as
+   * JSON body fields (createConversation, streamCompletion, transcribeAudio),
+   * never a raw URL path segment, so percent-encoding it would only embed
+   * literal `%` characters that get double-encoded once the conversation's
+   * stored path is built from it.
    */
-  const deploymentId = useMemo(() => encodeDeploymentId(appId), [appId]);
-
   const fixedModel = useMemo(
     () => ({
-      id: deploymentId,
+      id: appId,
       displayName: appDisplayName,
       iconUrl: resolveCatalogIconUrl(appIconUrl),
     }),
-    [deploymentId, appDisplayName, appIconUrl],
+    [appId, appDisplayName, appIconUrl],
   );
 
   const appDeployment = useMemo(
-    () => items.find((item) => item.id === deploymentId),
-    [items, deploymentId],
+    () => findDeploymentByIdOrReference(items, appId),
+    [items, appId],
+  );
+  const quickAppStarters = useMemo(
+    () => getQuickAppConversationStarters(appDeployment?.conversationStarters),
+    [appDeployment?.conversationStarters],
   );
 
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<Conversation | null>(null);
+  const [inputMessage, setInputMessage] = useState<string | undefined>();
   const conversationRef = useRef<Conversation | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -121,13 +129,9 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
     [showNotification, t],
   );
 
-  const { handleUploadAudio, handleTranscribeAudio, isTranscriptionSupported } =
-    useAudioTranscription({
-      bucket,
-      transcribeSizeLimitBytes,
-      asrModelId,
-      selectedDeploymentId: deploymentId,
-    });
+  const { isAudioMessageSupported } = useAudioTranscription({
+    selectedDeploymentId: appId,
+  });
 
   const handleStopError = useCallback(() => {
     showNotification({
@@ -136,18 +140,13 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
     });
   }, [showNotification, t]);
 
-  const {
-    startStream,
-    handleStop,
-    isStreaming,
-    canStopStreaming,
-    hasStreamError,
-  } = useConversationStream({
-    conversationId: conversationId ?? undefined,
-    setConversation,
-    conversationRef,
-    onStopError: handleStopError,
-  });
+  const { startStream, handleStop, isStreaming, canStopStreaming } =
+    useConversationStream({
+      conversationId: conversationId ?? undefined,
+      setConversation,
+      conversationRef,
+      onStopError: handleStopError,
+    });
 
   const handleCreateConversation = useCallback(
     async (
@@ -158,7 +157,7 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
       const attachmentDtos = attachmentsToDtos(attachments || []);
       const created = await apiCreateConversation(
         message,
-        deploymentId,
+        appId,
         attachmentDtos,
       );
       const savedConversation = {
@@ -190,13 +189,44 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         created.id,
         message,
         withPlaceholder.messages.length - 1,
-        deploymentId,
+        appId,
         attachmentDtos?.length ? { attachments: attachmentDtos } : undefined,
         crypto.randomUUID(),
         CompletionMode.ContinueLastUser,
       );
     },
-    [deploymentId, startStream],
+    [appId, startStream],
+  );
+
+  const handleStarterSelect = useCallback(
+    (starter: StarterOption) => {
+      const text = getStarterPopulateText(starter);
+      if (!starter['dial:widgetOptions'].submit) {
+        setInputMessage(text);
+        return;
+      }
+
+      const createFromStarter = async () => {
+        try {
+          await handleCreateConversation(text, [], {
+            responseFormat: ResponseFormat.Markdown,
+            systemPrompt: '',
+            temperature: 0.5,
+          });
+        } catch (err) {
+          const { message: errorMessage, traceId } =
+            await getApiErrorDetails(err);
+          showNotification({
+            variant: NotificationVariant.Error,
+            message: errorMessage ?? t(ChatI18nKeys.CreateConversationError),
+            requestId: traceId,
+          });
+        }
+      };
+
+      void createFromStarter();
+    },
+    [handleCreateConversation, showNotification, t],
   );
 
   /*
@@ -238,7 +268,7 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
     setConversation,
     navigate: handlePreviewNavigate as NavigateFunction,
     showNetworkError: handleNetworkUploadError,
-    fixedModelId: deploymentId,
+    fixedModelId: appId,
   });
 
   const handleConversationChange = useCallback(
@@ -279,13 +309,20 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         <Suspense fallback={null}>
           <NewConversationComposer
             deployments={[fixedModel]}
-            selectedDeploymentId={deploymentId}
+            selectedDeploymentId={appId}
             isModelSelectorDisabled
             selectedDeployment={appDeployment}
+            isInputDisabled={quickAppStarters.isChatMessageInputDisabled}
             placeholder={t(AppsEditorI18nKeys.PreviewChatPlaceholder)}
-            inputStyles={CONVERSATION_ROUTE_INPUT_STYLES}
+            introText={quickAppStarters.introText}
+            message={inputMessage}
             onCreateConversation={handleCreateConversation}
-          />
+          >
+            <StarterButtons
+              starters={quickAppStarters.starters}
+              onSelect={handleStarterSelect}
+            />
+          </NewConversationComposer>
         </Suspense>
       </div>
     );
@@ -299,7 +336,7 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
     >
       <ConversationView
         messages={conversation.messages}
-        initialModelId={deploymentId}
+        initialModelId={appId}
         fixedModel={fixedModel}
         onSend={handleSend}
         onUploadAttachment={handlePostCreateUploadAttachment}
@@ -315,16 +352,13 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         isAssistantTyping={isStreaming}
         canStopAssistant={canStopStreaming}
         placeholder={t(AppsEditorI18nKeys.PreviewChatPlaceholder)}
-        streamErrorText={hasStreamError ? t(ChatI18nKeys.StreamError) : ''}
         stoppedGeneratingText={t(ChatI18nKeys.StoppedGenerating)}
-        isTranscriptionSupported={isTranscriptionSupported}
-        onUploadAudio={handleUploadAudio}
-        onTranscribeAudio={handleTranscribeAudio}
+        isAudioMessageSupported={isAudioMessageSupported}
         conversation={conversation}
         onConversationChange={handleConversationChange}
       />
 
-      <DialConfirmationPopup
+      <ConfirmationPopup
         open={pendingDeleteIndex != null}
         header={t(ChatI18nKeys.DeleteMessageTitle)}
         description={t(ChatI18nKeys.DeleteMessageDescription)}

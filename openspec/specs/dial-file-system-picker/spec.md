@@ -1,7 +1,8 @@
-> **Sync note (add-file-manager-delete):** `DialFileManagerModal` now accepts
-> `onDeleteFiles` and `deleteConfirmationOptions` wired from `useDialFileManager`.
-> The spec previously noted delete was absent; that is no longer the case when
-> this change ships.
+> **Sync note (2026-07-23):** The "read-only" framing below was inaccurate.
+> `DialFileManagerModal` (attach picker, `actionProfile = Attach`) intentionally
+> allows Upload, Create folder, Delete, Rename, and Download — only Move, Copy,
+> and permission-management actions are excluded. The requirements below were
+> rewritten to match this actual, intended behavior.
 
 ## ADDED Requirements
 
@@ -37,15 +38,38 @@ The chat input's `+` attachment menu SHALL include a "DIAL file system" item (i1
 
 ---
 
+### Requirement: DIAL file system button available while editing a message
+
+The edit-message attach (+) menu (`EditMessageInput`, rendered while a message is in edit mode) SHALL offer the same "DIAL file system" item as the new-message composer, using the same `DialFileManagerModal` instance.
+
+- `EditMessageInputProps` SHALL expose `onDialFileSystemClick?: () => void` and `dialFileSystemLabel?: string`, with the same absent-means-not-rendered contract as `InputProps`/`ConversationInputProps`.
+- `ConversationView` SHALL wire the edit-mode handler to the same `isDialFileManagerOpen` state and `DialFileManagerModal` instance used by the new-message composer — no second modal instance is created for editing.
+- Files attached while editing SHALL be routed to the message currently being edited via `pendingAttachments`/`onPendingAttachmentsConsumed` on `EditMessageInput`, gated so they are never delivered to the new-message composer's draft while an edit is in progress, and vice versa.
+
+#### Scenario: DIAL file system item appears while editing
+
+- **GIVEN** a message is in edit mode and `onDialFileSystemClick` is provided to `EditMessageInput`
+- **WHEN** the user clicks the `+` trigger button in the edit action row
+- **THEN** the menu shows "Attach file" and "DIAL file system" in that order, matching the new-message composer
+
+#### Scenario: Files attached during edit go to the edited message only
+
+- **GIVEN** a message is in edit mode and the user opens the DIAL file system modal from the edit action row
+- **WHEN** the user selects files and clicks Attach
+- **THEN** the selected files appear in the edited message's attachment tray
+- **THEN** the new-message composer's draft attachments are unaffected
+
+---
+
 ### Requirement: Open FileManager in modal
 
-The system SHALL open a `DialPopup` modal (title `"DIAL file system"`, i18n key `dialFileManager.title`) when the user selects "DIAL file system" from the attachment menu. The modal SHALL render `DialFileManager` from `@epam/ai-dial-ui-kit` as its body and use `!h-[min(800px,100dvh)]`, matching the legacy file-manager modal's 800px cap and overriding the ui-kit's desktop auto-height.
+The system SHALL open a `DialPopup` modal (title `"Attach files"`, i18n key `basic.attachFiles`) when the user selects "DIAL file system" from the attachment menu. The modal SHALL render `DialFileManager` from `@epam/ai-dial-react-file-manager` as its body and use `!h-[min(800px,100dvh)]`, matching the legacy file-manager modal's 800px cap and overriding the ui-kit's desktop auto-height.
 
 - Modal state (`isDialFileManagerOpen`) is owned by `ConversationView`.
 - `DialFileManagerModal` is lazy-loaded via `React.lazy` + `Suspense` in `ConversationView`.
 - `DialPopup` is used with `size={PopupSize.Lg}` and `closeOnOutsideClick={true}`.
 - Closing the modal does NOT modify `message` text or the local `attachments` list in `Input`.
-- The popup and file-manager surface use `bg-layer-2`.
+- The popup and file-manager surface use `bg-layer-sunken`.
 - The footer action container uses `px-6 py-4`.
 - The ui-kit popup body SHALL use `flex min-h-0 flex-col`; the file-manager wrapper and manager SHALL use `grow`, matching the legacy modal layout. Row count SHALL NOT resize the modal.
 - `DialFileManager.gridClassName` SHALL be `"size-full"` and `gridOptions.additionalGridOptions.domLayout` SHALL be `"normal"` so the AG Grid viewport consumes the available manager height instead of using row-driven auto-height.
@@ -54,7 +78,7 @@ The system SHALL open a `DialPopup` modal (title `"DIAL file system"`, i18n key 
 
 - **GIVEN** the user is on the conversation page and the input is not disabled
 - **WHEN** the user clicks "DIAL file system" in the attachment menu
-- **THEN** a modal with title "DIAL file system" opens; `DialFileManager` is rendered inside it
+- **THEN** a modal with title "Attach files" opens; `DialFileManager` is rendered inside it
 
 #### Scenario: Closing the modal
 
@@ -90,20 +114,19 @@ The system SHALL provide a `useDialFileManager(options: { bucket: string; rootLa
 
 ---
 
-### Requirement: Select and attach read-only DIAL files
+### Requirement: Select and attach DIAL files with scoped mutation actions
 
-`DialFileManager` SHALL be configured in read-only mode. The following props MUST be omitted (not passed):
+`DialFileManager` is rendered with `actionProfile = DialFileManagerActionProfile.Attach`. This profile scopes down — but does not eliminate — mutation actions: Upload, Create folder, Delete, Rename, and Download remain reachable so the user can manage files while picking what to attach; Move, Copy, and permission-management actions are excluded because they imply a destination/ownership context the attach flow does not have.
 
-- `onUploadFiles`
-- `onDeleteFiles`
+The following props MUST be omitted (not passed), because their actions are gated off by `actionProfile = Attach` (via `isCopyMoveDuplicateAllowed` / `isShareActionsAllowed` in `dial-file-manager-path.util.ts`):
+
 - `onMoveToFiles`
 - `onCopyFiles`
-- `onDownloadFiles`
-- `onCreateFolder`
-- `onRenameValidate`
-- `onManagePermissions`
+- `onUnshareFiles`
+- `onRemoveFilesAccess`
+- `onGetInfo`
 
-The following props SHALL be passed:
+The following props SHALL be passed, wired from `useDialFileManager`:
 
 | Prop | Value |
 |------|-------|
@@ -114,13 +137,18 @@ The following props SHALL be passed:
 | `selectedPaths` | controlled modal selection |
 | `onSelectedPathsChange` | updates controlled modal selection |
 | `gridOptions.selectionMode` | `GridSelectionMode.MULTIPLE` |
-| `uploadEnabled` | `false` |
+| `uploadEnabled` | computed by `useDialFileManager` from active tab and write permission (e.g. `true` on the "My files" tab when the user has write access; `false` on read-only tabs such as Organization or the Shared root) — never hardcoded |
+| `onUploadFiles` / `onUploadArchive` / `onValidateUpload` | wired; reachable via the toolbar "New" action when `uploadEnabled` is `true` |
+| `onCreateFolder` / `onCreateFolderValidate` | wired; reachable via the toolbar "New" action alongside upload |
+| `onDeleteFiles` / `deleteConfirmationOptions` | wired; reachable as a row/bulk action on the "My files" tab |
+| `onRenameValidate` | wired; reachable as a row action when `uploadEnabled` is `true` |
+| `onDownloadFiles` | wired; reachable as a row/bulk action unconditionally |
 | `emptyStateTitle` | `t(DialFileManagerI18nKeys.Empty)` |
 | `emptyStateDescription` | `""` |
 
-No bulk-action toolbar is enabled (no `bulkActionsToolbarOptions`).
+`bulkActionsToolbarOptions` derives from the same action set, matching the excluded-props list above.
 
-Only rows with `nodeType === DialFileNodeType.ITEM` SHALL be selectable. The modal footer SHALL contain an "Attach" primary button (i18n key `dialFileManager.attach`) disabled while no files are selected or files are loading.
+Only rows with `nodeType === DialFileNodeType.ITEM` SHALL be selectable for attaching. The modal footer SHALL contain an "Attach" primary button (i18n key `dialFileManager.attach`) disabled while no files are selected or files are loading. Selecting the Attach button attaches the current selection; it does not depend on whether Upload/Create-folder/Delete/Rename/Download were used beforehand in the same session.
 
 When the user clicks "Attach":
 
@@ -218,24 +246,34 @@ The existing "Attach file" menu item and device-file-picker behavior MUST be unm
 
 ---
 
-### Requirement: No mutation actions available
+### Requirement: Scoped mutation actions available
 
-None of the following actions SHALL be accessible from the `DialFileManager` rendered in this modal:
+The `DialFileManager` rendered in this modal exposes a subset of mutation actions, gated by `actionProfile = Attach`:
 
-- Upload
-- Download
-- Delete
-- Rename
-- Move / Copy
-- Create folder
-- Manage permissions
+**Reachable** (row, bulk, and/or toolbar action, subject to tab/permission as noted above):
 
-All mutation-related props on `DialFileManager` MUST be omitted (see read-only prop table above).
+- Upload (toolbar "New" action, when `uploadEnabled` is `true`)
+- Create folder (toolbar "New" action, when `uploadEnabled` is `true`)
+- Delete (row/bulk action on the "My files" tab)
+- Rename (row action, when `uploadEnabled` is `true`)
+- Download (row/bulk action, unconditional)
 
-#### Scenario: No mutation actions
+**NOT reachable** (props omitted; excluded from `actionLabels` / `bulkActionsToolbarOptions`):
 
-- **GIVEN** the file manager modal is open with files displayed
-- **THEN** no upload button, delete option, rename option, move/copy option, or create-folder option is visible or reachable via keyboard
+- Move
+- Copy
+- Manage permissions (including unshare / remove access)
+- Get info
+
+#### Scenario: Upload and create-folder are available on My files with write access
+
+- **GIVEN** the file manager modal is open on the "My files" tab and the user has write access to the current folder
+- **THEN** the toolbar's "New" action offers both "Upload" and "Create folder"
+
+#### Scenario: Move, copy, and permission management are absent
+
+- **GIVEN** the file manager modal is open with files displayed, on any tab
+- **THEN** no move option, copy option, or manage-permissions option is visible or reachable via keyboard, regardless of selection
 
 ---
 
@@ -246,7 +284,7 @@ All mutation-related props on `DialFileManager` MUST be omitted (see read-only p
 | Key | English |
 |-----|---------|
 | `conversation.attachMenuDialFileSystem` | `"DIAL file system"` |
-| `dialFileManager.title` | `"DIAL file system"` |
+| `basic.attachFiles` | `"Attach files"` |
 | `dialFileManager.attach` | `"Attach"` |
 | `dialFileManager.empty` | `"This folder is empty"` |
 | `dialFileManager.error` | `"Failed to load files"` |
@@ -262,7 +300,7 @@ All `aria-label` values in `DialFileManagerModal` go through `t()`. No English s
 **Accessibility**:
 - `DialPopup` provides `role="dialog"` with `aria-labelledby` bound to the title. No extra ARIA needed on the container.
 - Error card: `role="alert"` so screen readers announce the failure.
-- Retry button: focusable `DialButton` with a visible text label.
+- Retry button: focusable `Button` with a visible text label.
 - Focus is trapped inside `DialPopup` while open (ui-kit built-in).
 - Keyboard navigation: `DialFileManager` provides built-in keyboard support for tree and grid navigation.
 

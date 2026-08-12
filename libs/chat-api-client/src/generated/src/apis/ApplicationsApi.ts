@@ -18,14 +18,25 @@ import type {
   ApplicationsResponseDto,
   CreateApplicationBodyDto,
   CreatedApplicationDto,
+  UpdateApplicationBodyDto,
+  UpdatedApplicationDto,
 } from '../models/index';
 
 export interface CreateApplicationRequest {
   createApplicationBodyDto: CreateApplicationBodyDto;
 }
 
+export interface DeleteApplicationRequest {
+  applicationName: string;
+}
+
 export interface GetApplicationSchemaRequest {
   id: string;
+}
+
+export interface UpdateApplicationRequest {
+  applicationName: string;
+  updateApplicationBodyDto: UpdateApplicationBodyDto;
 }
 
 /**
@@ -82,6 +93,55 @@ export class ApplicationsApi extends runtime.BaseAPI {
       initOverrides,
     );
     return await response.value();
+  }
+
+  /**
+   * Deletes an application for the authenticated session user by proxying DIAL Core. Invalidates the applications list cache on success.
+   * Delete an application
+   */
+  async deleteApplicationRaw(
+    requestParameters: DeleteApplicationRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<runtime.ApiResponse<void>> {
+    if (requestParameters['applicationName'] == null) {
+      throw new runtime.RequiredError(
+        'applicationName',
+        'Required parameter "applicationName" was null or undefined when calling deleteApplication().',
+      );
+    }
+
+    const queryParameters: runtime.HTTPQuery = {};
+
+    const headerParameters: runtime.HTTPHeaders = {};
+
+    let urlPath = `/api/v1/applications/{applicationName}`;
+    urlPath = urlPath.replace(
+      `{${'applicationName'}}`,
+      encodeURIComponent(String(requestParameters['applicationName'])),
+    );
+
+    const response = await this.request(
+      {
+        path: urlPath,
+        method: 'DELETE',
+        headers: headerParameters,
+        query: queryParameters,
+      },
+      initOverrides,
+    );
+
+    return new runtime.VoidApiResponse(response);
+  }
+
+  /**
+   * Deletes an application for the authenticated session user by proxying DIAL Core. Invalidates the applications list cache on success.
+   * Delete an application
+   */
+  async deleteApplication(
+    requestParameters: DeleteApplicationRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<void> {
+    await this.deleteApplicationRaw(requestParameters, initOverrides);
   }
 
   /**
@@ -208,6 +268,69 @@ export class ApplicationsApi extends runtime.BaseAPI {
     initOverrides?: RequestInit | runtime.InitOverrideFunction,
   ): Promise<ApplicationsResponseDto> {
     const response = await this.listApplicationsRaw(initOverrides);
+    return await response.value();
+  }
+
+  /**
+   * Updates the General-step fields (name, description, iconUrl, topics) of an existing application for the authenticated session user, by proxying DIAL Core. Settings-step configuration (application_properties, version) is preserved untouched. Invalidates the applications and deployments list caches on success.
+   * Update an application
+   */
+  async updateApplicationRaw(
+    requestParameters: UpdateApplicationRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<runtime.ApiResponse<UpdatedApplicationDto>> {
+    if (requestParameters['applicationName'] == null) {
+      throw new runtime.RequiredError(
+        'applicationName',
+        'Required parameter "applicationName" was null or undefined when calling updateApplication().',
+      );
+    }
+
+    if (requestParameters['updateApplicationBodyDto'] == null) {
+      throw new runtime.RequiredError(
+        'updateApplicationBodyDto',
+        'Required parameter "updateApplicationBodyDto" was null or undefined when calling updateApplication().',
+      );
+    }
+
+    const queryParameters: runtime.HTTPQuery = {};
+
+    const headerParameters: runtime.HTTPHeaders = {};
+
+    headerParameters['Content-Type'] = 'application/json';
+
+    let urlPath = `/api/v1/applications/{applicationName}`;
+    urlPath = urlPath.replace(
+      `{${'applicationName'}}`,
+      encodeURIComponent(String(requestParameters['applicationName'])),
+    );
+
+    const response = await this.request(
+      {
+        path: urlPath,
+        method: 'PATCH',
+        headers: headerParameters,
+        query: queryParameters,
+        body: requestParameters['updateApplicationBodyDto'],
+      },
+      initOverrides,
+    );
+
+    return new runtime.JSONApiResponse<UpdatedApplicationDto>(response);
+  }
+
+  /**
+   * Updates the General-step fields (name, description, iconUrl, topics) of an existing application for the authenticated session user, by proxying DIAL Core. Settings-step configuration (application_properties, version) is preserved untouched. Invalidates the applications and deployments list caches on success.
+   * Update an application
+   */
+  async updateApplication(
+    requestParameters: UpdateApplicationRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<UpdatedApplicationDto> {
+    const response = await this.updateApplicationRaw(
+      requestParameters,
+      initOverrides,
+    );
     return await response.value();
   }
 }

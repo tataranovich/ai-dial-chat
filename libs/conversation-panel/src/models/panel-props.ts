@@ -1,10 +1,8 @@
 import type { DropdownItem } from '@epam/ai-dial-ui-kit';
 import type { ReactNode } from 'react';
-import { ConversationGroupKey } from '../types/conversation-group-key';
-import { ConversationSource } from '../types/conversation-source';
-import { FilterTab } from '../types/filter-tab';
+import { FilterTab } from '../types/conversation-classification';
 
-/** Labels for each filter tab — provided as props so the app supplies i18n strings. */
+/** Labels for each filter tab. */
 export interface FilterLabels {
   /** Label for the "All" tab. */
   all: string;
@@ -17,60 +15,57 @@ export interface FilterLabels {
 }
 
 /** A single conversation entry shown in the history panel. */
-export interface ConversationHistoryItem {
+export interface ConversationItem {
   /** Unique conversation identifier (path or UUID). */
   id: string;
-  /** Human-readable title — typically the first user message. */
+  /** Human-readable conversation title. */
   title: string;
   /** When true the item is shown in the Pinned section. */
   isPinned?: boolean;
   /** Ownership/share source — used to filter by tab. */
-  source?: ConversationSource;
+  source?: FilterTab;
   /** URL of the model or conversation icon. When absent a default icon is shown. */
   iconUrl?: string;
-  /** Tooltip text shown on the deployment icon. Typically the agent or model display name. */
+  /** Tooltip text shown on the deployment icon. */
   iconTooltip?: string;
   /** When `true`, a skeleton placeholder is shown instead of the deployment icon. */
   isIconLoading?: boolean;
-  /**
-   * Browser-navigable URL for the conversation (e.g. `/conversations/<id>`).
-   * When provided, a middle mouse button click on the row opens this URL in a new tab,
-   * matching standard browser link behaviour.
-   */
+  /** Conversation URL. When provided, middle-click opens it in a new tab. */
   href?: string;
+  /** When `true`, a "TASK" pill badge is rendered at the end of the row. */
+  showTaskBadge?: boolean;
+  /** Text shown inside the task badge. When `showTaskBadge` is `true` and this is omitted, the badge renders with no text. */
+  taskBadgeLabel?: string;
+  /** When `true`, an unread indicator dot is rendered before the row's leading icon. */
+  isUnread?: boolean;
 }
 
 /** Font overrides for the header title in `ConversationPanel`. */
-export interface ConversationHistoryTypography {
-  /** Font family applied to the panel title. */
-  fontFamily?: string;
-  /** Font size applied to the panel title. */
-  fontSize?: string;
-  /** Font weight applied to the panel title. */
-  fontWeight?: string | number;
-  /** Line height applied to the panel title. */
-  lineHeight?: string;
-  /**
-   * A single utility class (e.g. `'dial-body-semi-text'`) applied to the title span.
-   * When provided, individual font CSS vars are ignored in favour of this class.
-   */
+export interface ConversationPanelTypography {
+  /** A single utility class (e.g. `'dial-body-semi-text'`) applied to the title span. */
   fontClassName?: string;
-  /** Typography class applied to collapsible group header buttons. Defaults to `'text-xs font-semibold'`. */
+  /** Typography class applied to collapsible group header buttons. Defaults to `'dial-tiny-semi-text uppercase'`. */
   groupHeaderClassName?: string;
-  /** Typography class applied to conversation title text in each row. Defaults to `'text-sm'`. */
+  /** Typography class applied to conversation title text in each row. Defaults to `'dial-small-text'`. */
   itemTitleClassName?: string;
-  /** Typography class applied to the New chat button label. Defaults to `'dial-small-text'`. */
+  /** Typography class applied to the New chat button label. Defaults to `'dial-small-semi-text'`. */
   newChatLabelClassName?: string;
-  /** Typography class applied to each filter tab label. Defaults to `'dial-tiny-semi-text'`. */
+  /** Class applied to each filter tab. Defaults to `'dial-tiny-semi-text'` (an additional `'flex-1'` class is always applied). */
   tabClassName?: string;
-  /** Text color class applied to each filter tab label. Defaults to `'text-primary'`. */
-  tabColorClassName?: string;
-  /** CSS class applied to the icon badge in each conversation row. Defaults to `'rounded-full'`. */
-  itemIconBadgeClassName?: string;
+}
+
+/** CSS custom-property overrides for the New chat button. */
+export interface NewChatButtonColors {
+  /** Default background. */
+  background?: string;
+  /** Label and icon color. */
+  text?: string;
+  /** Keyboard focus ring color. Defaults to `--stroke-focus-black`. */
+  focusOutline?: string;
 }
 
 /** CSS custom-property overrides for `ConversationPanel`. */
-export interface ConversationHistoryColors {
+export interface ConversationColors {
   /** Panel background color. */
   background?: string;
   /** Inner-edge divider border color. */
@@ -83,42 +78,50 @@ export interface ConversationHistoryColors {
   text?: string;
   /** Secondary text color (dates, metadata). */
   textSecondary?: string;
-  /** Hover background of the New chat button. */
-  newChatHoverBackground?: string;
-  /** Active/pressed background of the New chat button. */
-  newChatActiveBackground?: string;
-  /** Background of the New chat button. */
-  newChatBackground?: string;
+  /** Ring color shown around a group header acting as a drag-and-drop target. */
+  dropZoneRing?: string;
+  /** Background color of the active row actions trigger button. */
+  triggerBackground?: string;
+  /** Icon color of the row actions trigger button while active. */
+  triggerIcon?: string;
+  /** Icon color of the row actions trigger button in its idle state. */
+  triggerIconIdle?: string;
+  /** Shimmer color of the loading skeleton avatar. */
+  skeletonColor?: string;
+  /** Border color of the task pill badge. Defaults to `--stroke-tertiary`. */
+  taskBadgeBorder?: string;
+  /** Background color of the task pill badge. Defaults to `--bg-layer-base`. */
+  taskBadgeBackground?: string;
+  /** Text color of the task pill badge. Defaults to `--text-secondary`. */
+  taskBadgeText?: string;
+  /** Fill color of the unread indicator dot. Defaults to `--text-accent`. */
+  unreadDot?: string;
 }
 
 /** Combined style overrides (colors and typography) for `ConversationPanel`. */
 export interface ConversationPanelStyles {
   /** Color overrides applied as CSS custom properties. */
-  colors?: ConversationHistoryColors;
+  colors?: ConversationColors;
+  /** Color overrides forwarded to the New chat button. */
+  newChatButton?: NewChatButtonColors;
   /** Typography overrides for the panel and its children. */
-  typography?: ConversationHistoryTypography;
+  typography?: ConversationPanelTypography;
+  /** CSS class applied to the icon badge in each conversation row. Defaults to `'rounded-full'`. */
+  itemIconBadgeClassName?: string;
+  /** Typography class applied to the task pill badge in each conversation row. Defaults to `'dial-caption-semi-text uppercase tracking-[0.6px]'`. Colors come from the module stylesheet. */
+  taskBadgeClassName?: string;
 }
 
-/** Props accepted by `ConversationPanel`. */
-export interface ConversationPanelProps {
-  /** Ordered list of conversations to display. */
-  conversations: ConversationHistoryItem[];
-  /** When true, renders skeleton rows instead of the conversation list. */
-  isLoading?: boolean;
-  /** Whether the panel is currently expanded. */
-  isOpen: boolean;
-  /** Called with the conversation `id` when a row is clicked. */
-  onSelectConversation: (id: string) => void;
-  /** `id` of the currently viewed conversation; that row gets `aria-current="page"`. */
-  activeConversationId?: string;
+/** Localised labels and text content for `ConversationPanel`. */
+export interface ConversationPanelLabels {
   /** Panel heading text (e.g. `"Chats"`). */
   title: string;
   /** Message shown when `conversations` is empty. */
   emptyLabel: string;
   /** Message shown when conversations exist but none match the active filter. */
   noResultsLabel: string;
-  /** Called when the New chat button is clicked. */
-  onNewChat: () => void;
+  /** Status message announced to assistive tech while conversations are loading. Defaults to `'Loading conversations'`. */
+  loadingLabel?: string;
   /** Label for the New chat button (e.g. `"New chat"`). */
   newChatLabel: string;
   /** Placeholder text for the search input (e.g. `"Search chat…"`). */
@@ -138,68 +141,53 @@ export interface ConversationPanelProps {
     /** Heading for the Organization section. Defaults to `"Organization"`. */
     organization?: string;
   };
+  /** Accessible label for the row actions trigger button. Defaults to `"More actions"`. */
+  actionsLabel?: string;
+  /** Accessible (visually hidden) label announced for the unread indicator dot. Defaults to `"Unread"`. */
+  unreadIndicatorLabel?: string;
+  /** Accessible label for the sidebar toggle icon button. Required when `onToggle` is provided. */
+  closeAriaLabel?: string;
+}
+
+/** Props accepted by `ConversationPanel`. */
+export interface ConversationPanelProps {
+  /** Ordered list of conversations to display. */
+  conversations: ConversationItem[];
+  /** When true, renders skeleton rows instead of the conversation list. */
+  isLoading?: boolean;
+  /** Whether the panel is currently expanded. */
+  isOpen: boolean;
+  /** Called with the conversation `id` when a row is clicked. */
+  onSelectConversation: (id: string) => void;
+  /** `id` of the currently viewed conversation; that row gets `aria-current="page"`. */
+  activeConversationId?: string;
+  /** Localised labels and text content for the panel. */
+  labels: ConversationPanelLabels;
+  /** Called when the New chat button is clicked. */
+  onNewChat: () => void;
   /** Color and typography overrides applied as CSS custom properties. */
   styles?: ConversationPanelStyles;
   /** Extra class name(s) merged onto the panel root element. */
   className?: string;
-  /**
-   * Builds the dropdown menu items for a conversation row.
-   * Receives the full item so actions can reflect per-item state (e.g. `isPinned` toggle).
-   * When omitted or returns an empty array, no actions trigger is rendered on rows.
-   */
-  getActions?: (item: ConversationHistoryItem) => DropdownItem[];
-  /** Accessible label for the row actions trigger button. Defaults to `"More actions"`. */
-  actionsLabel?: string;
-  /**
-   * Called when the mobile sidebar toggle icon in the panel header is clicked.
-   * When provided, the toggle button becomes visible on mobile screens.
-   * The parent is responsible for managing `isOpen` state in response to this callback.
-   */
+  /** Builds dropdown actions for a row. When absent or empty, no action trigger is rendered. */
+  getActions?: (item: ConversationItem) => DropdownItem[];
+  /** Called when a row action menu opens; receives the trigger button. */
+  onActionMenuOpen?: (
+    item: ConversationItem,
+    trigger: HTMLButtonElement,
+  ) => void;
+  /** Called when the panel header toggle button is clicked. When provided, the toggle is visible on mobile. */
   onToggle?: () => void;
-  /** Accessible label for the sidebar toggle icon button. Required when `onToggle` is provided. */
-  closeAriaLabel?: string;
-  /**
-   * Enables the drag-to-resize handle on the panel's right edge.
-   * When false (default) the panel renders at a fixed width.
-   * Pass `false` on mobile to disable resizing.
-   */
-  resizable?: boolean;
-  /** Initial panel width in px used when `resizable` is true. Defaults to 325. */
-  defaultPanelWidth?: number;
-  /** Minimum panel width in px used when `resizable` is true. Defaults to 312. */
-  minPanelWidth?: number;
-  /** Maximum panel width in px used when `resizable` is true. Defaults to 600. */
-  maxPanelWidth?: number;
-  /** Called with the new width in px when the user finishes a resize drag. */
-  onPanelResizeStop?: (width: number) => void;
-  /**
-   * Content rendered in the right action group of the panel header bar.
-   * The app supplies any ReactNode — the library does not prescribe its content.
-   */
+  /** Extra content rendered in the panel header action area. */
   headerActions?: ReactNode;
   /**
-   * Called when the user completes a valid drag-and-drop move.
-   * `draggedId` is the conversation that was moved.
-   * `targetGroupKey` is the group it was dropped into.
-   * `afterId` is the id of the item the dragged conversation should be placed after,
-   * or `null` when dropped at the top of the target group.
-   *
-   * The app derives the action type from `targetGroupKey`:
-   * - dropping into `Pinned` → pin the conversation
-   * - dragging from `Pinned` into another group → unpin
-   * - same-group drop → reorder
+   * Called when the user completes a drag-and-drop move.
+   * See `ConversationMove` for the payload shape.
    */
   onMoveConversation?: (move: ConversationMove) => void;
-  /**
-   * Imperatively sets the active filter tab. When provided the panel switches
-   * to this tab; the user can still change it afterwards. Pass `undefined` to
-   * leave the current tab unchanged.
-   */
+  /** Programmatically sets the active filter tab. Pass `undefined` to leave the tab unchanged. */
   activeFilter?: FilterTab;
-  /**
-   * Called whenever the active filter tab changes — either because the user
-   * clicked a tab or because `activeFilter` drove a programmatic switch.
-   */
+  /** Called when the active filter tab changes. */
   onActiveFilterChange?: (tab: FilterTab) => void;
 }
 
@@ -208,10 +196,7 @@ export interface ConversationMove {
   /** Id of the conversation that was dragged. */
   draggedId: string;
   /** The group the item was dropped into. */
-  targetGroupKey: ConversationGroupKey;
-  /**
-   * Id of the item the dragged conversation should be placed after.
-   * `null` means the item was dropped at the top of the target group.
-   */
+  targetGroupKey: FilterTab;
+  /** Item to insert after; `null` means top of the target group. */
   afterId: string | null;
 }

@@ -1,7 +1,10 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AttachmentCanvasContent } from '../../../models/attachment-canvas';
-import { AttachmentContentType } from '../../../types/attachment-canvas';
+import {
+  AttachmentContentType,
+  AttachmentErrorType,
+} from '../../../types/attachment-canvas';
 import { AttachmentCanvas } from '../AttachmentCanvas';
 
 vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
@@ -22,6 +25,16 @@ vi.mock('react-json-view-lite', () => ({
   defaultStyles: {},
 }));
 
+vi.mock('@epam/ai-dial-visualizer-connector', () => ({
+  VisualizerConnector: vi.fn().mockImplementation(function () {
+    return {
+      ready: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      send: vi.fn(),
+      destroy: vi.fn(),
+    };
+  }),
+}));
+
 const plainTextContent: AttachmentCanvasContent = {
   type: AttachmentContentType.PlainText,
   text: 'Hello, world!\nSecond line.',
@@ -32,7 +45,7 @@ const defaultProps = {
   onClose: vi.fn(),
   content: plainTextContent,
   fileName: 'notes.txt',
-  ariaLabel: 'Attachment canvas',
+  labels: { ariaLabel: 'Attachment canvas' },
 };
 
 describe('AttachmentCanvas', () => {
@@ -50,7 +63,7 @@ describe('AttachmentCanvas', () => {
   it('hides the panel when isOpen is false', () => {
     render(<AttachmentCanvas {...defaultProps} isOpen={false} />);
     const panel = screen.getByRole('complementary', { hidden: true });
-    expect(panel.getAttribute('aria-hidden')).toBe('true');
+    expect(panel.getAttribute('aria-hidden')).toBeNull();
   });
 
   it('shows the file name as the panel title', () => {
@@ -92,14 +105,19 @@ describe('AttachmentCanvas', () => {
       <AttachmentCanvas
         {...defaultProps}
         onDownload={vi.fn()}
-        downloadLabel="Save file"
+        labels={{ ...defaultProps.labels, downloadLabel: 'Save file' }}
       />,
     );
     expect(screen.getByRole('button', { name: 'Save file' })).toBeDefined();
   });
 
   it('uses a custom closeLabel for the close button aria-label', () => {
-    render(<AttachmentCanvas {...defaultProps} closeLabel="Dismiss" />);
+    render(
+      <AttachmentCanvas
+        {...defaultProps}
+        labels={{ ...defaultProps.labels, closeLabel: 'Dismiss' }}
+      />,
+    );
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeDefined();
   });
 
@@ -132,5 +150,112 @@ describe('AttachmentCanvas', () => {
       <AttachmentCanvas {...defaultProps} content={jsonContent} />,
     );
     expect(container.querySelector('[dir="ltr"]')).toBeTruthy();
+  });
+
+  describe('Error content', () => {
+    it('renders the default load-error message for a LoadFailed error', () => {
+      const errorContent: AttachmentCanvasContent = {
+        type: AttachmentContentType.Error,
+        errorType: AttachmentErrorType.LoadFailed,
+        url: 'https://example.com/doc.pdf',
+      };
+      render(<AttachmentCanvas {...defaultProps} content={errorContent} />);
+      expect(screen.getByText('Failed to load file')).toBeDefined();
+    });
+
+    it('renders the default forbidden message for a Forbidden error', () => {
+      const errorContent: AttachmentCanvasContent = {
+        type: AttachmentContentType.Error,
+        errorType: AttachmentErrorType.Forbidden,
+        url: 'https://example.com/doc.pdf',
+      };
+      render(<AttachmentCanvas {...defaultProps} content={errorContent} />);
+      expect(
+        screen.getByText("You don't have permission to access this file"),
+      ).toBeDefined();
+    });
+
+    it('renders custom loadErrorLabel and forbiddenErrorLabel', () => {
+      const errorContent: AttachmentCanvasContent = {
+        type: AttachmentContentType.Error,
+        errorType: AttachmentErrorType.Forbidden,
+      };
+      render(
+        <AttachmentCanvas
+          {...defaultProps}
+          content={errorContent}
+          labels={{ ...defaultProps.labels, forbiddenErrorLabel: 'No access' }}
+        />,
+      );
+      expect(screen.getByText('No access')).toBeDefined();
+    });
+
+    it('shows the download button for a LoadFailed error with a url', () => {
+      const errorContent: AttachmentCanvasContent = {
+        type: AttachmentContentType.Error,
+        errorType: AttachmentErrorType.LoadFailed,
+        url: 'https://example.com/doc.pdf',
+      };
+      render(
+        <AttachmentCanvas
+          {...defaultProps}
+          content={errorContent}
+          onDownload={vi.fn()}
+        />,
+      );
+      expect(screen.getByRole('button', { name: /download/i })).toBeDefined();
+    });
+
+    it('hides the download button for a Forbidden error even when a url is present', () => {
+      const errorContent: AttachmentCanvasContent = {
+        type: AttachmentContentType.Error,
+        errorType: AttachmentErrorType.Forbidden,
+        url: 'https://example.com/doc.pdf',
+      };
+      render(
+        <AttachmentCanvas
+          {...defaultProps}
+          content={errorContent}
+          onDownload={vi.fn()}
+        />,
+      );
+      expect(screen.queryByRole('button', { name: /download/i })).toBeNull();
+    });
+  });
+
+  describe('Visualizer content', () => {
+    const visualizerContent: AttachmentCanvasContent = {
+      type: AttachmentContentType.Visualizer,
+      url: 'https://viz.example.com',
+      mimeType: 'application/x-my-viz',
+      data: { series: [1, 2, 3] },
+      layout: { themeId: 'dark' },
+      visualizerName: 'my-viz',
+    };
+
+    it('mounts the visualizer renderer inside the panel body', () => {
+      render(
+        <AttachmentCanvas {...defaultProps} content={visualizerContent} />,
+      );
+      expect(screen.getByRole('status')).toBeDefined();
+    });
+
+    it('still renders the fileName as the panel title', () => {
+      render(
+        <AttachmentCanvas {...defaultProps} content={visualizerContent} />,
+      );
+      expect(screen.getByText('notes.txt')).toBeDefined();
+    });
+
+    it('does not render a download button even when onDownload is provided', () => {
+      render(
+        <AttachmentCanvas
+          {...defaultProps}
+          content={visualizerContent}
+          onDownload={vi.fn()}
+        />,
+      );
+      expect(screen.queryByRole('button', { name: /download/i })).toBeNull();
+    });
   });
 });

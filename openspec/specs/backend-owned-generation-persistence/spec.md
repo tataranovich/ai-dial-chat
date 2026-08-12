@@ -6,7 +6,7 @@ The backend owns conversation persistence across the generation lifecycle — sa
 
 ### Requirement: Backend persists the conversation across the generation lifecycle
 
-`ConversationService.streamCompletion` (`apps/chat-api/src/conversations/conversation.service.ts`) SHALL own conversation persistence for a completion. The frontend MUST NOT call `saveConversation` during streaming. The backend SHALL save at the start of generation (user message + empty assistant placeholder), on successful completion (full assembled assistant message), and on stop/error (the partial assistant message accumulated so far).
+`ConversationStreamingService.streamCompletion` (`apps/chat-api/src/conversations/streaming/conversation-streaming.service.ts`, invoked via the `ConversationService` facade) SHALL own conversation persistence for a completion. The frontend MUST NOT call `saveConversation` during streaming. The backend SHALL save at the start of generation (user message + empty assistant placeholder), on successful completion (full assembled assistant message), and on stop/error (the partial assistant message accumulated so far).
 
 #### Scenario: Start state saved before streaming
 
@@ -21,7 +21,7 @@ The backend owns conversation persistence across the generation lifecycle — sa
 #### Scenario: Partial state saved on error
 
 - **WHEN** the upstream stream fails before `[DONE]`
-- **THEN** the backend saves the partial assistant message flagged `hasStreamError: true`
+- **THEN** the backend saves the partial assistant message with `streamErrorMessage` set — carrying the DIAL Core error text when one is available, or an empty string when no upstream text exists (empty body, non-user abort). The presence of the field (even `''`) is the terminal-error signal; the frontend localizes a generic fallback when the value is empty.
 
 ### Requirement: Generation finalizes on `[DONE]`, not on socket close
 

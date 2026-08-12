@@ -5,7 +5,7 @@ import type {
   Stage,
   StreamChunk,
 } from '@epam/ai-dial-chat-shared';
-import { normalizeRawAnnotations } from './annotation';
+import { normalizeRawAnnotations } from '@epam/ai-dial-quotations';
 
 const mergeAnnotations = (
   existing: Annotation[],
@@ -81,7 +81,15 @@ const mergeStages = (existing: Stage[], incoming: Stage[]): Stage[] => {
           : result[idx].attachments,
       };
     } else {
-      result.push(stage);
+      /*
+       * A brand-new stage's first chunk can carry `name: null` (DIAL Core's
+       * "stage opened, name pending" signal, before the name text streams
+       * in) — `Stage.name` is typed as non-nullable, so this must be
+       * normalized here the same way the merge branch above already
+       * coalesces `null` to `''`, or downstream renderers that assume a
+       * string (e.g. `cleanStageName`) crash on the very first chunk.
+       */
+      result.push({ ...stage, name: stage.name ?? '' });
     }
   }
   return result;
@@ -98,6 +106,9 @@ const mergeStages = (existing: Stage[], incoming: Stage[]): Stage[] => {
  * strings are concatenated across chunks, matching the same delta-merge
  * semantics used for stages.
  *
+ * `state` is overwritten (not merged) by each chunk that carries one,
+ * matching the DIAL stateful-app contract.
+ *
  * @returns Updated message array, or `null` when the chunk carries no
  *   actionable data (empty content, no form_schema, and no attachments).
  */
@@ -113,13 +124,15 @@ export const applyChunkToMessages = (
   const stages = delta?.custom_content?.stages;
   const annotations = delta?.custom_content?.annotations;
   const rawAnnotations = delta?.custom_fields?.annotations;
+  const state = delta?.custom_content?.state;
   const hasContentUpdate =
     !!content ||
     !!formSchema ||
     !!attachments?.length ||
     !!stages?.length ||
     !!annotations?.length ||
-    !!rawAnnotations?.length;
+    !!rawAnnotations?.length ||
+    !!state;
   const responseId =
     delta?.responseId ?? (hasContentUpdate ? chunk.id : undefined);
 
@@ -144,7 +157,8 @@ export const applyChunkToMessages = (
       formSchema ||
       attachments?.length ||
       stages?.length ||
-      incomingAnnotations.length;
+      incomingAnnotations.length ||
+      state;
 
     return {
       ...message,
@@ -166,6 +180,7 @@ export const applyChunkToMessages = (
               incomingAnnotations,
             ),
           }),
+          ...(state && { state }),
         },
       }),
     };

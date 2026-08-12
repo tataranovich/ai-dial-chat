@@ -70,6 +70,8 @@ The `AppsEditorPage` SHALL read all params exclusively via `useSearchParams` fro
 `apps/chat/src/pages/AppsEditor/AppsEditor.tsx` SHALL manage a two-step creation flow.
 
 State owned locally via `useState`:
+- `pendingSaveAction: 'save' | 'preview' | null` — distinguishes Save & Exit from Preview-triggered saves
+- `isPreviewing: boolean` — true while the Settings step shows the in-page chat preview instead of the editor iframe
 - `createdAppId: string | null` — populated after step-1 create succeeds
 - `isSaving: boolean` — true while a create (step 1) or save (step 2) action is in-flight; disables the header's Cancel/Save buttons
 - `saveError: string` — inline error message shown above the Settings step when a save fails
@@ -89,6 +91,7 @@ The page header SHALL be the shared `EditorHeader` component (see "Shared editor
 - `steps` / `currentStep`: the two-step stepper
 - `saveButtonLabel`: `appsEditor.generalForm.nextButton` ("Next") while on the General step, `appsEditor.saveButton` ("Save & Exit") while on the Settings step
 - `onSave`: on the General step, calls `generalFormRef.current.submit()`; on the Settings step, clears `saveError` and calls `settingsStepRef.current.triggerSave()`
+- `onPreview`: on the Settings step, exits preview when `isPreviewing` is true; otherwise clears `saveError`, sets `pendingSaveAction = 'preview'`, and calls `settingsStepRef.current.triggerSave()`
 - `onCancel`: navigates to `returnUrl`
 
 **i18n keys** (all under `appsEditor.*`):
@@ -118,7 +121,7 @@ The page header SHALL be the shared `EditorHeader` component (see "Shared editor
 | `appsEditor.error.createFailed` | `Failed to create application. Please try again.` |
 | `appsEditor.error.saveFailed` | `Failed to save application settings. Please try again.` |
 
-**Memoisation**: The resolved schema object and the `returnUrl` value SHALL be wrapped in `useMemo`. The `handleCreated`, `handleSave`, `handleSaveSuccess`, and `handleSaveError` callbacks SHALL be wrapped in `useCallback`.
+**Memoisation**: The resolved schema object and the `returnUrl` value SHALL be wrapped in `useMemo`. The `handleCreated`, `handleSave`, `handlePreview`, `handleSettingsUpdated`, `handleSaveSuccess`, and `handleSaveError` callbacks SHALL be wrapped in `useCallback`.
 
 **Accessibility**: The step indicator region SHALL have `role="navigation"` and `aria-label="Editor steps"`.
 
@@ -156,12 +159,25 @@ The page header SHALL be the shared `EditorHeader` component (see "Shared editor
 
 - **WHEN** the user is on the Settings step and clicks the header's "Save & Exit" button
 - **THEN** `isSaving` becomes true and `settingsStepRef.current.triggerSave()` is called
-- **AND** when the iframe posts back a `SAVE_SUCCESS` message, the page navigates to `returnUrl`
+- **AND** when the iframe posts back a `SAVE_SUCCESS` message, `refetchDeployments()` is awaited
+- **AND** the page navigates to `returnUrl`
+
+#### Scenario: Preview on Settings step uses freshly saved deployment settings
+
+- **WHEN** the user is on the Settings step and clicks the header's "Preview" button
+- **THEN** `isSaving` becomes true, `pendingSaveAction` is set to `preview`, and `settingsStepRef.current.triggerSave()` is called
+- **AND** when the iframe posts back a `SAVE_SUCCESS` message, `refetchDeployments()` is called fire-and-forget and `isPreviewing` becomes true immediately without waiting for the refetch
+- **AND** the preview chat input derives attachment availability and limits from the refreshed deployment's `inputAttachmentTypes` and `maxInputAttachments`
+
+#### Scenario: Settings updates refresh deployment metadata before preview
+
+- **WHEN** the iframe posts back a `<displayName>/updatedApplicationSuccess` message while the Settings step is mounted
+- **THEN** `AppsEditor` calls `refetchDeployments()` through the `onUpdated` callback passed to `SettingsStep`
 
 #### Scenario: Save failure on Settings step shows inline error and stays on the page
 
 - **WHEN** the iframe posts back a `SAVE_ERROR` message (with or without an `error` string)
-- **THEN** `isSaving` becomes false, `saveError` is set to the provided error or `appsEditor.error.saveFailed`, and a `DialNotification` with that message is rendered
+- **THEN** `isSaving` becomes false, `saveError` is set to the provided error or `appsEditor.error.saveFailed`, and a `Notification` with that message is rendered
 - **AND** the page does NOT navigate away
 
 ---
@@ -218,10 +234,10 @@ It SHALL render:
 
 **Left column** — form fields (scrollable, `w-1/2`, `border-e`):
 
-- **Name** (`DialInput`, required): maps to `CreateApplicationBodyDto.name`.
-- **Description** (`DialTextarea`, optional): maps to `CreateApplicationBodyDto.description`.
-- **Icon URL** (`DialInput`, optional): maps to `CreateApplicationBodyDto.iconUrl`.
-- **Version** (`DialInput`, optional): maps to `CreateApplicationBodyDto.version`.
+- **Name** (`Input`, required): maps to `CreateApplicationBodyDto.name`.
+- **Description** (`Textarea`, optional): maps to `CreateApplicationBodyDto.description`.
+- **Icon URL** (`Input`, optional): maps to `CreateApplicationBodyDto.iconUrl`.
+- **Version** (`Input`, optional): maps to `CreateApplicationBodyDto.version`.
 - **Topics** (`DialTagInput`, optional): maps to `CreateApplicationBodyDto.topics`.
 
 `GeneralForm` no longer renders its own Cancel/Next footer buttons — those live in the shared `EditorHeader` (see "Shared editor header component"). Instead, `GeneralForm` SHALL be wrapped in `forwardRef<GeneralFormHandle, Props>` and expose, via `useImperativeHandle`:
@@ -263,7 +279,7 @@ interface Props {
 }
 ```
 
-**Accessibility**: Each input uses `DialInput`/`DialTextarea`/`DialTagInput` label props for associated labels.
+**Accessibility**: Each input uses `Input`/`Textarea`/`DialTagInput` label props for associated labels.
 
 #### Scenario: Empty name prevents submission
 
@@ -296,6 +312,8 @@ interface Props {
 - If `schema.editorUrl` is truthy → render `<AppEditorIframe schema={schema} appId={appId} onSaveSuccess={onSaveSuccess} onSaveError={onSaveError} />`.
 - Otherwise → render a placeholder message (`appsEditor.settingsStep.noEditorPlaceholder`).
 
+When rendering `AppEditorIframe`, `SettingsStep` SHALL pass `onUpdated`, `onSaveSuccess`, and `onSaveError` through unchanged.
+
 `SettingsStep` SHALL be wrapped in `forwardRef<SettingsStepHandle, Props>` and expose, via `useImperativeHandle`, a `triggerSave()` that forwards to the inner `AppEditorIframe`'s own `triggerSave()` (a no-op when no iframe is rendered):
 
 ```ts
@@ -309,6 +327,7 @@ Props:
 interface Props {
   schema: ApplicationSchemaSummaryDto | undefined;
   appId: string;
+  onUpdated?: () => void;
   onSaveSuccess?: () => void;
   onSaveError?: (error: string) => void;
 }
@@ -344,7 +363,7 @@ interface Props {
   - `providerId` from `useUser().user?.providerId`
   - `themeId` from `useTheme().currentTheme`
 - Render a full-height `<iframe>` (`className="size-full border-none"`).
-- Show a `<DialSpinner />` overlay until the iframe dispatches `load` or fires a `readyToInteract` postMessage event; after either, hide the spinner.
+- Show a `<Spinner />` overlay until the iframe dispatches `load` or fires a `readyToInteract` postMessage event; after either, hide the spinner.
 - Add a `window.addEventListener('message', handleMessage)` listener on mount and remove it on unmount (`useEffect` cleanup).
 - In `handleMessage`, after verifying `event.origin` matches `schema.editorUrl`'s origin:
   - `event.data.type === \`${displayName}/${AppsEditorEvent.ReadyToInteract}\`` → set loading=false
@@ -385,17 +404,17 @@ interface Props {
 #### Scenario: Spinner shown until iframe loads
 
 - **WHEN** `AppEditorIframe` mounts
-- **THEN** the `DialSpinner` is visible
+- **THEN** the `Spinner` is visible
 
 #### Scenario: Spinner hidden after iframe load event
 
 - **WHEN** the iframe fires the `load` event
-- **THEN** the `DialSpinner` is no longer rendered
+- **THEN** the `Spinner` is no longer rendered
 
 #### Scenario: Spinner hidden after readyToInteract postMessage
 
 - **WHEN** a `message` event arrives with `data.type = "<displayName>/readyToInteract"`
-- **THEN** the `DialSpinner` is no longer rendered
+- **THEN** the `Spinner` is no longer rendered
 
 #### Scenario: onUpdated called on updatedApplicationSuccess
 

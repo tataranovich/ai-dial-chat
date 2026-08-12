@@ -1,10 +1,15 @@
 export { DeploymentCreationForm } from './components/DeploymentCreationForm/DeploymentCreationForm';
+export { DeploymentLocalesField } from './components/DeploymentLocalesField/DeploymentLocalesField';
+export type { DeploymentLocalesFieldProps } from './components/DeploymentLocalesField/DeploymentLocalesField';
 export type {
-  DeploymentCreationFormClassNames,
   DeploymentCreationFormFieldErrors,
   DeploymentCreationFormFieldLabels,
   DeploymentCreationFormLabels,
+  DeploymentCreationFormLocaleEntry,
+  DeploymentCreationFormLocaleLabels,
+  DeploymentCreationFormLocaleOption,
   DeploymentCreationFormProps,
+  DeploymentCreationFormStyles,
   DeploymentCreationFormValues,
 } from './models/deployment-creation-form';
 export type {
@@ -13,7 +18,6 @@ export type {
 } from './models/validation';
 export { DeploymentCreationFieldErrorCode } from './models/validation';
 export {
-  DEFAULT_INTRO_MAX_LENGTH,
   NAME_PATTERN,
   VERSION_PATTERN,
   validateDeploymentCreationFields,

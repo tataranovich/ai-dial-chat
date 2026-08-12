@@ -1,7 +1,6 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { IconSearch } from '@tabler/icons-react';
+import { SearchBar as BaseSearchBar } from '@epam/ai-dial-kit';
 import { type FC } from 'react';
-import styles from './SearchBar.module.scss';
 
 /** Props for SearchBar. */
 export interface SearchBarProps {
@@ -18,48 +17,37 @@ export interface SearchBarProps {
   ariaLabel?: string;
   /** Additional CSS class applied to the container for layout purposes (e.g. flex-1). */
   className?: string;
+  /**
+   * Accessible label for the clear-search button. When provided, a clear (X) button is shown once `value` is non-empty.
+   * App callers must pass a translated label.
+   */
+  clearLabel?: string;
 }
 
-/**
- * Catalog search bar.
- * The container carries all visual state (default / focus-within);
- * the inner <input> stays transparent with no outline of its own.
- */
+/** Catalog-layout search bar (50 px height, XL radius, adjusted icon size). */
 export const SearchBar: FC<SearchBarProps> = ({
   value,
   onChange,
   placeholder = 'Search',
   ariaLabel,
   className,
-}) => {
-  const resolvedAriaLabel = ariaLabel ?? placeholder;
-
-  return (
-    <div
-      role="search"
-      className={mergeClasses(
-        'flex h-[50px] cursor-text items-center gap-3 rounded-xl px-[18px]',
-        styles.container,
-        className,
-      )}
-    >
-      <IconSearch
-        size={18}
-        strokeWidth={1.8}
-        className={mergeClasses('shrink-0', styles.icon)}
-        aria-hidden
-      />
-      <input
-        type="search"
-        className={mergeClasses(
-          'min-w-0 flex-1 border-none bg-transparent outline-none',
-          styles.input,
-        )}
-        value={value}
-        placeholder={placeholder}
-        aria-label={resolvedAriaLabel}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </div>
-  );
-};
+  clearLabel,
+}) => (
+  <div className="flex-1">
+    <BaseSearchBar
+      value={value}
+      onChange={onChange}
+      labels={{ placeholder, ariaLabel, clearLabel }}
+      iconSize={18}
+      iconStrokeWidth={1.8}
+      styles={{
+        containerClassName: mergeClasses(
+          'h-[50px] flex-1 rounded-xl px-[18px]',
+          className,
+        ),
+        inputClassName: 'text-[15px]',
+        clearButtonClassName: 'size-11 desktop:size-auto',
+      }}
+    />
+  </div>
+);

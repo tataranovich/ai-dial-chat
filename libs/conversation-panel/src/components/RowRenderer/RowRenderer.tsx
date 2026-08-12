@@ -1,8 +1,8 @@
 import type { RowComponentProps } from 'react-window';
 import { type RowRendererData, VirtualRowKind } from '../../models/virtual-row';
-import { ConversationGroupKey } from '../../types/conversation-group-key';
-import { ConversationRow } from '../ConversationGroup/ConversationRow';
+import { FilterTab } from '../../types/conversation-classification';
 import { ConversationGroupHeader } from '../ConversationGroupHeader/ConversationGroupHeader';
+import { ConversationRow } from '../ConversationRow/ConversationRow';
 
 /** Renders a single virtual row — either a collapsible group header or a conversation item. */
 export const RowRenderer = ({
@@ -11,13 +11,15 @@ export const RowRenderer = ({
   rows,
   expandedGroups,
   onToggleGroup,
+  listId,
   activeConversationId,
+  searchQuery,
   onSelectConversation,
   getActions,
+  onActionMenuOpen,
   actionsLabel,
-  groupHeaderClassName,
-  itemTitleClassName,
-  itemIconBadgeClassName,
+  unreadIndicatorLabel,
+  styles,
   draggingId,
   dragOverId,
   allowedDropGroups,
@@ -30,20 +32,21 @@ export const RowRenderer = ({
   const row = rows[index];
 
   if (row.kind === VirtualRowKind.Header) {
-    const isPinnedHeader = row.groupKey === ConversationGroupKey.Pinned;
+    const isPinnedHeader = row.groupKey === FilterTab.Pinned;
     return (
-      <div style={style} className={index === 0 ? 'pt-0' : 'pt-8'}>
+      <div
+        role="presentation"
+        style={style}
+        className={index === 0 ? 'pt-0' : 'pt-8'}
+      >
         <ConversationGroupHeader
           label={row.label}
           isExpanded={expandedGroups.has(row.groupKey)}
           onToggle={() => onToggleGroup(row.groupKey)}
-          className={groupHeaderClassName}
-          dropZoneGroupKey={
-            isPinnedHeader ? ConversationGroupKey.Pinned : undefined
-          }
-          isDragOver={
-            isPinnedHeader && dragOverId === ConversationGroupKey.Pinned
-          }
+          listId={listId}
+          className={styles?.groupHeaderClassName}
+          dropZoneGroupKey={isPinnedHeader ? FilterTab.Pinned : undefined}
+          isDragOver={isPinnedHeader && dragOverId === FilterTab.Pinned}
           onDragOver={isPinnedHeader ? onDragOver : undefined}
           onDragLeave={isPinnedHeader ? onDragLeave : undefined}
           onDrop={isPinnedHeader ? onDrop : undefined}
@@ -53,15 +56,19 @@ export const RowRenderer = ({
   }
 
   return (
-    <div style={style} className="pt-1">
+    <div role="presentation" style={style} className="pt-1">
       <ConversationRow
         item={row.item}
         isActive={row.item.id === activeConversationId}
+        searchQuery={searchQuery}
         onSelectConversation={onSelectConversation}
         getActions={getActions}
+        onActionMenuOpen={onActionMenuOpen}
         actionsLabel={actionsLabel}
-        itemTitleClassName={itemTitleClassName}
-        itemIconBadgeClassName={itemIconBadgeClassName}
+        unreadIndicatorLabel={unreadIndicatorLabel}
+        itemTitleClassName={styles?.itemTitleClassName}
+        itemIconBadgeClassName={styles?.itemIconBadgeClassName}
+        taskBadgeClassName={styles?.taskBadgeClassName}
         rowGroupKey={row.groupKey}
         rows={rows}
         draggingId={draggingId}

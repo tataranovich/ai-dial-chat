@@ -1,11 +1,17 @@
 import type { Attachment, DisplayAttachment } from '@epam/ai-dial-chat-shared';
 import { RequestStatus, mergeClasses } from '@epam/ai-dial-chat-shared';
-import { NeutralButton, PrimaryButton } from '@epam/ai-dial-kit';
+import {
+  BASE_ICON_SIZE,
+  NeutralButton,
+  PrimaryButton,
+} from '@epam/ai-dial-ui-kit';
+import { IconFile } from '@tabler/icons-react';
 import {
   ChangeEvent,
   type FC,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -13,6 +19,7 @@ import type { EditMessageInputProps } from '../../models/ConversationInput';
 import { AddAttachmentButton } from '../AddAttachmentButton/AddAttachmentButton';
 import { Input } from '../Input/Input';
 
+/** Inline edit-message form: pre-populated textarea, existing attachment tray, and Save/Cancel actions. */
 export const EditMessageInput: FC<EditMessageInputProps> = ({
   message,
   initialAttachments = [],
@@ -32,7 +39,18 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
   pendingDropFiles: externalPendingFiles,
   onDropFilesConsumed,
   validateAttachment,
+  isAttachmentsEnabled,
   hideAttachFile = false,
+  fileAccept,
+  maximumAttachmentsAmount,
+  onAttachmentsLimitExceeded,
+  onDialFileSystemClick,
+  dialFileSystemLabel,
+  pendingAttachments,
+  onPendingAttachmentsConsumed,
+  onAttachmentClick,
+  pasteTextThreshold,
+  onMessageTooLong,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingDropFiles, setPendingDropFiles] = useState<File[]>([]);
@@ -73,9 +91,15 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
   );
 
   const handleSaveClick = () => {
-    if (canSend) {
-      handleSend(currentText, currentNewAttachments);
+    if (!canSend) return;
+    if (
+      !isAttachmentsEnabled &&
+      currentText.length >= (pasteTextThreshold ?? 4000)
+    ) {
+      onMessageTooLong?.(currentText.length, pasteTextThreshold ?? 4000);
+      return;
     }
+    handleSend(currentText, currentNewAttachments);
   };
 
   const handleDropFilesConsumed = useCallback(
@@ -89,6 +113,21 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
     e.target.value = '';
     setPendingDropFiles(files);
   }, []);
+
+  const dialFileSystemMenuItem = useMemo(
+    () =>
+      onDialFileSystemClick
+        ? [
+            {
+              key: 'dial-fs',
+              label: dialFileSystemLabel ?? 'DIAL file system',
+              icon: <IconFile size={BASE_ICON_SIZE} aria-hidden />,
+              onClick: onDialFileSystemClick,
+            },
+          ]
+        : [],
+    [onDialFileSystemClick, dialFileSystemLabel],
+  );
 
   return (
     <div className={mergeClasses('flex w-full flex-col gap-2', className)}>
@@ -110,6 +149,14 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
         prefixAttachments={keptAttachments}
         onRemovePrefixAttachment={handleRemovePreExisting}
         validateAttachment={validateAttachment}
+        isAttachmentsEnabled={isAttachmentsEnabled}
+        maximumAttachmentsAmount={maximumAttachmentsAmount}
+        onAttachmentsLimitExceeded={onAttachmentsLimitExceeded}
+        pendingAttachments={pendingAttachments}
+        onPendingAttachmentsConsumed={onPendingAttachmentsConsumed}
+        onAttachmentClick={onAttachmentClick}
+        pasteTextThreshold={pasteTextThreshold}
+        onMessageTooLong={onMessageTooLong}
       />
 
       {/* Action row — outside the bordered box */}
@@ -121,6 +168,7 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
                 ref={fileInputRef}
                 type="file"
                 multiple
+                accept={fileAccept}
                 className="sr-only"
                 aria-hidden
                 tabIndex={-1}
@@ -132,6 +180,7 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
                 addMenuTitle={addMenuTitle}
                 menuTitle={menuTitle}
                 menuCloseLabel={menuCloseLabel}
+                extraMenuItems={dialFileSystemMenuItem}
               />
             </>
           )}

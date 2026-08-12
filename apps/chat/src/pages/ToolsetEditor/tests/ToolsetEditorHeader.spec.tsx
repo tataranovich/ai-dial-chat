@@ -2,8 +2,11 @@ import { StepStatus } from '@epam/ai-dial-ui-kit';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ToolsetEditorI18nKeys } from '../../../constants/translation-keys';
-import { ToolsetEditorSteps } from '../../../types/toolsets';
+import { ToolsetEditorSteps } from '../../../constants/toolsets';
+import {
+  BasicI18nKeys,
+  EditorI18nKeys,
+} from '../../../constants/translation-keys';
 import ToolsetEditorHeader from '../ToolsetEditorHeader';
 
 interface MockStep {
@@ -14,6 +17,7 @@ interface MockStep {
 
 interface MockEditorHeaderProps {
   steps: MockStep[];
+  isSaveDisabled?: boolean;
   onChangeStep: (stepId: string) => void;
 }
 
@@ -47,6 +51,7 @@ describe('ToolsetEditorHeader', () => {
       <ToolsetEditorHeader
         step={ToolsetEditorSteps.General}
         isSaving={false}
+        isSaveDisabled={false}
         canOpenSettings={false}
         onChangeStep={vi.fn()}
         onCancel={vi.fn()}
@@ -61,12 +66,12 @@ describe('ToolsetEditorHeader', () => {
     expect(props?.steps).toEqual([
       {
         id: ToolsetEditorSteps.General,
-        name: ToolsetEditorI18nKeys.StepGeneral,
+        name: EditorI18nKeys.StepGeneral,
         status: undefined,
       },
       {
         id: ToolsetEditorSteps.Settings,
-        name: ToolsetEditorI18nKeys.StepSettings,
+        name: BasicI18nKeys.Settings,
         status: undefined,
       },
     ]);
@@ -77,6 +82,7 @@ describe('ToolsetEditorHeader', () => {
       <ToolsetEditorHeader
         step={ToolsetEditorSteps.General}
         isSaving={false}
+        isSaveDisabled={false}
         canOpenSettings
         onChangeStep={vi.fn()}
         onCancel={vi.fn()}
@@ -91,12 +97,12 @@ describe('ToolsetEditorHeader', () => {
     expect(props?.steps).toEqual([
       {
         id: ToolsetEditorSteps.General,
-        name: ToolsetEditorI18nKeys.StepGeneral,
+        name: EditorI18nKeys.StepGeneral,
         status: StepStatus.VALID,
       },
       {
         id: ToolsetEditorSteps.Settings,
-        name: ToolsetEditorI18nKeys.StepSettings,
+        name: BasicI18nKeys.Settings,
         status: StepStatus.VALID,
       },
     ]);
@@ -108,6 +114,7 @@ describe('ToolsetEditorHeader', () => {
       <ToolsetEditorHeader
         step={ToolsetEditorSteps.General}
         isSaving={false}
+        isSaveDisabled={false}
         canOpenSettings
         onChangeStep={onChangeStep}
         onCancel={vi.fn()}
@@ -117,10 +124,30 @@ describe('ToolsetEditorHeader', () => {
 
     await userEvent.click(
       screen.getByRole('button', {
-        name: ToolsetEditorI18nKeys.StepSettings,
+        name: BasicI18nKeys.Settings,
       }),
     );
 
     expect(onChangeStep).toHaveBeenCalledWith(ToolsetEditorSteps.Settings);
+  });
+
+  it('forwards the Save disabled state to the shared header', () => {
+    render(
+      <ToolsetEditorHeader
+        step={ToolsetEditorSteps.Settings}
+        isSaving={false}
+        isSaveDisabled
+        canOpenSettings
+        onChangeStep={vi.fn()}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const props = mockEditorHeader.mock.calls[0]?.[0] as
+      | MockEditorHeaderProps
+      | undefined;
+
+    expect(props?.isSaveDisabled).toBe(true);
   });
 });

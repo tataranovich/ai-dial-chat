@@ -40,7 +40,7 @@ Core principle: the chat application is assembled from a set of **independently 
 root/
 ├── apps/
 │   ├── chat/                  # React SPA — frontend chat application (port 4207)
-│   └── chat-api/              # NestJS — backend API server (port 3005)
+│   └── chat-api/              # NestJS — backend API server (port 5000)
 ├── libs/
 │   ├── chat-shared/           # @epam/ai-dial-chat-shared
 │   ├── conversation-input/    # @epam/ai-dial-conversation-input
@@ -189,10 +189,11 @@ apps/chat/src/
 
 Current implementation uses **React Context** with no external state library.
 
-| Context        | State owned                                                                                        |
-| -------------- | -------------------------------------------------------------------------------------------------- |
-| `UserContext`  | Auth status (`loading \| authenticated \| unauthenticated`), `UserProfile`, `refresh()`, `reset()` |
-| `ThemeContext` | Active theme ID, theme list, `setTheme()`, logo URL, loading flag                                  |
+| Context                | State owned                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UserContext`          | Auth status (`loading \| authenticated \| unauthenticated`), `UserProfile`, `refresh()`, `reset()`                                                                                                                                                                                                                                                                                                                        |
+| `ThemeContext`         | Active theme ID, theme list, `setTheme()`, logo URL, loading flag                                                                                                                                                                                                                                                                                                                                                         |
+| `ClientChannelContext` | DIAL Core client-channel id, pending `toolset/signin` **and** `external-service/signin` events, `reportEvent()`, `ensureConnected()` — mounted inside `RequireAuth` alongside `GenerationProvider` so it survives conversation navigation; see [`docs/auth/auth-bff-encrypted-cookie.md` §5.5](./auth/auth-bff-encrypted-cookie.md#55-interactive-sign-in-during-a-completion-toolsets-and-application-external-services) |
 
 Context pattern (reference: `ThemeContext.tsx`):
 
@@ -219,16 +220,18 @@ Behaviour applied automatically:
 
 `ApiEndpoints` enum centralises all URL constants:
 
-| Key              | URL                      |
-| ---------------- | ------------------------ |
-| `THEMES`         | `/api/themes`            |
-| `THEME_ICON`     | `/api/themes/icon`       |
-| `CONVERSATIONS`  | `/api/v1/conversations`  |
-| `DEPLOYMENTS`    | `/api/deployments`       |
-| `MODELS`         | `/api/v1/models`         |
-| `AUTH_ME`        | `/api/v1/auth/me`        |
-| `AUTH_PROVIDERS` | `/api/v1/auth/providers` |
-| `AUTH_LOGOUT`    | `/api/v1/auth/logout`    |
+| Key                 | URL                         |
+| ------------------- | --------------------------- |
+| `THEMES`            | `/api/themes`               |
+| `THEME_ICON`        | `/api/themes/icon`          |
+| `CONVERSATIONS`     | `/api/v1/conversations`     |
+| `DEPLOYMENTS`       | `/api/deployments`          |
+| `MODELS`            | `/api/v1/models`            |
+| `AUTH_ME`           | `/api/v1/auth/me`           |
+| `AUTH_PROVIDERS`    | `/api/v1/auth/providers`    |
+| `AUTH_LOGOUT`       | `/api/v1/auth/logout`       |
+| `CLIENT_CHANNEL`    | `/api/v1/client-channel`    |
+| `EXTERNAL_SERVICES` | `/api/v1/external-services` |
 
 ### SSE streaming
 
@@ -257,6 +260,11 @@ Configured at startup:
 - Swagger at `/api/docs` (non-production)
 - Static React SPA serving from `apps/chat/dist` for non-`/api/*` routes
 - Global prefix: `api`
+- OpenTelemetry SDK bootstrap (`telemetry/otel-sdk.ts`, imported first, before `reflect-metadata`)
+  — off by default (`OTEL_SDK_DISABLED=true`); when enabled, adds a `traceparent` response header
+  on traced routes and an optional dedicated Prometheus scrape listener (default `:9464/metrics`,
+  independent of the main application port) — see `apps/chat-api/README.md`'s Observability
+  section
 
 NestJS conventions (domain structure, thin controllers, Swagger decorators, Logger, ConfigService, DTO validation) are defined in `apps/chat-api/AGENTS.md` — read it before implementing anything in `apps/chat-api/**`.
 
@@ -280,10 +288,13 @@ apps/chat-api/src/
 │   └── utils/
 ├── conversations/         # Conversation CRUD + completions
 ├── chat/                  # Direct DIAL Core proxy
+├── client-channel/        # DIAL Core client-channel proxy (subscribe/report/unsubscribe SSE relay)
+├── external-services/     # Application external-service metadata + signin/signout proxy
 ├── deployments/           # Available deployments listing
 ├── models/                # Available models listing
 ├── themes/                # Theme config + icon serving
 ├── health/                # Health check
+├── telemetry/             # OpenTelemetry bootstrap, logger bridge, metrics, traceparent header
 ├── config/                # class-validator env schema
 └── common/                # Shared decorators, interceptors
 ```
@@ -314,6 +325,8 @@ One folder per domain. **No `modules/` wrapper** — `{domain}.module.ts` sits d
 | `POST`   | `/api/v1/conversations/completions`    | SSE chat completion stream    | 10/min     |
 | `DELETE` | `/api/v1/conversations?path=`          | Delete conversation           | —          |
 
+`POST /api/v1/conversations/completions` routes to one of two upstream generation APIs per request — `ConversationService.streamCompletion` resolves `features.responsesApi` off `DeploymentsService.getDeploymentDetails` (under the caller's own token, before opening the upstream stream) and dispatches to `chat-completions.adapter.ts` or `responses.adapter.ts` (`apps/chat-api/src/conversations/generation/`) accordingly. Both adapters normalize their upstream SSE events into the same `chat.completion.chunk` shape, so the wire contract to the browser, `apply-chunk.server.ts`, and the persistence lifecycle are unchanged regardless of which API served the request. Deployments that don't declare `responses_api: true` keep using Chat Completions exactly as before.
+
 #### Models & Deployments
 
 | Method | Path                                       | Description                                              |
@@ -321,6 +334,26 @@ One folder per domain. **No `modules/` wrapper** — `{domain}.module.ts` sits d
 | `GET`  | `/api/v1/models`                           | List available models (cached)                           |
 | `GET`  | `/api/deployments`                         | List available deployments                               |
 | `GET`  | `/api/v1/deployments/{deployment}/details` | Full per-entity detail for one deployment by id (cached) |
+
+#### Client Channel (`/api/v1/client-channel`)
+
+DIAL Core RPC proxy used to deliver mid-completion `toolset/signin` and `external-service/signin` interrupts. See [`docs/auth/auth-bff-encrypted-cookie.md` §5.5](./auth/auth-bff-encrypted-cookie.md#55-interactive-sign-in-during-a-completion-toolsets-and-application-external-services).
+
+| Method | Path                                 | Description                                         |
+| ------ | ------------------------------------ | --------------------------------------------------- |
+| `POST` | `/api/v1/client-channel/subscribe`   | Open the SSE relay, get/resume a channel id         |
+| `POST` | `/api/v1/client-channel/report`      | Report `{ id, result }` back to a blocked tool call |
+| `POST` | `/api/v1/client-channel/unsubscribe` | Close the channel                                   |
+
+#### External Services (`/api/v1/external-services`)
+
+BFF proxy for an application's external-service credentials, driving the `external-service/signin` interrupt above. See [`docs/auth/auth-bff-encrypted-cookie.md` §5.5](./auth/auth-bff-encrypted-cookie.md#55-interactive-sign-in-during-a-completion-toolsets-and-application-external-services).
+
+| Method | Path                                                    | Description                                        |
+| ------ | ------------------------------------------------------- | -------------------------------------------------- |
+| `GET`  | `/api/v1/external-services/{appId}/{serviceId}`         | Get display metadata + auth type (not cached)      |
+| `POST` | `/api/v1/external-services/{appId}/{serviceId}/signin`  | Submit API-key/OAuth credentials                   |
+| `POST` | `/api/v1/external-services/{appId}/{serviceId}/signout` | Revoke credentials (Core 404 = idempotent success) |
 
 #### Infrastructure
 
@@ -403,7 +436,7 @@ Three-tier fallback pattern (defined in `openspec/lib-styling-guide.md`):
 ```scss
 // libs/conversation-input/src/components/ConversationInput/ConversationInput.module.scss
 .welcome {
-  color: var(--ci-welcome-color, var(--text-primary, #eef1f7));
+  color: var(--ci-welcome-color, var(--text-primary, #161b2d));
   font-size: var(--ci-welcome-font-size, 24px);
 }
 ```
@@ -412,7 +445,7 @@ Tiers:
 
 1. `--ci-welcome-color` — set by parent app via `colors` prop → `style={{ '--ci-welcome-color': value }}`
 2. `--text-primary` — global DIAL Theme token injected by `ThemeProvider`
-3. `#eef1f7` — hardcoded hex fallback (dark theme defaults)
+3. `#161B2D` — hardcoded hex fallback (dark theme defaults)
 
 CSS variable naming: `--{lib-prefix}-{property}` (e.g. `--ci-*` for conversation-input, `--cm-*` for conversation-messages).
 
@@ -445,17 +478,17 @@ Themes are defined in [ai-dial-chat-themes](https://github.com/epam/ai-dial-chat
 
 ### Colour token groups
 
-| Group             | Examples                                                                  | Purpose                        |
-| ----------------- | ------------------------------------------------------------------------- | ------------------------------ |
-| `bg-layer-*`      | `bg-layer-0` … `bg-layer-4`                                               | Background depth levels        |
-| `bg-accent-*`     | `bg-accent-primary`, `bg-accent-secondary`                                | Brand accent fills             |
-| `bg-*`            | `bg-error`, `bg-warning`, `bg-info`, `bg-success`                         | Semantic state backgrounds     |
-| `text-*`          | `text-primary`, `text-secondary`, `text-error`, `text-accent-primary`     | Text colours                   |
-| `stroke-*`        | `stroke-primary`, `stroke-hover`, `stroke-focus`, `stroke-accent-primary` | Borders and outlines           |
-| `controls-bg-*`   | `controls-bg-accent-primary`, `controls-bg-error`, `controls-bg-disable`  | Interactive element fills      |
-| `controls-text-*` | `controls-text-permanent`, `controls-text-neutral`                        | Interactive element text       |
-| `topicColors`     | `bg-topic-*`, `stroke-topic-*`                                            | Application / model topic tags |
-| `authColors`      | `bg-auth-layer-0`, `bg-auth-layer-1`                                      | Auth screen backgrounds        |
+| Group             | Examples                                                                 | Purpose                        |
+| ----------------- | ------------------------------------------------------------------------ | ------------------------------ |
+| `bg-layer-*`      | `bg-layer-raised` … `bg-layer-4`                                         | Background depth levels        |
+| `bg-accent-*`     | `bg-accent-primary`, `bg-accent-secondary`                               | Brand accent fills             |
+| `bg-*`            | `bg-error`, `bg-warning`, `bg-info`, `bg-success`                        | Semantic state backgrounds     |
+| `text-*`          | `text-primary`, `text-secondary`, `text-error`, `text-accent`            | Text colours                   |
+| `stroke-*`        | `stroke-primary`, `stroke-hover`, `stroke-focus-black`, `stroke-info`    | Borders and outlines           |
+| `controls-bg-*`   | `controls-bg-accent-primary`, `controls-bg-error`, `controls-bg-disable` | Interactive element fills      |
+| `controls-text-*` | `controls-text-permanent`, `controls-text-neutral`                       | Interactive element text       |
+| `topicColors`     | `bg-topic-*`, `stroke-topic-*`                                           | Application / model topic tags |
+| `authColors`      | `bg-auth-bg-layer-raised`, `bg-auth-layer-1`                             | Auth screen backgrounds        |
 
 ### Token flow
 
@@ -466,11 +499,11 @@ theme.json (from /api/themes)
 ThemeProvider (apps/chat)
     │  injects tokens as CSS variables on :root
     ▼
---bg-layer-0, --text-primary, --controls-bg-accent-primary, ...
+--bg-layer-raised, --text-primary, --control-accent, ...
     │
-    ├──▶ Tailwind config → bg-[var(--bg-layer-0)], text-[var(--text-primary)], ...
+    ├──▶ Tailwind config → bg-[var(--bg-layer-raised)], text-[var(--text-primary)], ...
     │
-    └──▶ SCSS Modules in libs → var(--text-primary, #eef1f7)
+    └──▶ SCSS Modules in libs → var(--text-primary, #161B2D)
 ```
 
 ---

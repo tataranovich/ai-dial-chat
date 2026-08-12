@@ -2,17 +2,20 @@ import {
   isMimeTypeAllowed,
   mimeTypesToExtensionLabels,
 } from '@epam/ai-dial-attachment-input';
-import { PrimaryButton } from '@epam/ai-dial-kit';
 import {
   DialFileManagerTabs,
   DialFileNodeType,
-  DialPopup,
-  NotificationVariant,
-  NOT_ALLOWED_SYMBOLS_REGEXP,
-  PopupSize,
   useDialFileManagerTabs,
   type DialFile,
   type FileManagerGridRow,
+} from '@epam/ai-dial-react-file-manager';
+import {
+  Popup,
+  NOT_ALLOWED_SYMBOLS,
+  NOT_ALLOWED_SYMBOLS_REGEXP,
+  NotificationVariant,
+  PopupSize,
+  PrimaryButton,
 } from '@epam/ai-dial-ui-kit';
 import {
   memo,
@@ -24,12 +27,17 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  BasicI18nKeys,
   ButtonsI18nKeys,
   DialFileManagerI18nKeys,
 } from '../../constants/translation-keys';
 import { useNotification } from '../../context/NotificationContext';
 import { useDialFileManager } from '../../hooks/files/useDialFileManager';
-import { DialFileManagerVariant } from '../../types/file-manager-variant';
+import { useDialFileManagerTabConfig } from '../../hooks/files/useDialFileManagerTabConfig';
+import {
+  DialFileManagerActionProfile,
+  DialFileManagerVariant,
+} from '../../types/file-manager-variant';
 import {
   mimeTypesToAttachmentExtensionLabels,
   mimeTypesToDialFileAcceptTypes,
@@ -70,6 +78,7 @@ interface Props {
   allowedTypes?: string[];
   maxSelectableFileSize?: number;
   maximumAttachmentsAmount?: number;
+  existingAttachmentsAmount?: number;
   canAttachFolders?: boolean;
   allowedTypesLabel?: string;
   autoSelectUploadedItems?: boolean;
@@ -105,9 +114,10 @@ const DialFileManagerModal: FC<Props> = ({
   allowedTypes,
   maxSelectableFileSize,
   maximumAttachmentsAmount,
+  existingAttachmentsAmount = 0,
   canAttachFolders = false,
   allowedTypesLabel,
-  autoSelectUploadedItems = true,
+  autoSelectUploadedItems = false,
 }) => {
   const { t } = useTranslation();
   const { showNotification } = useNotification();
@@ -116,9 +126,7 @@ const DialFileManagerModal: FC<Props> = ({
     () => ({
       [DialFileManagerTabs.MyFiles]: t(DialFileManagerI18nKeys.TabMyFiles),
       [DialFileManagerTabs.Shared]: t(DialFileManagerI18nKeys.TabShared),
-      [DialFileManagerTabs.Organization]: t(
-        DialFileManagerI18nKeys.TabOrganization,
-      ),
+      [DialFileManagerTabs.Organization]: t(BasicI18nKeys.Organization),
       [DialFileManagerTabs.Review]: '',
     }),
     [t],
@@ -133,9 +141,10 @@ const DialFileManagerModal: FC<Props> = ({
   const rootLabel =
     tabLabels[activeTab] || tabLabels[DialFileManagerTabs.MyFiles];
 
-  const tabs = useMemo(
-    () => allTabs?.filter((tab) => tab.id !== DialFileManagerTabs.Review),
-    [allTabs],
+  const { tabs } = useDialFileManagerTabConfig(
+    activeTab,
+    handleTabChange,
+    allTabs,
   );
 
   const hookResult = useDialFileManager({
@@ -147,20 +156,18 @@ const DialFileManagerModal: FC<Props> = ({
     forbiddenSymbolsRegExp: NOT_ALLOWED_SYMBOLS_REGEXP,
   });
 
-  const {
-    items,
-    isLoading,
-    searchResults,
-    uploadBatchState,
-    isCreatingFolder,
-    isDownloading,
-    isDeleting,
-    isRenaming,
-  } = hookResult;
+  const { items, isLoading, searchResults, isAnyOperationInProgress } =
+    hookResult;
 
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(
     () => new Set(),
   );
+
+  const handleSelectedPathsChange = useCallback((paths: Set<string>) => {
+    setSelectedPaths(
+      new Set(Array.from(paths).filter((path) => !isHiddenPath(path))),
+    );
+  }, []);
 
   const handleTabChangeWithReset = useCallback(
     (tab: DialFileManagerTabs) => {
@@ -205,6 +212,8 @@ const DialFileManagerModal: FC<Props> = ({
     const selectedFileNodes: DialFile[] = [];
 
     for (const file of selectedFiles) {
+      if (isHiddenPath(file.path)) continue;
+
       if (file.nodeType === DialFileNodeType.FOLDER) {
         selectedFolderPaths.push(file.path);
       } else {
@@ -269,7 +278,10 @@ const DialFileManagerModal: FC<Props> = ({
       ];
     });
 
-    const totalCount = dedupedFiles.length + dialCoreFolderPaths.length;
+    const totalCount =
+      existingAttachmentsAmount +
+      dedupedFiles.length +
+      dialCoreFolderPaths.length;
     if (
       maximumAttachmentsAmount != null &&
       maximumAttachmentsAmount > 0 &&
@@ -292,6 +304,7 @@ const DialFileManagerModal: FC<Props> = ({
     selectedFiles,
     allowedTypes,
     maximumAttachmentsAmount,
+    existingAttachmentsAmount,
     showNotification,
     t,
     filesByPath,
@@ -398,13 +411,6 @@ const DialFileManagerModal: FC<Props> = ({
     [t],
   );
 
-  const isOperationInProgress =
-    isDownloading ||
-    isDeleting ||
-    isRenaming ||
-    isCreatingFolder ||
-    uploadBatchState != null;
-
   const isRowSelectable = useCallback(
     (node: { data?: FileManagerGridRow | null }) => {
       const row = node.data;
@@ -462,7 +468,7 @@ const DialFileManagerModal: FC<Props> = ({
       multipleFilesTitle: t(DialFileManagerI18nKeys.ConflictMultipleTitle),
       actionLabels: {
         replace: t(DialFileManagerI18nKeys.ConflictReplace),
-        duplicate: t(DialFileManagerI18nKeys.ConflictDuplicate),
+        duplicate: t(ButtonsI18nKeys.Duplicate),
         cancel: t(ButtonsI18nKeys.Cancel),
       },
       strategyLabels: {
@@ -505,10 +511,8 @@ const DialFileManagerModal: FC<Props> = ({
       [DialFileManagerTabs.MyFiles]: t(
         DialFileManagerI18nKeys.MyFilesTreeHeader,
       ),
-      [DialFileManagerTabs.Shared]: t(DialFileManagerI18nKeys.SharedTreeHeader),
-      [DialFileManagerTabs.Organization]: t(
-        DialFileManagerI18nKeys.OrganizationTreeHeader,
-      ),
+      [DialFileManagerTabs.Shared]: t(DialFileManagerI18nKeys.TabShared),
+      [DialFileManagerTabs.Organization]: t(BasicI18nKeys.Organization),
       [DialFileManagerTabs.Review]: '',
     }),
     [t],
@@ -523,20 +527,19 @@ const DialFileManagerModal: FC<Props> = ({
       hideHiddenFilesLabel,
       getSelectionLabel,
       uploadFilesLabel,
+      uploadArchiveAction: t(DialFileManagerI18nKeys.UploadArchiveAction),
       newFolderLabel,
       downloadLabel,
       downloadingLabel,
       deleteLabel,
       deletingLabel,
-      renameLabel: t(DialFileManagerI18nKeys.RenameAction),
+      renameLabel: t(ButtonsI18nKeys.Rename),
       renamingLabel: t(DialFileManagerI18nKeys.RenamingLabel),
       copyLabel: t(DialFileManagerI18nKeys.CopyAction),
       moveLabel: t(DialFileManagerI18nKeys.MoveAction),
-      duplicateLabel: t(DialFileManagerI18nKeys.DuplicateAction),
+      duplicateLabel: t(ButtonsI18nKeys.Duplicate),
       addFolderLabel: t(DialFileManagerI18nKeys.FolderPickerAddFolderLabel),
-      hiddenFilesSwitcherLabel: t(
-        DialFileManagerI18nKeys.FolderPickerHiddenFilesLabel,
-      ),
+      hiddenFilesSwitcherLabel: t(DialFileManagerI18nKeys.HiddenFiles),
       getCopyHeader: (count, name) =>
         count === 1
           ? t(DialFileManagerI18nKeys.CopyHeaderSingle, { name })
@@ -547,6 +550,9 @@ const DialFileManagerModal: FC<Props> = ({
           : t(DialFileManagerI18nKeys.MoveHeaderMultiple, { count }),
       moveSourceDisabledTooltip: t(
         DialFileManagerI18nKeys.MoveSourceDisabledTooltip,
+      ),
+      folderPickerLoadingTooltip: t(
+        DialFileManagerI18nKeys.FolderPickerLoadingTooltip,
       ),
       folderPickerEmptyStateTitle: t(
         DialFileManagerI18nKeys.FolderPickerEmptyStateTitle,
@@ -562,9 +568,7 @@ const DialFileManagerModal: FC<Props> = ({
       operationLoaderMoveTitle: t(
         DialFileManagerI18nKeys.OperationLoaderMoveTitle,
       ),
-      operationLoaderCancelLabel: t(
-        DialFileManagerI18nKeys.OperationLoaderCancelLabel,
-      ),
+      operationLoaderCancelLabel: t(ButtonsI18nKeys.Cancel),
       deleteConfirmTitle,
       deleteConfirmBody,
       deleteConfirmLabel,
@@ -572,14 +576,29 @@ const DialFileManagerModal: FC<Props> = ({
       uploadProgressTitle,
       cancelLabel,
       getUploadProgressText,
-      searchEmptyStateTitle: t(DialFileManagerI18nKeys.SearchEmptyStateTitle),
+      searchEmptyStateTitle: t(BasicI18nKeys.NoResults),
+      folderEmptyStateTitle: t(DialFileManagerI18nKeys.Empty),
       forbiddenSymbolsTooltip: t(
         DialFileManagerI18nKeys.ForbiddenSymbolsTooltip,
+        { notAllowedSymbols: NOT_ALLOWED_SYMBOLS },
       ),
       emptyStateByTab,
       treeHeaderByTab,
       renameValidationMessages,
       conflictResolutionPopupOptions,
+      unshareLabel: t(DialFileManagerI18nKeys.UnshareAction),
+      unsharingLabel: t(DialFileManagerI18nKeys.UnsharingLabel),
+      removeAccessLabel: t(DialFileManagerI18nKeys.RemoveAccessAction),
+      removingAccessLabel: t(DialFileManagerI18nKeys.RemovingAccessLabel),
+      infoLabel: t(DialFileManagerI18nKeys.InfoAction),
+      metadataHeader: t(DialFileManagerI18nKeys.MetadataHeader),
+      metadataNameLabel: t(DialFileManagerI18nKeys.MetadataNameLabel),
+      metadataPathLabel: t(DialFileManagerI18nKeys.MetadataPathLabel),
+      metadataModifiedDateLabel: t(
+        DialFileManagerI18nKeys.MetadataModifiedDateLabel,
+      ),
+      metadataSizeLabel: t(DialFileManagerI18nKeys.MetadataSizeLabel),
+      metadataAuthorLabel: t(DialFileManagerI18nKeys.MetadataAuthorLabel),
     }),
     [
       errorMessage,
@@ -610,27 +629,28 @@ const DialFileManagerModal: FC<Props> = ({
   );
 
   return (
-    <DialPopup
+    <Popup
       open={isOpen}
       header={
         <div className="flex flex-col gap-1">
           <span>{title}</span>
           {headerDescription != null && (
-            <p className="text-start text-sm font-normal">
-              {headerDescription}
-            </p>
+            <p className="dial-small-text text-start">{headerDescription}</p>
           )}
         </div>
       }
       size={PopupSize.Lg}
-      className="flex !h-[min(800px,100dvh)] w-full flex-col !bg-layer-2 [&>[aria-label='popup-description']]:flex [&>[aria-label='popup-description']]:min-h-0 [&>[aria-label='popup-description']]:flex-col"
+      className="flex !h-[min(800px,100dvh)] w-full flex-col !bg-layer-sunken"
+      bodyClassName="flex min-h-0 flex-col"
       onClose={onClose}
       footer={
         <div className="flex justify-end px-6 py-4">
           <PrimaryButton
             label={attachLabel}
             disabled={
-              selectedFiles.length === 0 || isLoading || isOperationInProgress
+              selectedFiles.length === 0 ||
+              isLoading ||
+              isAnyOperationInProgress
             }
             onClick={handleAttach}
           />
@@ -644,7 +664,9 @@ const DialFileManagerModal: FC<Props> = ({
         tabs={tabs}
         onTabChange={handleTabChangeWithReset}
         selectedPaths={selectedPaths}
-        onSelectedPathsChange={setSelectedPaths}
+        onSelectedPathsChange={handleSelectedPathsChange}
+        variant={DialFileManagerVariant.Attach}
+        actionProfile={DialFileManagerActionProfile.Attach}
         autoSelectUploadedItems={autoSelectUploadedItems}
         allowedFileTypes={allowedFileTypes}
         maxSelectableFileSize={maxSelectableFileSize}
@@ -652,7 +674,7 @@ const DialFileManagerModal: FC<Props> = ({
         getDisabledTooltip={getDisabledTooltip}
         unsupportedFileTypeTooltip={unsupportedFileTypeTooltip}
       />
-    </DialPopup>
+    </Popup>
   );
 };
 

@@ -1,7 +1,18 @@
+.tableContainer {
+  background: var(--cm-code-block-bg, var(--bg-layer-raised, #fcfcfc));
+  border-color: var(
+    --cm-markdown-border,
+    var(--cm-code-block-border, var(--stroke-secondary, #d1dbea))
+  );
+}
+
+.tableContainerLight {
+  background: var(--cm-code-block-bg, var(--bg-layer-6, #f8fafc));
+}
+
 .scrollContainer {
-  border-color: var(--cm-markdown-border, var(--stroke-secondary, #d1dbea));
   scrollbar-width: thin;
-  scrollbar-color: var(--cm-table-scrollbar, var(--stroke-primary, #7c8293))
+  scrollbar-color: var(--cm-table-scrollbar, var(--stroke-primary, #57647a))
     transparent;
 
   &::-webkit-scrollbar {
@@ -13,16 +24,40 @@
   }
 
   &::-webkit-scrollbar-thumb {
-    background-color: var(--cm-table-scrollbar, var(--stroke-primary, #7c8293));
+    background-color: var(--cm-table-scrollbar, var(--stroke-primary, #57647a));
     border-radius: 4px;
   }
+}
+
+.tableHeaderCell {
+  background: var(--cm-code-block-header-bg, var(--bg-layer-raised, #fcfcfc));
+  color: var(--cm-table-header-text, var(--text-secondary, #57647a));
+}
+
+.sectionRow td {
+  background: var(--cm-code-block-header-bg, var(--bg-layer-raised, #fcfcfc));
+}
+
+tbody .row:nth-child(even) td {
+  background: var(--cm-table-row-zebra-bg, var(--bg-layer-base, #f5f7fa));
+}
+
+.rowDivider {
+  border-color: var(--cm-table-row-divider, var(--stroke-tertiary, #e0e6f0));
+}
+
+tbody .row:hover td {
+  background: var(
+    --cm-table-row-hover-bg,
+    var(--bg-accent-primary-alpha, #7da4ff2e)
+  );
 }
 
 .tableScrollFadeEnd {
   mask-image: linear-gradient(
     to right,
-    #000 0,
-    #000 calc(100% - 1rem),
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) 0,
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) calc(100% - 1rem),
     transparent 100%
   );
 }
@@ -30,26 +65,36 @@
 :global([dir='rtl']) .tableScrollFadeEnd {
   mask-image: linear-gradient(
     to left,
-    #000 0,
-    #000 calc(100% - 1rem),
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) 0,
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) calc(100% - 1rem),
     transparent 100%
   );
 }
 
 .tableScrollFadeStart {
-  mask-image: linear-gradient(to right, transparent 0, #000 1rem, #000 100%);
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) 1rem,
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) 100%
+  );
 }
 
 :global([dir='rtl']) .tableScrollFadeStart {
-  mask-image: linear-gradient(to left, transparent 0, #000 1rem, #000 100%);
+  mask-image: linear-gradient(
+    to left,
+    transparent 0,
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) 1rem,
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) 100%
+  );
 }
 
 .tableScrollFadeBoth {
   mask-image: linear-gradient(
     to right,
     transparent 0,
-    #000 1rem,
-    #000 calc(100% - 1rem),
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) 1rem,
+    var(--cm-table-fade, var(--stroke-focus-black, #161b2d)) calc(100% - 1rem),
     transparent 100%
   );
 }

@@ -1,8 +1,8 @@
+import type { SendCompletionDtoModeEnum } from '@epam/ai-dial-chat-api-client'; // type-only is fine here — used only as a type annotation
 import {
   type Conversation,
   type MessageCustomContent,
 } from '@epam/ai-dial-chat-shared';
-import type { SendCompletionDtoModeEnum } from '@epam/chat-api-client'; // type-only is fine here — used only as a type annotation
 import {
   type Dispatch,
   type MutableRefObject,
@@ -12,7 +12,9 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useClientChannel } from '../../context/ClientChannelContext';
 import { useGeneration } from '../../context/GenerationContext';
+import { useOptionalOverlay } from '../../context/overlay/OverlayContext';
 import {
   CompletionMode,
   stopCompletion,
@@ -25,6 +27,7 @@ import {
 import { applyChunkToMessages } from '../../utils/apply-chunk';
 import { getConversationPath } from '../../utils/conversation-path';
 import { isAwaitingGenerationResume } from '../../utils/generation-resume';
+import { safeDecodeURIComponent } from '../../utils/string-utils';
 
 /*
  * Safety-net only: the primary completion signal is the `/watch` SSE event
@@ -58,8 +61,6 @@ interface Result {
   ) => void;
   isStreaming: boolean;
   canStopStreaming: boolean;
-  hasStreamError: boolean;
-  setHasStreamError: Dispatch<SetStateAction<boolean>>;
 }
 
 export const useConversationStream = ({
@@ -76,11 +77,15 @@ export const useConversationStream = ({
     () => new Set(),
   );
   const [stoppablePath, setStoppablePath] = useState<string | null>(null);
-  const [hasStreamError, setHasStreamError] = useState(false);
   const activeGenerationIdRef = useRef<string | null>(null);
   const activeGenerationPathRef = useRef<string | null>(null);
   const resumingPathsRef = useRef<Set<string>>(new Set());
+  /* Generation ids stopped by the user — onComplete emits STOP_GENERATING's
+   * counterpart (nothing) instead of GPT_END_GENERATING for these. */
+  const stoppedGenerationIdsRef = useRef<Set<string>>(new Set());
   const { startGeneration, completeGeneration } = useGeneration();
+  const { channelId, ensureConnected } = useClientChannel();
+  const overlay = useOptionalOverlay();
 
   /*
    * ConversationPage is NOT remounted when navigating between conversations
@@ -153,6 +158,14 @@ export const useConversationStream = ({
 
       const controller = startGeneration(conversationPath, genId);
       addStreamingPath(conversationPath);
+      overlay?.notifyGenerationStart();
+
+      /*
+       * Best-effort: nudge a disconnected client channel to reconnect so a
+       * `toolset/signin` event has a chance to reach this completion. Never
+       * blocks or delays the send — see design.md Decision 2.
+       */
+      ensureConnected();
 
       streamCompletion(
         conversationPath,
@@ -189,6 +202,11 @@ export const useConversationStream = ({
               setStoppablePath(null);
             }
             completeGeneration(conversationPath, genId);
+            if (stoppedGenerationIdsRef.current.has(genId)) {
+              stoppedGenerationIdsRef.current.delete(genId);
+            } else {
+              overlay?.notifyGenerationEnd();
+            }
             /*
              * Only refresh displayed state if the user is still viewing this
              * conversation; otherwise leave the currently-shown chat untouched.
@@ -198,9 +216,17 @@ export const useConversationStream = ({
               /*
                * Backend has already saved the conversation; reload to get server-persisted state
                * (including server-computed fields like stage attachment `data`).
+               * Unlike `streamCompletion`/`watchConversation` (which take the
+               * bucket-stripped `conversationPath` and re-qualify it
+               * server-side against the session bucket), `GET /conversations`
+               * requires the full `{bucket}/{name}` path — passing the
+               * stripped path here breaks any deployment id containing a
+               * slash (e.g. `applications/{bucket}/{app}__{version}`),
+               * since the backend would then treat `applications` itself as
+               * the bucket.
                */
               const refreshed = (await getConversation(
-                conversationPath,
+                safeDecodeURIComponent(currentConversationId),
               )) as Conversation;
               if (!isPathDisplayed(conversationPath)) return;
               setConversation(refreshed);
@@ -209,7 +235,7 @@ export const useConversationStream = ({
               // Non-fatal: keep local state if reload fails
             }
           },
-          onError: () => {
+          onError: (error: Error) => {
             removeStreamingPath(conversationPath);
             if (activeGenerationIdRef.current === genId) {
               activeGenerationIdRef.current = null;
@@ -218,13 +244,14 @@ export const useConversationStream = ({
             }
             // Surface the error only on the conversation the user is viewing.
             if (!isPathDisplayed(conversationPath)) return;
-            setHasStreamError(true);
             setConversation((prev) => {
               if (!prev) return prev;
               const updated = {
                 ...prev,
                 messages: prev.messages.map((m, index) =>
-                  index === messageIndex ? { ...m, hasStreamError: true } : m,
+                  index === messageIndex
+                    ? { ...m, streamErrorMessage: error.message }
+                    : m,
                 ),
               };
               conversationRef.current = updated;
@@ -236,6 +263,7 @@ export const useConversationStream = ({
         genId,
         mode,
         serverMessageIndex,
+        channelId ?? undefined,
       );
     },
     // setConversation and conversationRef are stable refs — intentionally omitted
@@ -246,6 +274,9 @@ export const useConversationStream = ({
       addStreamingPath,
       removeStreamingPath,
       isPathDisplayed,
+      channelId,
+      ensureConnected,
+      overlay,
     ],
   );
 
@@ -256,6 +287,9 @@ export const useConversationStream = ({
     const conversationPath = getConversationPath(conversationId);
     if (activeGenerationPathRef.current !== conversationPath) return;
 
+    stoppedGenerationIdsRef.current.add(genId);
+    overlay?.notifyStopGenerating();
+
     /*
      * Only signal the backend; it aborts upstream, saves the partial, and closes
      * the stream. Keeping our fetch open lets onComplete reload the saved partial
@@ -264,11 +298,10 @@ export const useConversationStream = ({
     void stopCompletion({ generationId: genId, path: conversationPath }).catch(
       (err: unknown) => {
         const error = err instanceof Error ? err : new Error(String(err));
-        setHasStreamError(true);
         onStopError?.(error);
       },
     );
-  }, [conversationId, onStopError]);
+  }, [conversationId, onStopError, overlay]);
 
   /*
    * A hard refresh mid-generation loads a conversation whose last message is
@@ -302,8 +335,10 @@ export const useConversationStream = ({
 
       const finalCheck = async () => {
         try {
+          /* `getConversation` needs the full bucket-qualified path — see the
+           * comment on the other `getConversation` call in this file. */
           const result = (await getConversation(
-            conversationPath,
+            safeDecodeURIComponent(currentConversationId),
           )) as Conversation;
           finish(result);
         } catch {
@@ -353,7 +388,7 @@ export const useConversationStream = ({
 
               try {
                 const result = (await getConversation(
-                  conversationPath,
+                  safeDecodeURIComponent(currentConversationId),
                 )) as Conversation;
                 if (!isAwaitingGenerationResume(result)) {
                   finish(result);
@@ -408,7 +443,5 @@ export const useConversationStream = ({
     resumeIfAwaitingGeneration,
     isStreaming,
     canStopStreaming,
-    hasStreamError,
-    setHasStreamError,
   };
 };

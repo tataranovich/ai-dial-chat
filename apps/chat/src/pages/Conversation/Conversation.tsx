@@ -1,3 +1,4 @@
+import type { ConversationResponseDto } from '@epam/ai-dial-chat-api-client';
 import {
   MessageRating,
   MessageRole,
@@ -6,25 +7,25 @@ import {
 } from '@epam/ai-dial-chat-shared';
 import {
   ConfirmationPopupVariant,
-  DialConfirmationPopup,
-  DialSpinner,
+  ConfirmationPopup,
+  Spinner,
   NotificationVariant,
 } from '@epam/ai-dial-ui-kit';
-import type { ConversationResponseDto } from '@epam/chat-api-client';
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import ConversationView from '../../components/ConversationView/ConversationView';
 import NegativeFeedbackModal from '../../components/ConversationView/Rate/NegativeFeedbackModal';
+import ScheduledTaskConversationBanner from '../../components/ScheduledTaskConversationBanner/ScheduledTaskConversationBanner';
 import { getConversationRoute } from '../../constants/routes';
 import {
-  AttachmentsI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
   ConversationPanelI18nKeys,
   RateI18nKeys,
+  ToolsI18nKeys,
 } from '../../constants/translation-keys';
-import { useAppConfig } from '../../context/AppConfigContext';
+import { useActiveScheduledTask } from '../../context/ActiveScheduledTaskContext';
 import { useUser } from '../../context/auth/UserContext';
 import { useConversations } from '../../context/ConversationsContext';
 import { useDeployments } from '../../context/DeploymentsContext';
@@ -33,17 +34,23 @@ import {
   useGeneration,
 } from '../../context/GenerationContext';
 import { useNotification } from '../../context/NotificationContext';
+import { useOptionalOverlay } from '../../context/overlay/OverlayContext';
 import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
+import { useActiveConversationBridge } from '../../hooks/conversation/useActiveConversationBridge';
 import { useAudioTranscription } from '../../hooks/conversation/useAudioTranscription';
 import { useConversationHandlers } from '../../hooks/conversation/useConversationHandlers';
 import { useConversationStream } from '../../hooks/conversation/useConversationStream';
+import { useToolsMenu } from '../../hooks/conversation/useToolsMenu';
 import { useDeploymentChangeEffect } from '../../hooks/useDeploymentChangeEffect';
+import { getApiErrorDetails } from '../../server-api/api-error';
 import { CompletionMode } from '../../server-api/chat-stream.api';
 import {
   getConversation as apiGetConversation,
   saveConversation,
 } from '../../server-api/conversations.api';
+import { ActiveScheduledTaskStatus } from '../../types/active-scheduled-task';
 import { ROUTES } from '../../types/routes';
+import { buildNetworkUploadErrorNotification } from '../../utils/attachment-network-error-notification';
 import { getConversationPath } from '../../utils/conversation-path';
 import { shouldWatchForDisplayNameUpdate } from '../../utils/display-name-watch';
 import { isAwaitingGenerationResume } from '../../utils/generation-resume';
@@ -67,11 +74,9 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   const conversationRef = useRef<Conversation | null>(null);
   const displayNameWatchCleanupRef = useRef<(() => void) | null>(null);
   const displayNameWatchKeyRef = useRef<string | null>(null);
+  const notificationShownForRef = useRef<string | null>(null);
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const {
-    config: { asrModelId, transcribeSizeLimitBytes },
-  } = useAppConfig();
   const {
     restoreSelectedItemId,
     selectedItemId: currentSelectedItemId,
@@ -81,6 +86,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     useSourcesSidebar();
   const { user } = useUser();
   const bucket = user?.bucket ?? '';
+  const { status: activeScheduledTaskStatus } = useActiveScheduledTask();
   const {
     conversations,
     duplicateConversation,
@@ -88,14 +94,16 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     watchForDisplayNameUpdate,
   } = useConversations();
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const overlay = useOptionalOverlay();
+  const [overlayInputContent, setOverlayInputContent] = useState({
+    revision: 0,
+    value: '',
+  });
+  const notifiedLoadedConversationIdRef = useRef<string | null>(null);
 
-  const { handleUploadAudio, handleTranscribeAudio, isTranscriptionSupported } =
-    useAudioTranscription({
-      bucket,
-      transcribeSizeLimitBytes,
-      asrModelId,
-      selectedDeploymentId: currentSelectedItemId,
-    });
+  const { isAudioMessageSupported } = useAudioTranscription({
+    selectedDeploymentId: currentSelectedItemId,
+  });
 
   const { showNotification } = useNotification();
 
@@ -103,24 +111,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     (filenames: string[]) => {
       showNotification({
         variant: NotificationVariant.Error,
-        title: t(AttachmentsI18nKeys.NetworkErrorTitle),
-        message: (
-          <div className="min-w-0 overflow-hidden">
-            <span className="whitespace-pre-line">
-              {t(AttachmentsI18nKeys.NetworkErrorMessage)}
-            </span>
-            <ul className="mt-1 max-w-[508px]">
-              {filenames.map((name, i) => (
-                <li key={i} className="flex items-center gap-1 overflow-hidden">
-                  <span className="shrink-0" aria-hidden>
-                    •
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{name}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ),
+        ...buildNetworkUploadErrorNotification(filenames, t),
       });
     },
     [showNotification, t],
@@ -373,7 +364,16 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
             resumeIfAwaitingGeneration(id, result);
           }
         }
-      } catch {
+      } catch (error) {
+        if (notificationShownForRef.current !== id) {
+          notificationShownForRef.current = id;
+          const { traceId } = await getApiErrorDetails(error);
+          showNotification({
+            variant: NotificationVariant.Error,
+            message: t(ChatI18nKeys.ConversationNotFound),
+            requestId: traceId,
+          });
+        }
         navigate(ROUTES.Root);
       } finally {
         setIsFetching(false);
@@ -386,6 +386,8 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
       resumeIfAwaitingGeneration,
       updateConversationTitle,
       getGeneration,
+      showNotification,
+      t,
     ],
   );
 
@@ -415,6 +417,9 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     navigate(`${pathname}${search}`, { replace: true, state: null });
   }, [conversationId, prefetchedConversation, navigate, pathname, search]);
 
+  const { toolsMenuItems, onToolToggle, toolConfigurationValue } =
+    useToolsMenu();
+
   const {
     handleSend,
     handleUploadAttachment,
@@ -442,6 +447,30 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     setConversation,
     navigate,
     showNetworkError: handleNetworkUploadError,
+    toolConfigurationValue,
+  });
+
+  useEffect(() => {
+    if (!overlay || isFetching || !conversation || !conversationId) return;
+    if (notifiedLoadedConversationIdRef.current === conversationId) return;
+    notifiedLoadedConversationIdRef.current = conversationId;
+    overlay.notifyConversationLoaded();
+  }, [overlay, isFetching, conversation, conversationId]);
+
+  const handleOverlayInputContent = useCallback((content: string) => {
+    setOverlayInputContent((prev) => ({
+      revision: prev.revision + 1,
+      value: content,
+    }));
+  }, []);
+
+  useActiveConversationBridge({
+    conversation,
+    conversationId,
+    conversationRef,
+    setConversation,
+    handleSend,
+    setOverlayInputContent: handleOverlayInputContent,
   });
 
   const handleLike = useCallback(
@@ -476,7 +505,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         showNotification({
           variant: NotificationVariant.Success,
           title: t(RateI18nKeys.DislikeToastTitle),
-          message: t(RateI18nKeys.DislikeToastDescription),
+          message: t(RateI18nKeys.LikeToastDescription),
         });
       }
     },
@@ -490,12 +519,11 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   if (isFetching)
     return (
       <div className="flex size-full items-center justify-center">
-        <DialSpinner />
+        <Spinner />
       </div>
     );
 
   if (!conversation) {
-    navigate(ROUTES.Root);
     return null;
   }
 
@@ -522,16 +550,30 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
           canStopAssistant={canStopStreaming}
           placeholder={t(ChatI18nKeys.Placeholder)}
           onSelectStarter={handleButtonSelect}
-          streamErrorText={t(ChatI18nKeys.StreamError)}
           stoppedGeneratingText={t(ChatI18nKeys.StoppedGenerating)}
           isReadOnly={isReadOnly}
           onDuplicateConversation={handleDuplicateConversation}
           duplicateError={duplicateError ?? undefined}
-          isTranscriptionSupported={isTranscriptionSupported}
-          onUploadAudio={handleUploadAudio}
-          onTranscribeAudio={handleTranscribeAudio}
+          isAudioMessageSupported={isAudioMessageSupported}
           conversation={conversation}
           onConversationChange={handleConversationChange}
+          inputContent={overlay ? overlayInputContent.value : undefined}
+          inputContentRevision={
+            overlay ? overlayInputContent.revision : undefined
+          }
+          toolsMenuItems={toolsMenuItems}
+          onToolToggle={onToolToggle}
+          toolsMenuTitle={t(ToolsI18nKeys.MenuTitle)}
+          toolsChipLabels={{
+            countLabel: (count) => t(ToolsI18nKeys.SelectedCount, { count }),
+            removeLabel: (label) => t(ToolsI18nKeys.RemoveTool, { label }),
+          }}
+          topContent={
+            activeScheduledTaskStatus ===
+            ActiveScheduledTaskStatus.TaskConversation ? (
+              <ScheduledTaskConversationBanner />
+            ) : undefined
+          }
         />
       </div>
 
@@ -542,7 +584,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         />
       )}
 
-      <DialConfirmationPopup
+      <ConfirmationPopup
         open={pendingDeleteIndex != null}
         header={t(ChatI18nKeys.DeleteMessageTitle)}
         description={t(ChatI18nKeys.DeleteMessageDescription)}
@@ -553,7 +595,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         onClose={() => setPendingDeleteIndex(null)}
       />
 
-      <DialConfirmationPopup
+      <ConfirmationPopup
         open={pendingStarterContext != null}
         header={t(ChatI18nKeys.StarterConfirmTitle)}
         description={

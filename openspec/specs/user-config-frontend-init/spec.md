@@ -1,8 +1,10 @@
-## Requirement: UserConfigContext loads user configuration once per authenticated session
+## Requirement: UserConfigContext loads user configuration once per authenticated identity
 
-`UserConfigProvider` (`apps/chat/src/context/UserConfigContext.tsx`) SHALL call `getUserConfig()` from `apps/chat/src/server-api/user-config.api.ts` exactly once when it mounts. It must not trigger a second request on re-renders or on child component mount/unmount cycles.
+`UserConfigProvider` (`apps/chat/src/context/UserConfigContext.tsx`) SHALL call `getUserConfig()` from `apps/chat/src/server-api/user-config.api.ts` exactly once for each authenticated identity: once on mount, and again whenever the authenticated identity (`useUser().user?.sub`) changes while the provider remains mounted. It must not trigger a second request on re-renders, or on child component mount/unmount cycles, that do not correspond to a `sub` change.
 
-`UserConfigProvider` is placed inside `RequireAuth` in `apps/chat/src/main.tsx`, wrapping `AppConfigProvider` and `ConversationsProvider`. It therefore only mounts after the user is authenticated.
+When the resolved `sub` changes while `UserConfigProvider` stays mounted, the provider SHALL reset `pinnedConversationIds`, `installedToolsetIds`, `installedDeploymentIds`, and `selectedDeploymentId` to their empty/`null` defaults, set `status` back to `Loading`, and re-issue `getUserConfig()` — mirroring what already happens on a fresh mount. This SHALL NOT re-run merely because `user` is updated in place with an unchanged `sub` (see `spa-auth-session`'s identity revalidation requirement).
+
+`UserConfigProvider` is placed inside `RequireAuth` in `apps/chat/src/main.tsx`, wrapping `AppConfigProvider` and `ConversationsProvider`. It therefore only mounts after the user is authenticated, and continues to fully reset via that unmount/remount path on explicit logout or a `401`. The identity-keyed effect above additionally covers the case where the identity changes without an intervening unmount — i.e. `spa-auth-session`'s "adopt the new profile in place" behavior on a focus/visibility identity mismatch.
 
 **State exposed by `UserConfigContextType`:**
 
@@ -11,10 +13,12 @@ interface UserConfigContextType {
   pinnedConversationIds: string[];
   installedToolsetIds: string[];
   installedDeploymentIds: string[];
+  selectedDeploymentId: string | null;
   status: UserConfigStatus;
   setPinnedConversation: (id: string, isPinned: boolean) => Promise<void>;
   setInstalledToolset: (id: string, isInstalled: boolean) => Promise<void>;
   setInstalledDeployment: (id: string, isInstalled: boolean) => Promise<void>;
+  setSelectedDeployment: (id: string | null) => Promise<void>;
 }
 ```
 
@@ -33,33 +37,43 @@ interface UserConfigContextType {
 
 #### Scenario: Single fetch — no duplicate requests on re-render
 
-- **WHEN** `UserConfigProvider` re-renders (e.g. due to parent state change) after the initial fetch completes
+- **WHEN** `UserConfigProvider` re-renders (e.g. due to parent state change) after the initial fetch completes, with the authenticated identity unchanged
 - **THEN** `getUserConfig()` is NOT called a second time
+
+#### Scenario: Identity changes while UserConfigProvider stays mounted
+
+- **WHEN** `useUser().user?.sub` changes from one authenticated value to another while a `UserConfigProvider` instance remains mounted
+- **THEN** `status` becomes `Loading`, `pinnedConversationIds`/`installedToolsetIds`/`installedDeploymentIds`/`selectedDeploymentId` are reset to their defaults, and `getUserConfig()` is re-invoked, replacing the exposed state with the new identity's config once it resolves
+
+#### Scenario: In-place user update with unchanged sub does not trigger a refetch
+
+- **WHEN** `useUser().user` is replaced with a new object whose `sub` equals the previous value (e.g. from `spa-auth-session`'s focus-revalidation requirement updating other claims)
+- **THEN** `UserConfigProvider` does NOT reset or re-fetch its state
 
 ---
 
 ## Requirement: App shows the existing loading spinner while user config is loading
 
-`UserConfigProvider` SHALL render `<DialSpinner />` while `status === UserConfigStatus.Loading`. It SHALL render its `children` (wrapped in the context provider) only once `status` is `Ready` or `Error`.
+`UserConfigProvider` SHALL render `<Spinner />` while `status === UserConfigStatus.Loading`. It SHALL render its `children` (wrapped in the context provider) only once `status` is `Ready` or `Error`.
 
 Neither `AppConfigProvider`, `ConversationsProvider`, nor `App` renders until `UserConfigProvider` has exited the `Loading` state.
 
-#### Scenario: DialSpinner is shown during load
+#### Scenario: Spinner is shown during load
 
 - **WHEN** `UserConfigProvider` mounts and `getUserConfig()` is pending
-- **THEN** `<DialSpinner />` is rendered in place of `children`
+- **THEN** `<Spinner />` is rendered in place of `children`
 
 #### Scenario: Children render after load completes successfully
 
 - **WHEN** `getUserConfig()` resolves successfully
 - **THEN** `children` are rendered with `status === Ready`
-- **AND** `<DialSpinner />` is no longer rendered
+- **AND** `<Spinner />` is no longer rendered
 
 #### Scenario: Children render after load fails
 
 - **WHEN** `getUserConfig()` rejects
 - **THEN** `children` are rendered with `status === Error`
-- **AND** `<DialSpinner />` is no longer rendered
+- **AND** `<Spinner />` is no longer rendered
 
 ---
 
@@ -221,7 +235,7 @@ export enum UserConfigI18nKeys {
 
 ### RTL / direction
 
-No new directional UI surfaces are introduced. `<DialSpinner />` is direction-agnostic. No RTL-specific work required.
+No new directional UI surfaces are introduced. `<Spinner />` is direction-agnostic. No RTL-specific work required.
 
 ### Feature flag
 
@@ -229,7 +243,7 @@ Not gated behind `ENABLED_FEATURES` / `ENABLED_FEATURES_ROLES`. User-config init
 
 ### Accessibility
 
-No new interactive UI. `<DialSpinner />` from `@epam/ai-dial-ui-kit` already handles `role="status"` internally. No additional ARIA attributes required.
+No new interactive UI. `<Spinner />` from `@epam/ai-dial-ui-kit` already handles `role="status"` internally. No additional ARIA attributes required.
 
 ### Memoisation
 

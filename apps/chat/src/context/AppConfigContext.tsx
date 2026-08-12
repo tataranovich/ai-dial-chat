@@ -1,3 +1,4 @@
+import type { CustomVisualizer } from '@epam/ai-dial-chat-shared';
 import {
   createContext,
   FC,
@@ -9,20 +10,37 @@ import {
   useMemo,
   useState,
 } from 'react';
+import type { AnnouncementItem } from '../models/announcement';
 import { getClientConfig } from '../server-api/app-config.api';
 import { AuthStatus } from '../types/auth-status';
 import { UserConfigStatus } from '../types/user-config-status';
 import { useUser } from './auth/UserContext';
 
 const DEFAULT_TRANSCRIBE_SIZE_LIMIT = 5 * 1024 * 1024;
+const DEFAULT_FILE_MANAGER_TABS = ['my_files', 'shared', 'organization'];
+const DEFAULT_PUBLICATION_FILTER_SOURCES = ['title', 'role', 'dial_roles'];
 
-interface AppConfigState {
+export interface AppConfigState {
   status: UserConfigStatus;
   features: Record<string, boolean>;
   config: {
+    appVersion: string;
     asrModelId: string | null;
     transcribeSizeLimitBytes: number;
     defaultDeploymentId: string | null;
+    dialCoreExternalUrl: string | null;
+    fileManagerTabs: string[];
+    overlayEnabled: boolean;
+    overlayAllowedOrigins: string[];
+    enabledUiFeatures: string[] | null;
+    announcementHtml: string | null;
+    announcementTitle: string | null;
+    announcementDescription: string | null;
+    announcements: AnnouncementItem[];
+    deepResearchToolId: string | null;
+    footerHtmlMessage: string;
+    customVisualizers: CustomVisualizer[];
+    publicationFilterSources: string[];
   };
   metadata?: { resolvedAt: string; cacheTtlSeconds: number };
 }
@@ -31,9 +49,23 @@ const INITIAL_STATE: AppConfigState = {
   status: UserConfigStatus.Loading,
   features: {},
   config: {
+    appVersion: '',
     asrModelId: null,
     transcribeSizeLimitBytes: DEFAULT_TRANSCRIBE_SIZE_LIMIT,
     defaultDeploymentId: null,
+    dialCoreExternalUrl: null,
+    fileManagerTabs: DEFAULT_FILE_MANAGER_TABS,
+    overlayEnabled: false,
+    overlayAllowedOrigins: [],
+    enabledUiFeatures: null,
+    announcementHtml: null,
+    announcementTitle: null,
+    announcementDescription: null,
+    announcements: [],
+    deepResearchToolId: null,
+    footerHtmlMessage: '',
+    customVisualizers: [],
+    publicationFilterSources: DEFAULT_PUBLICATION_FILTER_SOURCES,
   },
 };
 
@@ -56,11 +88,31 @@ const AppConfigProvider: FC<Props> = ({ children }) => {
           status: UserConfigStatus.Ready,
           features: (response.features ?? {}) as Record<string, boolean>,
           config: {
+            appVersion: response.config?.appVersion ?? '',
             asrModelId: response.config?.asrModelId ?? null,
             transcribeSizeLimitBytes:
               response.config?.transcribeSizeLimitBytes ??
               DEFAULT_TRANSCRIBE_SIZE_LIMIT,
             defaultDeploymentId: response.config?.defaultDeploymentId ?? null,
+            dialCoreExternalUrl: response.config?.dialCoreExternalUrl ?? null,
+            fileManagerTabs:
+              response.config?.fileManagerTabs ?? DEFAULT_FILE_MANAGER_TABS,
+            overlayEnabled: response.config?.overlayEnabled ?? false,
+            overlayAllowedOrigins: response.config?.overlayAllowedOrigins ?? [],
+            enabledUiFeatures: response.config?.enabledUiFeatures ?? null,
+            announcementHtml: response.config?.announcementHtml ?? null,
+            announcementTitle: response.config?.announcementTitle ?? null,
+            announcementDescription:
+              response.config?.announcementDescription ?? null,
+            announcements: Array.isArray(response.config?.announcements)
+              ? response.config.announcements
+              : [],
+            deepResearchToolId: response.config?.deepResearchToolId ?? null,
+            footerHtmlMessage: response.config?.footerHtmlMessage ?? '',
+            customVisualizers: response.config?.customVisualizers ?? [],
+            publicationFilterSources:
+              response.config?.publicationFilterSources ??
+              DEFAULT_PUBLICATION_FILTER_SOURCES,
           },
           metadata: response.metadata,
         });

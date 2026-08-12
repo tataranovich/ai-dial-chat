@@ -147,13 +147,13 @@ In read-only conversations, the Dislike button is not rendered, so the modal can
 
 **Modal contents:**
 - Title: **"Send negative feedback"**
-- Required `DialSelect` labelled **"What type of feedback you want to give? \*"** with the following options defined in `apps/chat/src/constants/feedback-categories.ts`:
+- Required `Select` labelled **"What type of feedback you want to give? \*"** with the following options defined in `apps/chat/src/constants/feedback-categories.ts`:
   - "UI bug"
   - "Overactive refusal"
   - "Incomplete response"
   - "Should have triggered thinking"
   - "Should have search the web"
-- Optional `DialTextarea` with placeholder **"Type an optional comment to your feedback"**
+- Optional `Textarea` with placeholder **"Type an optional comment to your feedback"**
 - `PrimaryButton` labelled **"Send"** — disabled until a category is selected
 - Close (×) icon button
 
@@ -210,7 +210,7 @@ In read-only conversations, the Dislike button is not rendered, so the modal can
 
 After a successful Like toggle-on or a successful negative feedback submission, the `ConversationPage` SHALL display a **floating auto-dismiss toast notification** confirming the rating was received. The toast SHALL NOT appear when a rating is toggled off or when the API call fails.
 
-**Component:** `apps/chat/src/components/ConversationView/RatingToast.tsx` — wraps `DialNotification` with `NotificationVariant.Success`, rendered in a `fixed` overlay layer (e.g. `fixed bottom-6 start-1/2 -translate-x-1/2 z-50`).
+**Component:** `apps/chat/src/components/ConversationView/RatingToast.tsx` — wraps `Notification` with `NotificationVariant.Success`, rendered in a `fixed` overlay layer (e.g. `fixed bottom-6 start-1/2 -translate-x-1/2 z-50`).
 
 **Auto-dismiss:** Toast disappears after **5 000 ms**. Implemented via `setTimeout` keyed to a counter so rapid successive actions each restart the timer correctly.
 

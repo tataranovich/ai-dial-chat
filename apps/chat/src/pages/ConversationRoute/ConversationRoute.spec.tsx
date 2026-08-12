@@ -1,13 +1,19 @@
+import {
+  DeploymentItemDto,
+  DialToolsetDto,
+} from '@epam/ai-dial-chat-api-client';
 import type { DeploymentConfigurationSchema } from '@epam/ai-dial-chat-shared';
 import { SendOnEnter } from '@epam/ai-dial-conversation-input';
 import { NotificationVariant } from '@epam/ai-dial-ui-kit';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import { ReactNode } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { ReactNode, useEffect, useState, type Context } from 'react';
+import { MemoryRouter, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as UserContextModule from '../../context/auth/UserContext';
 import * as DeploymentsContextModule from '../../context/DeploymentsContext';
 import * as NotificationContextModule from '../../context/NotificationContext';
+import * as OverlayContextMock from '../../context/overlay/OverlayContext';
+import * as ToolsMenuModule from '../../hooks/conversation/useToolsMenu';
 import * as KeyboardShortcutModule from '../../hooks/keyboard-shortcut/useKeyboardShortcutPreference';
 import * as conversationsApi from '../../server-api/conversations.api';
 import * as filesApi from '../../server-api/files.api';
@@ -15,9 +21,33 @@ import { AuthStatus } from '../../types/auth-status';
 import * as attachmentToDtoModule from '../../utils/attachment-to-dto';
 import ConversationRoute from './ConversationRoute';
 
+const OverlayTestCtx = (
+  OverlayContextMock as unknown as {
+    _OverlayTestCtx: Context<
+      { notifyConversationLoaded: () => void } | undefined
+    >;
+  }
+)._OverlayTestCtx;
+
+const overlayMocks = vi.hoisted(() => ({
+  current: undefined as
+    | { notifyConversationLoaded: ReturnType<typeof vi.fn> }
+    | undefined,
+  notifyConversationLoaded: vi.fn(),
+}));
+
 vi.mock('../../hooks/attachment/useOpenAttachmentCanvas', () => ({
   useOpenAttachmentCanvas: () => ({ openAttachmentCanvas: vi.fn() }),
 }));
+vi.mock(
+  '../../components/DeploymentSelector/useDeploymentSelectorOverlay',
+  () => ({
+    useDeploymentSelectorOverlay: () => ({
+      renderOverlay: vi.fn(),
+      catalogModal: null,
+    }),
+  }),
+);
 vi.mock('../../context/AppConfigContext', () => ({
   default: ({ children }: { children: ReactNode }) => children,
   useAppConfig: () => ({
@@ -30,14 +60,33 @@ vi.mock('../../context/AppConfigContext', () => ({
 vi.mock('../../context/DeploymentsContext');
 vi.mock('../../context/auth/UserContext');
 vi.mock('../../context/NotificationContext');
+vi.mock('../../context/overlay/OverlayContext', async () => {
+  const { createContext, useContext } = await import('react');
+  const _OverlayTestCtx = createContext<
+    { notifyConversationLoaded: () => void } | undefined
+  >(undefined);
+  return {
+    useOptionalOverlay: () => useContext(_OverlayTestCtx),
+    _OverlayTestCtx,
+  };
+});
 vi.mock('../../hooks/keyboard-shortcut/useKeyboardShortcutPreference');
+vi.mock('../../hooks/useUiFeature', async () => {
+  const { DEFAULT_ENABLED_UI_FEATURES } =
+    await import('../../constants/ui-features');
+  return {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    useUiFeature: (feature: any) => DEFAULT_ENABLED_UI_FEATURES.has(feature),
+  };
+});
+vi.mock('../../hooks/conversation/useToolsMenu', () => ({
+  useToolsMenu: vi.fn(),
+}));
 vi.mock('../../server-api/conversations.api');
 vi.mock('../../server-api/files.api');
 vi.mock('../../utils/attachment-to-dto');
 vi.mock('../../utils/build-upload-path', () => ({
-  buildUploadPath: vi.fn(
-    (attachment: { name: string }) => `uploads/${attachment.name}`,
-  ),
+  buildUploadPath: vi.fn((fileName: string) => `uploads/${fileName}`),
 }));
 vi.mock('../../components/StarterButtons/StarterButtons', () => ({
   default: ({
@@ -66,7 +115,7 @@ vi.mock('../../components/StarterButtons/StarterButtons', () => ({
     <div>
       {starters.map((starter) => (
         <button
-          key={starter.const}
+          key={String(starter.const)}
           type="button"
           onClick={() => onSelect(starter)}
         >
@@ -76,11 +125,6 @@ vi.mock('../../components/StarterButtons/StarterButtons', () => ({
     </div>
   ),
 }));
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>();
-  return { ...actual, useNavigate: vi.fn(() => vi.fn()) };
-});
-
 vi.mock('@epam/ai-dial-conversation-input', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@epam/ai-dial-conversation-input')>();
@@ -92,6 +136,7 @@ vi.mock('@epam/ai-dial-conversation-input', async (importOriginal) => {
       deployments,
       selectedDeploymentId,
       isInputDisabled,
+      message,
       sendOnEnter,
     }: {
       onSend?: (msg: string, att: never[]) => Promise<void> | void;
@@ -102,6 +147,7 @@ vi.mock('@epam/ai-dial-conversation-input', async (importOriginal) => {
       deployments?: unknown[];
       selectedDeploymentId?: string | null;
       isInputDisabled?: boolean;
+      message?: string;
       sendOnEnter?: string;
     }) => (
       <div>
@@ -114,6 +160,7 @@ vi.mock('@epam/ai-dial-conversation-input', async (importOriginal) => {
         <output aria-label="Input disabled">
           {String(isInputDisabled ?? false)}
         </output>
+        <output aria-label="Input message">{message ?? ''}</output>
         <output aria-label="Send on enter">{sendOnEnter ?? 'none'}</output>
         <button
           type="button"
@@ -158,12 +205,29 @@ const renderRoute = () =>
     </MemoryRouter>,
   );
 
+const RouteStateDriver = ({ deploymentId }: { deploymentId: string }) => {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate('.', { replace: true, state: { deploymentId } });
+  }, [deploymentId, navigate]);
+  return null;
+};
+
+const renderRouteWithDeploymentState = (deploymentId: string) =>
+  render(
+    <MemoryRouter>
+      <RouteStateDriver deploymentId={deploymentId} />
+      <ConversationRoute />
+    </MemoryRouter>,
+  );
+
 describe('ConversationRoute', () => {
   const mockUseDeployments = vi.mocked(DeploymentsContextModule.useDeployments);
   const mockUseUser = vi.mocked(UserContextModule.useUser);
   const mockUseKeyboardShortcutPreference = vi.mocked(
     KeyboardShortcutModule.useKeyboardShortcutPreference,
   );
+  const mockUseToolsMenu = vi.mocked(ToolsMenuModule.useToolsMenu);
   const mockUseNotification = vi.mocked(
     NotificationContextModule.useNotification,
   );
@@ -173,6 +237,8 @@ describe('ConversationRoute', () => {
     attachmentToDtoModule.attachmentsToDtos,
   );
   const mockShowNotification = vi.fn();
+  const mockRestoreSelectedItemId = vi.fn();
+  const mockRestoreDefaultSelection = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -180,16 +246,25 @@ describe('ConversationRoute', () => {
       items: mockItems,
       selectedItemId: 'gpt-4o',
       setSelectedItemId: vi.fn(),
-      restoreSelectedItemId: vi.fn(),
+      restoreSelectedItemId: mockRestoreSelectedItemId,
+      restoreDefaultSelection: mockRestoreDefaultSelection,
       selectedDeploymentConfiguration: null,
       isLoading: false,
       error: null,
       schemas: [],
       toolsets: [],
       refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
     });
     mockUseUser.mockReturnValue({
-      user: { sub: 'u1', providerId: 'p1', claims: {}, bucket: 'user-bucket' },
+      user: {
+        sub: 'u1',
+        providerId: 'p1',
+        claims: {},
+        bucket: 'user-bucket',
+        isAdmin: false,
+      },
       status: AuthStatus.Authenticated,
       refresh: vi.fn(),
       reset: vi.fn(),
@@ -202,6 +277,11 @@ describe('ConversationRoute', () => {
     mockUseKeyboardShortcutPreference.mockReturnValue({
       preference: SendOnEnter.Enter,
       setPreference: vi.fn(),
+    });
+    mockUseToolsMenu.mockReturnValue({
+      toolsMenuItems: [],
+      onToolToggle: vi.fn(),
+      toolConfigurationValue: {},
     });
     mockUseNotification.mockReturnValue({
       notifications: [],
@@ -222,6 +302,109 @@ describe('ConversationRoute', () => {
     });
   });
 
+  it('restores deploymentId when router state changes while composer stays mounted', async () => {
+    const view = renderRouteWithDeploymentState('gpt-4o-mini');
+
+    await waitFor(() => {
+      expect(mockRestoreSelectedItemId).toHaveBeenCalledWith('gpt-4o-mini');
+    });
+
+    view.rerender(
+      <MemoryRouter>
+        <RouteStateDriver deploymentId="gpt-4.1" />
+        <ConversationRoute />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(mockRestoreSelectedItemId).toHaveBeenCalledWith('gpt-4.1');
+    });
+  });
+
+  it('calls restoreDefaultSelection on mount when there is no router-state deploymentId and no pending overlay model', async () => {
+    renderRoute();
+
+    await waitFor(() => {
+      expect(mockRestoreDefaultSelection).toHaveBeenCalledOnce();
+    });
+    expect(mockRestoreSelectedItemId).not.toHaveBeenCalled();
+  });
+
+  it('does not call restoreDefaultSelection when mounted with an explicit router-state deploymentId', async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: '/', state: { deploymentId: 'gpt-4o-mini' } },
+        ]}
+      >
+        <ConversationRoute />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(mockRestoreSelectedItemId).toHaveBeenCalledWith('gpt-4o-mini');
+    });
+    expect(mockRestoreDefaultSelection).not.toHaveBeenCalled();
+  });
+
+  it('does not call restoreDefaultSelection while an overlay pending model selection is awaiting resolution', async () => {
+    render(
+      <MemoryRouter>
+        <OverlayTestCtx.Provider
+          value={
+            {
+              notifyConversationLoaded: overlayMocks.notifyConversationLoaded,
+              pendingModelId: 'overlay-model',
+            } as never
+          }
+        >
+          <ConversationRoute />
+        </OverlayTestCtx.Provider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(overlayMocks.notifyConversationLoaded).toHaveBeenCalledOnce();
+    });
+    expect(mockRestoreDefaultSelection).not.toHaveBeenCalled();
+  });
+
+  it('notifies overlay when overlay context becomes available after initial render', async () => {
+    let setOverlay!: (
+      v: { notifyConversationLoaded: () => void } | undefined,
+    ) => void;
+    const OverlayDriver = ({ children }: { children: ReactNode }) => {
+      const [overlay, setO] = useState<
+        { notifyConversationLoaded: () => void } | undefined
+      >(undefined);
+      // eslint-disable-next-line react-hooks/globals
+      setOverlay = setO;
+      return (
+        <OverlayTestCtx.Provider value={overlay}>
+          {children}
+        </OverlayTestCtx.Provider>
+      );
+    };
+
+    render(
+      <MemoryRouter>
+        <OverlayDriver>
+          <ConversationRoute />
+        </OverlayDriver>
+      </MemoryRouter>,
+    );
+
+    expect(overlayMocks.notifyConversationLoaded).not.toHaveBeenCalled();
+
+    await act(async () => {
+      setOverlay({
+        notifyConversationLoaded: overlayMocks.notifyConversationLoaded,
+      });
+    });
+
+    expect(overlayMocks.notifyConversationLoaded).toHaveBeenCalledOnce();
+  });
+
   it('calls apiCreateConversation with selectedItemId when send fires', async () => {
     renderRoute();
     const sendButton = await screen.findByRole('button', { name: 'Send' });
@@ -234,6 +417,7 @@ describe('ConversationRoute', () => {
       expect(mockCreateConversation).toHaveBeenCalledWith(
         'Hello',
         'gpt-4o',
+        undefined,
         undefined,
       );
     });
@@ -291,12 +475,15 @@ describe('ConversationRoute', () => {
       selectedItemId: null,
       setSelectedItemId: vi.fn(),
       restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
       selectedDeploymentConfiguration: null,
       isLoading: false,
       error: null,
       schemas: [],
       toolsets: [],
       refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
     });
 
     renderRoute();
@@ -315,6 +502,7 @@ describe('ConversationRoute', () => {
       selectedItemId: 'gpt-4o',
       setSelectedItemId: vi.fn(),
       restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
       selectedDeploymentConfiguration: {
         isChatMessageInputDisabled: true,
       },
@@ -323,6 +511,8 @@ describe('ConversationRoute', () => {
       schemas: [],
       toolsets: [],
       refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
     });
     renderRoute();
     await waitFor(() => {
@@ -343,16 +533,172 @@ describe('ConversationRoute', () => {
       selectedItemId: 'gpt-4o',
       setSelectedItemId: vi.fn(),
       restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
       selectedDeploymentConfiguration: { type: 'object' },
       isLoading: false,
       error: null,
       schemas: [],
       toolsets: [],
       refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
     });
     renderRoute();
     await waitFor(() => {
       expect(screen.getByLabelText('Input disabled').textContent).toBe('false');
+    });
+  });
+
+  it('renders Quick Apps intro text and populates input from non-submit starter', async () => {
+    mockUseDeployments.mockReturnValue({
+      items: [
+        {
+          ...mockItems[0],
+          conversationStarters: {
+            introText: 'Choose how to start',
+            autoSubmit: false,
+            chatMessageInputDisabled: true,
+            starters: [{ title: 'Draft', text: 'Write a draft' }],
+          },
+        },
+      ],
+      selectedItemId: 'gpt-4o',
+      setSelectedItemId: vi.fn(),
+      restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
+      selectedDeploymentConfiguration: null,
+      isLoading: false,
+      error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: function (
+        item: DeploymentItemDto | DialToolsetDto,
+      ): void {
+        throw new Error('Function not implemented.');
+      },
+    });
+
+    renderRoute();
+
+    expect(await screen.findByText('Choose how to start')).toBeTruthy();
+    expect(screen.getByLabelText('Input disabled').textContent).toBe('true');
+
+    await act(async () => {
+      screen.getByText('Draft').click();
+    });
+
+    expect(screen.getByLabelText('Input message').textContent).toBe(
+      'Write a draft',
+    );
+    expect(mockCreateConversation).not.toHaveBeenCalled();
+  });
+
+  it('uses Quick Apps populate-only behavior even when the deployment configuration mirrors a submit-only schema starter', async () => {
+    const selectedDeploymentConfiguration: DeploymentConfigurationSchema = {
+      type: 'object',
+      isChatMessageInputDisabled: true,
+      properties: {
+        starter: {
+          description: 'Choose how to start',
+          oneOf: [
+            {
+              const: 0,
+              title: 'Draft',
+              'dial:widgetOptions': {
+                populateText: null,
+                submit: true,
+                confirmationMessage: null,
+              },
+            },
+          ],
+        },
+      },
+    };
+    mockUseDeployments.mockReturnValue({
+      items: [
+        {
+          ...mockItems[0],
+          conversationStarters: {
+            introText: 'Choose how to start',
+            autoSubmit: false,
+            chatMessageInputDisabled: false,
+            starters: [{ title: 'Draft', text: 'Write a draft' }],
+          },
+        },
+      ],
+      selectedItemId: 'gpt-4o',
+      setSelectedItemId: vi.fn(),
+      restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
+      selectedDeploymentConfiguration,
+      isLoading: false,
+      error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
+    });
+
+    renderRoute();
+
+    expect(screen.getByLabelText('Input disabled').textContent).toBe('false');
+
+    await act(async () => {
+      screen.getByText('Draft').click();
+    });
+
+    expect(screen.getByLabelText('Input message').textContent).toBe(
+      'Write a draft',
+    );
+    expect(screen.getByLabelText('Input disabled').textContent).toBe('false');
+    expect(mockCreateConversation).not.toHaveBeenCalled();
+  });
+
+  it('creates a conversation from auto-submit Quick Apps starter without configuration value', async () => {
+    mockUseDeployments.mockReturnValue({
+      items: [
+        {
+          ...mockItems[0],
+          conversationStarters: {
+            autoSubmit: true,
+            starters: [{ title: 'Summarize', text: 'Summarize this' }],
+          },
+        },
+      ],
+      selectedItemId: 'gpt-4o',
+      setSelectedItemId: vi.fn(),
+      restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
+      selectedDeploymentConfiguration: null,
+      isLoading: false,
+      error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: function (
+        item: DeploymentItemDto | DialToolsetDto,
+      ): void {
+        throw new Error('Function not implemented.');
+      },
+    });
+
+    renderRoute();
+
+    await act(async () => {
+      screen.getByText('Summarize').click();
+    });
+
+    await waitFor(() => {
+      expect(mockCreateConversation).toHaveBeenCalledWith(
+        'Summarize this',
+        'gpt-4o',
+        [],
+        undefined,
+      );
     });
   });
 
@@ -380,12 +726,15 @@ describe('ConversationRoute', () => {
       selectedItemId: 'deepseek-ocr-2',
       setSelectedItemId: vi.fn(),
       restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
       selectedDeploymentConfiguration,
       isLoading: false,
       error: null,
       schemas: [],
       toolsets: [],
       refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
     });
 
     renderRoute();
@@ -400,6 +749,123 @@ describe('ConversationRoute', () => {
         'deepseek-ocr-2',
         [],
         { starter: 0 },
+      );
+    });
+  });
+
+  it('lets tool configuration override submit starter configuration on key conflict', async () => {
+    mockUseToolsMenu.mockReturnValue({
+      toolsMenuItems: [],
+      onToolToggle: vi.fn(),
+      toolConfigurationValue: { starter: true },
+    });
+    const selectedDeploymentConfiguration: DeploymentConfigurationSchema = {
+      type: 'object',
+      properties: {
+        starter: {
+          oneOf: [
+            {
+              const: 0,
+              title: 'Starter override',
+              'dial:widgetOptions': {
+                populateText: 'Run starter',
+                submit: true,
+                confirmationMessage: null,
+              },
+            },
+          ],
+        },
+      },
+    };
+    mockUseDeployments.mockReturnValue({
+      items: mockItems,
+      selectedItemId: 'deepseek-ocr-2',
+      setSelectedItemId: vi.fn(),
+      restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
+      selectedDeploymentConfiguration,
+      isLoading: false,
+      error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
+    });
+
+    renderRoute();
+
+    await act(async () => {
+      screen.getByText('Starter override').click();
+    });
+
+    await waitFor(() => {
+      expect(mockCreateConversation).toHaveBeenCalledWith(
+        'Run starter',
+        'deepseek-ocr-2',
+        [],
+        { starter: true },
+      );
+    });
+  });
+
+  it('uses each starter own prompt instead of the shared schema description', async () => {
+    const selectedDeploymentConfiguration: DeploymentConfigurationSchema = {
+      type: 'object',
+      properties: {
+        starter: {
+          description: 'Choose how to start',
+          oneOf: [
+            {
+              const: 0,
+              title: 'OCR image',
+              'dial:widgetOptions': {
+                populateText: 'Scan this image',
+                submit: true,
+                confirmationMessage: null,
+              },
+            },
+            {
+              const: 1,
+              title: 'Summarize',
+              'dial:widgetOptions': {
+                populateText: 'Summarize this document',
+                submit: true,
+                confirmationMessage: null,
+              },
+            },
+          ],
+        },
+      },
+    };
+    mockUseDeployments.mockReturnValue({
+      items: mockItems,
+      selectedItemId: 'deepseek-ocr-2',
+      setSelectedItemId: vi.fn(),
+      restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
+      selectedDeploymentConfiguration,
+      isLoading: false,
+      error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
+    });
+
+    renderRoute();
+
+    await act(async () => {
+      screen.getByText('Summarize').click();
+    });
+
+    await waitFor(() => {
+      expect(mockCreateConversation).toHaveBeenCalledWith(
+        'Summarize this document',
+        'deepseek-ocr-2',
+        [],
+        { starter: 1 },
       );
     });
   });
@@ -429,12 +895,15 @@ describe('ConversationRoute', () => {
       selectedItemId: 'form-example',
       setSelectedItemId: vi.fn(),
       restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
       selectedDeploymentConfiguration,
       isLoading: false,
       error: null,
       schemas: [],
       toolsets: [],
       refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
     });
 
     renderRoute();
@@ -477,12 +946,15 @@ describe('ConversationRoute', () => {
       selectedItemId: 'deepseek-ocr-2',
       setSelectedItemId: vi.fn(),
       restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
       selectedDeploymentConfiguration,
       isLoading: false,
       error: null,
       schemas: [],
       toolsets: [],
       refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      mergeSharedItem: vi.fn(),
     });
     mockCreateConversation.mockRejectedValueOnce({
       response: {
@@ -565,7 +1037,13 @@ describe('ConversationRoute', () => {
 
   it('creates a text-only conversation when bucket is empty', async () => {
     mockUseUser.mockReturnValue({
-      user: { sub: 'u1', providerId: 'p1', claims: {}, bucket: '' },
+      user: {
+        sub: 'u1',
+        providerId: 'p1',
+        claims: {},
+        bucket: '',
+        isAdmin: false,
+      },
       status: AuthStatus.Authenticated,
       refresh: vi.fn(),
       reset: vi.fn(),
@@ -583,7 +1061,56 @@ describe('ConversationRoute', () => {
         'Hello',
         'gpt-4o',
         undefined,
+        undefined,
       );
+    });
+  });
+
+  describe('prompt content from router state', () => {
+    it('seeds the composer with the prompt body passed as router state', async () => {
+      render(
+        <MemoryRouter
+          initialEntries={[
+            { pathname: '/', state: { promptContent: 'Summarize:' } },
+          ]}
+        >
+          <ConversationRoute />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Input message').textContent).toBe(
+          'Summarize:',
+        );
+      });
+    });
+
+    it('leaves the composer empty when no prompt content is passed', async () => {
+      renderRoute();
+
+      await waitFor(() => {
+        expect(mockRestoreDefaultSelection).toHaveBeenCalled();
+      });
+      expect(screen.getByLabelText('Input message').textContent).toBe('');
+    });
+
+    it('does not select a deployment when seeding from prompt content', async () => {
+      render(
+        <MemoryRouter
+          initialEntries={[
+            { pathname: '/', state: { promptContent: 'Summarize:' } },
+          ]}
+        >
+          <ConversationRoute />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Input message').textContent).toBe(
+          'Summarize:',
+        );
+      });
+      expect(mockRestoreSelectedItemId).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,18 +1,17 @@
 import { render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ButtonsI18nKeys } from '../../../constants/translation-keys';
+import * as useUiFeatureModule from '../../../hooks/useUiFeature';
 import NegativeFeedbackModal from '../Rate/NegativeFeedbackModal';
 
-/*
- * DialSelect uses floating-ui which can't position in jsdom — mock it as a
- * native <select> so option interaction works in tests.
- */
+vi.mock('../../../hooks/useUiFeature');
+
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
   const real = await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
   return {
     ...real,
-    DialSelect: ({
+    Select: ({
       options,
       value,
       placeholder,
@@ -40,6 +39,12 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
 });
 
 describe('NegativeFeedbackModal', () => {
+  const mockUseUiFeature = vi.mocked(useUiFeatureModule.useUiFeature);
+
+  beforeEach(() => {
+    mockUseUiFeature.mockReturnValue(true);
+  });
+
   it('renders a category selector and an optional comment textarea', () => {
     render(<NegativeFeedbackModal onClose={vi.fn()} onSubmit={vi.fn()} />);
     expect(screen.getByRole('combobox')).toBeTruthy();
@@ -98,5 +103,12 @@ describe('NegativeFeedbackModal', () => {
     );
 
     expect(onSubmit).toHaveBeenCalledWith('Overactive refusal');
+  });
+
+  it('hides the comment textarea when dislike-comment is disabled', () => {
+    mockUseUiFeature.mockReturnValue(false);
+    render(<NegativeFeedbackModal onClose={vi.fn()} onSubmit={vi.fn()} />);
+    expect(screen.getByRole('combobox')).toBeTruthy();
+    expect(screen.queryByRole('textbox')).toBeNull();
   });
 });

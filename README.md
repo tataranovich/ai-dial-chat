@@ -42,7 +42,7 @@ AI DIAL Chat is a comprehensive chat application platform featuring:
 │                                                 │
 │  ┌─────────────────┐      ┌─────────────────┐   │
 │  │   React App     │◄────►│   NestJS API    │   │
-│  │   (Port 4207)   │      │   (Port 3005)   │   │
+│  │   (Port 4207)   │      │   (Port 5000)   │   │
 │  │                 │      │                 │   │
 │  │  - Vite         │      │  - REST API     │   │
 │  │  - Tailwind     │      │  - Swagger      │   │
@@ -88,12 +88,16 @@ cp apps/chat-api/.env.template .env.local
 Edit `.env.local` with your configuration:
 
 ```bash
-PORT=3005
+PORT=5000
 API_PREFIX=api
 CORS_ORIGIN=http://localhost:4207
 AUTH_SESSION_SECRET=<64-character-hex-secret>
-AUTH_CALLBACK_BASE_URL=http://localhost:3005
-AUTH_PROVIDERS=[{"id":"your-provider","issuer":"https://your-issuer.example.com","clientId":"your-client-id","clientSecret":"<client-secret>","scope":"openid email profile offline_access","rolesClaim":"roles","adminRoles":["admin"],"postLogoutRedirectUri":"http://localhost:4207"}]
+AUTH_CALLBACK_BASE_URL=http://localhost:5000
+AUTH_POST_LOGOUT_REDIRECT_URI=http://localhost:4207
+AUTH_KEYCLOAK_CLIENT_ID=your-client-id
+AUTH_KEYCLOAK_SECRET=<client-secret>
+AUTH_KEYCLOAK_HOST=your-issuer.example.com
+AUTH_KEYCLOAK_ADMIN_ROLE_NAMES=admin
 # DIAL_CORE_URL=https://your-dial-core-url.example.com
 # DIAL_API_VERSION=2024-10-21
 # DIAL_API_KEY=your-api-key
@@ -121,8 +125,8 @@ npm run start:api
 ### 4. Access the Applications
 
 - **React App**: http://localhost:4207
-- **API Server**: http://localhost:3005/api
-- **Swagger Docs**: http://localhost:3005/api/docs
+- **API Server**: http://localhost:5000/api
+- **Swagger Docs**: http://localhost:5000/api/docs
 
 ## Project Structure
 
@@ -225,7 +229,7 @@ nx graph
 | Command                 | Description                    |
 | ----------------------- | ------------------------------ |
 | `npm run start`         | Start React app (port 4207)    |
-| `npm run start:api`     | Start NestJS API (port 3005)   |
+| `npm run start:api`     | Start NestJS API (port 5000)   |
 | `npm run start:all`     | Start both apps in parallel    |
 | `npm run build`         | Build React app                |
 | `npm run build:api`     | Build NestJS API               |
@@ -273,7 +277,7 @@ RESTful API server with OpenAPI documentation.
 
 **Documentation**: [`apps/chat-api/README.md`](apps/chat-api/README.md)
 
-**Port**: 3005
+**Port**: 5000
 
 ## Libraries
 
@@ -289,7 +293,7 @@ Reusable chat panel component.
 
 - [Chat App Documentation](apps/chat/README.md) - Frontend details
 - [Chat API Documentation](apps/chat-api/README.md) - Backend details
-- [Swagger API Docs](http://localhost:3005/api/docs) - Interactive API documentation
+- [Swagger API Docs](http://localhost:5000/api/docs) - Interactive API documentation
 - [Nx Documentation](https://nx.dev) - Nx workspace guide
 
 ## Code Quality
@@ -369,12 +373,15 @@ The NestJS API serves both the API endpoints and the built React application:
 Ensure these environment variables are set in production:
 
 ```bash
-PORT=3005
+PORT=5000
 API_PREFIX=api
 CORS_ORIGIN=https://your-frontend-domain.com
 AUTH_SESSION_SECRET=<64-character-hex-secret>
 AUTH_CALLBACK_BASE_URL=https://your-api-domain.com
-AUTH_PROVIDERS=[{"id":"your-provider","issuer":"https://your-issuer.example.com","clientId":"your-client-id","clientSecret":"<client-secret>","scope":"openid email profile","rolesClaim":"roles","postLogoutRedirectUri":"https://your-frontend-domain.com"}]
+AUTH_POST_LOGOUT_REDIRECT_URI=https://your-frontend-domain.com
+AUTH_KEYCLOAK_CLIENT_ID=your-client-id
+AUTH_KEYCLOAK_SECRET=<client-secret>
+AUTH_KEYCLOAK_HOST=your-issuer.example.com
 DIAL_CORE_URL=https://your-dial-core-url
 DIAL_API_VERSION=2024-10-21
 DIAL_API_KEY=your-production-api-key
@@ -391,7 +398,7 @@ If you see "Port already in use" errors:
 
 - Change port in `apps/chat/vite.config.mts`
 
-**NestJS API (3005):**
+**NestJS API (5000):**
 
 - Change `PORT` in `.env.local`
 

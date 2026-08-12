@@ -1,12 +1,19 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CodeBlockTheme } from '../../../types/code-editor';
 import { copyToClipboard } from '../../../utils/copy-to-clipboard';
+import { downloadTextFile } from '../../../utils/file-download';
 import { MarkdownCodeBlock } from '../CodeBlock/CodeBlock';
 
 vi.mock('../../../utils/copy-to-clipboard', () => ({
   copyToClipboard: vi.fn(),
 }));
+vi.mock('../../../utils/file-download', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../../utils/file-download')>();
+  return { ...actual, downloadTextFile: vi.fn() };
+});
 vi.mock('react-syntax-highlighter', () => ({
   Prism: ({ children, language }: { children: string; language: string }) => (
     <pre data-language={language}>
@@ -14,20 +21,35 @@ vi.mock('react-syntax-highlighter', () => ({
     </pre>
   ),
 }));
-vi.mock('react-syntax-highlighter/dist/cjs/styles/prism', () => ({
-  oneDark: {},
-  oneLight: {},
-}));
 
 describe('MarkdownCodeBlock', () => {
   beforeEach(() => {
     vi.mocked(copyToClipboard).mockResolvedValue(true);
+    vi.mocked(downloadTextFile).mockClear();
   });
 
-  it('renders the language label when language is non-empty', () => {
-    render(<MarkdownCodeBlock language="typescript" value="const x = 1;" />);
+  it('renders the language label as a small uppercase muted caption', () => {
+    const { container } = render(
+      <MarkdownCodeBlock language="typescript" value="const x = 1;" />,
+    );
 
-    expect(screen.getByText('typescript')).toBeTruthy();
+    const label = screen.getByText('typescript');
+    expect(label.className).toContain('uppercase');
+    expect(container.querySelector('span.opacity-60')).toBeNull();
+  });
+
+  it('renders title in place of language in the header, keeping language for highlighting', () => {
+    const { container } = render(
+      <MarkdownCodeBlock
+        language="bash"
+        title="cURL"
+        value="curl https://dial.example.com"
+      />,
+    );
+
+    expect(screen.getByText('cURL')).toBeTruthy();
+    expect(screen.queryByText('bash')).toBeNull();
+    expect(container.querySelector('[data-language="bash"]')).toBeTruthy();
   });
 
   it('renders no label text when language is empty', () => {
@@ -35,7 +57,7 @@ describe('MarkdownCodeBlock', () => {
       <MarkdownCodeBlock language="" value="const x = 1;" />,
     );
 
-    const labelSpan = container.querySelector('span.opacity-60');
+    const labelSpan = container.querySelector('span.uppercase');
     expect(labelSpan?.textContent).toBe('');
   });
 
@@ -65,7 +87,20 @@ describe('MarkdownCodeBlock', () => {
     expect(screen.queryByRole('button', { name: 'Copy code' })).toBeNull();
   });
 
-  it('switches aria-label to copiedLabel after clicking copy', async () => {
+  it('renders the copy button as icon-only, with no visible text label', () => {
+    render(
+      <MarkdownCodeBlock
+        language="typescript"
+        value="const x = 1;"
+        copyLabel="Copy code"
+      />,
+    );
+
+    const copyButton = screen.getByRole('button', { name: 'Copy code' });
+    expect(copyButton.textContent).toBe('');
+  });
+
+  it('shows a Copied confirm state — writes the clipboard, swaps the icon and accessible name, and tints the button green', async () => {
     const user = userEvent.setup({ delay: null });
 
     render(
@@ -79,7 +114,58 @@ describe('MarkdownCodeBlock', () => {
 
     await user.click(screen.getByRole('button', { name: 'Copy code' }));
 
-    expect(await screen.findByRole('button', { name: 'Copied!' })).toBeTruthy();
+    expect(copyToClipboard).toHaveBeenCalledWith('const x = 1;');
+    const copiedButton = await screen.findByRole('button', {
+      name: 'Copied!',
+    });
+    expect(copiedButton.className).toContain('dial-kit-primary-ghost-button');
+  });
+
+  it('renders a download button next to copy that downloads the code as a file', async () => {
+    const user = userEvent.setup({ delay: null });
+
+    render(
+      <MarkdownCodeBlock
+        language="typescript"
+        value="const x = 1;"
+        downloadLabel="Download code"
+      />,
+    );
+
+    const downloadButton = screen.getByRole('button', {
+      name: 'Download code',
+    });
+    await user.click(downloadButton);
+
+    expect(downloadTextFile).toHaveBeenCalledWith('const x = 1;', 'code.ts');
+  });
+
+  it('does not render the download button when isStreaming is true', () => {
+    render(
+      <MarkdownCodeBlock
+        language="typescript"
+        value="const x = 1;"
+        isStreaming={true}
+        downloadLabel="Download code"
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Download code' })).toBeNull();
+  });
+
+  it('does not render the download button when hideDownload is true, but still shows copy', () => {
+    render(
+      <MarkdownCodeBlock
+        language="typescript"
+        value="const x = 1;"
+        hideDownload
+        downloadLabel="Download code"
+        copyLabel="Copy code"
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Download code' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy code' })).toBeTruthy();
   });
 
   it('sets dir="ltr" on the scroll container', () => {
@@ -126,5 +212,95 @@ describe('MarkdownCodeBlock', () => {
     expect(container.querySelector('code')?.textContent).toContain(
       'const x = 1;',
     );
+  });
+
+  it.each([CodeBlockTheme.Light, CodeBlockTheme.Dark])(
+    'renders the %s theme without error, on the restrained CSS-token palette',
+    (theme) => {
+      const { container } = render(
+        <MarkdownCodeBlock
+          language="typescript"
+          value="const x = 1;"
+          theme={theme}
+        />,
+      );
+
+      expect(container.querySelector('code')?.textContent).toContain(
+        'const x = 1;',
+      );
+    },
+  );
+
+  it('scrolls long lines horizontally instead of wrapping', () => {
+    const longLine = `const url = "${'a'.repeat(400)}";`;
+    const { container } = render(
+      <MarkdownCodeBlock language="typescript" value={longLine} />,
+    );
+
+    const scrollContainer = container.querySelector(
+      '[dir="ltr"]',
+    ) as HTMLElement;
+    expect(scrollContainer.className).toContain('overflow-auto');
+    expect(scrollContainer.textContent).toContain(longLine);
+  });
+
+  it('renders titleSlot in place of the plain language label when provided', () => {
+    render(
+      <MarkdownCodeBlock
+        language="typescript"
+        value="const x = 1;"
+        titleSlot={<button>Pick language</button>}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Pick language' })).toBeTruthy();
+    expect(screen.queryByText('typescript')).toBeNull();
+  });
+
+  it('removes the header vertical padding when a custom titleSlot is provided', () => {
+    const { container } = render(
+      <MarkdownCodeBlock
+        language="typescript"
+        value="const x = 1;"
+        titleSlot={<button>Pick language</button>}
+      />,
+    );
+
+    const header = container.querySelector('.border-b') as HTMLElement;
+    expect(header.className).toContain('py-0');
+    expect(header.className).not.toContain('py-2');
+  });
+
+  it('keeps the header default vertical padding for the plain language label', () => {
+    const { container } = render(
+      <MarkdownCodeBlock language="typescript" value="const x = 1;" />,
+    );
+
+    const header = container.querySelector('.border-b') as HTMLElement;
+    expect(header.className).toContain('py-2');
+  });
+
+  it('still shows the download and copy buttons alongside a custom titleSlot', () => {
+    render(
+      <MarkdownCodeBlock
+        language="typescript"
+        value="const x = 1;"
+        titleSlot={<button>Pick language</button>}
+        copyLabel="Copy code"
+        downloadLabel="Download code"
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Copy code' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download code' })).toBeTruthy();
+  });
+
+  it('preserves <pre>/<code> semantics for a language-less block', () => {
+    const { container } = render(
+      <MarkdownCodeBlock language="" value="plain text block" />,
+    );
+
+    const pre = container.querySelector('pre');
+    expect(pre?.querySelector('code')?.textContent).toBe('plain text block');
   });
 });

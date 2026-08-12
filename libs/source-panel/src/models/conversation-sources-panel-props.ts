@@ -1,4 +1,5 @@
 import type { DisplayAttachment } from '@epam/ai-dial-chat-shared';
+import type { ReactNode } from 'react';
 import type { QuotationSource } from './quotation-source';
 
 /** User-visible strings passed by the consuming app (via i18n or plain strings). */
@@ -11,8 +12,8 @@ export interface ConversationSourcesPanelLabels {
   searchPlaceholder: string;
   /** Accessible label for the search input clear button. */
   searchClearLabel: string;
-  /** Text shown when the panel has no files or sources. */
-  emptyLabel: string;
+  /** Text shown in the centred empty state when the panel has no files or sources. */
+  noDataLabel: string;
   /** Text shown when a search query matches nothing. */
   noResultsLabel: string;
   /** Accessible label for the download-all icon button. */
@@ -25,18 +26,36 @@ export interface ConversationSourcesPanelLabels {
   sourcesSectionTitle: string;
   /** Accessible label for each source's copy-URL button. */
   copySourceLabel: string;
+  /** Status message announced to assistive tech after a source URL is copied. Defaults to `'Link copied to clipboard'`. */
+  sourceCopiedLabel?: string;
   /** Label passed to each attachment card's action button. */
   attachmentClickLabel: string;
 }
 
-/** Optional typography and color class overrides for inner elements. */
-export interface ConversationSourcesPanelStyles {
+/** CSS custom-property overrides for the sources section. */
+export interface ConversationSourcesPanelColors {
+  /** Source link color. */
+  sourceLink?: string;
+  /** Source quote text color. */
+  sourceQuote?: string;
+}
+
+/** Typography (font utility class) overrides for inner elements. */
+export interface ConversationSourcesPanelTypography {
   /** CSS class applied to each section heading (`<h2>`). Defaults to `'dial-body-semi-text'`. */
   sectionTitleClassName?: string;
-  /** CSS class applied to each source link. Defaults to `'dial-small-text !text-accent-primary'`. */
+  /** CSS class applied to each source link. Defaults to `'dial-small-text'`. */
   sourceLinkClassName?: string;
-  /** CSS class applied to each source quote paragraph. Defaults to `'dial-tiny-text text-secondary'`. */
+  /** CSS class applied to each source quote paragraph. Defaults to `'dial-tiny-text'`. */
   sourceQuoteClassName?: string;
+}
+
+/** Optional color and typography overrides for inner elements. */
+export interface ConversationSourcesPanelStyles {
+  /** Color overrides applied as CSS custom properties to the sources section. */
+  colors?: ConversationSourcesPanelColors;
+  /** Typography overrides for section headings and source text. */
+  typography?: ConversationSourcesPanelTypography;
 }
 
 /** Props for the ConversationSourcesPanel component. */
@@ -55,6 +74,8 @@ export interface ConversationSourcesPanelProps {
   onAttachmentClick?: (attachment: DisplayAttachment) => void;
   /** Called when the user clicks a source link. When omitted, the link navigates normally. */
   onSourceClick?: (source: QuotationSource) => void;
+  /** Called when the user activates the download-all button; omit to disable the button. */
+  onDownloadAll?: () => void;
   /** Whether the viewport is in mobile breakpoint (disables resizing). */
   isMobile: boolean;
   /** Initial panel width in pixels. */
@@ -69,4 +90,16 @@ export interface ConversationSourcesPanelProps {
   labels: ConversationSourcesPanelLabels;
   /** Optional typography and color class overrides for inner elements. */
   styles?: ConversationSourcesPanelStyles;
+  /**
+   * Overrides the panel header's title (passed through to the underlying
+   * `SidebarPanel`'s `title`). Omit to keep the panel's default (untitled)
+   * header.
+   */
+  title?: ReactNode;
+  /**
+   * Rendered inside the scrollable body, before the Uploaded Files, Generated
+   * Files, and Sources sections. A plain, host-agnostic slot — this component
+   * has no knowledge of what it contains.
+   */
+  additionalSections?: ReactNode;
 }

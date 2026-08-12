@@ -1,15 +1,17 @@
 import type { DeploymentFeatures } from '@epam/ai-dial-chat-shared';
-import { ResponseFormat } from '@epam/ai-dial-chat-shared';
 import {
-  DialInput,
+  buildCssVars,
+  mergeClasses,
+  ResponseFormat,
+} from '@epam/ai-dial-chat-shared';
+import {
+  Input,
   DialRadioGroup,
   DialSlider,
   RadioGroupOrientation,
 } from '@epam/ai-dial-ui-kit';
 import type { FC } from 'react';
-
-const LABEL_CLASS_NAME =
-  '!text-[14px] !leading-[20px] font-semibold !text-primary gap-1';
+import styles from './ChatSettingsFields.module.scss';
 
 /** Props for the shared chat-settings form fields. */
 export interface ChatSettingsFieldsProps {
@@ -45,6 +47,16 @@ export interface ChatSettingsFieldsProps {
   temperatureLabels?: [string, string, string];
   /** Helper text shown below the temperature field. */
   temperatureHint?: string;
+  /** CSS class applied to each field's label. Defaults to `'!dial-small-semi-text'`. */
+  labelClassName?: string;
+  /** Color overrides. */
+  colors?: ChatSettingsFieldsColors;
+}
+
+/** Color overrides for `ChatSettingsFields`, applied as CSS custom properties with app theme fallbacks. */
+export interface ChatSettingsFieldsColors {
+  /** Field label text color. Fallback: `--text-primary`. */
+  labelText?: string;
 }
 
 /** Shared form fields for the chat-settings UI, used by both the desktop modal and mobile bottom sheet. */
@@ -65,56 +77,68 @@ export const ChatSettingsFields: FC<ChatSettingsFieldsProps> = ({
   temperatureLabel = 'Temperature',
   temperatureLabels = ['Precise', 'Neutral', 'Creative'],
   temperatureHint,
-}) => (
-  <div className="flex flex-col px-6">
-    {features.responseFormat && (
-      <DialRadioGroup
-        fieldTitle={responseFormatLabel}
-        elementId="response-format"
-        orientation={RadioGroupOrientation.Column}
-        activeRadioButton={responseFormat ?? ResponseFormat.Markdown}
-        labelDescription={responseFormatHint}
-        labelClassName={LABEL_CLASS_NAME}
-        radioButtons={[
-          {
-            id: ResponseFormat.Markdown,
-            name: responseFormatMarkdownLabel,
-          },
-          {
-            id: ResponseFormat.PlainText,
-            name: responseFormatPlainTextLabel,
-          },
-        ]}
-        onChange={(v) => onResponseFormatChange(v as ResponseFormat)}
-      />
-    )}
-    {features.systemPrompt && (
-      <DialInput
-        value={systemPrompt}
-        placeholder={systemPromptTooltip}
-        labelProps={{
-          label: systemPromptLabel,
-          className: LABEL_CLASS_NAME,
-        }}
-        containerClassName="py-4 gap-3"
-        onChange={(value) => onSystemPromptChange(value ?? '')}
-      />
-    )}
-    {features.temperature && (
-      <DialSlider
-        labelProps={{
-          label: temperatureLabel,
-          className: LABEL_CLASS_NAME,
-          caption: temperatureHint,
-        }}
-        className="gap-3 py-4"
-        value={temperature}
-        min={0}
-        max={1}
-        step={0.1}
-        labels={temperatureLabels}
-        onChange={onTemperatureChange}
-      />
-    )}
-  </div>
-);
+  labelClassName = '!dial-small-semi-text',
+  colors,
+}) => {
+  const cssVars = buildCssVars({
+    '--csf-label-text': colors?.labelText,
+  });
+
+  const fieldLabelClassName = mergeClasses(
+    labelClassName,
+    styles.label,
+    'gap-1',
+  );
+
+  return (
+    <div className="flex flex-col gap-4 px-6 py-3" style={cssVars}>
+      {features.responseFormat && (
+        <DialRadioGroup
+          fieldTitle={responseFormatLabel}
+          labelClassName={fieldLabelClassName}
+          elementId="response-format"
+          orientation={RadioGroupOrientation.Column}
+          activeRadioButton={responseFormat ?? ResponseFormat.Markdown}
+          labelDescription={responseFormatHint}
+          radioButtons={[
+            {
+              id: ResponseFormat.Markdown,
+              name: responseFormatMarkdownLabel,
+            },
+            {
+              id: ResponseFormat.PlainText,
+              name: responseFormatPlainTextLabel,
+            },
+          ]}
+          onChange={(v) => onResponseFormatChange(v as ResponseFormat)}
+        />
+      )}
+      {features.systemPrompt && (
+        <Input
+          value={systemPrompt}
+          placeholder={systemPromptTooltip}
+          labelProps={{
+            className: fieldLabelClassName,
+            label: systemPromptLabel,
+          }}
+          onChange={(value) => onSystemPromptChange(value ?? '')}
+        />
+      )}
+      {features.temperature && (
+        <DialSlider
+          labelProps={{
+            label: temperatureLabel,
+            className: fieldLabelClassName,
+            caption: temperatureHint,
+          }}
+          value={temperature}
+          min={0}
+          max={1}
+          step={0.1}
+          labels={temperatureLabels}
+          onChange={onTemperatureChange}
+        />
+      )}
+    </div>
+  );
+};

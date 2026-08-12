@@ -1,19 +1,22 @@
 import { useAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
 import type { Annotation, DisplayAttachment } from '@epam/ai-dial-chat-shared';
-import { useCallback, useMemo } from 'react';
-import type { Components } from 'react-markdown';
-import CitationDropdown from '../../components/Citations/CitationDropdown/CitationDropdown';
-import { annotationToPdfCanvasContent } from '../../utils/attachment-canvas';
-import { annotationToDisplayAttachment } from '../../utils/attachment-dto-to-display';
 import {
+  CitationDropdown,
   injectCitationSentinels,
   replaceSentinelsInChildren,
-} from '../../utils/citation-injection';
+  type AnnotationGroup,
+} from '@epam/ai-dial-quotations';
+import { useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { Components } from 'react-markdown';
 import {
-  isDialFileId,
-  resolveDialFileDownloadUrl,
-} from '../../utils/dial-file';
-import type { AnnotationGroup } from '../../utils/group-annotations-by-source';
+  BasicI18nKeys,
+  ButtonsI18nKeys,
+  CitationsI18nKeys,
+} from '../../constants/translation-keys';
+import { openAnnotationAttachment } from '../../utils/annotation';
+import { annotationToPdfCanvasContent } from '../../utils/attachment-canvas';
+import { annotationToDisplayAttachment } from '../../utils/attachment-dto-to-display';
 
 /**
  * Builds react-markdown component overrides that inject citation markers into
@@ -35,23 +38,12 @@ export const useCitationMarkdownComponents = (
   groups: AnnotationGroup[],
   onAttachmentPreview: (attachment: DisplayAttachment) => void,
 ): { processedContent: string; markdownComponents: Components } => {
+  const { t } = useTranslation();
   const { openCanvas } = useAttachmentCanvas();
 
   const onOpenInBrowser = useCallback((annotation: Annotation) => {
     const attachment = annotation.body?.source?.attachment;
-    const url = attachment?.url;
-    if (url == null) return;
-
-    if (isDialFileId(url)) {
-      const downloadUrl = resolveDialFileDownloadUrl(url);
-      if (downloadUrl == null) return;
-      const anchor = document.createElement('a');
-      anchor.href = downloadUrl;
-      anchor.download = attachment?.title ?? url.split('/').pop() ?? '';
-      anchor.click();
-    } else {
-      window.open(url, '_blank', 'noopener,noreferrer');
-    }
+    if (attachment) openAnnotationAttachment(attachment);
   }, []);
 
   const onPreview = useCallback(
@@ -83,12 +75,38 @@ export const useCitationMarkdownComponents = (
     const renderMarker = (idx: number) => {
       const group = groups[idx];
       if (!group) return null;
+
+      const cardLabels = {
+        ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
+          source: group.sourceName,
+        }),
+        previousCitation: t(CitationsI18nKeys.PopupPreviousCitation),
+        nextCitation: t(CitationsI18nKeys.PopupNextCitation),
+        formatSwitcherText: (current: number, total: number) =>
+          t(CitationsI18nKeys.PopupSwitcher, { current, total }),
+        preview: t(BasicI18nKeys.Preview),
+        openInBrowser: t(CitationsI18nKeys.PopupOpenInBrowser),
+        download: t(ButtonsI18nKeys.Download),
+      };
+      const markerLabels = {
+        ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
+          source: group.sourceName,
+        }),
+        label: t(CitationsI18nKeys.MarkerLabel, { source: group.sourceName }),
+        labelWithOverflow: t(CitationsI18nKeys.MarkerLabelWithOverflow, {
+          source: group.sourceName,
+          count: group.annotations.length - 1,
+        }),
+      };
+
       return (
         <CitationDropdown
           key={`citation-${group.sourceUrl}`}
           group={group}
           onPreview={onPreview}
           onOpenInBrowser={onOpenInBrowser}
+          cardLabels={cardLabels}
+          markerLabels={markerLabels}
         />
       );
     };
@@ -97,7 +115,7 @@ export const useCitationMarkdownComponents = (
       p: ({ children, ...rest }) => (
         <p
           {...rest}
-          className="dial-body-paragraph-text mb-3 break-words [overflow-wrap:anywhere] [text-wrap:pretty] last:mb-0"
+          className="dial-body-paragraph-text mb-3 [overflow-wrap:anywhere] [text-wrap:pretty] last:mb-0"
         >
           {replaceSentinelsInChildren(children, renderMarker)}
         </p>
@@ -108,7 +126,7 @@ export const useCitationMarkdownComponents = (
         </li>
       ),
     };
-  }, [groups, onPreview, onOpenInBrowser]);
+  }, [groups, onPreview, onOpenInBrowser, t]);
 
   return { processedContent, markdownComponents };
 };

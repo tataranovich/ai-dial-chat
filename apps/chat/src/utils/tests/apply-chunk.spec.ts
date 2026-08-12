@@ -47,6 +47,15 @@ describe('applyChunkToMessages', () => {
     expect(result![0].content).toBe('A plus');
     expect(result![1].content).toBe('B');
   });
+
+  it('overwrites custom_content.state (last wins) rather than merging it', () => {
+    const messages = [
+      makeAssistantMessage({ custom_content: { state: { step: 1 } } }),
+    ];
+    const chunk = makeChunk('', { custom_content: { state: { step: 2 } } });
+    const result = applyChunkToMessages(messages, 0, chunk)!;
+    expect(result[0].custom_content?.state).toEqual({ step: 2 });
+  });
 });
 
 describe('applyChunkToMessages — stage merging', () => {
@@ -60,6 +69,17 @@ describe('applyChunkToMessages — stage merging', () => {
     const result = applyChunkToMessages(messages, 0, chunk)!;
     expect(result[0].custom_content?.stages).toHaveLength(1);
     expect(result[0].custom_content?.stages![0].name).toBe('Stage');
+  });
+
+  it('normalizes a null name on the first chunk for a new stage (DIAL Core "stage opened" signal)', () => {
+    const messages = [makeAssistantMessage()];
+    const chunk = makeChunk('', {
+      custom_content: {
+        stages: [{ index: 0, name: null, status: null }] as never,
+      },
+    });
+    const result = applyChunkToMessages(messages, 0, chunk)!;
+    expect(result[0].custom_content?.stages![0].name).toBe('');
   });
 
   it('concatenates stage name across chunks', () => {

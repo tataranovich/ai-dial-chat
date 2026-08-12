@@ -1,43 +1,50 @@
-import type { Stage } from '@epam/ai-dial-chat-shared';
 import { StageStatus } from '@epam/ai-dial-chat-shared';
-import { DIAL_ICON_SIZE, DialSpinner } from '@epam/ai-dial-ui-kit';
-import { IconAlertCircle, IconCircleCheck } from '@tabler/icons-react';
+import { DIAL_ICON_SIZE, Spinner } from '@epam/ai-dial-ui-kit';
+import { IconAlertCircle, IconCheck } from '@tabler/icons-react';
 import { FC } from 'react';
 import styles from '../StagesPanel/StagesPanel.module.scss';
 
-interface Props {
+/** Props for {@link StageIcon}. */
+export interface StageIconProps {
   /** The stage status value; `null` means the stage is pending or running. */
-  status: Stage['status'];
+  status: StageStatus | null;
   /** Whether this stage is the currently executing (live) stage. */
   isLive: boolean;
+  /** Accessible label announced for the running spinner. Defaults to `'Running'`. */
+  runningLabel?: string;
+  /** Accessible label announced (visually hidden) alongside a failed stage's icon. Defaults to `'Failed'`. */
+  failedLabel?: string;
 }
 
-/** Maps a stage status to the appropriate icon element. */
-export const StageIcon: FC<Props> = ({ status, isLive }) => {
-  if (!status) {
-    if (!isLive) {
-      return (
+/** Renders the icon for a stage, based on its status and whether it's currently executing. */
+export const StageIcon: FC<StageIconProps> = ({
+  status,
+  isLive,
+  runningLabel = 'Running',
+  failedLabel = 'Failed',
+}) => {
+  if (isLive) {
+    return <Spinner size={16} ariaLabel={runningLabel} />;
+  }
+
+  if (status === StageStatus.Failed) {
+    return (
+      <>
         <IconAlertCircle
           size={DIAL_ICON_SIZE.MD}
-          className={styles.iconSecondary}
+          className={styles.iconError}
+          aria-hidden
         />
-      );
-    }
-    return <DialSpinner size={20} />;
-  }
-  if (status === StageStatus.Completed) {
-    return (
-      <IconCircleCheck
-        size={DIAL_ICON_SIZE.MD}
-        className={styles.iconSecondary}
-      />
+        <span className="sr-only">{failedLabel}</span>
+      </>
     );
   }
 
   return (
-    <IconAlertCircle
-      size={DIAL_ICON_SIZE.MD}
-      className={styles.iconSecondary}
+    <IconCheck
+      size={DIAL_ICON_SIZE.SM}
+      className={styles.iconCompleted}
+      aria-hidden
     />
   );
 };

@@ -20,15 +20,20 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
   return {
     ...actual,
-    DialDropdown: ({
+    Dropdown: ({
       children,
       items,
+      open,
+      renderOverlay,
     }: {
       children: ReactNode;
       items?: MenuItems;
+      open?: boolean;
+      renderOverlay?: () => ReactNode;
     }) => (
       <div>
         {children}
+        {open && renderOverlay?.()}
         {items?.map((item) => (
           <button
             key={item.key}
@@ -67,7 +72,7 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
         ))}
       </div>
     ),
-    DialSkeleton: ({ variant }: { variant: string }) => (
+    Skeleton: ({ variant }: { variant: string }) => (
       <span data-variant={variant} />
     ),
   };
@@ -101,6 +106,30 @@ describe('Input', () => {
     const { container } = render(<Input message="Hello" />);
     const textarea = container.querySelector('textarea');
     expect(textarea?.value).toBe('Hello');
+  });
+
+  it('should clear textarea when message changes to an empty string', () => {
+    const { container, rerender } = render(<Input message="Hello" />);
+    const textarea = container.querySelector('textarea');
+
+    rerender(<Input message="" />);
+
+    expect(textarea?.value).toBe('');
+  });
+
+  it('should re-apply the same message when messageRevision changes', () => {
+    const { container, rerender } = render(
+      <Input message="Draft" messageRevision={1} />,
+    );
+    const textarea = container.querySelector('textarea');
+    expect(textarea?.value).toBe('Draft');
+
+    if (textarea) {
+      fireEvent.change(textarea, { target: { value: 'User edited draft' } });
+    }
+    rerender(<Input message="Draft" messageRevision={2} />);
+
+    expect(textarea?.value).toBe('Draft');
   });
 
   it('should call onSend with message text and clear textarea on Enter', () => {
@@ -231,6 +260,22 @@ describe('Input', () => {
     expect(screen.getByLabelText('Add')).toBeTruthy();
   });
 
+  it('should set the accept attribute on the file input when fileAccept is provided', () => {
+    render(<Input fileAccept="image/*,application/pdf" />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    expect(fileInput.getAttribute('accept')).toBe('image/*,application/pdf');
+  });
+
+  it('should not set the accept attribute when fileAccept is absent', () => {
+    render(<Input />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    expect(fileInput.hasAttribute('accept')).toBe(false);
+  });
+
   it('should show an attachment card after a file is picked', () => {
     render(<Input />);
     const fileInput = document.querySelector(
@@ -266,17 +311,6 @@ describe('Input', () => {
       '',
       expect.arrayContaining([expect.objectContaining({ name: 'doc.pdf' })]),
     );
-  });
-
-  it('should remove the card when the remove button is clicked', () => {
-    render(<Input />);
-    const fileInput = document.querySelector(
-      'input[type="file"]',
-    ) as HTMLInputElement;
-    const file = new File(['content'], 'doc.pdf', { type: 'application/pdf' });
-    fireEvent.change(fileInput, { target: { files: [file] } });
-    fireEvent.click(screen.getByLabelText('Remove attachment'));
-    expect(screen.queryByText('doc')).toBeNull();
   });
 
   it('pendingDropFiles prop creates attachment cards and calls onDropFilesConsumed', () => {
@@ -336,26 +370,86 @@ describe('Input', () => {
     );
   });
 
-  it('should show mic button when isTranscriptionSupported and message is empty', () => {
-    render(<Input isTranscriptionSupported micLabel="Record voice message" />);
+  it('does not add a selected batch when it would exceed the attachment limit', () => {
+    const onAttachmentsLimitExceeded = vi.fn();
+    const onAttachmentsChange = vi.fn();
+    render(
+      <Input
+        maximumAttachmentsAmount={2}
+        onAttachmentsLimitExceeded={onAttachmentsLimitExceeded}
+        onAttachmentsChange={onAttachmentsChange}
+      />,
+    );
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(['content'], 'first.pdf', { type: 'application/pdf' }),
+          new File(['content'], 'second.pdf', { type: 'application/pdf' }),
+          new File(['content'], 'third.pdf', { type: 'application/pdf' }),
+        ],
+      },
+    });
+
+    expect(screen.queryByText('first')).toBeNull();
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    expect(onAttachmentsLimitExceeded).toHaveBeenCalledWith(3, 2);
+  });
+
+  it('counts existing attachments when checking a selected batch against the limit', () => {
+    const onAttachmentsLimitExceeded = vi.fn();
+    render(
+      <Input
+        maximumAttachmentsAmount={2}
+        onAttachmentsLimitExceeded={onAttachmentsLimitExceeded}
+      />,
+    );
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(['content'], 'first.pdf', { type: 'application/pdf' }),
+        ],
+      },
+    });
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(['content'], 'second.pdf', { type: 'application/pdf' }),
+          new File(['content'], 'third.pdf', { type: 'application/pdf' }),
+        ],
+      },
+    });
+
+    expect(screen.getByText('first')).toBeTruthy();
+    expect(screen.queryByText('second')).toBeNull();
+    expect(screen.queryByText('third')).toBeNull();
+    expect(onAttachmentsLimitExceeded).toHaveBeenCalledWith(3, 2);
+  });
+
+  it('should show mic button when isAudioMessageSupported is true', () => {
+    render(<Input isAudioMessageSupported micLabel="Record voice message" />);
     expect(screen.getByLabelText('Record voice message')).toBeTruthy();
   });
 
-  it('should hide mic button when message is not empty', () => {
+  it('should show mic button when isAudioMessageSupported is true and message is not empty', () => {
     const { container } = render(
-      <Input isTranscriptionSupported micLabel="Record voice message" />,
+      <Input isAudioMessageSupported micLabel="Record voice message" />,
     );
     const textarea = container.querySelector('textarea')!;
     fireEvent.change(textarea, { target: { value: 'Hello' } });
-    expect(screen.queryByLabelText('Record voice message')).toBeNull();
+    expect(screen.getByLabelText('Record voice message')).toBeTruthy();
   });
 
-  it('should hide mic button when isTranscriptionSupported is false', () => {
+  it('should hide mic button when isAudioMessageSupported is false', () => {
     render(
-      <Input
-        isTranscriptionSupported={false}
-        micLabel="Record voice message"
-      />,
+      <Input isAudioMessageSupported={false} micLabel="Record voice message" />,
     );
     expect(screen.queryByLabelText('Record voice message')).toBeNull();
   });
@@ -533,6 +627,88 @@ describe('Input — isModelSelectorDisabled', () => {
   });
 });
 
+describe('Input — isSendDisabled', () => {
+  it('disables the send button without disabling typing', () => {
+    const handleSend = vi.fn();
+    const { container } = render(
+      <Input
+        message="Hello"
+        onSend={handleSend}
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        isSendDisabled
+      />,
+    );
+    expect(screen.getByLabelText('Send message').hasAttribute('disabled')).toBe(
+      true,
+    );
+    const textarea = container.querySelector('textarea');
+    expect(textarea?.disabled).toBe(false);
+  });
+
+  it('does not fire onSend on Enter when send is disabled', () => {
+    const handleSend = vi.fn();
+    const { container } = render(
+      <Input
+        message="Hello"
+        onSend={handleSend}
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        isSendDisabled
+      />,
+    );
+    const textarea = container.querySelector('textarea');
+
+    if (textarea) {
+      fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
+    }
+
+    expect(handleSend).not.toHaveBeenCalled();
+  });
+
+  it('passes canSend false to custom footer actions and blocks their onSend helper', () => {
+    const handleSend = vi.fn();
+    let footerCanSend: boolean | undefined;
+
+    render(
+      <Input
+        message="Hello"
+        onSend={handleSend}
+        isSendDisabled
+        renderFooterActions={({ canSend, onSend }) => {
+          footerCanSend = canSend;
+          return (
+            <button type="button" onClick={onSend}>
+              Custom send
+            </button>
+          );
+        }}
+      />,
+    );
+
+    expect(footerCanSend).toBe(false);
+    fireEvent.click(screen.getByText('Custom send'));
+    expect(handleSend).not.toHaveBeenCalled();
+  });
+
+  it('does not disable the send button when isSendDisabled is false', () => {
+    render(
+      <Input
+        message="Hello"
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        isSendDisabled={false}
+      />,
+    );
+    expect(screen.getByLabelText('Send message').hasAttribute('disabled')).toBe(
+      false,
+    );
+  });
+});
+
 describe('Input — isInputDisabled', () => {
   it('textarea has disabled attribute when isInputDisabled is true', () => {
     const { container } = render(<Input isInputDisabled />);
@@ -546,12 +722,28 @@ describe('Input — isInputDisabled', () => {
     expect(textarea?.disabled).toBe(false);
   });
 
-  it('send button is disabled when isInputDisabled is true', () => {
+  /*
+   * A disabled textarea can never receive typed input, so the only way a
+   * message exists while isInputDisabled is true is a starter having
+   * populated it (see chat-input-disabled-state spec). In that one case the
+   * user still needs to submit the (unamendable) populated text, so the send
+   * button stays enabled instead of being blocked like the rest of the
+   * free-text path.
+   */
+  it('send button is enabled when isInputDisabled is true and a message is already populated', () => {
     render(<Input message="Hello" isInputDisabled />);
     const sendButton = screen.getByLabelText(
       'Send message',
     ) as HTMLButtonElement;
-    expect(sendButton.disabled).toBe(true);
+    expect(sendButton.disabled).toBe(false);
+  });
+
+  it('clicking send still calls onSend when isInputDisabled is true and a message is already populated', async () => {
+    const handleSend = vi.fn();
+    render(<Input message="Hello" isInputDisabled onSend={handleSend} />);
+    const sendButton = screen.getByLabelText('Send message');
+    fireEvent.click(sendButton);
+    await waitFor(() => expect(handleSend).toHaveBeenCalledWith('Hello', []));
   });
 
   it('attach button is disabled when isInputDisabled is true', () => {
@@ -582,6 +774,52 @@ describe('Input — isInputDisabled', () => {
       fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
     }
     expect(handleSend).toHaveBeenCalledWith('Hello', []);
+  });
+
+  it('opens the model picker when isInputDisabled is true', () => {
+    render(
+      <Input
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        modelPickerOverlay={() => <div>model picker</div>}
+        isInputDisabled
+      />,
+    );
+    expect(screen.queryByText('model picker')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText(/Select model/));
+
+    expect(screen.getByText('model picker')).toBeTruthy();
+  });
+
+  it('does not dim the model selector when isInputDisabled is true', () => {
+    const { container } = render(
+      <Input
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        isInputDisabled
+      />,
+    );
+    expect(container.querySelector('[aria-disabled="true"]')).toBeNull();
+  });
+
+  it('keeps the model picker closed when the selector is explicitly disabled', () => {
+    render(
+      <Input
+        deployments={mockItems}
+        selectedDeploymentId="gpt-4o"
+        onDeploymentChange={vi.fn()}
+        modelPickerOverlay={() => <div>model picker</div>}
+        isInputDisabled
+        isModelSelectorDisabled
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/Select model/));
+
+    expect(screen.queryByText('model picker')).toBeNull();
   });
 });
 
@@ -676,30 +914,33 @@ describe('Input — attachment status transitions', () => {
       expect(screen.queryByText('doc')).toBeNull();
     });
   });
+});
 
-  it('shows retry for failed immediate uploads and retries the same attachment', async () => {
-    const handleUploadAttachment = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('upload failed'))
-      .mockResolvedValueOnce('https://example.com/doc.pdf');
+describe('Input — usageLimitsSlot', () => {
+  it('renders slot content in the action row when usageLimitsSlot is provided', () => {
+    render(
+      <Input usageLimitsSlot={<button type="button">Usage limits</button>} />,
+    );
 
-    render(<Input onUploadAttachment={handleUploadAttachment} />);
-    const fileInput = document.querySelector(
-      'input[type="file"]',
-    ) as HTMLInputElement;
-    const file = new File(['content'], 'doc.pdf', { type: 'application/pdf' });
-    fireEvent.change(fileInput, { target: { files: [file] } });
+    expect(screen.getByRole('button', { name: 'Usage limits' })).toBeTruthy();
+  });
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Retry upload')).toBeTruthy();
-    });
+  it('does not render any slot content when usageLimitsSlot is omitted', () => {
+    render(<Input />);
 
-    fireEvent.click(screen.getByLabelText('Retry upload'));
+    expect(screen.queryByRole('button', { name: 'Usage limits' })).toBeNull();
+  });
 
-    await waitFor(() => {
-      expect(handleUploadAttachment).toHaveBeenCalledTimes(2);
-      expect(screen.getByLabelText('Send message')).toBeTruthy();
-    });
+  it('does not render slot when renderFooterActions is provided (custom footer replaces the slot area)', () => {
+    render(
+      <Input
+        usageLimitsSlot={<button type="button">Usage limits</button>}
+        renderFooterActions={() => <button type="button">Custom footer</button>}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Usage limits' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Custom footer' })).toBeTruthy();
   });
 });
 

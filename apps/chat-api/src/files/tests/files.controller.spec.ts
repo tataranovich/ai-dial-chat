@@ -10,11 +10,13 @@ import {
   ValidationPipe,
   VersioningType,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 import { Test, TestingModule } from '@nestjs/testing';
 import { memoryStorage } from 'multer';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ArchiveUploadInterceptor } from '../archive-upload.interceptor';
 import { FilesController } from '../files.controller';
 import { FilesService } from '../files.service';
 
@@ -52,7 +54,18 @@ async function buildApp(
       }),
     ],
     controllers: [FilesController],
-    providers: [{ provide: FilesService, useValue: service }],
+    providers: [
+      ArchiveUploadInterceptor,
+      { provide: FilesService, useValue: service },
+      {
+        provide: ConfigService,
+        useValue: {
+          get: vi.fn((key: string) =>
+            key === 'ARCHIVE_UPLOAD_MAX_BYTES' ? fileSizeLimit : undefined,
+          ),
+        },
+      },
+    ],
   }).compile();
 
   const app = module.createNestApplication();
@@ -78,6 +91,7 @@ async function buildApp(
     }),
   );
   await app.init();
+  await app.listen(0, '127.0.0.1');
   return app;
 }
 
@@ -293,6 +307,121 @@ describe('FilesController — upload', () => {
   });
 });
 
+describe('FilesController — upload-archive', () => {
+  let app: INestApplication;
+  let service: {
+    uploadFile: ReturnType<typeof vi.fn>;
+    uploadArchive: ReturnType<typeof vi.fn>;
+    downloadFile: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(async () => {
+    service = {
+      uploadFile: vi.fn(),
+      uploadArchive: vi.fn().mockResolvedValue({
+        results: [{ path: 'reports/a.txt', success: true }],
+      }),
+      downloadFile: vi.fn(),
+    };
+    app = await buildApp(service);
+  });
+
+  afterEach(async () => {
+    vi.clearAllMocks();
+    await app.close();
+  });
+
+  it('returns 200 with results on a valid multipart request', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/files/upload-archive')
+      .field('bucket', 'my-bucket')
+      .field('destinationPath', 'reports')
+      .attach('file', Buffer.from('zip-bytes'), 'archive.zip')
+      .expect(200);
+
+    expect(res.body).toEqual({
+      results: [{ path: 'reports/a.txt', success: true }],
+    });
+    expect(service.uploadArchive).toHaveBeenCalledWith(
+      'my-bucket',
+      'reports',
+      expect.objectContaining({
+        path: expect.any(String),
+        size: expect.any(Number),
+      }),
+      TEST_USER.at,
+    );
+  });
+
+  it('accepts an empty destinationPath for bucket-root archive upload', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/files/upload-archive')
+      .field('bucket', 'my-bucket')
+      .field('destinationPath', '')
+      .attach('file', Buffer.from('zip-bytes'), 'archive.zip')
+      .expect(200);
+
+    expect(service.uploadArchive).toHaveBeenCalledWith(
+      'my-bucket',
+      '',
+      expect.objectContaining({
+        path: expect.any(String),
+        size: expect.any(Number),
+      }),
+      TEST_USER.at,
+    );
+  });
+
+  it('returns 400 when the file field is missing', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/files/upload-archive')
+      .field('bucket', 'my-bucket')
+      .field('destinationPath', 'reports')
+      .expect(400);
+    expect(service.uploadArchive).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for a missing bucket', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/files/upload-archive')
+      .field('destinationPath', 'reports')
+      .attach('file', Buffer.from('zip-bytes'), 'archive.zip')
+      .expect(400);
+    expect(service.uploadArchive).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for an invalid destinationPath (path traversal)', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/files/upload-archive')
+      .field('bucket', 'my-bucket')
+      .field('destinationPath', '../etc')
+      .attach('file', Buffer.from('zip-bytes'), 'archive.zip')
+      .expect(400);
+    expect(service.uploadArchive).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when unauthenticated', async () => {
+    service.uploadArchive.mockRejectedValue(new UnauthorizedException());
+    await request(app.getHttpServer())
+      .post('/api/v1/files/upload-archive')
+      .field('bucket', 'my-bucket')
+      .field('destinationPath', 'reports')
+      .attach('file', Buffer.from('zip-bytes'), 'archive.zip')
+      .expect(401);
+  });
+
+  it('returns 413 when multer rejects an oversized archive', async () => {
+    await app.close();
+    app = await buildApp(service, { fileSizeLimit: 1 });
+    await request(app.getHttpServer())
+      .post('/api/v1/files/upload-archive')
+      .field('bucket', 'my-bucket')
+      .field('destinationPath', 'reports')
+      .attach('file', Buffer.from('zip-bytes-too-large'), 'archive.zip')
+      .expect(413);
+  });
+});
+
 describe('FilesController — download', () => {
   let app: INestApplication;
   let service: {
@@ -380,6 +509,94 @@ describe('FilesController — download', () => {
       .get('/api/v1/files/download')
       .query({ bucket: 'my-bucket', path: 'file.pdf' })
       .expect(503);
+  });
+});
+
+describe('FilesController — downloadArchive', () => {
+  let app: INestApplication;
+  let service: {
+    uploadFile: ReturnType<typeof vi.fn>;
+    downloadArchive: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(async () => {
+    service = {
+      uploadFile: vi.fn(),
+      downloadArchive: vi.fn(),
+    };
+    app = await buildApp(service);
+  });
+
+  afterEach(async () => {
+    vi.clearAllMocks();
+    await app.close();
+  });
+
+  it('pipes the returned stream and forwards headers, without passing Response into the service', async () => {
+    const { Readable } = await import('node:stream');
+    const stream = Readable.from([Buffer.from('zip-bytes')]);
+    const abortOnDisconnect = vi.fn();
+    service.downloadArchive.mockResolvedValue({
+      stream,
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="files.zip"',
+        'Cache-Control': 'no-store',
+      },
+      abortOnDisconnect,
+    });
+
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/files/download-archive')
+      .send({
+        items: [
+          {
+            bucket: 'my-bucket',
+            path: 'reports/',
+            name: 'reports',
+            nodeType: 'folder',
+          },
+        ],
+      })
+      .expect(200);
+
+    expect(res.headers['content-type']).toMatch('application/zip');
+    expect(res.headers['content-disposition']).toBe(
+      'attachment; filename="files.zip"',
+    );
+    expect(res.text).toBe('zip-bytes');
+    expect(service.downloadArchive).toHaveBeenCalledWith(
+      [
+        {
+          bucket: 'my-bucket',
+          path: 'reports/',
+          name: 'reports',
+          nodeType: 'folder',
+        },
+      ],
+      TEST_USER.at,
+    );
+  });
+
+  it('returns 413 when service throws for too many items', async () => {
+    const { PayloadTooLargeException } = await import('@nestjs/common');
+    service.downloadArchive.mockRejectedValue(
+      new PayloadTooLargeException('Too many items'),
+    );
+
+    await request(app.getHttpServer())
+      .post('/api/v1/files/download-archive')
+      .send({
+        items: [
+          {
+            bucket: 'my-bucket',
+            path: 'reports/',
+            name: 'reports',
+            nodeType: 'folder',
+          },
+        ],
+      })
+      .expect(413);
   });
 });
 
@@ -1190,6 +1407,7 @@ describe('FilesController — copyFiles', () => {
             bucket: 'user-files',
             sourcePath: 'reports/q1.pdf',
             destinationPath: 'archive/q1.pdf',
+            overwrite: true,
             nodeType: 'item',
             name: 'q1.pdf',
           },
@@ -1203,6 +1421,7 @@ describe('FilesController — copyFiles', () => {
         expect.objectContaining({
           sourcePath: 'reports/q1.pdf',
           destinationPath: 'archive/q1.pdf',
+          overwrite: true,
           nodeType: 'item',
         }),
       ]),
@@ -1317,6 +1536,7 @@ describe('FilesController — moveFiles', () => {
             bucket: 'user-files',
             sourcePath: 'inbox/draft.pdf',
             destinationPath: 'reports/draft.pdf',
+            overwrite: true,
             nodeType: 'item',
             name: 'draft.pdf',
           },
@@ -1330,6 +1550,7 @@ describe('FilesController — moveFiles', () => {
         expect.objectContaining({
           sourcePath: 'inbox/draft.pdf',
           destinationPath: 'reports/draft.pdf',
+          overwrite: true,
           nodeType: 'item',
         }),
       ]),
@@ -1405,6 +1626,157 @@ describe('FilesController — moveFiles', () => {
           },
         ],
       })
+      .expect(401);
+  });
+});
+
+describe('FilesController — revokeAccess', () => {
+  let app: INestApplication;
+  let service: { revokeAccess: ReturnType<typeof vi.fn> };
+
+  beforeEach(async () => {
+    service = {
+      revokeAccess: vi.fn().mockResolvedValue({ success: true }),
+    };
+    app = await buildApp(service);
+  });
+
+  afterEach(async () => {
+    vi.clearAllMocks();
+    await app.close();
+  });
+
+  it('returns 200 with success=true on a valid request', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/files/revoke-access')
+      .send({ items: [{ bucket: 'user-bucket', path: 'reports/q1.pdf' }] })
+      .expect(200);
+
+    expect(res.body).toEqual({ success: true });
+    expect(service.revokeAccess).toHaveBeenCalledWith(
+      [{ bucket: 'user-bucket', path: 'reports/q1.pdf' }],
+      TEST_USER.at,
+    );
+  });
+
+  it('returns 400 when items array is empty', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/files/revoke-access')
+      .send({ items: [] })
+      .expect(400);
+    expect(service.revokeAccess).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when service throws UnauthorizedException', async () => {
+    service.revokeAccess.mockRejectedValue(new UnauthorizedException());
+    await request(app.getHttpServer())
+      .post('/api/v1/files/revoke-access')
+      .send({ items: [{ bucket: 'user-bucket', path: 'reports/q1.pdf' }] })
+      .expect(401);
+  });
+});
+
+describe('FilesController — discardShared', () => {
+  let app: INestApplication;
+  let service: { discardShared: ReturnType<typeof vi.fn> };
+
+  beforeEach(async () => {
+    service = {
+      discardShared: vi.fn().mockResolvedValue({ success: true }),
+    };
+    app = await buildApp(service);
+  });
+
+  afterEach(async () => {
+    vi.clearAllMocks();
+    await app.close();
+  });
+
+  it('returns 200 with success=true on a valid request', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/files/discard-shared')
+      .send({ items: [{ bucket: 'owner-bucket', path: 'shared.pdf' }] })
+      .expect(200);
+
+    expect(res.body).toEqual({ success: true });
+    expect(service.discardShared).toHaveBeenCalledWith(
+      [{ bucket: 'owner-bucket', path: 'shared.pdf' }],
+      TEST_USER.at,
+    );
+  });
+
+  it('returns 400 when items array is empty', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/files/discard-shared')
+      .send({ items: [] })
+      .expect(400);
+    expect(service.discardShared).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when service throws UnauthorizedException', async () => {
+    service.discardShared.mockRejectedValue(new UnauthorizedException());
+    await request(app.getHttpServer())
+      .post('/api/v1/files/discard-shared')
+      .send({ items: [{ bucket: 'owner-bucket', path: 'shared.pdf' }] })
+      .expect(401);
+  });
+});
+
+describe('FilesController — listSharedByMe', () => {
+  const MOCK_SHARED_BY_ME_RESPONSE = {
+    bucket: 'user-bucket',
+    path: '',
+    items: [
+      {
+        name: 'shared-by-me.pdf',
+        path: 'shared-by-me.pdf',
+        folderId: 'user-bucket:',
+        nodeType: 'item',
+        bucket: 'user-bucket',
+      },
+    ],
+  };
+
+  let app: INestApplication;
+  let service: { listSharedByMe: ReturnType<typeof vi.fn> };
+
+  beforeEach(async () => {
+    service = {
+      listSharedByMe: vi.fn().mockResolvedValue(MOCK_SHARED_BY_ME_RESPONSE),
+    };
+    app = await buildApp(service);
+  });
+
+  afterEach(async () => {
+    vi.clearAllMocks();
+    await app.close();
+  });
+
+  it('returns 200 with shared-by-me items on a valid request', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/api/v1/files/shared-by-me')
+      .query({ bucket: 'user-bucket' })
+      .expect(200);
+
+    expect(res.body).toMatchObject({ items: expect.any(Array) });
+    expect(service.listSharedByMe).toHaveBeenCalledWith(
+      'user-bucket',
+      TEST_USER.at,
+    );
+  });
+
+  it('returns 400 when bucket is missing', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/files/shared-by-me')
+      .expect(400);
+    expect(service.listSharedByMe).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when service throws UnauthorizedException', async () => {
+    service.listSharedByMe.mockRejectedValue(new UnauthorizedException());
+    await request(app.getHttpServer())
+      .get('/api/v1/files/shared-by-me')
+      .query({ bucket: 'user-bucket' })
       .expect(401);
   });
 });

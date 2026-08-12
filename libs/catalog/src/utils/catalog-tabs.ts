@@ -1,6 +1,5 @@
 import type { TabModel } from '@epam/ai-dial-ui-kit';
 import type { CatalogItem } from '../models/catalog-item';
-import type { CatalogTitles } from '../models/catalog-props';
 import { CatalogEntityType } from '../types/entity-type';
 
 /**
@@ -9,29 +8,25 @@ import { CatalogEntityType } from '../types/entity-type';
  */
 const DEFAULT_TAB_LABELS: Record<CatalogEntityType, string> = {
   [CatalogEntityType.Model]: 'Models',
-  [CatalogEntityType.Application]: 'Agents',
   [CatalogEntityType.Agent]: 'Agents',
   [CatalogEntityType.Toolset]: 'Toolsets',
-  [CatalogEntityType.Guardrail]: 'Guardrails',
+  [CatalogEntityType.Prompt]: 'Prompts',
   [CatalogEntityType.Skill]: 'Skills',
-  [CatalogEntityType.Mcp]: 'MCP',
 };
 
 /** Canonical display order for entity type tabs. */
 const TAB_ORDER: CatalogEntityType[] = [
   CatalogEntityType.Model,
-  CatalogEntityType.Application,
   CatalogEntityType.Agent,
   CatalogEntityType.Toolset,
-  CatalogEntityType.Guardrail,
+  CatalogEntityType.Prompt,
   CatalogEntityType.Skill,
-  CatalogEntityType.Mcp,
 ];
 
 /** Derives entity-type tabs from items present in the catalog, sorted by canonical order. */
 export const buildCatalogTabs = (
   items: CatalogItem[],
-  tabLabels?: CatalogTitles['tabLabels'],
+  tabLabels?: Partial<Record<CatalogEntityType, string>>,
 ): TabModel[] => {
   const labels = { ...DEFAULT_TAB_LABELS, ...tabLabels };
   const presentTypes = new Set(items.map((item) => item.type));

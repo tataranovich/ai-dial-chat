@@ -25,7 +25,7 @@
 
 ### Requirement: Duplicate is dispatched through the existing onCopyFiles callback
 
-Triggering the Duplicate action SHALL be handled entirely by `@epam/ai-dial-ui-kit`'s internal `DialFileManager` logic, which computes a same-folder destination and a collision-free name, then calls the app's existing `onCopyFiles(items, destinationFolder)` callback (already wired per [file-manager-copy-move](../../../specs/file-manager-copy-move/spec.md)). This capability SHALL NOT introduce a separate `onDuplicate` callback or a distinct BFF request path — duplicated items flow through the same `POST /api/v1/files/copy` endpoint as an ordinary same-folder copy.
+Triggering the Duplicate action SHALL be handled entirely by `@epam/ai-dial-react-file-manager`'s internal `DialFileManager` logic, which computes a same-folder destination and a collision-free name, then calls the app's existing `onCopyFiles(items, destinationFolder)` callback (already wired per [file-manager-copy-move](../../../specs/file-manager-copy-move/spec.md)). This capability SHALL NOT introduce a separate `onDuplicate` callback or a distinct BFF request path — duplicated items flow through the same `POST /api/v1/files/copy` endpoint as an ordinary same-folder copy.
 
 **State ownership**: no new state is introduced in `useDialFileManager`; `isCopying` (from `file-manager-copy-move`) covers the in-flight state for a duplicate the same way it covers an ordinary copy.
 
@@ -43,7 +43,7 @@ Triggering the Duplicate action SHALL be handled entirely by `@epam/ai-dial-ui-k
 
 ### Requirement: Naming collision avoidance is ui-kit-owned
 
-The destination name for a duplicated file or folder SHALL be computed by `@epam/ai-dial-ui-kit` against the destination folder's already-loaded listing, using the pattern `"{base} ({n}){ext}"` for files (extension preserved, `n` starting at 1 and incrementing until unused) and `"{name} ({n})"` for folders. This app SHALL NOT implement or duplicate this naming logic.
+The destination name for a duplicated file or folder SHALL be computed by `@epam/ai-dial-react-file-manager` against the destination folder's already-loaded listing, using the pattern `"{base} ({n}){ext}"` for files (extension preserved, `n` starting at 1 and incrementing until unused) and `"{name} ({n})"` for folders. This app SHALL NOT implement or duplicate this naming logic.
 
 #### Scenario: First duplicate of a file gets "(1)" suffix
 
@@ -87,6 +87,11 @@ The destination name for a duplicated file or folder SHALL be computed by `@epam
 - **WHEN** `onCopyFiles` is called with items whose source and destination folder are identical
 - **THEN** the folder's cache entry is invalidated and `retryCounter` increments, exactly once for that folder key
 
+#### Scenario: Same-folder copy success shows copy notification
+
+- **WHEN** a duplicate (same-folder copy) succeeds
+- **THEN** the same success notification behavior specified in `file-manager-copy-move` for `onCopyFiles` applies unchanged, using the duplicated destination name in the single-item toast
+
 #### Scenario: Same-folder copy failure surfaces the existing error toast
 
 - **WHEN** a duplicate (same-folder copy) fails
@@ -96,12 +101,12 @@ The destination name for a duplicated file or folder SHALL be computed by `@epam
 
 ### Requirement: i18n key for the Duplicate action label
 
-The key `dialFileManager.duplicateAction` SHALL be added to `apps/chat/src/i18n/locales/en.json`, with a matching `DialFileManagerI18nKeys.DuplicateAction` member in `apps/chat/src/constants/translation-keys.ts`. This capability SHALL NOT reuse the existing `ButtonsI18nKeys.Duplicate` key (owned by the unrelated conversation-duplicate feature).
+The Duplicate action label SHALL reuse the shared `ButtonsI18nKeys.Duplicate` (`buttons.duplicate`) key in `apps/chat/src/constants/translation-keys.ts` and `apps/chat/src/i18n/locales/en.json`. This capability SHALL NOT introduce a separate `dialFileManager.duplicateAction` key — the conversation-duplicate and file-manager-duplicate features already use the identical English word "Duplicate" for this action, so a single shared key keeps them consistent instead of drifting into two copies of the same translation.
 
 #### Scenario: Duplicate action label is translated
 
 - **WHEN** the Duplicate action is rendered in the grid, tree, or bulk toolbar
-- **THEN** its label is produced via `t(DialFileManagerI18nKeys.DuplicateAction)`, never a raw string literal or `ButtonsI18nKeys.Duplicate`
+- **THEN** its label is produced via `t(ButtonsI18nKeys.Duplicate)`, never a raw string literal or a dedicated `dialFileManager.duplicateAction` key
 
 ---
 

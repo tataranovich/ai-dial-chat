@@ -1,8 +1,14 @@
+import 'katex/dist/katex.min.css';
 import { memo, useMemo, type FC } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { type Components, type Options } from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
+import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import { useStreamedMarkdownContent } from '../../hooks/useStreamedMarkdownContent';
 import { CodeBlockTheme } from '../../types/code-editor';
+import { buildCssVars } from '../../utils/build-css-vars';
+import { preprocessLaTeX } from '../../utils/latex';
 import { mergeClasses } from '../../utils/merge-class';
 import { MarkdownCodeBlock } from './CodeBlock/CodeBlock';
 import styles from './MarkdownRenderer.module.scss';
@@ -10,6 +16,7 @@ import {
   MarkdownTable,
   type MarkdownTableClassNames,
 } from './Table/MarkdownTable';
+import tableStyles from './Table/MarkdownTable.module.scss';
 import { MarkdownTaskCheckbox } from './TaskCheckbox/MarkdownTaskCheckbox';
 
 /** Per-element className overrides passed to {@link MarkdownRenderer}. */
@@ -28,9 +35,9 @@ export interface MarkdownRendererClassNames extends MarkdownTableClassNames {
   h6?: string;
   /** Classes on `<p>` elements. */
   p?: string;
-  /** Extra classes on `<ul>` (base: `list-disc pl-5`). */
+  /** Extra classes on `<ul>` (base: `list-disc ps-5`). */
   ul?: string;
-  /** Extra classes on `<ol>` (base: `list-decimal pl-5`). */
+  /** Extra classes on `<ol>` (base: `list-decimal ps-5`). */
   ol?: string;
   /** Typography class for `<strong>`. Defaults to `'font-semibold'`. */
   strong?: string;
@@ -41,11 +48,6 @@ export interface MarkdownRendererClassNames extends MarkdownTableClassNames {
    * to fenced code blocks. Migrate to `codeBlockContainer` for the block container.
    */
   codeBlock?: string;
-  /**
-   * @deprecated Was the font-size class on the `<pre>` wrapper; has no effect on fenced blocks
-   * now that `<pre>` is a passthrough.
-   */
-  codeBlockFont?: string;
   /** Extra classes on the {@link MarkdownCodeBlock} outer container. */
   codeBlockContainer?: string;
   /** Extra classes on the {@link MarkdownCodeBlock} header bar. */
@@ -70,7 +72,7 @@ export interface MarkdownRendererClassNames extends MarkdownTableClassNames {
   tableBodyCell?: string;
   /** Extra classes on `<th>` only (applied alongside `tableCell`). */
   tableHeader?: string;
-  /** Typography class for `<th>` cells. Defaults to `'font-semibold'`. */
+  /** Typography class for `<th>` cells. Defaults to `'dial-tiny-semi-text uppercase tracking-wider'`. Text color is set separately via `colors.tableHeaderText`. */
   tableHeaderFont?: string;
 }
 
@@ -82,13 +84,15 @@ export interface MarkdownRendererProps {
   isStreaming?: boolean;
   /** Reveal speed used while `isStreaming` is true. Defaults to 120 characters per second. */
   streamCharactersPerSecond?: number;
-  /** Per-element styling classes. Merged with structural base classes inside the component. */
+  /** Per-element styling classes. Merged with structural base classes inside the component. Defaults to no overrides (`{}`). */
   classNames?: MarkdownRendererClassNames;
   /**
    * Full component overrides merged on top of the built-in map.
    * Use for elements not covered by `classNames`.
    */
   components?: Components;
+  /** Extra rehype plugins, applied after the built-in KaTeX pass. Defaults to none. */
+  rehypePlugins?: NonNullable<Options['rehypePlugins']>;
   /**
    * Label shown with a shimmer animation while `isStreaming` is true and no content has arrived yet.
    * Defaults to `'Thinking'`. Pass a translated string from the consuming app.
@@ -98,23 +102,79 @@ export interface MarkdownRendererProps {
   codeBlockCopyLabel?: string;
   /** Accessible label for the copy button after copying. Defaults to `'Copied!'`. */
   codeBlockCopiedLabel?: string;
-  /** Syntax highlight color theme for code blocks. Defaults to `'dark'`. */
+  /** Syntax highlight color theme for code blocks and tables. Defaults to `'dark'`. */
   codeBlockTheme?: CodeBlockTheme;
+  /** Color overrides applied as CSS custom properties. */
+  colors?: MarkdownRendererColors;
+  /** Accessible label for a table's horizontally scrollable region. Defaults to `'Scrollable table'`. */
+  tableScrollRegionAriaLabel?: string;
 }
 
-/** GFM remark plugins list, shared across all markdown instances. */
-const remarkPlugins = [remarkGfm];
+/** CSS custom-property overrides for the `MarkdownRenderer` component. */
+export interface MarkdownRendererColors {
+  /** Primary color of the "thinking" shimmer gradient. */
+  thinkingPrimary?: string;
+  /** Secondary color of the "thinking" shimmer gradient. */
+  thinkingSecondary?: string;
+  /** Border color for `<hr>` separators and table cell borders. */
+  border?: string;
+  /** Border color for the `<blockquote>` start border. Defaults to `--stroke-primary`. */
+  blockquoteBorder?: string;
+  /** Text color for `<blockquote>` content. Defaults to `--text-secondary`. */
+  blockquoteText?: string;
+  /** Text color for `<a>` links. Defaults to `--text-accent`. */
+  linkText?: string;
+  /** Focus-visible outline color for `<a>` links. Defaults to `--stroke-focus-black`. */
+  linkFocus?: string;
+  /** Text color for `<th>` table header cells. Defaults to `--text-secondary`. */
+  tableHeaderText?: string;
+  /** Text color for `<h6>` headings. Defaults to `--text-secondary`. */
+  headingSixText?: string;
+  /** Background color for inline `<code>` spans. Defaults to `--bg-layer-raised`. */
+  inlineCodeBackground?: string;
+  /** Text color for inline `<code>` spans. Defaults to `--text-primary`. */
+  inlineCodeText?: string;
+}
+
+/**
+ * Remark plugins list, shared across all markdown instances: GFM support,
+ * soft-break-to-hard-break conversion so single newlines render as visible
+ * line breaks, then math-span detection for KaTeX rendering.
+ */
+const remarkPlugins: Options['remarkPlugins'] = [
+  remarkGfm,
+  remarkBreaks,
+  [remarkMath, { singleDollarTextMath: false }],
+];
+
+/** KaTeX rehype plugin list, shared across all markdown instances. */
+const baseRehypePlugins: NonNullable<Options['rehypePlugins']> = [
+  [rehypeKatex, { output: 'mathml', strict: false }],
+];
+
+/** Stable empty plugin list used as the default when no extra plugins are passed. */
+const EMPTY_REHYPE_PLUGINS: NonNullable<Options['rehypePlugins']> = [];
 
 /** Stable empty classNames object used as the default when no `classNames` prop is passed. */
 const EMPTY_CLASS_NAMES: MarkdownRendererClassNames = {};
 
-/**
- * Shared component definitions for elements whose rendering is identical across
- * all consumers. These are merged after `classNames`-built components and before
- * explicit `components` overrides, so consumers can still override them.
- */
+/** Default react-markdown component overrides shared across all consumers. */
 export const defaultMarkdownComponents: Components = {
   li: ({ children }) => <li className="mb-1.5 last:mb-0">{children}</li>,
+};
+
+/** Minimal shape shared by hast text and element nodes, enough to read a cell's plain text. */
+interface HastTextLike {
+  type: string;
+  value?: string;
+  children?: HastTextLike[];
+}
+
+/** Recursively concatenates the text content of a hast node. */
+const getNodeText = (node: HastTextLike | undefined): string => {
+  if (!node) return '';
+  if (node.type === 'text') return node.value ?? '';
+  return (node.children ?? []).map(getNodeText).join('');
 };
 
 const buildMarkdownComponents = (
@@ -123,14 +183,22 @@ const buildMarkdownComponents = (
   codeBlockCopyLabel?: string,
   codeBlockCopiedLabel?: string,
   codeBlockTheme?: CodeBlockTheme,
+  tableScrollRegionAriaLabel?: string,
 ): Components => ({
   h1: ({ children }) => <h1 className={cn.h1}>{children}</h1>,
   h2: ({ children }) => <h2 className={cn.h2}>{children}</h2>,
   h3: ({ children }) => <h3 className={cn.h3}>{children}</h3>,
   h4: ({ children }) => <h4 className={cn.h4}>{children}</h4>,
   h5: ({ children }) => <h5 className={cn.h5}>{children}</h5>,
-  h6: ({ children }) => <h6 className={cn.h6}>{children}</h6>,
-  p: ({ children }) => <p className={cn.p}>{children}</p>,
+  h6: ({ children }) => (
+    <h6 className={mergeClasses(styles.h6, cn.h6)}>{children}</h6>
+  ),
+  /* `break-words` is structural rather than typographic: an unbreakable token
+   * (typically a long URL) would otherwise overflow its container and get
+   * clipped by any ancestor that hides overflow, e.g. a line-clamped quote. */
+  p: ({ children }) => (
+    <p className={mergeClasses('break-words', cn.p)}>{children}</p>
+  ),
   ul: ({ children }) => (
     <ul className={mergeClasses('list-disc ps-5', cn.ul)}>{children}</ul>
   ),
@@ -167,6 +235,7 @@ const buildMarkdownComponents = (
       <code
         className={mergeClasses(
           'rounded px-1 py-0.5',
+          styles.codeInline,
           cn.codeInlineFont ?? 'dial-code-text',
           cn.codeInline,
         )}
@@ -178,7 +247,8 @@ const buildMarkdownComponents = (
   blockquote: ({ children }) => (
     <blockquote
       className={mergeClasses(
-        'border-s-2 border-primary py-1 ps-4 text-secondary',
+        'border-s-2 py-1 ps-4',
+        styles.blockquote,
         cn.blockquote,
       )}
     >
@@ -191,7 +261,8 @@ const buildMarkdownComponents = (
       target="_blank"
       rel="noopener noreferrer"
       className={mergeClasses(
-        'decoration-current/60 text-accent-primary underline underline-offset-2 hover:decoration-current focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-[var(--stroke-focus,#EEF1F7)]',
+        'decoration-current/60 break-words underline underline-offset-2 hover:decoration-current focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2',
+        styles.link,
         cn.link,
       )}
     >
@@ -211,14 +282,42 @@ const buildMarkdownComponents = (
       <MarkdownTaskCheckbox checked={checked ?? false} />
     ) : null,
   table: ({ children }) => (
-    <MarkdownTable classNames={cn}>{children}</MarkdownTable>
+    <MarkdownTable
+      classNames={cn}
+      scrollRegionAriaLabel={tableScrollRegionAriaLabel}
+    >
+      {children}
+    </MarkdownTable>
   ),
+  tr: ({ children, node }) => {
+    const cells = (node?.children.filter((child) => child.type === 'element') ??
+      []) as (HastTextLike & { tagName?: string })[];
+    const isHeaderRow = cells.some((cell) => cell.tagName === 'th');
+    const nonEmptyCount = cells.filter(
+      (cell) => getNodeText(cell).trim().length > 0,
+    ).length;
+    const isSectionRow =
+      !isHeaderRow && cells.length > 1 && nonEmptyCount === 1;
+
+    return (
+      <tr
+        className={mergeClasses(
+          tableStyles.row,
+          isSectionRow && tableStyles.sectionRow,
+        )}
+      >
+        {children}
+      </tr>
+    );
+  },
   th: ({ children }) => (
     <th
+      scope="col"
       className={mergeClasses(
-        'max-w-96 whitespace-normal break-words border-b px-3 py-2.5 text-start text-secondary [overflow-wrap:anywhere]',
-        styles.secondaryBorder,
-        cn.tableHeaderFont ?? 'font-semibold',
+        'sticky top-0 z-[2] max-w-96 whitespace-normal break-words border-b px-3 py-2.5 text-start [overflow-wrap:anywhere]',
+        tableStyles.rowDivider,
+        tableStyles.tableHeaderCell,
+        cn.tableHeaderFont ?? 'dial-tiny-semi-text uppercase tracking-wider',
         cn.tableCell,
         cn.tableHeader,
       )}
@@ -230,7 +329,7 @@ const buildMarkdownComponents = (
     <td
       className={mergeClasses(
         'max-w-96 whitespace-normal break-words border-b px-3 py-2.5 align-top [overflow-wrap:anywhere]',
-        styles.secondaryBorder,
+        tableStyles.rowDivider,
         cn.tableBodyCell,
         cn.tableCell,
       )}
@@ -248,16 +347,37 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
     streamCharactersPerSecond,
     classNames = EMPTY_CLASS_NAMES,
     components,
+    rehypePlugins = EMPTY_REHYPE_PLUGINS,
     thinkingLabel = 'Thinking',
     codeBlockCopyLabel,
     codeBlockCopiedLabel,
     codeBlockTheme,
+    colors,
+    tableScrollRegionAriaLabel,
   }) => {
     const displayedContent = useStreamedMarkdownContent(
       content,
       isStreaming,
       streamCharactersPerSecond,
     );
+    const processedContent = useMemo(
+      () => preprocessLaTeX(displayedContent),
+      [displayedContent],
+    );
+
+    const cssVars = buildCssVars({
+      '--cm-thinking-inverted': colors?.thinkingPrimary,
+      '--cm-thinking-secondary': colors?.thinkingSecondary,
+      '--cm-markdown-border': colors?.border,
+      '--cm-blockquote-border': colors?.blockquoteBorder,
+      '--cm-blockquote-text': colors?.blockquoteText,
+      '--cm-link-text': colors?.linkText,
+      '--cm-link-focus': colors?.linkFocus,
+      '--cm-table-header-text': colors?.tableHeaderText,
+      '--cm-h6-text': colors?.headingSixText,
+      '--cm-code-inline-bg': colors?.inlineCodeBackground,
+      '--cm-code-inline-text': colors?.inlineCodeText,
+    });
 
     const mergedComponents = useMemo(
       () => ({
@@ -267,6 +387,7 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
           codeBlockCopyLabel,
           codeBlockCopiedLabel,
           codeBlockTheme,
+          tableScrollRegionAriaLabel,
         ),
         ...defaultMarkdownComponents,
         ...components,
@@ -277,21 +398,29 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
         codeBlockCopyLabel,
         codeBlockCopiedLabel,
         codeBlockTheme,
+        tableScrollRegionAriaLabel,
         components,
       ],
     );
 
     if (isStreaming && !displayedContent) {
-      return <span className={styles.thinking}>{thinkingLabel}</span>;
+      return (
+        <span className={styles.thinking} style={cssVars}>
+          {thinkingLabel}
+        </span>
+      );
     }
 
     return (
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        components={mergedComponents}
-      >
-        {displayedContent}
-      </ReactMarkdown>
+      <div style={cssVars}>
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={[...baseRehypePlugins, ...rehypePlugins]}
+          components={mergedComponents}
+        >
+          {processedContent}
+        </ReactMarkdown>
+      </div>
     );
   },
 );

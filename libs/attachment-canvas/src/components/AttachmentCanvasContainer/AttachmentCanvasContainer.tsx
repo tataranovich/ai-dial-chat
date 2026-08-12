@@ -5,6 +5,8 @@ import {
 import { memo, useCallback, type FC } from 'react';
 import { useAttachmentCanvas } from '../../context/AttachmentCanvasContext';
 import type {
+  AttachmentCanvasLabels,
+  CodeCanvasContent,
   JsonCanvasContent,
   MarkdownCanvasContent,
   PlainTextCanvasContent,
@@ -15,30 +17,14 @@ import { AttachmentCanvas } from '../AttachmentCanvas/AttachmentCanvas';
 
 /** Props for the AttachmentCanvasContainer component. */
 export interface AttachmentCanvasContainerProps {
-  /** Accessible label for the panel region. Defaults to `'Attachment preview'`. */
-  ariaLabel?: string;
-  /** Accessible label for the close button. Defaults to `'Close'`. */
-  closeLabel?: string;
-  /** Accessible label for the download button. Defaults to `'Download'`. */
-  downloadLabel?: string;
-  /** Message shown when the content type is `Unsupported`. Defaults to `'Preview is not supported for this file'`. */
-  unsupportedLabel?: string;
-  /** Tooltip and aria-label for the copy-text button in its default state. Defaults to `'Copy text'`. */
-  copyTextLabel?: string;
-  /** Tooltip and aria-label for the copy-text button after a successful copy. Defaults to `'Copied!'`. */
-  copiedTextLabel?: string;
-  /** Tooltip and aria-label for the copy-as-markdown button in its default state. Defaults to `'Copy as Markdown'`. */
-  copyMarkdownLabel?: string;
-  /** Tooltip and aria-label for the copy-as-markdown button after a successful copy. Defaults to `'Copied!'`. */
-  copiedMarkdownLabel?: string;
-  /** Tooltip and aria-label for the copy-JSON button in its default state. Defaults to `'Copy as JSON'`. */
-  copyJsonLabel?: string;
-  /** Tooltip and aria-label for the copy-JSON button after a successful copy. Defaults to `'Copied!'`. */
-  copiedJsonLabel?: string;
+  /** User-visible strings. All fields have English defaults. */
+  labels?: AttachmentCanvasLabels;
   /** Whether the viewport is in mobile breakpoint — disables drag-to-resize. Defaults to `false`. */
   isMobile?: boolean;
   /** Initial panel width in pixels. When omitted, SidebarPanel uses its own default. */
   defaultWidth?: number;
+  /** Maximum panel width in pixels. Constrains drag-to-resize so the chat area is never fully hidden. */
+  maxWidth?: number;
   /** Syntax highlight color theme forwarded to MarkdownRenderer code blocks. */
   codeBlockTheme?: CodeBlockTheme;
 }
@@ -46,22 +32,28 @@ export interface AttachmentCanvasContainerProps {
 /** Context-connected container that renders `AttachmentCanvas` with download support. */
 export const AttachmentCanvasContainer: FC<AttachmentCanvasContainerProps> =
   memo(
-    ({
-      ariaLabel = 'Attachment preview',
-      closeLabel = 'Close',
-      downloadLabel = 'Download',
-      unsupportedLabel = 'Preview is not supported for this file',
-      copyTextLabel,
-      copiedTextLabel,
-      copyMarkdownLabel,
-      copiedMarkdownLabel,
-      copyJsonLabel,
-      copiedJsonLabel,
-      isMobile = false,
-      defaultWidth,
-      codeBlockTheme,
-    }) => {
-      const { isOpen, content, fileName, closeCanvas } = useAttachmentCanvas();
+    ({ labels, isMobile = false, defaultWidth, maxWidth, codeBlockTheme }) => {
+      const {
+        ariaLabel = 'Attachment preview',
+        closeLabel = 'Close',
+        downloadLabel = 'Download',
+        unsupportedLabel = 'Preview is not supported for this file',
+        loadErrorLabel = 'Failed to load file',
+        forbiddenErrorLabel = "You don't have permission to access this file",
+        copyTextLabel,
+        copiedTextLabel,
+        copyMarkdownLabel,
+        copiedMarkdownLabel,
+        copyJsonLabel,
+        copiedJsonLabel,
+        htmlFrameBlockedLabel,
+        htmlOpenInNewTabLabel,
+        htmlViewSourceLabel,
+        htmlViewRenderedLabel,
+      } = labels ?? {};
+
+      const { isOpen, isLoading, content, fileName, closeCanvas } =
+        useAttachmentCanvas();
 
       const handleDownload = useCallback(() => {
         downloadAttachmentContent(content, fileName);
@@ -70,6 +62,8 @@ export const AttachmentCanvasContainer: FC<AttachmentCanvasContainerProps> =
       const handleCopyText = useCallback(() => {
         if (content.type === AttachmentContentType.PlainText) {
           void copyToClipboard((content as PlainTextCanvasContent).text);
+        } else if (content.type === AttachmentContentType.Code) {
+          void copyToClipboard((content as CodeCanvasContent).text);
         }
       }, [content]);
 
@@ -90,37 +84,48 @@ export const AttachmentCanvasContainer: FC<AttachmentCanvasContainerProps> =
       return (
         <AttachmentCanvas
           isOpen={isOpen}
+          isLoading={isLoading}
           onClose={closeCanvas}
           content={content}
           fileName={fileName}
-          ariaLabel={ariaLabel}
-          closeLabel={closeLabel}
+          labels={{
+            ariaLabel,
+            closeLabel,
+            downloadLabel,
+            copyTextLabel,
+            copiedTextLabel,
+            copyMarkdownLabel,
+            copiedMarkdownLabel,
+            copyJsonLabel,
+            copiedJsonLabel,
+            unsupportedLabel,
+            loadErrorLabel,
+            forbiddenErrorLabel,
+            htmlFrameBlockedLabel,
+            htmlOpenInNewTabLabel,
+            htmlViewSourceLabel,
+            htmlViewRenderedLabel,
+          }}
           onDownload={handleDownload}
-          downloadLabel={downloadLabel}
           onCopyText={
-            content.type === AttachmentContentType.PlainText
+            content.type === AttachmentContentType.PlainText ||
+            content.type === AttachmentContentType.Code
               ? handleCopyText
               : undefined
           }
-          copyTextLabel={copyTextLabel}
-          copiedTextLabel={copiedTextLabel}
           onCopyMarkdown={
             content.type === AttachmentContentType.Markdown
               ? handleCopyMarkdown
               : undefined
           }
-          copyMarkdownLabel={copyMarkdownLabel}
-          copiedMarkdownLabel={copiedMarkdownLabel}
           onCopyJson={
             content.type === AttachmentContentType.Json
               ? handleCopyJson
               : undefined
           }
-          copyJsonLabel={copyJsonLabel}
-          copiedJsonLabel={copiedJsonLabel}
-          unsupportedLabel={unsupportedLabel}
           isMobile={isMobile}
           defaultWidth={defaultWidth}
+          maxWidth={maxWidth}
           codeBlockTheme={codeBlockTheme}
         />
       );

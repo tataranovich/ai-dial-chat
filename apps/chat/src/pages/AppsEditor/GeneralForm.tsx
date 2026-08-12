@@ -8,7 +8,7 @@ import {
   DeploymentCreationFormValues,
   validateDeploymentCreationFields,
 } from '@epam/ai-dial-deployment-creation-form';
-import { DialNotification, NotificationVariant } from '@epam/ai-dial-ui-kit';
+import { ErrorMessageNotification } from '@epam/ai-dial-ui-kit';
 import {
   forwardRef,
   memo,
@@ -20,12 +20,29 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AppsEditorI18nKeys } from '../../constants/translation-keys';
+import {
+  AppsEditorI18nKeys,
+  BasicI18nKeys,
+  EditorI18nKeys,
+} from '../../constants/translation-keys';
 import { createApplication } from '../../server-api/applications';
+import type { TriggerSaveGeneralPayload } from '../../types/apps-editor';
 import { isQuickAppSchema } from '../../utils/application-schema';
+import {
+  appendLocaleCode,
+  buildAdditionalLocaleOptions,
+  buildLocaleFieldLabels,
+  composeLocalePayload,
+  PRIMARY_LOCALE,
+} from '../../utils/locale';
 
 export interface GeneralFormHandle {
   submit: () => Promise<void>;
+  /**
+   * Current in-memory General-step values, normalized (trimmed). Includes
+   * `display_version`; excludes the backend `version` field.
+   */
+  getValues: () => TriggerSaveGeneralPayload;
 }
 
 export interface GeneralFormInitialValues {
@@ -34,6 +51,7 @@ export interface GeneralFormInitialValues {
   iconUrl?: string;
   version?: string;
   topics?: string[];
+  otherLocales?: DeploymentCreationFormValues['otherLocales'];
 }
 
 interface Props {
@@ -51,8 +69,19 @@ const EMPTY_VALUES: DeploymentCreationFormValues = {
   iconUrl: '',
   version: '',
   topics: [],
-  intro: '',
+  otherLocales: [],
 };
+
+const normalizeFormValues = (
+  values: Partial<DeploymentCreationFormValues>,
+): DeploymentCreationFormValues => ({
+  name: values.name ?? '',
+  description: values.description ?? '',
+  iconUrl: values.iconUrl ?? '',
+  version: values.version ?? '',
+  topics: values.topics ?? [],
+  otherLocales: values.otherLocales ?? [],
+});
 
 const GeneralForm = forwardRef<GeneralFormHandle, Props>(function GeneralForm(
   { schemaId, appId, initialValues, onCreated },
@@ -70,35 +99,38 @@ const GeneralForm = forwardRef<GeneralFormHandle, Props>(function GeneralForm(
   useEffect(() => {
     if (hasSeededInitialValuesRef.current || !initialValues) return;
     hasSeededInitialValuesRef.current = true;
-    setValues({ ...EMPTY_VALUES, ...initialValues });
+    setValues(normalizeFormValues(initialValues));
   }, [initialValues]);
+
+  const localeOptions = useMemo(() => buildAdditionalLocaleOptions(), []);
 
   const labels: DeploymentCreationFormLabels = useMemo(
     () => ({
       name: {
-        label: t(AppsEditorI18nKeys.GeneralFormNameLabel),
+        label: appendLocaleCode(t(EditorI18nKeys.NameLabel), PRIMARY_LOCALE),
         placeholder: t(AppsEditorI18nKeys.GeneralFormNamePlaceholder),
       },
       description: {
-        label: t(AppsEditorI18nKeys.GeneralFormDescriptionLabel),
+        label: appendLocaleCode(
+          t(EditorI18nKeys.DescriptionLabel),
+          PRIMARY_LOCALE,
+        ),
         placeholder: t(AppsEditorI18nKeys.GeneralFormDescriptionPlaceholder),
       },
       iconUrl: {
-        label: t(AppsEditorI18nKeys.GeneralFormIconUrlLabel),
-        placeholder: t(AppsEditorI18nKeys.GeneralFormIconUrlPlaceholder),
+        label: t(EditorI18nKeys.IconUrlLabel),
+        placeholder: t(BasicI18nKeys.UrlPlaceholder),
       },
       version: {
-        label: t(AppsEditorI18nKeys.GeneralFormVersionLabel),
-        placeholder: t(AppsEditorI18nKeys.GeneralFormVersionPlaceholder),
+        label: t(EditorI18nKeys.VersionLabel),
+        placeholder: t(EditorI18nKeys.VersionPlaceholder),
       },
       topics: {
-        label: t(AppsEditorI18nKeys.GeneralFormTopicsLabel),
-        placeholder: t(AppsEditorI18nKeys.GeneralFormTopicsPlaceholder),
+        label: t(EditorI18nKeys.TopicsLabel),
+        placeholder: t(EditorI18nKeys.TopicsPlaceholder),
       },
-      intro: {
-        label: t(AppsEditorI18nKeys.GeneralFormIntroLabel),
-        placeholder: t(AppsEditorI18nKeys.GeneralFormIntroPlaceholder),
-      },
+      otherLocales: buildLocaleFieldLabels(t),
+      ariaLabel: t(EditorI18nKeys.StepGeneral),
     }),
     [t],
   );
@@ -121,10 +153,10 @@ const GeneralForm = forwardRef<GeneralFormHandle, Props>(function GeneralForm(
       validateNamePattern: true,
       validateVersionPattern: true,
     });
-    if (codes.name || codes.version || codes.intro) {
+    if (codes.name || codes.version) {
       let nameError: string | undefined;
       if (codes.name === DeploymentCreationFieldErrorCode.Required) {
-        nameError = t(AppsEditorI18nKeys.GeneralFormNameRequired);
+        nameError = t(EditorI18nKeys.NameRequired);
       } else if (
         codes.name === DeploymentCreationFieldErrorCode.InvalidFormat
       ) {
@@ -135,9 +167,6 @@ const GeneralForm = forwardRef<GeneralFormHandle, Props>(function GeneralForm(
         name: nameError,
         version: codes.version
           ? t(AppsEditorI18nKeys.GeneralFormVersionInvalid)
-          : undefined,
-        intro: codes.intro
-          ? t(AppsEditorI18nKeys.GeneralFormIntroTooLong)
           : undefined,
       });
       return;
@@ -160,6 +189,7 @@ const GeneralForm = forwardRef<GeneralFormHandle, Props>(function GeneralForm(
             tool_sets: [],
           }
         : undefined;
+      const locales = composeLocalePayload(values.otherLocales, PRIMARY_LOCALE);
       const result = await createApplication({
         name: values.name.trim(),
         type: schemaId,
@@ -167,8 +197,9 @@ const GeneralForm = forwardRef<GeneralFormHandle, Props>(function GeneralForm(
         iconUrl: values.iconUrl.trim() || undefined,
         version: values.version.trim() || undefined,
         topics: values.topics.length > 0 ? values.topics : undefined,
-        intro: values.intro.trim() || undefined,
         applicationProperties,
+        locales,
+        primaryLocale: locales ? PRIMARY_LOCALE : undefined,
       });
       onCreated(
         result.id,
@@ -182,12 +213,26 @@ const GeneralForm = forwardRef<GeneralFormHandle, Props>(function GeneralForm(
     }
   }, [isSubmitting, values, appId, t, onCreated, schemaId]);
 
-  useImperativeHandle(ref, () => ({ submit: handleSubmit }), [handleSubmit]);
+  const getValues = useCallback(
+    (): TriggerSaveGeneralPayload => ({
+      name: values.name.trim(),
+      description: values.description.trim() || undefined,
+      iconUrl: values.iconUrl.trim() || undefined,
+      topics: values.topics.length > 0 ? values.topics : undefined,
+      display_version: values.version.trim() || undefined,
+    }),
+    [values],
+  );
+
+  useImperativeHandle(ref, () => ({ submit: handleSubmit, getValues }), [
+    handleSubmit,
+    getValues,
+  ]);
 
   const previewItem = useMemo<CatalogItem>(
     () => ({
       id: 'preview',
-      type: CatalogEntityType.Application,
+      type: CatalogEntityType.Agent,
       name: values.name,
       version: values.version,
       lastUsed: '',
@@ -215,20 +260,16 @@ const GeneralForm = forwardRef<GeneralFormHandle, Props>(function GeneralForm(
             errors={errors}
             onChange={handleChange}
             labels={labels}
+            availableLocaleOptions={localeOptions}
           />
 
-          {submitError && (
-            <DialNotification
-              variant={NotificationVariant.Error}
-              message={submitError}
-            />
-          )}
+          {submitError && <ErrorMessageNotification message={submitError} />}
         </div>
       </div>
 
       <div className="flex w-1/2 flex-col bg-layer-1 p-4">
         <p className="dial-small-text text-secondary">
-          {t(AppsEditorI18nKeys.GeneralFormPreviewTitle)}
+          {t(BasicI18nKeys.Preview)}
         </p>
         <div className="flex flex-1 items-center justify-center">
           <div className="w-[280px]">
