@@ -2,7 +2,7 @@ name: Release Workflow
 
 on:
   push:
-    branches: [development-1.0, release-1.*]
+    branches: [development, release-1.*]
   workflow_dispatch:
     inputs:
       promote:
@@ -27,9 +27,9 @@ jobs:
       promote: ${{ github.event_name == 'workflow_dispatch' && inputs.promote }}
       node-version: 24
       filter-version: '1\.[0-9]+'
-      primary-branch-pattern: '^development-1\.0$'
+      primary-branch-pattern: '^development$'
       release-branch-pattern: '^release-1\.[0-9]+$'
-      docker-development-tag: 'development-1.0'
+      docker-development-tag: 'development'
       maximize-build-space: false
       draft-stable-releases: false
       # Disable long running parts
