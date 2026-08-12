@@ -3,11 +3,20 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getEmptyLeafFolderIds,
+  getFolderNestingLevel,
+  getFoldersDepth,
   getPartialAndFullyChosenFolders,
   getSelectedEntitiesByFolderId,
+  remapMovedPath,
+  sortByName,
   updateMovedEntityId,
   updateMovedFolderId,
 } from '@/src/utils/app/folders';
+
+import {
+  MAX_NESTED_FOLDERS,
+  MAX_NEW_FOLDER_PATH_SEGMENTS,
+} from '@/src/constants/folders';
 
 import { FeatureType } from '@epam/ai-dial-shared';
 import type { FolderInterface, ShareEntity } from '@epam/ai-dial-shared';
@@ -243,5 +252,209 @@ describe('getPartialAndFullyChosenFolders with directContainerFolderIds', () => 
     expect(fullyChosenFolderIds).toEqual([]);
     expect(partialChosenFolderIds).toContain('files/public/folderX/');
     expect(partialChosenFolderIds).toContain('files/public/folderX/sub/');
+  });
+});
+
+describe('getPartialAndFullyChosenFolders with folder/prompt id collision', () => {
+  // A folder and a root-level prompt share the exact same path string
+  // (the prompt is named identically to the folder). The prompt id equals
+  // the folder id without a trailing slash.
+  const folderPath = 'prompts/bucket/collide';
+  const folders = [{ id: folderPath }] as FolderInterface[];
+  const items = [
+    { id: folderPath }, // root prompt named exactly like the folder
+    { id: `${folderPath}/child-a` },
+    { id: `${folderPath}/child-b` },
+  ] as ShareEntity[];
+
+  it('keeps the folder partial when one child is unselected despite the id collision', () => {
+    const { fullyChosenFolderIds, partialChosenFolderIds } =
+      getPartialAndFullyChosenFolders(folders, items, [
+        folderPath,
+        `${folderPath}/child-a`,
+        // child-b intentionally left unselected
+      ]);
+
+    expect(fullyChosenFolderIds).not.toContain(`${folderPath}/`);
+    expect(partialChosenFolderIds).toContain(`${folderPath}/`);
+  });
+
+  it('marks the folder fully chosen when all its children are selected', () => {
+    const { fullyChosenFolderIds } = getPartialAndFullyChosenFolders(
+      folders,
+      items,
+      items.map((i) => i.id),
+    );
+
+    expect(fullyChosenFolderIds).toContain(`${folderPath}/`);
+  });
+});
+
+describe('getFolderNestingLevel', () => {
+  it.each([
+    [undefined, 0],
+    ['', 0],
+    ['files/bucket', 0],
+    ['files/bucket/folder1', 1],
+    ['files/bucket/folder1/folder2', 2],
+    ['files/bucket/folder1/folder2/folder3', 3],
+    ['files/bucket/folder1/folder2/folder3/folder4', 4],
+  ])('returns %s -> %s', (folderId, expected) => {
+    expect(getFolderNestingLevel(folderId)).toBe(expected);
+  });
+
+  it('ignores a trailing slash', () => {
+    expect(getFolderNestingLevel('files/bucket/folder1/')).toBe(1);
+  });
+
+  it.each([
+    ['files/bucket', true],
+    ['files/bucket/f1', true],
+    ['files/bucket/f1/f2', true],
+    ['files/bucket/f1/f2/f3', true],
+    ['files/bucket/f1/f2/f3/f4', false],
+  ])('allows creating inside %s -> %s', (parentId, allowed) => {
+    expect(getFolderNestingLevel(parentId) < MAX_NESTED_FOLDERS).toBe(allowed);
+  });
+});
+
+describe('getFoldersDepth', () => {
+  const bucket = 'files/bucket';
+  const folders = [
+    testFolder(`${bucket}/src`, bucket),
+    testFolder(`${bucket}/src/child`, `${bucket}/src`),
+    testFolder(`${bucket}/leaf`, bucket),
+  ];
+
+  it('counts the folder itself, so a leaf is 1', () => {
+    expect(getFoldersDepth(folders[2], folders)).toBe(1);
+  });
+
+  it('counts the deepest nested child', () => {
+    expect(getFoldersDepth(folders[0], folders)).toBe(2);
+  });
+});
+
+describe('remapMovedPath', () => {
+  const bucket = 'files/bucket';
+  const rename = [
+    { sourceUrl: `${bucket}/parent`, destinationUrl: `${bucket}/renamed` },
+  ];
+
+  it('remaps the moved folder itself', () => {
+    expect(remapMovedPath(`${bucket}/parent`, rename)).toBe(
+      `${bucket}/renamed`,
+    );
+  });
+
+  it('keeps the subtree below the moved folder', () => {
+    expect(remapMovedPath(`${bucket}/parent/child/leaf`, rename)).toBe(
+      `${bucket}/renamed/child/leaf`,
+    );
+  });
+
+  it('leaves unrelated paths untouched', () => {
+    expect(remapMovedPath(`${bucket}/other/child`, rename)).toBe(
+      `${bucket}/other/child`,
+    );
+  });
+
+  it('does not match a sibling sharing the name prefix', () => {
+    expect(remapMovedPath(`${bucket}/parent2/child`, rename)).toBe(
+      `${bucket}/parent2/child`,
+    );
+  });
+
+  it('remaps a path moved to another parent', () => {
+    expect(
+      remapMovedPath(`${bucket}/a/moved/child`, [
+        {
+          sourceUrl: `${bucket}/a/moved`,
+          destinationUrl: `${bucket}/b/moved`,
+        },
+      ]),
+    ).toBe(`${bucket}/b/moved/child`);
+  });
+
+  it('applies a single mapping per path, so a chain does not remap twice', () => {
+    expect(
+      remapMovedPath(`${bucket}/a`, [
+        { sourceUrl: `${bucket}/a`, destinationUrl: `${bucket}/b` },
+        { sourceUrl: `${bucket}/b`, destinationUrl: `${bucket}/c` },
+      ]),
+    ).toBe(`${bucket}/b`);
+  });
+});
+
+describe('MAX_NEW_FOLDER_PATH_SEGMENTS', () => {
+  it.each([
+    'files/bucket',
+    'files/bucket/f1',
+    'files/bucket/f1/f2',
+    'files/bucket/f1/f2/f3',
+    'files/bucket/f1/f2/f3/f4',
+  ])('matches the app-side check for %s', (parentId) => {
+    const vetoedByUiKit =
+      parentId.split('/').filter(Boolean).length >
+      MAX_NEW_FOLDER_PATH_SEGMENTS - 1;
+
+    expect(vetoedByUiKit).toBe(
+      getFolderNestingLevel(parentId) >= MAX_NESTED_FOLDERS,
+    );
+  });
+});
+
+describe('sortByName', () => {
+  const toEntities = (names: string[]) =>
+    names.map((name, index) => ({
+      id: `folder/id-${index}`,
+      name,
+      folderId: 'folder',
+    }));
+
+  it('orders numeric suffixes character by character', () => {
+    const entities = toEntities([
+      'New folder 10',
+      'New folder 2',
+      'New folder 1',
+      'New folder 20',
+      'New folder 3',
+    ]);
+
+    expect(sortByName(entities).map(({ name }) => name)).toEqual([
+      'New folder 1',
+      'New folder 10',
+      'New folder 2',
+      'New folder 20',
+      'New folder 3',
+    ]);
+  });
+
+  it('compares leading digits as characters', () => {
+    const entities = toEntities(['4eQvn2SpLI', '16EgORK_file', '16EgORK_1_2']);
+
+    expect(sortByName(entities).map(({ name }) => name)).toEqual([
+      '16EgORK_1_2',
+      '16EgORK_file',
+      '4eQvn2SpLI',
+    ]);
+  });
+
+  it('stays case insensitive', () => {
+    const entities = toEntities(['beta', 'Alpha', 'gamma']);
+
+    expect(sortByName(entities).map(({ name }) => name)).toEqual([
+      'Alpha',
+      'beta',
+      'gamma',
+    ]);
+  });
+
+  it('does not mutate the passed array', () => {
+    const entities = toEntities(['b', 'a']);
+
+    sortByName(entities);
+
+    expect(entities.map(({ name }) => name)).toEqual(['b', 'a']);
   });
 });

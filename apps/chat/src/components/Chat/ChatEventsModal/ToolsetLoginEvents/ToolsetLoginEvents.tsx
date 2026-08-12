@@ -5,6 +5,7 @@ import classNames from 'classnames';
 
 import { useTranslation } from '@/src/hooks/useTranslation';
 
+import { getModelName } from '@/src/utils/app/application';
 import { getEntityNameFromId, isPredefinedEntity } from '@/src/utils/app/id';
 import { isEntityIdPublic } from '@/src/utils/app/publications';
 import { getVersionFromId } from '@/src/utils/server/api';
@@ -23,7 +24,11 @@ import {
   ToolsetActions,
 } from '@/src/store/actions';
 import { useAppDispatch, useAppSelector } from '@/src/store/hooks';
-import { ChatEventsSelectors, ToolsetSelectors } from '@/src/store/selectors';
+import {
+  ChatEventsSelectors,
+  ToolsetSelectors,
+  UISelectors,
+} from '@/src/store/selectors';
 
 import { ChatI18nKeys } from '@/src/constants/i18n';
 
@@ -54,6 +59,7 @@ export const ToolsetLoginEvents: FC<ToolsetLoginEventsProps> = ({ events }) => {
   const toolsets = useAppSelector(ToolsetSelectors.selectToolsetsMap);
   const areToolsetsLoading = useAppSelector(ToolsetSelectors.selectIsLoading);
   const isReporting = useAppSelector(ChatEventsSelectors.selectIsReporting);
+  const locale = useAppSelector(UISelectors.selectLocale);
 
   const loginToolsets = useMemo(
     () =>
@@ -160,7 +166,10 @@ export const ToolsetLoginEvents: FC<ToolsetLoginEventsProps> = ({ events }) => {
             {t(ChatI18nKeys.ToolsetsRequireLogin)}
           </h2>
 
-          <div className="divide-y divide-tertiary rounded border border-secondary">
+          <div
+            className="divide-y divide-tertiary rounded border border-secondary"
+            data-qa="toolset-login-list"
+          >
             <div className={classNames(gridLayout, 'bg-layer-1')}>
               <div className="p-2 text-sm text-secondary md:p-3">
                 {t(ChatI18nKeys.Toolset)}
@@ -175,6 +184,7 @@ export const ToolsetLoginEvents: FC<ToolsetLoginEventsProps> = ({ events }) => {
               <div
                 key={event.id}
                 className={classNames(gridLayout, 'bg-layer-3')}
+                data-qa="toolset-login-row"
               >
                 <div className="flex items-center gap-2 overflow-hidden p-2 md:p-3">
                   <ModelIcon
@@ -184,7 +194,7 @@ export const ToolsetLoginEvents: FC<ToolsetLoginEventsProps> = ({ events }) => {
                   />
                   <div className="flex flex-col gap-1 truncate">
                     <span className="truncate text-sm text-primary">
-                      {toolset?.name ?? name}
+                      {getModelName(toolset, locale) || name}
                     </span>
                     <span className="text-xs text-secondary md:hidden">
                       {toolset?.version ?? version}

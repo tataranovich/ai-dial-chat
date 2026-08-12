@@ -3,7 +3,9 @@ import { FormProvider, useForm } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
 
+import { LocalesService } from '@/src/utils/app/data/locales-service';
 import { getValidFormFields } from '@/src/utils/app/forms';
+import { getEntityPayloadFromLocals } from '@/src/utils/app/marketplace-localization';
 import { isEntityIdPublic } from '@/src/utils/app/publications';
 import { isTruthyQuery } from '@/src/utils/app/route';
 import { getToolsetPayload, isToolsetSignedIn } from '@/src/utils/app/toolsets';
@@ -39,6 +41,7 @@ export const ToolsetEditor = () => {
     [ToolsetEditorQuery.IsCreating]: isCreating,
   } = router.query;
   const isCreatingToolset = !idQuery || isTruthyQuery(isCreating);
+
   const toolsetDetails = useAppSelector(ToolsetSelectors.selectToolsetDetails);
   const toolsets = useAppSelector(ToolsetSelectors.selectToolsets);
   const editorStep = useAppSelector(ToolsetSelectors.selectEditorStep);
@@ -71,14 +74,16 @@ export const ToolsetEditor = () => {
 
   const submitHandler = useCallback(
     (data: ToolsetEditorForm) => {
+      const { name, description } = getEntityPayloadFromLocals(data.locales);
+      const primaryLocale = LocalesService.getPrimaryLocale();
       const payloadToolset = getToolsetPayload(
         {
-          name: data.name,
+          name: { ...name, [primaryLocale]: data.name },
           endpoint:
             data.endpoint === ENDPOINT_PLACEHOLDER ? '' : data.endpoint.trim(),
           iconUrl: data.iconUrl,
           transport: data.protocol,
-          description: data.description,
+          description: { ...description, [primaryLocale]: data.description },
           topics: data.topics,
           allowedTools: data.allowedTools,
           version: data.version,
@@ -89,6 +94,7 @@ export const ToolsetEditor = () => {
             clientSecret: data.clientSecret,
             authorizationEndpoint: data.authorizationEndpoint,
             tokenEndpoint: data.tokenEndpoint,
+            tokenEndpointAuthMethod: data.tokenEndpointAuthMethod,
             scopesSupported: data.scopes,
           },
         },

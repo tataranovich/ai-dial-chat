@@ -1,3 +1,9 @@
+import { LocalesService } from '@/src/utils/app/data/locales-service';
+import {
+  getEntityLocals,
+  getLocalizedEntityIdName,
+  parseLocalizedField,
+} from '@/src/utils/app/marketplace-localization';
 import {
   getStorageSafeUniqueToolsetName,
   isToolsetSignedIn,
@@ -11,7 +17,11 @@ import { formErrors, urlErrors } from '@/src/constants/form-errors';
 import { DEFAULT_VERSION } from '@/src/constants/publication';
 import { MarketplaceEntityBaseSchema } from '@/src/constants/validation-helpers';
 
-import { ToolsetAuthTypes, ToolsetTransportType } from '@epam/ai-dial-shared';
+import {
+  TokenEndpointAuthMethod,
+  ToolsetAuthTypes,
+  ToolsetTransportType,
+} from '@epam/ai-dial-shared';
 
 export const ENDPOINT_PLACEHOLDER = 'ENDPOINT_PLACEHOLDER';
 
@@ -34,6 +44,9 @@ export const ToolsetLoginFormSchema = zodValidation
     clientSecret: zodValidation.string().optional(),
     authorizationEndpoint: zodValidation.string().optional(),
     tokenEndpoint: zodValidation.string().optional(),
+    tokenEndpointAuthMethod: zodValidation
+      .enum(TokenEndpointAuthMethod)
+      .optional(),
     scopes: zodValidation.array(zodValidation.string()).optional(),
   })
   .superRefine((data, ctx) => {
@@ -58,14 +71,14 @@ export const ToolsetLoginFormSchema = zodValidation
       data.authenticationType === ToolsetAuthTypes.OAUTH &&
       data.withLogin === WithLogin.WithConfig
     ) {
-      if (!data.clientId) {
+      if (!data.clientId?.trim()) {
         ctx.addIssue({
           code: 'custom',
           path: ['clientId'],
           message: 'Client ID is required',
         });
       }
-      if (!data.clientSecret) {
+      if (!data.clientSecret?.trim()) {
         ctx.addIssue({
           code: 'custom',
           path: ['clientSecret'],
@@ -146,6 +159,9 @@ export const getDefaultLoginFormData = ({
         authorizationEndpoint:
           toolset?.authSettings?.authorizationEndpoint ?? '',
         tokenEndpoint: toolset?.authSettings?.tokenEndpoint ?? '',
+        tokenEndpointAuthMethod:
+          toolset?.authSettings?.tokenEndpointAuthMethod ??
+          TokenEndpointAuthMethod.ClientSecretBasic,
         withLogin:
           !prevData &&
           toolset?.authSettings?.clientSecret &&
@@ -177,8 +193,8 @@ export const getDefaultFormData = ({
 }): ToolsetEditorForm => {
   return {
     name:
-      toolset?.name ??
-      getStorageSafeUniqueToolsetName({
+      getLocalizedEntityIdName(toolset?.name) ||
+      (getStorageSafeUniqueToolsetName({
         toolset: {
           name: '',
           version: toolset?.version ?? DEFAULT_VERSION,
@@ -186,16 +202,23 @@ export const getDefaultFormData = ({
           id: toolset?.id,
         },
         defaultName: DEFAULT_TOOLSET_NAME,
-        existingNames: (toolsets ?? []).map((t) => t.name),
+        existingNames: (toolsets ?? []).map((t) =>
+          getLocalizedEntityIdName(t.name),
+        ),
       }) ??
-      DEFAULT_TOOLSET_NAME,
+        DEFAULT_TOOLSET_NAME),
     endpoint: toolset ? (toolset.endpoint ?? '') : ENDPOINT_PLACEHOLDER,
     protocol: toolset?.transport ?? ToolsetTransportType.HTTP,
-    description: toolset?.description ?? '',
+    description: parseLocalizedField(
+      LocalesService.getPrimaryLocale(),
+      toolset?.description,
+      true,
+    ),
     allowedTools: toolset?.allowedTools ?? [],
     iconUrl: toolset?.iconUrl ?? '',
     version: toolset ? (toolset.version ?? '') : DEFAULT_VERSION,
     topics: toolset?.topics ?? [],
+    locales: getEntityLocals(toolset, true),
 
     ...getDefaultLoginFormData({
       authenticationType:

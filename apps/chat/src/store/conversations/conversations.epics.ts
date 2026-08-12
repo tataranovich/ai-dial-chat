@@ -50,6 +50,7 @@ import {
   isReplayConversation,
   isSettingsChanged,
   regenerateConversationId,
+  updateMessagesAttachmentsOnMove,
 } from '@/src/utils/app/conversation';
 import { ApplicationService } from '@/src/utils/app/data/application-service';
 import { ConversationService } from '@/src/utils/app/data/conversation-service';
@@ -57,7 +58,10 @@ import { DataService } from '@/src/utils/app/data/data-service';
 import { DefaultsService } from '@/src/utils/app/data/defaults-service';
 import { FileService } from '@/src/utils/app/data/file-service';
 import { getOrUploadConversation } from '@/src/utils/app/data/storages/api/conversation-api-storage';
-import { parseApiError } from '@/src/utils/app/epics-helpers/common.epic-helpers';
+import {
+  isResourcePathTooLongError,
+  parseApiError,
+} from '@/src/utils/app/epics-helpers/common.epic-helpers';
 import {
   isAllowedMimeType,
   notAllowedSymbolsRegex,
@@ -65,6 +69,7 @@ import {
 import {
   addGeneratedFolderId,
   fitFolderNameToStorageLimits,
+  getFileMovesFromResult,
   getFolderFromId,
   getParentFolderIdsFromEntityId,
   getParentFolderIdsFromFolderId,
@@ -79,6 +84,7 @@ import {
   isEntityIdExternal,
   isEntityIdLocal,
   isMyBucket,
+  isMyEntity,
 } from '@/src/utils/app/id';
 import {
   mergeMessages,
@@ -142,7 +148,7 @@ import {
   DEFAULT_TEMPERATURE,
 } from '@/src/constants/default-ui-settings';
 import { DEFAULT_EXTERNAL_APPS_SCHEMA_ID } from '@/src/constants/external-apps';
-import { ChatI18nKeys } from '@/src/constants/i18n';
+import { ChatI18nKeys, CommonI18nKeys } from '@/src/constants/i18n';
 import { MarketplaceQueryParams } from '@/src/constants/marketplace';
 import { defaultReplay } from '@/src/constants/replay';
 import { CONVERSATIONS_DATE_SECTIONS } from '@/src/constants/sections';
@@ -381,7 +387,7 @@ const initSelectedConversationsEpic: AppEpic = (action$, state$) =>
                     return conv;
                   }
 
-                  const { name, version, modelInfo } = parseEntityApiKey(
+                  const { name, version, modelInfo, uuid } = parseEntityApiKey(
                     splitEntityId(conv.id).name,
                     { parseVersion: true, parseModel: true },
                   );
@@ -390,6 +396,7 @@ const initSelectedConversationsEpic: AppEpic = (action$, state$) =>
                     ...conv,
                     ...modelInfo,
                     name,
+                    ...(uuid && { uuid }),
                     publicationInfo: {
                       version,
                     },
@@ -443,7 +450,9 @@ const initFoldersAndConversationsEpic: AppEpic = (action$) =>
         }),
         catchError((err) => {
           console.error('Error during upload conversations and folders', err);
-          return of(ConversationsActions.uploadConversationsFail());
+          return of(
+            ConversationsActions.uploadConversationsFail(parseApiError(err)),
+          );
         }),
       ),
     ),
@@ -668,12 +677,14 @@ const createNotLocalConversationsEpic: AppEpic = (action$) =>
     }),
     catchError((err) => {
       console.error("New conversation wasn't created: ", err);
+      const { traceId } = parseApiError(err);
       return concat(
         of(
           UIActions.showErrorToast({
             message: translate(ChatI18nKeys.ErrorCreatingConversation, {
               ns: Translation.Chat,
             }),
+            traceId,
           }),
         ),
       );
@@ -902,11 +913,13 @@ const saveNewConversationEpic: AppEpic = (action$) =>
         }),
         catchError((err) => {
           console.error(err);
+          const { traceId } = parseApiError(err);
           return of(
             UIActions.showErrorToast({
               message: translate(ChatI18nKeys.ErrorSavingConversationExists, {
                 ns: Translation.Chat,
               }),
+              traceId,
             }),
           );
         }),
@@ -1138,32 +1151,69 @@ const deleteConversationsEpic: AppEpic = (action$, state$) =>
                 ? ConversationService.deleteConversation(
                     getConversationInfoFromId(id),
                   ).pipe(
-                    map(() => null),
+                    map(() => ({
+                      name: null,
+                      alreadyDeletedName: null,
+                      traceId: undefined,
+                    })),
                     catchError((err) => {
+                      const { traceId } = parseApiError(err);
                       const { name } = getConversationInfoFromId(id);
+                      if ((err as { status?: number })?.status === 404) {
+                        return of({
+                          name: null,
+                          alreadyDeletedName: name,
+                          traceId,
+                        });
+                      }
                       !suppressErrorMessage &&
                         console.error(`Error during deleting "${name}"`, err);
-                      return of(name);
+                      return of({ name, alreadyDeletedName: null, traceId });
                     }),
                   )
-                : of(null),
+                : of({
+                    name: null,
+                    alreadyDeletedName: null,
+                    traceId: undefined,
+                  }),
             ),
           ).pipe(
-            switchMap((failedNames) =>
-              concat(
+            switchMap((results) => {
+              const failedNames = results
+                .map((result) => result.name)
+                .filter(Boolean) as string[];
+              const hasAlreadyDeleted = results.some(
+                (result) => result.alreadyDeletedName,
+              );
+              const traceId = results.filter(({ traceId }) => !!traceId)[0]
+                ?.traceId;
+
+              return concat(
                 iif(
-                  () =>
-                    failedNames.filter(Boolean).length > 0 &&
-                    !suppressErrorMessage,
+                  () => failedNames.length > 0 && !suppressErrorMessage,
                   of(
                     UIActions.showErrorToast({
                       message: translate(
                         ChatI18nKeys.ErrorDeletingConversations,
                         {
                           ns: Translation.Chat,
-                          failedNames: failedNames.filter(Boolean).join('", "'),
+                          failedNames: failedNames.join('", "'),
                         },
                       ),
+                      traceId,
+                    }),
+                  ),
+                  EMPTY,
+                ),
+                iif(
+                  () => hasAlreadyDeleted && !suppressErrorMessage,
+                  of(
+                    UIActions.showErrorToast({
+                      message: translate(
+                        ChatI18nKeys.ConversationHasBeenDeleted,
+                        { ns: Translation.Chat },
+                      ),
+                      traceId,
                     }),
                   ),
                   EMPTY,
@@ -1173,8 +1223,8 @@ const deleteConversationsEpic: AppEpic = (action$, state$) =>
                     conversationIds,
                   }),
                 ),
-              ),
-            ),
+              );
+            }),
           ),
           ...actions,
         );
@@ -1239,19 +1289,21 @@ const rateMessageEpic: AppEpic = (action$, state$) =>
       }).pipe(
         switchMap((resp) => {
           if (!resp.ok) {
-            return throwError(() => resp);
+            return throwError(() => resp.text());
           }
           return from(resp.json());
         }),
         switchMap(() => EMPTY),
-        catchError((e: Response) => {
+        catchError((e) => {
           console.error('Failed to rate message:', e);
+          const { traceId } = parseApiError(e);
           return of(
             ConversationsActions.rateMessageFail({
               ...payload,
               error: translate(ChatI18nKeys.FailedToRateMessage, {
                 ns: Translation.Chat,
               }),
+              traceId,
             }),
           );
         }),
@@ -1437,7 +1489,12 @@ const rateMessageFailEpic: AppEpic = (action$) =>
             },
           }),
         ),
-        of(UIActions.showErrorToast({ message: payload.error.toString() })),
+        of(
+          UIActions.showErrorToast({
+            message: payload.error.toString(),
+            traceId: payload?.traceId,
+          }),
+        ),
       );
     }),
   );
@@ -2462,11 +2519,13 @@ const saveFoldersEpic: AppEpic = (action$, state$) =>
             'An error occurred during the saving conversation folders: ',
             err,
           );
+          const { traceId } = parseApiError(err);
           return of(
             UIActions.showErrorToast({
               message: translate(ChatI18nKeys.ErrorSavingConversationFolders, {
                 ns: Translation.Chat,
               }),
+              traceId,
             }),
           );
         }),
@@ -2889,7 +2948,10 @@ const uploadConversationsByIdsEpic: AppEpic = (action$, state$) =>
           getOrUploadConversation({ id }, state$.value).pipe(
             map((result) => result.conversation),
             catchError((err) => {
-              console.error('The selected conversation was not found:', err);
+              console.warn(
+                'The selected conversation was not found:',
+                err instanceof Error ? err.message : err,
+              );
               return of(null);
             }),
           ),
@@ -3016,12 +3078,14 @@ const saveConversationEpic: AppEpic = (action$, state$) =>
         }),
         catchError((err) => {
           console.error(err);
+          const { traceId } = parseApiError(err);
           return concat(
             of(
               UIActions.showErrorToast({
                 message: translate(ChatI18nKeys.ErrorSavingConversation, {
                   ns: Translation.Chat,
                 }),
+                traceId,
               }),
             ),
             of(ConversationsActions.saveConversationFail(conversation)),
@@ -3035,11 +3099,17 @@ const moveConversationFailEpic: AppEpic = (action$) =>
   action$.pipe(
     ofType(ConversationsActions.moveConversationFail.type),
     switchMap(({ payload }) => {
+      const message = isResourcePathTooLongError(payload?.message)
+        ? translate(CommonI18nKeys.ResourcePathTooLong, {
+            ns: Translation.Common,
+          })
+        : translate(ChatI18nKeys.ConversationAlreadyExists, {
+            ns: Translation.Chat,
+          });
+
       return of(
         UIActions.showErrorToast({
-          message: translate(ChatI18nKeys.ConversationAlreadyExists, {
-            ns: Translation.Chat,
-          }),
+          message,
           traceId: payload?.traceId,
         }),
       );
@@ -3071,6 +3141,48 @@ const moveConversationEpic: AppEpic = (action$) =>
           );
         }),
       );
+    }),
+  );
+
+const updateAttachmentsOnFileMoveEpic: AppEpic = (action$, state$) =>
+  action$.pipe(
+    ofType(FilesActions.moveFilesSuccess.type),
+    mergeMap(({ payload }) => {
+      const moves = getFileMovesFromResult(payload.result);
+
+      if (!moves.size) {
+        return EMPTY;
+      }
+
+      const loadedConversations = ConversationsSelectors.selectConversations(
+        state$.value,
+      ).filter(
+        (conversation) =>
+          isMyEntity(conversation) &&
+          conversation.status === UploadStatus.LOADED,
+      ) as Conversation[];
+
+      const updateActions = loadedConversations.flatMap((conversation) => {
+        if (!conversation.messages?.length) {
+          return [];
+        }
+
+        const { messages, isUpdated } = updateMessagesAttachmentsOnMove(
+          conversation.messages,
+          moves,
+        );
+
+        return isUpdated
+          ? [
+              ConversationsActions.updateConversation({
+                id: conversation.id,
+                values: { messages },
+              }),
+            ]
+          : [];
+      });
+
+      return updateActions.length ? from(updateActions) : EMPTY;
     }),
   );
 
@@ -3346,13 +3458,14 @@ const uploadFoldersEpic: AppEpic = (action$) =>
         }),
         catchError((err) => {
           console.error('Error during upload conversations and folders', err);
+          const { traceId } = parseApiError(err);
           return concat(
             of(
               ConversationsActions.uploadFoldersFail({
                 paths: new Set(payload.ids),
               }),
             ),
-            of(ConversationsActions.uploadConversationsFail()),
+            of(ConversationsActions.uploadConversationsFail({ traceId })),
           );
         }),
       );
@@ -3362,11 +3475,12 @@ const uploadFoldersEpic: AppEpic = (action$) =>
 const uploadConversationsFailEpic: AppEpic = (action$) =>
   action$.pipe(
     ofType(ConversationsActions.uploadConversationsFail.type),
-    map(() =>
+    map(({ payload }) =>
       UIActions.showErrorToast({
         message: translate(
           'An error occurred while loading conversations and folders. Most likely the conversation already exists. Please refresh the page.',
         ),
+        traceId: payload?.traceId,
       }),
     ),
   );
@@ -3468,15 +3582,17 @@ const uploadConversationsFromMultipleFoldersEpic: AppEpic = (action$, state$) =>
         }),
       );
     }),
-    catchError(() =>
-      of(
+    catchError((err) => {
+      const { traceId } = parseApiError(err);
+      return of(
         UIActions.showErrorToast({
           message: translate(
             'An error occurred while loading conversations and folders. Please try to refresh the page.',
           ),
+          traceId,
         }),
-      ),
-    ),
+      );
+    }),
   );
 
 const uploadConversationsWithFoldersRecursiveEpic: AppEpic = (action$) =>
@@ -3543,7 +3659,8 @@ const uploadConversationsWithFoldersRecursiveEpic: AppEpic = (action$) =>
         }),
         catchError((err) => {
           console.error('Error during upload conversations and folders', err);
-          return of(ConversationsActions.uploadConversationsFail());
+          const { traceId } = parseApiError(err);
+          return of(ConversationsActions.uploadConversationsFail({ traceId }));
         }),
       ),
     ),
@@ -3580,14 +3697,16 @@ const uploadConversationsWithContentRecursiveEpic: AppEpic = (
               ConversationsActions.addConversations({
                 conversations: conversations.map((conv) => {
                   if (publicConversationIds.includes(conv.id)) {
-                    const { name, version, modelInfo } = parseEntityApiKey(
-                      splitEntityId(conv.id).name,
-                      { parseVersion: true, parseModel: true },
-                    );
+                    const { name, version, modelInfo, uuid } =
+                      parseEntityApiKey(splitEntityId(conv.id).name, {
+                        parseVersion: true,
+                        parseModel: true,
+                      });
                     return {
                       ...conv,
                       ...modelInfo,
                       name,
+                      ...(uuid && { uuid }),
                       publicationInfo: {
                         version,
                       },
@@ -3616,7 +3735,8 @@ const uploadConversationsWithContentRecursiveEpic: AppEpic = (
         }),
         catchError((err) => {
           console.error('Error during upload conversations and folders', err);
-          return of(ConversationsActions.uploadConversationsFail());
+          const { traceId } = parseApiError(err);
+          return of(ConversationsActions.uploadConversationsFail({ traceId }));
         }),
       ),
     ),
@@ -3667,13 +3787,15 @@ const getChartAttachmentEpic: AppEpic = (action$) =>
             }),
           );
         }),
-        catchError(() =>
-          of(
+        catchError((err) => {
+          const { traceId } = parseApiError(err);
+          return of(
             UIActions.showErrorToast({
               message: translate('Error while uploading chart data'),
+              traceId,
             }),
-          ),
-        ),
+          );
+        }),
       ),
     ),
   );
@@ -3696,13 +3818,15 @@ const getCustomAttachmentDataEpic: AppEpic = (action$) =>
                 }),
               );
             }),
-            catchError(() =>
-              of(
+            catchError((err) => {
+              const { traceId } = parseApiError(err);
+              return of(
                 UIActions.showErrorToast({
                   message: translate('Error while uploading chart data'),
+                  traceId,
                 }),
-              ),
-            ),
+              );
+            }),
           ),
         ),
       ),
@@ -3740,11 +3864,20 @@ const deleteChosenConversationsEpic: AppEpic = (action$, state$) =>
         ),
       ]);
 
-      if (conversationIds.length) {
+      if (deletedConversationIds.length) {
         actions.push(
           of(
             ConversationsActions.deleteConversations({
               conversationIds: deletedConversationIds,
+            }),
+          ),
+        );
+      } else {
+        // nothing to delete on the server, hide the loader shown on delete start
+        actions.push(
+          of(
+            ConversationsActions.deleteConversationsComplete({
+              conversationIds: new Set([]),
             }),
           ),
         );
@@ -3915,7 +4048,10 @@ const updateLastConversationSettingsEpic: AppEpic = (action$, state$) =>
         lastConversation: !wasAlreadyUploaded
           ? ConversationService.getConversation(lastConversation!).pipe(
               catchError((err) => {
-                console.error('The last used conversation was not found:', err);
+                console.warn(
+                  'The last used conversation was not found:',
+                  err instanceof Error ? err.message : err,
+                );
                 return of(null);
               }),
             )
@@ -4025,10 +4161,13 @@ const getConversationMetadataEpic: AppEpic = (action$) =>
             ),
           );
         }),
-        catchError(() => {
+        catchError((err) => {
+          const { traceId } = parseApiError(err);
+
           return of(
             ChatActions.getEntityInfoFail({
               errorText: 'Could not get conversation info. Try again later',
+              traceId,
             }),
           );
         }),
@@ -4047,6 +4186,7 @@ export const ConversationsEpics = combineEpics(
   moveConversationEpic,
   moveConversationFailEpic,
   updateConversationEpic,
+  updateAttachmentsOnFileMoveEpic,
   updateLocalConversationEpic,
   saveConversationEpic,
   createNewConversationsEpic,

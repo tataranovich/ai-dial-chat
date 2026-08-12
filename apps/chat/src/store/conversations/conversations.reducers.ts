@@ -131,6 +131,7 @@ export const conversationsSlice = createSlice({
         oldConversation: Conversation;
         newConversation: Conversation;
         traceId?: string;
+        message?: string;
       }>,
     ) => {
       state.conversations = state.conversations.map((conv) => {
@@ -288,6 +289,17 @@ export const conversationsSlice = createSlice({
         })),
         state.conversations,
       );
+
+      const uploadedIds = new Set(payload.conversations.map((conv) => conv.id));
+      const failedIds = Array.from(payload.setIds).filter(
+        (id) => !uploadedIds.has(id),
+      );
+      state.conversations = state.conversations.map((conv) =>
+        failedIds.includes(conv.id)
+          ? { ...conv, status: UploadStatus.FAILED }
+          : conv,
+      );
+
       if (payload.showLoader) {
         state.areSelectedConversationsLoaded = true;
       }
@@ -514,6 +526,7 @@ export const conversationsSlice = createSlice({
         conversationId: string;
         messageIndex: number;
         error: string;
+        traceId?: string;
       }>,
     ) => state,
     deleteMessage: (state, _action: PayloadAction<{ index: number }>) => state,
@@ -656,7 +669,10 @@ export const conversationsSlice = createSlice({
     uploadConversationsWithFoldersRecursiveSuccess: (state) => {
       state.conversationsLoaded = true;
     },
-    uploadConversationsFail: (state) => {
+    uploadConversationsFail: (
+      state,
+      _action: PayloadAction<{ traceId?: string } | undefined>,
+    ) => {
       state.conversationsStatus = UploadStatus.FAILED;
       state.areConversationsWithContentUploading = false;
     },
@@ -795,7 +811,10 @@ export const conversationsSlice = createSlice({
         .map(({ id }) => `${id}/`);
     },
 
-    deleteChosenConversations: (state) => state,
+    deleteChosenConversations: (state) => {
+      // show loader while chosen conversations are being deleted on the server
+      state.conversationsLoaded = false;
+    },
     addToChosenEmptyFolders: (
       state,
       { payload }: PayloadAction<{ ids: string[] }>,

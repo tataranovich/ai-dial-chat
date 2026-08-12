@@ -86,6 +86,7 @@ export const MarketplaceSideBarSelectors = {
   filterPropertyOptions: '[data-qa="filter-property-options"]',
   filterPropertyOption: '[data-qa="filter-option"]',
   optionLabel: '#option-label',
+  filterSelectedCount: '[data-qa="filter-selected-count"]',
 };
 
 export const ToolsetLoginModalSelectors = {
@@ -107,4 +108,13 @@ export const ToolsetLoginModalSelectors = {
 
 export const ConnectToolsetModalSelectors = {
   copyUrlButton: 'Copy URL',
+};
+
+// "Toolset login required" modal shown in preview (ToolsetLoginEvents).
+export const ToolsetLoginEventsModalSelectors = {
+  list: '[data-qa="toolset-login-list"]',
+  row: '[data-qa="toolset-login-row"]',
+  loginButton: 'Log in',
+  declineButton: 'Decline',
+  declineAllButton: 'Decline all',
 };

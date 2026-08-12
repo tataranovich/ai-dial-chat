@@ -1,9 +1,16 @@
 import { createSelector } from '@reduxjs/toolkit';
 
 import { getPartialAndFullyChosenFolders } from '@/src/utils/app/folders';
-import { isFileId } from '@/src/utils/app/id';
+import {
+  isApplicationId,
+  isConversationId,
+  isFileId,
+  isToolsetId,
+} from '@/src/utils/app/id';
 import { EnumMapper } from '@/src/utils/app/mappers';
-import { orderByType } from '@/src/utils/app/publications';
+import { getPublicationId, orderByType } from '@/src/utils/app/publications';
+import { splitEntityId } from '@/src/utils/app/shared-utils';
+import { parseEntityApiKey } from '@/src/utils/server/api';
 
 import { FeatureType } from '@/src/types/common';
 import { Publication, PublicationResource } from '@/src/types/publication';
@@ -38,6 +45,109 @@ const selectFilteredPublications = (
         ) ||
         (includeEmptyResourceTypes && !publication.resourceTypes.length),
     );
+  });
+
+/**
+ * Feature types which resources are rendered as items inside the "Approve required" section.
+ * A publication can also contain files, applications or toolsets, but such resources are never
+ * displayed in the chat/prompt panels, so they must not be searchable there.
+ */
+const SIDEBAR_DISPLAYED_FEATURE_TYPES = [FeatureType.Chat, FeatureType.Prompt];
+
+/**
+ * Extracts the display name from a publication resource URL.
+ * Handles different entity types (conversations, prompts, files, applications, toolsets).
+ */
+const getResourceDisplayName = (reviewUrl: string): string => {
+  const { name } = splitEntityId(reviewUrl);
+
+  // Files don't have version/model info, return the name as-is
+  if (isFileId(reviewUrl)) {
+    return name;
+  }
+
+  // Parse entity API key to extract the actual name (removing version, model info, etc.)
+  const parsed = parseEntityApiKey(name, {
+    parseVersion: isApplicationId(reviewUrl) || isToolsetId(reviewUrl),
+    parseModel: isConversationId(reviewUrl),
+  });
+
+  return parsed.name;
+};
+
+/**
+ * Keeps only the resources which are actually rendered as items in the panel,
+ * so that the search results match what the user can see.
+ */
+const getDisplayedResources = (
+  resources: PublicationResource[],
+  featureTypes: FeatureType[],
+) => {
+  const displayedFeatureTypes = featureTypes.filter((featureType) =>
+    SIDEBAR_DISPLAYED_FEATURE_TYPES.includes(featureType),
+  );
+
+  return resources.filter((resource) => {
+    const { apiKey } = splitEntityId(resource.reviewUrl);
+
+    return displayedFeatureTypes.includes(
+      EnumMapper.getFeatureTypeByApiKey(apiKey),
+    );
+  });
+};
+
+const selectFilteredPublicationsWithSearch = (
+  featureTypes: FeatureType[],
+  includeEmptyResourceTypes?: boolean,
+  searchTerm?: string,
+) =>
+  createSelector([selectPublications], (publications) => {
+    return publications.filter((publication) => {
+      const matchesFeatureType =
+        publication.resourceTypes.some((resourceType) =>
+          featureTypes
+            .map((featureType) =>
+              EnumMapper.getBackendResourceTypeByFeatureType(featureType),
+            )
+            .includes(resourceType),
+        ) ||
+        (includeEmptyResourceTypes && !publication.resourceTypes.length);
+
+      if (!matchesFeatureType) {
+        return false;
+      }
+
+      if (!searchTerm) {
+        return true;
+      }
+
+      const searchTermLower = searchTerm.toLowerCase().trim();
+
+      // The publication row itself is always rendered, so its displayed name is searchable
+      const publicationName =
+        publication.name || getPublicationId(publication.url) || '';
+
+      if (publicationName.toLowerCase().trim().includes(searchTermLower)) {
+        return true;
+      }
+
+      // Search only in resources which are displayed inside the publication in this panel
+      // This matches the behavior of other sections where search works on items, not folders
+      const displayedResources = getDisplayedResources(
+        publication.resources ?? [],
+        featureTypes,
+      );
+
+      return displayedResources.some((resource) => {
+        try {
+          const resourceName = getResourceDisplayName(resource.reviewUrl);
+          return resourceName.toLowerCase().trim().includes(searchTermLower);
+        } catch {
+          // If parsing fails, skip this resource
+          return false;
+        }
+      });
+    });
   });
 
 const selectFilteredPublicationResources = (featureTypes: FeatureType[]) =>
@@ -347,6 +457,7 @@ const selectCurrentPublicationInvalidEntities = (state: RootState) =>
 export const PublicationSelectors = {
   selectPublications,
   selectFilteredPublications,
+  selectFilteredPublicationsWithSearch,
   selectFilteredPublicationResources,
   selectSelectedPublicationUrl,
   selectSelectedPublicationPanel,

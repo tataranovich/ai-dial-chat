@@ -8,10 +8,12 @@ import { useTranslation } from '@/src/hooks/useTranslation';
 import {
   getApplicationType,
   getModelDescription,
+  getModelName,
   isExecutableApp,
   isQuickApp2,
 } from '@/src/utils/app/application';
 import { getFolderIdFromEntityId } from '@/src/utils/app/folders';
+import { getLocalizedEntityIdName } from '@/src/utils/app/marketplace-localization';
 import { ApiUtils } from '@/src/utils/server/api';
 
 import { CustomApplicationModel } from '@/src/types/applications';
@@ -19,7 +21,7 @@ import { Translation } from '@/src/types/translation';
 
 import { ApplicationActions, PublicationActions } from '@/src/store/actions';
 import { useAppDispatch, useAppSelector } from '@/src/store/hooks';
-import { PublicationSelectors } from '@/src/store/selectors';
+import { PublicationSelectors, UISelectors } from '@/src/store/selectors';
 
 import { ChatI18nKeys } from '@/src/constants/i18n';
 import { NA_VERSION } from '@/src/constants/publication';
@@ -47,6 +49,7 @@ export function ReviewApplicationDialogView({
   const { t } = useTranslation(Translation.Chat);
   const dispatch = useAppDispatch();
 
+  const locale = useAppSelector(UISelectors.selectLocale);
   const selectedPublicationUrl = useAppSelector(
     PublicationSelectors.selectSelectedPublicationUrl,
   );
@@ -60,12 +63,12 @@ export function ReviewApplicationDialogView({
 
   const isCodeApp = isExecutableApp(application);
   const isQuickAppTwo = isQuickApp2(application);
-  const description = getModelDescription(application);
+  const description = getModelDescription(application, locale);
 
   const controlsEntity = useMemo(
     () => ({
       id: ApiUtils.decodeApiUrl(application.id),
-      name: application.name,
+      name: getLocalizedEntityIdName(application.name),
       folderId: getFolderIdFromEntityId(application.id),
     }),
     [application.id, application.name],
@@ -123,7 +126,7 @@ export function ReviewApplicationDialogView({
         <div className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2">
           <MarketplaceEntityInfoRow
             label={t(ChatI18nKeys.Name)}
-            value={application.name}
+            value={getModelName(application, locale)}
             dataQa="entity-name"
           />
           <MarketplaceEntityInfoRow

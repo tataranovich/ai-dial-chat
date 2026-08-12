@@ -52,7 +52,7 @@ dialSharedWithMeTest(
     setTestIds,
     additionalShareUserLocalStorageManager,
   }) => {
-    setTestIds('EPMRTC-1933', 'EPMRTC-2896', 'EPMRTC-4705', 'EPMRTC-4122');
+    setTestIds('EPMDIAL-3055', 'EPMDIAL-3036', 'EPMDIAL-3138', 'EPMDIAL-6765');
     let responseImageConversation: Conversation;
     let requestImageConversation: Conversation;
     let stageConversation: Conversation;
@@ -346,7 +346,7 @@ dialSharedWithMeTest(
     localStorageManager,
     additionalShareUserLocalStorageManager,
   }) => {
-    setTestIds('EPMRTC-2860');
+    setTestIds('EPMDIAL-3056');
     let responseImageConversation: Conversation;
     let requestImageConversation: Conversation;
     let stageConversation: Conversation;
@@ -586,7 +586,7 @@ dialSharedWithMeTest(
     confirmationDialog,
   }) => {
     dialSharedWithMeTest.slow();
-    setTestIds('EPMRTC-3518', 'EPMRTC-3102', 'EPMRTC-3101', 'EPMRTC-5524');
+    setTestIds('EPMDIAL-6691', 'EPMDIAL-6702', 'EPMDIAL-6736', 'EPMDIAL-6737');
 
     let imageConversation: Conversation;
     let firstImageUrl: string;
@@ -860,7 +860,7 @@ dialSharedWithMeTest(
     setTestIds,
     additionalShareUserLocalStorageManager,
   }) => {
-    setTestIds('EPMRTC-3517');
+    setTestIds('EPMDIAL-3012');
     let responseImageConversation: Conversation;
     let stageConversation: Conversation;
     let codeConversation: Conversation;
@@ -954,8 +954,11 @@ dialSharedWithMeTest(
           await additionalShareUserPlaybackControl.playbackNextButton.click();
         }
         await additionalShareUserChatMessages
-          .getChatMessageAttachment(chatResponseIndex, Attachment.sunImageName)
-          .waitForState({ state: 'visible' });
+          .getChatMessageAttachmentTitle(
+            chatResponseIndex,
+            Attachment.sunImageName,
+          )
+          .waitFor({ state: 'visible' });
         const expandAttachmentResponse =
           await additionalShareUserChatMessages.expandChatMessageAttachment(
             chatResponseIndex,
@@ -977,7 +980,7 @@ dialSharedWithMeTest(
         );
         await expect
           .soft(
-            additionalShareUserChatMessages.getMessageStage(
+            additionalShareUserChatMessages.getExpandedMessageStage(
               chatResponseIndex + 2,
               1,
             ),
@@ -1052,7 +1055,7 @@ dialSharedWithMeTest(
     additionalShareUserSharedWithMeConversations,
     additionalShareUserLocalStorageManager,
   }) => {
-    setTestIds('EPMRTC-3112');
+    setTestIds('EPMDIAL-3013');
     let plotlyConversation: Conversation;
     let plotlyImageUrl: string;
 
@@ -1090,8 +1093,11 @@ dialSharedWithMeTest(
           plotlyConversation.name,
         );
         await additionalShareUserChatMessages
-          .getChatMessageAttachment(chatResponseIndex, Attachment.plotlyName)
-          .waitForState({ state: 'visible' });
+          .getChatMessageAttachmentTitle(
+            chatResponseIndex,
+            Attachment.plotlyName,
+          )
+          .waitFor({ state: 'visible' });
         const expandAttachmentResponse =
           await additionalShareUserChatMessages.expandChatMessageAttachment(
             chatResponseIndex,
@@ -1129,7 +1135,7 @@ dialSharedWithMeTest(
     setTestIds,
     additionalShareUserLocalStorageManager,
   }) => {
-    setTestIds('EPMRTC-3353');
+    setTestIds('EPMDIAL-3014');
     let attachmentLinkConversation: Conversation;
     const attachmentLink = 'https://www.epam.com';
 

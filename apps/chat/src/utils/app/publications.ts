@@ -70,6 +70,25 @@ import sortBy from 'lodash-es/sortBy';
 import uniq from 'lodash-es/uniq';
 import { nanoid } from 'nanoid';
 
+// Rewrites the bucket segment of an entity id to the chosen public target folder,
+// so a duplicate-version lookup targets the destination (not the source) folder.
+export const getPublicItemIdForVersionCheck = (
+  entityId: string,
+  publishToUrl: string,
+  shouldApplyTargetFolder: boolean,
+) => {
+  if (!shouldApplyTargetFolder) {
+    return entityId;
+  }
+
+  const parts = entityId.split('/');
+  if (parts.length > 1) {
+    parts[1] = publishToUrl;
+  }
+
+  return parts.join('/');
+};
+
 export const isEntityIdPublic = (
   entity: { id: string },
   featureType?: FeatureType,
@@ -113,14 +132,6 @@ export const organizationFolderIdToPublishPathSuffix = (
   return getIdWithoutRootPathSegments(folderId) || undefined;
 };
 
-export const getOrganizationPublishPathDepth = (
-  folderId: string | undefined,
-): number => {
-  const relative = folderId ? getIdWithoutRootPathSegments(folderId) : '';
-  const segments = relative.split('/').filter(Boolean);
-  return segments.length === 0 ? 0 : segments.length - 1;
-};
-
 export const remapPublicFolderToFilesNamespace = (
   folder: FolderInterface,
 ): FolderInterface => {
@@ -149,6 +160,30 @@ export const createFoldersFilesTargetUrl = (id: string) => {
     ...lastElement,
   );
 };
+
+/**
+ * Target path for the icon of a published application or toolset. The icon is
+ * put into a folder named after the published entity, because the source
+ * folder of the icon is not a part of the target path: two entities, for
+ * instance two versions of the same app, can use different icon files sharing
+ * a file name, and a common target would make the second publication silently
+ * reuse the icon of the first one.
+ */
+export const createPublicationIconTargetUrl = ({
+  entityId,
+  iconUrl,
+  targetFolder,
+}: {
+  entityId: string;
+  iconUrl: string;
+  targetFolder: string;
+}) =>
+  constructPath(
+    ApiKeys.Files,
+    targetFolder,
+    splitEntityId(entityId).name,
+    splitEntityId(iconUrl).name,
+  );
 
 /**
  * Target paths for file attachments when publishing conversations. De-duplicates
@@ -698,4 +733,48 @@ export const orderByType = (id: string) => {
   if (isApplicationId(id)) return 3;
   if (isToolsetId(id)) return 4;
   return 5;
+};
+
+/**
+ * Fills in missing intermediate folder paths in rule entries to show complete folder hierarchy.
+ * When publishing to nested folders (e.g., public/Folder01/Folder02/Folder03), if middle folders
+ * don't have rules, they won't appear in the rules object. This function adds entries with empty
+ * rule arrays for all intermediate paths.
+ *
+ * @param ruleEntries - Array of [path, rules[]] tuples from the rules object
+ * @param targetPath - The full target folder path being published to
+ * @returns Array with all intermediate paths filled in, sorted by path depth
+ *
+ * @example
+ * Input:
+ *   ruleEntries = [['public/Folder01', [rule1]], ['public/Folder01/Folder02/Folder03', [rule2]]]
+ *   targetPath = 'public/Folder01/Folder02/Folder03'
+ * Output:
+ *   [
+ *     ['public/Folder01', [rule1]],
+ *     ['public/Folder01/Folder02', []],
+ *     ['public/Folder01/Folder02/Folder03', [rule2]]
+ *   ]
+ */
+export const fillMissingFolderPaths = (
+  ruleEntries: [string, PublicationRule[]][],
+  targetPath: string,
+): [string, PublicationRule[]][] => {
+  const existingPaths = new Set(ruleEntries.map(([path]) => path));
+  const pathsToAdd: [string, PublicationRule[]][] = [];
+
+  // Generate all intermediate paths from target path
+  const segments = targetPath.split('/');
+  for (let i = 1; i < segments.length; i++) {
+    const intermediatePath = segments.slice(0, i + 1).join('/');
+    if (!existingPaths.has(intermediatePath)) {
+      pathsToAdd.push([intermediatePath, []]);
+      existingPaths.add(intermediatePath);
+    }
+  }
+
+  // Combine original entries with new intermediate paths and sort by path depth
+  return [...ruleEntries, ...pathsToAdd].sort(
+    (a, b) => a[0].split('/').length - b[0].split('/').length,
+  );
 };

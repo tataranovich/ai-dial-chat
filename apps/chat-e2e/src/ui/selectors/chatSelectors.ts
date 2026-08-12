@@ -44,6 +44,13 @@ export const MessageInputSelectors = {
   inputAttachedFolderName: '[data-qa="attached-folder-name"]',
 };
 
+export const DislikeCommentModalSelectors = {
+  modal: '[data-qa="dislike-comment-modal"]',
+  title: '[data-qa="modal-entity-name"]',
+  commentInput: '[data-qa="dislike-comment-input"]',
+  sendButton: '[data-qa="dislike-send-button"]',
+};
+
 export const PlaybackSelectors = {
   playbackContainer: '[data-qa="playback"]',
   playbackAppTitle: '[data-qa="entity-name"]',
@@ -116,6 +123,7 @@ export const ImportExportSelectors = {
 
 export const ChatSelectors = {
   fileDropArea: '#file-drop-area',
+  editMessageFileDropArea: '#edit-message-file-drop-area',
   chat: '[data-qa="chat"]',
   spinner: '[data-qa="spinner"]',
   chatMessages: '[data-qa="chat-messages"]',
@@ -126,8 +134,12 @@ export const ChatSelectors = {
   messageIcon: '[data-qa="message-icon"]',
   messageContent: '[data-qa="message-content"]',
   messageStage: '[data-qa="message-stage"]',
+  referenceButton: 'reference',
   openedStage: '[data-qa="stage-opened"]',
   closedStage: '[data-qa="stage-closed"]',
+  stageContent: '[data-qa="stage-content"]',
+  stageContentCopyButton: 'copy',
+  stageContentDownloadButton: 'download',
   stageLoader: '.animate-spin',
   loadingCursor: '[data-qa="loading-cursor"]',
   regenerate: '[data-qa="regenerate"]',
@@ -141,6 +153,10 @@ export const ChatSelectors = {
   attachmentExpanded: '[data-qa="attachment-expanded"]',
   attachmentCollapsed: '[data-qa="attachment-collapsed"]',
   attachmentsGroup: '[data-qa="grouped-attachments"]',
+  attachmentTitle: '[data-qa="attachment-title"]',
+  attachmentContent: '[data-qa="attachment-content"]',
+  attachmentName: '[data-qa="attachment-name"]',
+  attachmentReferenceLink: '[data-qa="attachment-reference-link"]',
   entitySpinner: '[data-qa="entity-spinner"]',
   plotlyContainer: '.plot-container',
   maxWidth: '.max-w-none',
@@ -169,6 +185,9 @@ export const TableSelectors = {
   copyAsCsvIcon: '[data-qa="copy-csv-icon"]',
   copyAsTxtIcon: '[data-qa="copy-txt-icon"]',
   copyAsMdIcon: '[data-qa="copy-md-icon"]',
+  downloadCsvIcon: '[data-qa="download-csv"]',
+  headerScrollContainer: '[data-qa="table-header-scroll-container"]',
+  bodyScrollContainer: '[data-qa="table-body-scroll-container"]',
 };
 
 export const PublicationReviewControls = {

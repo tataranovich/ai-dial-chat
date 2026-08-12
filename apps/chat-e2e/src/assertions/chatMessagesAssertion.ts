@@ -1,7 +1,17 @@
 import { BaseAssertion } from '@/src/assertions/base/baseAssertion';
-import { ElementLabel, ElementState, ExpectedMessages } from '@/src/testData';
-import { AttributeValues, Attributes } from '@/src/ui/domData';
+import {
+  ElementLabel,
+  ElementState,
+  ExpectedMessages,
+  Rate,
+} from '@/src/testData';
+import {
+  AttributeValues,
+  Attributes,
+  ThemeColorAttributes,
+} from '@/src/ui/domData';
 import { ChatMessages } from '@/src/ui/webElements';
+import { ThemesUtil } from '@/src/utils/themesUtil';
 import { Locator, expect } from '@playwright/test';
 
 export class ChatMessagesAssertion extends BaseAssertion {
@@ -27,15 +37,19 @@ export class ChatMessagesAssertion extends BaseAssertion {
   ) {
     const button =
       label === 'more'
-        ? this.chatMessages.showMoreButton.getElementLocator()
-        : this.chatMessages.showLessButton.getElementLocator();
+        ? this.chatMessages.showMoreButton
+        : this.chatMessages.showLessButton;
     expectedState === 'visible'
-      ? await expect
-          .soft(button, ExpectedMessages.buttonIsVisible)
-          .toBeVisible()
-      : await expect
-          .soft(button, ExpectedMessages.buttonIsNotVisible)
-          .toBeHidden();
+      ? await this.assertElementState(
+          button,
+          'visible',
+          ExpectedMessages.buttonIsVisible,
+        )
+      : await this.assertElementState(
+          button,
+          'hidden',
+          ExpectedMessages.buttonIsNotVisible,
+        );
   }
 
   public async assertShowMoreLessButtonColor(
@@ -220,7 +234,7 @@ export class ChatMessagesAssertion extends BaseAssertion {
     expectedLink: string | RegExp,
   ) {
     await this.assertElementAttribute(
-      this.chatMessages.getAttachmentLink(message),
+      this.chatMessages.getMessageContentLink(message),
       Attributes.href,
       expectedLink,
     );
@@ -228,7 +242,7 @@ export class ChatMessagesAssertion extends BaseAssertion {
 
   public async assertMessageImageOpenedInNewTab(message: number) {
     await this.assertElementAttribute(
-      this.chatMessages.getAttachmentLink(message),
+      this.chatMessages.getMessageContentLink(message),
       Attributes.target,
       AttributeValues.blank,
     );
@@ -239,7 +253,7 @@ export class ChatMessagesAssertion extends BaseAssertion {
     expectedName: string,
   ) {
     await this.assertElementAttribute(
-      this.chatMessages.getAttachmentLink(message),
+      this.chatMessages.getMessageContentLink(message),
       Attributes.download,
       expectedName,
     );
@@ -247,5 +261,22 @@ export class ChatMessagesAssertion extends BaseAssertion {
 
   public assertCopiedMessage(copiedMessage: string, expectedMessage: string) {
     this.assertValue(copiedMessage.replace(/\r\n/g, '\n'), expectedMessage);
+  }
+
+  public async assertRate(rate: Rate, messageIndex: number) {
+    const likeIcon = this.chatMessages.getChatMessageRate(messageIndex, rate);
+    await this.assertElementState(likeIcon, 'visible');
+    await this.assertElementActionabilityState(likeIcon, 'disabled');
+    await this.assertElementColor(
+      likeIcon,
+      ThemesUtil.getRgbColorByKey(ThemeColorAttributes.textAccentPrimary),
+    );
+    await this.assertElementState(
+      this.chatMessages.getChatMessageRate(
+        messageIndex,
+        rate === Rate.like ? Rate.dislike : Rate.like,
+      ),
+      'hidden',
+    );
   }
 }

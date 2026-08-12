@@ -210,6 +210,9 @@ export const ExpectedConstants = {
   allFilesRoot: 'My Files',
   copyTableTooltip: (copyType: CopyTableType) =>
     `Copy as ${copyType.toUpperCase()}`,
+  downloadTableAsCsvTooltip: 'Download as CSV',
+  downloadTableAsCsvModalHeading: 'Download table as CSV',
+  downloadedCsvTableDefaultName: `${new Date().toISOString().slice(0, 10)}_table.csv`,
   charsToEscape: ['\\', '"'],
   maxEntityNameLength: 255,
   selectAllTooltip: 'Select all',
@@ -421,6 +424,29 @@ export const ExpectedConstants = {
   // Shown in an editable (non-readonly) editor when the chip's entity is deleted.
   notAvailableEditableChipTooltip: (entityType: string) =>
     `Not available ${entityType}. Please, change or remove ${entityType} to proceed.`,
+  // Code Interpreter field in the Quick app 2.0 App settings step.
+  codeInterpreterFieldLabel: 'Code Interpreter',
+  codeInterpreterAdditionalText: 'Use to execute custom Python code',
+  codeInterpreterInfoTooltip:
+    'Allows to build multi-agent applications where agents can generate and safely execute Python code in real-time to perform specific tasks, such as data visualization or analytics.',
+  // Error under the Model field when the orchestrator model has no tools support.
+  selectedModelDoesNotSupportToolsError:
+    'Selected model does not support tools',
+  // Attach files form hints reflecting the app's attachment config.
+  attachmentsUpToFiles: (n: number) => `Up to ${n} files.`,
+  attachmentsSupportedTypesLabel: 'Supported types:',
+  pdfAttachmentType: 'application/pdf',
+  // template_name of the predefined Code Interpreter toolset.
+  codeInterpreterTemplateName: 'py_interpreter',
+  // API key header name injected into the mocked API key toolset auth settings.
+  apiKeyHeaderName: 'api-key',
+  // "Toolset login required" modal shown in the App editor preview.
+  toolsetLoginRequiredTitle: 'Toolset login required',
+  toolsetsRequireLoginSubtitle:
+    'The toolsets that "Quick app" uses to generate a response require a login',
+  // Toasts shown after declining toolset sign-in requests.
+  toolsetSignInRequestDeclined: 'Toolset sign in request declined',
+  allToolsetSignInRequestsDeclined: 'All toolset sign in requests declined',
   // Confirmation dialog shown on Save & Exit when the config has invalid items.
   saveOnlyValidDataTitle: 'Only valid data will be saved',
   saveOnlyValidDataMessage:
@@ -438,6 +464,9 @@ export const ExpectedConstants = {
   toolsetNotFoundToast: 'Toolset by this link not found',
   enterKeyboardShortcut: 'Enter - send messages, Shift + Enter - new line',
   ctrlEnterKeyboardShortcut: 'Ctrl + Enter - send messages, Enter - new line',
+  stageContentLimitExceeded: (limit: number) =>
+    `Content is too large to display (exceeds ${limit} KB).`,
+  fewVersionsLabel: 'Few',
 };
 
 export const withTraceId = (message: string): RegExp => {
@@ -484,6 +513,7 @@ export enum MenuOptions {
   removeAccess = 'Remove access',
   loginWithMyCreds = 'Login with my creds',
   login = 'Log in',
+  manageCreds = 'Manage creds',
   connect = 'Connect',
 }
 
@@ -534,6 +564,11 @@ export enum EditPromptFormFields {
   name = 'Name',
   description = 'Description',
   promptContent = 'Prompt',
+}
+
+export enum DislikeCommentFields {
+  title = 'Send feedback',
+  inputPlaceholder = 'Type an optional comment to your feedback',
 }
 
 export enum EntityEditorToolsetTypes {
@@ -640,8 +675,11 @@ export const API = {
   authorizationEndpoint: (endpoint: string) => `${endpoint}/oauth/authorize`,
   tokenEndpoint: (endpoint: string) => `${endpoint}/oauth/token`,
   toolsetSignInHost: () => `${API.api}/ops/${ServerSlugs.TOOLSET_SIGN_IN}`,
+  subscribeHost: () => `${API.api}/client-channels/subscribe`,
   unsubscribeHost: () => `${API.api}/client-channels/unsubscribe`,
+  reportHost: () => `${API.api}/client-channels/report`,
   limitsHost: (id: string) => `/api/deployments/${id}/limits`,
+  rateHost: () => `${API.api}/rate`,
 };
 
 export const Import = {
@@ -659,6 +697,12 @@ export const Import = {
   v14AppFolderPromptName: 'Version 1.4 A*B',
   oldVersionAppGpt35Message: '11 * 12 =',
   importAttachmentExtension: '.dial',
+};
+
+export const PdfViewerZoom = {
+  auto: 'Auto',
+  pageFit: 'Page Fit',
+  percent: (value: number) => `${value}%`,
 };
 
 export const Attachment = {
@@ -684,6 +728,7 @@ export const Attachment = {
   fileWithoutExtension: 'withoutExtension',
   plotlyName: 'plotly.json',
   pdfName: 'pdf_attachment.pdf',
+  multipagePdfName: 'multipage_pdf.pdf',
   appIconSvg: 'appIcon.svg',
   sttAudioName: 'stt_audio.mp3',
 };
@@ -702,6 +747,11 @@ export enum ImportedModelIds {
 export enum Rate {
   like = 'like',
   dislike = 'dislike',
+}
+
+export enum RateTooltip {
+  Like = 'Like',
+  Dislike = 'Dislike',
 }
 
 export enum ThemeId {

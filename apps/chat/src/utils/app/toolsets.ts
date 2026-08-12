@@ -17,6 +17,10 @@ import {
   isEntityIdExternal,
   isMyToolset,
 } from '@/src/utils/app/id';
+import {
+  getLocalizedEntityIdName,
+  updateLocalizedEntityIdName,
+} from '@/src/utils/app/marketplace-localization';
 import { ApiUtils, getMarketplaceEntityApiKey } from '@/src/utils/server/api';
 import { ServerUtils } from '@/src/utils/server/server';
 
@@ -92,6 +96,7 @@ export const convertToolsetFromApi = (data: Toolset): ToolsetModel => {
       codeChallengeMethod: data.auth_settings.code_challenge_method,
       scopesSupported: data.auth_settings.scopes_supported,
       tokenEndpoint: data.auth_settings.token_endpoint,
+      tokenEndpointAuthMethod: data.auth_settings.token_endpoint_auth_method,
     },
   };
 };
@@ -119,6 +124,9 @@ const convertToolsetAuthSettingsToApi = (data: ToolsetModel) => {
         }),
         ...(data.authSettings.tokenEndpoint && {
           token_endpoint: data.authSettings.tokenEndpoint,
+        }),
+        ...(data.authSettings.tokenEndpointAuthMethod && {
+          token_endpoint_auth_method: data.authSettings.tokenEndpointAuthMethod,
         }),
         ...(data.authSettings.authorizationEndpoint && {
           authorization_endpoint: data.authSettings.authorizationEndpoint,
@@ -207,13 +215,14 @@ export const fitToolsetNameToStorageLimits = <
     return toolset;
   }
 
+  const entityIdName = getLocalizedEntityIdName(toolset.name);
   const fittedName = prepareEntityName(
-    truncateToUtf8Bytes(prepareEntityName(toolset.name), availableNameBytes),
+    truncateToUtf8Bytes(prepareEntityName(entityIdName), availableNameBytes),
   );
 
-  return fittedName === toolset.name
+  return fittedName === entityIdName
     ? toolset
-    : { ...toolset, name: fittedName };
+    : (updateLocalizedEntityIdName(toolset, fittedName) as T);
 };
 
 export const getStorageSafeUniqueToolsetName = (params: {

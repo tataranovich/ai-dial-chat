@@ -11,6 +11,7 @@ import {
   Fragment,
   RefObject,
   createElement,
+  useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -24,6 +25,9 @@ import { useTranslation } from '@/src/hooks/useTranslation';
 import { Translation } from '@/src/types/translation';
 
 import { CommonI18nKeys } from '@/src/constants/i18n';
+import { DEFAULT_ICON_SIZES } from '@/src/constants/icons';
+
+import { Loader } from '@/src/components/Common/Loader';
 
 import { CloseButtonSmall } from './CloseButtons';
 import { Tooltip } from './Tooltip';
@@ -44,10 +48,11 @@ function getFilteredItems<T>({
   selectedItems,
 }: getFilteredItemsArgs<T>) {
   if (!items) {
-    return !inputValue ||
-      selectedItems?.some((item) => getItemLabel(item) === inputValue)
+    const trimmedInputValue = inputValue?.trim();
+    return !trimmedInputValue ||
+      selectedItems?.some((item) => getItemLabel(item) === trimmedInputValue)
       ? []
-      : [inputValue as T];
+      : [trimmedInputValue as T];
   }
   if (!selectedItems) {
     return items;
@@ -80,14 +85,16 @@ interface Props<T> {
   getItemLabel: (item: T) => string;
   getItemValue: (item: T) => string;
   onChangeSelectedItems: (value: T[]) => void;
-  handleError?: () => void;
-  handleClearError?: () => void;
+  /** Makes the not yet added input text controlled from the outside. */
+  inputValue?: string;
+  onInputValueChange?: (value: string) => void;
   dataQa?: string;
   /** When set, merged with the internal input ref (e.g. to focus programmatically). */
   inputRef?: RefObject<HTMLInputElement | null>;
   /** When true, shows `connectorLabel` between selected pills (not before the first). */
   showConnectorBetweenSelectedItems?: boolean;
   connectorLabel?: string;
+  isLoading?: boolean;
 }
 
 export function MultipleComboBox<T>({
@@ -109,16 +116,29 @@ export function MultipleComboBox<T>({
   getItemLabel,
   getItemValue,
   onChangeSelectedItems,
-  handleError,
-  handleClearError,
+  inputValue: inputValueProp,
+  onInputValueChange,
   dataQa,
   inputRef: inputRefProp,
   showConnectorBetweenSelectedItems,
   connectorLabel,
+  isLoading,
 }: Props<T>) {
   const { t } = useTranslation(Translation.Common);
-  const [inputValue, setInputValue] = useState<string | undefined>('');
+  const [ownInputValue, setOwnInputValue] = useState<string | undefined>('');
   const [floatingWidth, setFloatingWidth] = useState(0);
+
+  const isInputValueControlled = inputValueProp !== undefined;
+  const inputValue = isInputValueControlled ? inputValueProp : ownInputValue;
+  const setInputValue = useCallback(
+    (value: string | undefined) => {
+      if (!isInputValueControlled) {
+        setOwnInputValue(value);
+      }
+      onInputValueChange?.(value ?? '');
+    },
+    [isInputValueControlled, onInputValueChange],
+  );
 
   const inputRef = useRef<HTMLInputElement>(null);
   const cursorPositionRef = useRef<number | null>(null);
@@ -183,6 +203,7 @@ export function MultipleComboBox<T>({
     highlightedIndex,
     getItemProps,
     selectedItem,
+    openMenu,
   } = useCombobox({
     items: displayedItems,
     itemToString: (item: T | null) => (item ? getItemLabel(item) : 'null item'),
@@ -200,6 +221,11 @@ export function MultipleComboBox<T>({
             isOpen: true, // keep the menu open after selection.
             highlightedIndex: 0, // with the first option highlighted.
           };
+        case useCombobox.stateChangeTypes.InputClick:
+          return {
+            ...changes,
+            isOpen: true, // always open on click (never toggle closed).
+          };
         default:
           return changes;
       }
@@ -212,35 +238,45 @@ export function MultipleComboBox<T>({
       switch (type) {
         case useCombobox.stateChangeTypes.InputKeyDownEnter:
         case useCombobox.stateChangeTypes.ItemClick:
-        case useCombobox.stateChangeTypes.InputBlur:
+        case useCombobox.stateChangeTypes.InputBlur: {
           if (!newSelectedItem) {
             return;
           }
 
-          if (
-            getItemLabel(newSelectedItem) &&
-            !getItemLabel(newSelectedItem).trim()
-          ) {
+          const itemToAdd: T =
+            typeof newSelectedItem === 'string'
+              ? (newSelectedItem.trim() as T)
+              : newSelectedItem;
+
+          if (getItemLabel(itemToAdd) && !getItemLabel(itemToAdd).trim()) {
             return;
           }
 
           if (
             validationRegExp &&
-            typeof newSelectedItem === 'string' &&
-            !validationRegExp.test(newSelectedItem)
+            typeof itemToAdd === 'string' &&
+            !validationRegExp.test(itemToAdd)
           ) {
-            handleError?.();
             return;
           }
 
-          addSelectedItem(newSelectedItem);
-          onChangeSelectedItems([...(selectedItems ?? []), newSelectedItem]);
+          if (
+            selectedItems?.some(
+              (item) => getItemLabel(item) === getItemLabel(itemToAdd),
+            )
+          ) {
+            setInputValue('');
+            return;
+          }
+
+          addSelectedItem(itemToAdd);
+          onChangeSelectedItems([...(selectedItems ?? []), itemToAdd]);
           setInputValue('');
 
           break;
+        }
 
         case useCombobox.stateChangeTypes.InputChange:
-          handleClearError?.();
           setInputValue(newInputValue);
           break;
         default:
@@ -269,13 +305,13 @@ export function MultipleComboBox<T>({
     <Tooltip tooltip={tooltip}>
       <div
         className={classNames(
-          'relative w-full bg-transparent',
+          'relative flex w-full items-center bg-transparent',
           disabled && 'cursor-not-allowed',
           className,
         )}
         data-qa={dataQa}
       >
-        <div className="flex w-full flex-col gap-1">
+        <div className="flex grow flex-col gap-1">
           <div
             ref={refs.reference as RefObject<HTMLDivElement>}
             onClick={() => {
@@ -312,7 +348,7 @@ export function MultipleComboBox<T>({
                     >
                       <span
                         className={classNames(
-                          'flex items-center justify-between gap-2 rounded bg-accent-primary-alpha p-1 pr-0',
+                          'flex items-center justify-between gap-2 rounded bg-accent-primary-alpha px-3 pr-0',
                           itemHeightClassName
                             ? itemHeightClassName
                             : 'h-[24px]',
@@ -366,6 +402,11 @@ export function MultipleComboBox<T>({
                 onChange: (e: ChangeEvent<HTMLInputElement>) => {
                   cursorPositionRef.current = e.target.selectionStart;
                 },
+                onFocus: () => {
+                  if (!isOpen) {
+                    openMenu();
+                  }
+                },
               })}
               data-qa="filter-value-input"
             />
@@ -411,10 +452,10 @@ export function MultipleComboBox<T>({
                 )}
           </ul>
         </div>
-        {hasDeleteAll && selectedItems.length > 0 ? (
-          <div className={closeButtonClassName}>
+        <div className="flex items-center gap-2">
+          {hasDeleteAll && selectedItems.length > 0 && (
             <CloseButtonSmall
-              className="text-primary"
+              className={classNames('text-primary', closeButtonClassName)}
               disabled={disabled}
               onClick={(e) => {
                 e.stopPropagation();
@@ -422,8 +463,9 @@ export function MultipleComboBox<T>({
                 onChangeSelectedItems([]);
               }}
             />
-          </div>
-        ) : null}
+          )}
+          {!!isLoading && <Loader size={DEFAULT_ICON_SIZES.SMALL} />}
+        </div>
       </div>
     </Tooltip>
   );

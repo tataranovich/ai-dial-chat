@@ -11,6 +11,7 @@ import { FilesActions } from '@/src/store/actions';
 import { useAppDispatch, useAppSelector } from '@/src/store/hooks';
 import { SettingsSelectors } from '@/src/store/selectors';
 
+import { MAX_NEW_FOLDER_PATH_SEGMENTS } from '@/src/constants/folders';
 import { SideBarI18nKeys } from '@/src/constants/i18n';
 
 import { FilesUploadingModal } from './FilesUploadingModal';
@@ -60,6 +61,7 @@ export const FileManager: React.FC = () => {
     fileMetadataPopupOptions,
     navigationPanelOptions,
     gridOptions,
+    gridPathColumnLabel,
     toolbarOptions,
     destinationFolderPopupOptions,
     deleteConfirmationOptions,
@@ -79,6 +81,8 @@ export const FileManager: React.FC = () => {
     handleOpenUnshareFilesDialog,
     handleOpenRemoveFilesAccessDialog,
     handleRenameValidation,
+    handleCreateFolderValidate,
+    showMaxDepthError,
 
     sharedWithMeIds,
 
@@ -91,6 +95,14 @@ export const FileManager: React.FC = () => {
   });
 
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+
+  const gridPathColumnLabelStyle = useMemo(
+    () =>
+      ({
+        '--grid-path-column-label': `"${gridPathColumnLabel.replace(/["\\]/g, '\\$&')}"`,
+      }) as React.CSSProperties,
+    [gridPathColumnLabel],
+  );
 
   const allSelectedItemsShared = useMemo(() => {
     if (selectedPaths.size === 0) return false;
@@ -125,7 +137,11 @@ export const FileManager: React.FC = () => {
   }, [initialDataStatus, dispatch]);
 
   return (
-    <div className="flex w-full grow overflow-auto" data-qa="file-manager">
+    <div
+      className="flex w-full grow overflow-auto"
+      data-qa="file-manager"
+      style={gridPathColumnLabelStyle}
+    >
       {initialDataStatus !== UploadStatus.LOADED ? (
         <DialLoader size={45} />
       ) : (
@@ -162,7 +178,9 @@ export const FileManager: React.FC = () => {
           onUnshareFiles={handleOpenUnshareFilesDialog}
           onRemoveFilesAccess={handleOpenRemoveFilesAccessDialog}
           onRenameValidate={handleRenameValidation}
-          onCreateFolderValidate={handleRenameValidation}
+          onCreateFolderValidate={handleCreateFolderValidate}
+          maxNewFolderDepth={MAX_NEW_FOLDER_PATH_SEGMENTS}
+          onNewFolderDepthExceeded={showMaxDepthError}
           sharedWithMeIds={sharedWithMeIds}
           uploadEnabled={uploadEnabled}
           clearSearchResults={handleClearSearch}

@@ -10,8 +10,13 @@ import {
 import { isHiddenEntity } from '@/src/utils/app/search';
 
 import { Conversation, PrepareNameOptions } from '@/src/types/chat';
-import { BaseDialEntity, FeatureType, PartialBy } from '@/src/types/common';
-import { DialFile } from '@/src/types/files';
+import {
+  BaseDialEntity,
+  FeatureType,
+  MoveModel,
+  PartialBy,
+} from '@/src/types/common';
+import { DialFile, FileOperationsResult } from '@/src/types/files';
 import { FolderInterface } from '@/src/types/folder';
 import { PublishRequestDialAIEntityModel } from '@/src/types/models';
 import { Prompt } from '@/src/types/prompt';
@@ -36,7 +41,7 @@ import {
   prepareEntityName,
   truncateToUtf8Bytes,
 } from './common';
-import { isRootEntity } from './id';
+import { getIdWithoutRootPathSegments, isRootEntity } from './id';
 import { hasWritePermission } from './share';
 import { isReplayConversation, splitEntityId } from './shared-utils';
 
@@ -48,7 +53,6 @@ import {
   UploadStatus,
 } from '@epam/ai-dial-shared';
 import escapeRegExp from 'lodash-es/escapeRegExp';
-import sortBy from 'lodash-es/sortBy';
 import uniq from 'lodash-es/uniq';
 
 export const getFoldersDepth = (
@@ -68,6 +72,11 @@ export const getFoldersDepth = (
 
   return 1 + maxDepth;
 };
+
+export const getFolderNestingLevel = (folderId: string | undefined): number =>
+  folderId
+    ? getIdWithoutRootPathSegments(folderId).split('/').filter(Boolean).length
+    : 0;
 
 export const getParentAndCurrentFoldersById = (
   folders: FolderInterface[],
@@ -520,8 +529,27 @@ export const getEntitiesFoldersFromEntities = (
   return featuresFolders;
 };
 
+/**
+ * Compares entity names character by character, case insensitively. Digits are
+ * compared as characters and not as numbers, so "Folder 10" comes before
+ * "Folder 2" and "16Folder" before "4Folder".
+ */
+export const compareEntitiesByName = (
+  a: { name: string },
+  b: { name: string },
+): number => {
+  const aName = a.name.toLowerCase();
+  const bName = b.name.toLowerCase();
+
+  if (aName === bName) {
+    return 0;
+  }
+
+  return aName < bName ? -1 : 1;
+};
+
 export const sortByName = <T extends Entity>(entities: T[]): T[] =>
-  sortBy(entities, (entity: T) => entity.name.toLowerCase());
+  [...entities].sort(compareEntitiesByName);
 
 export const updateMovedFolderId = (
   oldParentFolderId: string,
@@ -552,6 +580,26 @@ export const updateMovedEntityId = (
   }
   return entityId;
 };
+
+export type FileMovesMap = Map<string, string>;
+
+export const getFileMovesFromResult = (
+  result?: FileOperationsResult<MoveModel>,
+): FileMovesMap => {
+  const moves: FileMovesMap = new Map();
+
+  for (const { data } of result?.results ?? []) {
+    const { sourceUrl, destinationUrl } = data;
+    if (sourceUrl && destinationUrl && sourceUrl !== destinationUrl) {
+      moves.set(sourceUrl, destinationUrl);
+    }
+  }
+
+  return moves;
+};
+
+export const updatePathOnMove = (path: string, moves: FileMovesMap): string =>
+  moves.get(path) ?? path;
 
 export const getFolderIdFromEntityId = (id: string) =>
   id.split('/').slice(0, -1).join('/');
@@ -657,6 +705,24 @@ export const updateChildAndCurrentFoldersIds = (
 
     return id;
   });
+};
+
+/**
+ * Folder ids are path based, so renaming or moving a folder changes the ids of
+ * its whole subtree. Maps a path onto its new location, keeping the part below
+ * the moved folder intact. Paths outside the moved folders are returned as is.
+ */
+export const remapMovedPath = (
+  path: string,
+  movedFolders: { sourceUrl: string; destinationUrl: string }[],
+) => {
+  const movedFolder = movedFolders.find(
+    ({ sourceUrl }) => path === sourceUrl || path.startsWith(`${sourceUrl}/`),
+  );
+
+  return movedFolder
+    ? `${movedFolder.destinationUrl}${path.slice(movedFolder.sourceUrl.length)}`
+    : path;
 };
 
 export const updateChildFoldersIds = (
@@ -806,7 +872,10 @@ export const getPartialAndFullyChosenFolders = (
 
   const partialChosenFolderIds = folderIds.filter(
     (folderId) =>
-      !selectedItems.some((chosenId) => folderId.startsWith(chosenId)) &&
+      !selectedItems.some((chosenId) => {
+        const chosenPrefix = addTrailingSlashIfAbsent(chosenId);
+        return folderId.startsWith(chosenPrefix) && folderId !== chosenPrefix;
+      }) &&
       (selectedItems.some((chosenId) => chosenId.startsWith(folderId)) ||
         fullyChosenFolderIds.some((entityId) =>
           entityId.startsWith(folderId),

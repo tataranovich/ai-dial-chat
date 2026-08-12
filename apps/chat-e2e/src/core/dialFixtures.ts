@@ -22,6 +22,7 @@ import {
   CustomAppEditorAppSettingsPreviewBody,
   CustomAppEditorContainer,
   CustomAppEditorViewForm,
+  DownloadTableCsvModal,
   DragFile,
   Dropdown,
   EntityDetailsModal,
@@ -47,6 +48,7 @@ import {
   InformationModal,
   ListboxMenu,
   MessageTemplateModal,
+  PdfPreviewModal,
   PromptBar,
   PublishingFilter,
   PublishingRules,
@@ -58,6 +60,7 @@ import {
   ShareAppModal,
   ToolsetEditorContainer,
   ToolsetEditorViewForm,
+  ToolsetLoginEventsModal,
   ToolsetLoginModal,
   TooltipPortal,
   TopicsTooltip,
@@ -120,6 +123,7 @@ import { EntityEditorHeaderAssertion } from '@/src/assertions/entityEditorHeader
 import { InformationModalAssertion } from '@/src/assertions/informationModalAssertion';
 import { LocalStorageAssertion } from '@/src/assertions/localStorageAssertion';
 import { MessageTemplateModalAssertion } from '@/src/assertions/messageTemplateModalAssertion';
+import { PdfPreviewModalAssertion } from '@/src/assertions/pdfPreviewModalAssertion';
 import { PromptPreviewModalAssertion } from '@/src/assertions/promptPreviewModalAssertion';
 import { PublishingRulesAssertion } from '@/src/assertions/publishing/publishingRulesAssertion';
 import { RenameConversationModalAssertion } from '@/src/assertions/renameConversationModalAssertion';
@@ -144,6 +148,7 @@ import { PublicationApiHelper } from '@/src/testData/api/publicationApiHelper';
 import { ApiInjector } from '@/src/testData/injector/apiInjector';
 import { BrowserStorageInjector } from '@/src/testData/injector/browserStorageInjector';
 import { DataInjectorInterface } from '@/src/testData/injector/dataInjectorInterface';
+import { ToolsetSignInMockHelper } from '@/src/testData/toolsets/toolsetSignInMockHelper';
 import { DialErrorPage } from '@/src/ui/pages/dialErrorPage';
 import { AccountSettings } from '@/src/ui/webElements/accountSettings';
 import { AgentSettings } from '@/src/ui/webElements/agentSettings';
@@ -151,6 +156,7 @@ import { AppContainer } from '@/src/ui/webElements/appContainer';
 import { Banner } from '@/src/ui/webElements/banner';
 import { Compare } from '@/src/ui/webElements/compare';
 import { ConfirmationDialog } from '@/src/ui/webElements/confirmationDialog';
+import { DislikeCommentModal } from '@/src/ui/webElements/dislikeCommentModal';
 import { DropdownCheckboxMenu } from '@/src/ui/webElements/dropdownCheckboxMenu';
 import { DropdownMenu } from '@/src/ui/webElements/dropdownMenu';
 import {
@@ -235,8 +241,11 @@ const dialTest = test.extend<{
   externalAppEditorViewForm: ExternalAppEditorViewForm;
   externalAppEditorAppSettingsPreview: EntityEditorEntitySettingsCardPreview;
   quickApp2EditorContainer: QuickApp2EditorContainer;
+  quickApp2EditorAppSettingsPreviewChat: EntityEditorEntitySettingsPreviewChat;
   quickApp2EditorViewForm: QuickApp2EditorViewForm;
   agentAndToolsetSelectModal: AgentAndToolsetSelectModal;
+  agentAndToolsetSelectModalEntityMenu: DropdownMenu;
+  agentAndToolsetSelectModalEntityMenuAssertion: MenuAssertion;
   externalAppEditorAppSettingsPreviewBody: EntityEditorEntitySettingsCardPreviewBody;
   externalAppEditorAppSettingsPreviewCard: EntityEditorPreviewCard;
   toolsetEditorContainer: ToolsetEditorContainer;
@@ -294,6 +303,7 @@ const dialTest = test.extend<{
   promptModalDialog: PromptModalDialog;
   renameConversationModal: RenameConversationModal;
   renameConversationModalAssertion: RenameConversationModalAssertion;
+  dislikeCommentModal: DislikeCommentModal;
   variableModalDialog: VariableModalDialog;
   chatHeader: ChatHeader;
   chatHeaderVersionDropdownMenu: DropdownMenu;
@@ -350,6 +360,7 @@ const dialTest = test.extend<{
   additionalSecondUserItemApiHelper: ItemApiHelper;
   chatNotFound: ChatNotFound;
   uploadFromDeviceModal: UploadFromDeviceModal;
+  downloadTableCsvModal: DownloadTableCsvModal;
   selectFolderModal: SelectFolderModal;
   selectFolderManagerModal: SelectFolderManagerModal;
   selectFolders: Folders;
@@ -371,6 +382,8 @@ const dialTest = test.extend<{
   informationModal: InformationModal;
   listboxMenu: ListboxMenu;
   informationModalAssertion: InformationModalAssertion;
+  pdfPreviewModal: PdfPreviewModal;
+  pdfPreviewModalAssertion: PdfPreviewModalAssertion;
   conversationAssertion: ConversationAssertion;
   chatBarFolderAssertion: FolderAssertion<FolderConversations>;
   organizationConversationAssertion: SideBarConversationAssertion<OrganizationConversationsTree>;
@@ -489,6 +502,10 @@ const dialTest = test.extend<{
   toolsetApiAuthenticationAssertion: ToolsetApiAuthenticationAssertion;
   toolsetLoginModal: ToolsetLoginModal;
   toolsetLoginModalAssertion: ToolsetLoginModalAssertion;
+  previewToolsetLoginModal: ToolsetLoginModal;
+  previewToolsetLoginModalAssertion: ToolsetLoginModalAssertion;
+  toolsetLoginEventsModal: ToolsetLoginEventsModal;
+  toolsetSignInMock: ToolsetSignInMockHelper;
   connectToolsetModal: ConnectToolsetModal;
 }>({
   beforeTestCleanup: [
@@ -701,8 +718,31 @@ const dialTest = test.extend<{
       quickApp2EditorContainer.getEntityEditorViewForm();
     await use(quickApp2EditorViewForm);
   },
+  quickApp2EditorAppSettingsPreviewChat: async (
+    { quickApp2EditorContainer },
+    use,
+  ) => {
+    await use(
+      quickApp2EditorContainer
+        .getEntityEditorEntitySettingsPreview()
+        .getEntityEditorEntitySettingsPreviewBody()
+        .getAppEditorAppSettingsPreviewChat(),
+    );
+  },
   agentAndToolsetSelectModal: async ({ page }, use) => {
     await use(new AgentAndToolsetSelectModal(page));
+  },
+  agentAndToolsetSelectModalEntityMenu: async (
+    { agentAndToolsetSelectModal },
+    use,
+  ) => {
+    await use(agentAndToolsetSelectModal.getEntities().getEntityDropdownMenu());
+  },
+  agentAndToolsetSelectModalEntityMenuAssertion: async (
+    { agentAndToolsetSelectModalEntityMenu },
+    use,
+  ) => {
+    await use(new MenuAssertion(agentAndToolsetSelectModalEntityMenu));
   },
   toolsetEditorContainer: async ({ entityEditorPage }, use) => {
     const toolsetEditorContainer = entityEditorPage.getToolsetEditorContainer();
@@ -945,6 +985,10 @@ const dialTest = test.extend<{
     const renameConversationModal = new RenameConversationModal(page);
     await use(renameConversationModal);
   },
+  dislikeCommentModal: async ({ page }, use) => {
+    const dislikeCommentModal = new DislikeCommentModal(page);
+    await use(dislikeCommentModal);
+  },
   renameConversationModalAssertion: async (
     { renameConversationModal },
     use,
@@ -1012,6 +1056,16 @@ const dialTest = test.extend<{
   shareModal: async ({ page }, use) => {
     const shareModal = new ShareModal(page);
     await use(shareModal);
+  },
+  pdfPreviewModal: async ({ page }, use) => {
+    const pdfPreviewModal = new PdfPreviewModal(page);
+    await use(pdfPreviewModal);
+  },
+  pdfPreviewModalAssertion: async ({ pdfPreviewModal }, use) => {
+    const pdfPreviewModalAssertion = new PdfPreviewModalAssertion(
+      pdfPreviewModal,
+    );
+    await use(pdfPreviewModalAssertion);
   },
   shareAppModal: async ({ page }, use) => {
     const shareAppModal = new ShareAppModal(page);
@@ -1215,6 +1269,10 @@ const dialTest = test.extend<{
   uploadFromDeviceModal: async ({ page }, use) => {
     const uploadFromDeviceModal = new UploadFromDeviceModal(page);
     await use(uploadFromDeviceModal);
+  },
+  downloadTableCsvModal: async ({ page }, use) => {
+    const downloadTableCsvModal = new DownloadTableCsvModal(page);
+    await use(downloadTableCsvModal);
   },
   selectFolderModal: async ({ page }, use) => {
     const selectFolderModal = new SelectFolderModal(page);
@@ -2028,6 +2086,28 @@ const dialTest = test.extend<{
       toolsetLoginModal,
     );
     await use(toolsetLoginModalAssertion);
+  },
+  previewToolsetLoginModal: async ({ page }, use) => {
+    // App editor renders the sign-in dialog twice; target the interactive one.
+    const previewToolsetLoginModal = new ToolsetLoginModal(page, true);
+    await use(previewToolsetLoginModal);
+  },
+  previewToolsetLoginModalAssertion: async (
+    { previewToolsetLoginModal },
+    use,
+  ) => {
+    const previewToolsetLoginModalAssertion = new ToolsetLoginModalAssertion(
+      previewToolsetLoginModal,
+    );
+    await use(previewToolsetLoginModalAssertion);
+  },
+  toolsetLoginEventsModal: async ({ page }, use) => {
+    const toolsetLoginEventsModal = new ToolsetLoginEventsModal(page);
+    await use(toolsetLoginEventsModal);
+  },
+  toolsetSignInMock: async ({ page }, use) => {
+    const toolsetSignInMock = new ToolsetSignInMockHelper(page);
+    await use(toolsetSignInMock);
   },
   connectToolsetModal: async ({ page }, use) => {
     const connectToolsetModal = new ConnectToolsetModal(page);

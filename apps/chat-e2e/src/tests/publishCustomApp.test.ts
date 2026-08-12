@@ -13,7 +13,7 @@ import {
 } from '@/src/testData';
 import { ThemeColorAttributes } from '@/src/ui/domData';
 import { BaseElement } from '@/src/ui/webElements';
-import { GeneratorUtil, UserUtil } from '@/src/utils';
+import { GeneratorUtil, ItemUtil, UserUtil } from '@/src/utils';
 import { ThemesUtil } from '@/src/utils/themesUtil';
 
 dialAdminTest(
@@ -37,6 +37,7 @@ dialAdminTest(
       adminNavigationPanel,
       adminFileManagerGridAssertion,
       adminFileManagerToolbar,
+      adminFileManagerFoldersTree,
       adminMarketplaceHeader,
       adminMarketplaceEntitiesSection,
       baseAssertion,
@@ -68,14 +69,14 @@ dialAdminTest(
     testInfo,
   ) => {
     setTestIds(
-      'EPMRTC-4092',
-      'EPMRTC-4111',
-      'EPMRTC-5854',
-      'EPMRTC-5860',
-      'EPMRTC-4110',
-      'EPMRTC-4823',
-      'EPMRTC-5354',
-      'EPMRTC-5342',
+      'EPMDIAL-4205',
+      'EPMDIAL-4300',
+      'EPMDIAL-4310',
+      'EPMDIAL-4316',
+      'EPMDIAL-4238',
+      'EPMDIAL-4240',
+      'EPMDIAL-4242',
+      'EPMDIAL-4241',
     );
     const appName = GeneratorUtil.randomApplicationName();
     const appVersion = GeneratorUtil.randomEntityVersion();
@@ -336,7 +337,7 @@ dialAdminTest(
     );
 
     await dialAdminTest.step(
-      'Click on "Back to publication request", approve it and verify app icon appears under "Organization" section on File Manager page',
+      'Click on "Back to publication request", approve it and verify app icon appears under "Organization" section in the folder named as published app',
       async () => {
         await adminPublishedApplicationReviewModal
           .getPublicationReviewControl()
@@ -360,6 +361,10 @@ dialAdminTest(
 
         await adminNavigationPanel.goToFileManager();
         await adminFileManagerToolbar.organizationTab.click();
+        await adminFileManagerFoldersTree.expandFolders(
+          { isFilesListingTriggered: true },
+          `${appName}${ItemUtil.entityIdSeparator}${appVersion}`,
+        );
         await adminFileManagerGridAssertion.assertGridRowByNameState(
           filename,
           'visible',

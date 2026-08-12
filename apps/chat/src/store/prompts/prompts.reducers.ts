@@ -130,6 +130,7 @@ export const promptsSlice = createSlice({
         newPrompt: Prompt;
         oldPrompt: Prompt;
         traceId?: string;
+        message?: string;
       }>,
     ) => {
       state.prompts = state.prompts.map((prompt) => {
@@ -439,7 +440,10 @@ export const promptsSlice = createSlice({
         )
         .map(({ id }) => `${id}/`);
     },
-    deleteChosenPrompts: (state) => state,
+    deleteChosenPrompts: (state) => {
+      // show loader while chosen prompts are being deleted on the server
+      state.promptsLoaded = false;
+    },
 
     addToChosenEmptyFolders: (
       state,

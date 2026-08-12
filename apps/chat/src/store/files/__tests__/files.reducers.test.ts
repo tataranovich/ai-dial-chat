@@ -336,6 +336,56 @@ describe('files.reducers deleteFilesSuccess', () => {
   });
 });
 
+describe('files.reducers moveFiles', () => {
+  const bucket = 'files/bucket';
+  const renamed = `${bucket}/parent`;
+  const sibling = `${bucket}/parent2`;
+
+  it('drops the moved subtree but keeps a sibling sharing the name prefix', () => {
+    const state = {
+      ...filesSlice.getInitialState(),
+      files: [
+        makeFile({
+          id: `${renamed}/child/doc.txt`,
+          folderId: `${renamed}/child`,
+        }),
+        makeFile({
+          id: `${sibling}/child/doc.txt`,
+          folderId: `${sibling}/child`,
+        }),
+      ],
+      folders: [
+        makeFolder({ id: renamed, name: 'parent', folderId: bucket }),
+        makeFolder({ id: `${renamed}/child`, folderId: renamed }),
+        makeFolder({ id: sibling, name: 'parent2', folderId: bucket }),
+        makeFolder({ id: `${sibling}/child`, folderId: sibling }),
+      ],
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.moveFiles({
+        files: [
+          {
+            sourceUrl: renamed,
+            destinationUrl: `${bucket}/newName`,
+            nodeType: DialFileNodeType.FOLDER,
+          },
+        ],
+        sourceFolder: bucket,
+        destinationFolder: bucket,
+      }),
+    );
+
+    expect(nextState.folders.map((f) => f.id).sort()).toEqual(
+      [renamed, sibling, `${sibling}/child`].sort(),
+    );
+    expect(nextState.files.map((f) => f.id)).toEqual([
+      `${sibling}/child/doc.txt`,
+    ]);
+  });
+});
+
 describe('files.reducers uploadReplaceDialog', () => {
   const folderId = 'files/test-bucket/uploads';
   const file = new File(['content'], 'sun.jpg', { type: 'image/jpeg' });
@@ -499,6 +549,50 @@ describe('files.reducers quick attachments', () => {
     expect(nextState.selectedFilesIds).toEqual(['files/test/other.txt']);
     expect(nextState.files).toHaveLength(1);
   });
+
+  it('resetDeviceAttachmentFlag clears isFromDeviceAttachment for matching ids', () => {
+    const otherId = 'files/test/other.txt';
+    const state = {
+      ...filesSlice.getInitialState(),
+      files: [
+        makeFile({
+          id: fileId,
+          isFromDeviceAttachment: true,
+        }),
+        makeFile({
+          id: otherId,
+          isFromDeviceAttachment: true,
+        }),
+      ],
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.resetDeviceAttachmentFlag({ ids: [fileId] }),
+    );
+
+    expect(nextState.files[0].isFromDeviceAttachment).toBeFalsy();
+    expect(nextState.files[1].isFromDeviceAttachment).toBe(true);
+  });
+
+  it('resetDeviceAttachmentFlag leaves non-device files untouched', () => {
+    const state = {
+      ...filesSlice.getInitialState(),
+      files: [
+        makeFile({
+          id: fileId,
+        }),
+      ],
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.resetDeviceAttachmentFlag({ ids: [fileId] }),
+    );
+
+    expect(nextState.files[0].isFromDeviceAttachment).toBeUndefined();
+    expect(nextState.files).toHaveLength(1);
+  });
 });
 
 describe('files.reducers getFullListingSuccess', () => {
@@ -531,5 +625,77 @@ describe('files.reducers getFullListingSuccess', () => {
 
     const file = nextState.files.find((f) => f.id === fileId);
     expect(file?.publishedWithMe).toBe(true);
+  });
+
+  it('keeps the known content length when a listing result has none (no size flicker while uploading)', () => {
+    const folderPath = 'files/my-bucket';
+    const fileId = `${folderPath}/uploading.png`;
+    const state = {
+      ...filesSlice.getInitialState(),
+      files: [
+        makeFile({ id: fileId, folderId: folderPath, contentLength: 42 }),
+      ],
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.getFullListingSuccess({
+        folderPath,
+        files: [
+          makeFile({ id: fileId, folderId: folderPath, contentLength: 0 }),
+        ],
+      }),
+    );
+
+    const file = nextState.files.find((f) => f.id === fileId);
+    expect(file?.contentLength).toBe(42);
+  });
+
+  it('falls back to the locally cached size for a new file that has no content length yet', () => {
+    const folderPath = 'files/my-bucket';
+    const fileId = `${folderPath}/new.png`;
+    const state = {
+      ...filesSlice.getInitialState(),
+      localFileSizeCache: { [fileId]: 128 },
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.getFullListingSuccess({
+        folderPath,
+        files: [
+          makeFile({ id: fileId, folderId: folderPath, contentLength: 0 }),
+        ],
+      }),
+    );
+
+    const file = nextState.files.find((f) => f.id === fileId);
+    expect(file?.contentLength).toBe(128);
+  });
+
+  it('prefers the backend content length once it arrives and clears the local cache', () => {
+    const folderPath = 'files/my-bucket';
+    const fileId = `${folderPath}/done.png`;
+    const state = {
+      ...filesSlice.getInitialState(),
+      files: [
+        makeFile({ id: fileId, folderId: folderPath, contentLength: 42 }),
+      ],
+      localFileSizeCache: { [fileId]: 42 },
+    };
+
+    const nextState = filesSlice.reducer(
+      state,
+      FilesActions.getFullListingSuccess({
+        folderPath,
+        files: [
+          makeFile({ id: fileId, folderId: folderPath, contentLength: 100 }),
+        ],
+      }),
+    );
+
+    const file = nextState.files.find((f) => f.id === fileId);
+    expect(file?.contentLength).toBe(100);
+    expect(nextState.localFileSizeCache[fileId]).toBeUndefined();
   });
 });

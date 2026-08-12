@@ -30,12 +30,12 @@ jobs:
       name: security-review
       deployment: false
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: true # TODO: set false when upstream issue be resolved https://github.com/anthropics/claude-code-action/issues/1236
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@ba0aafd4308cbba7165f9f2cdb0cfbed5a3c99ce # v1.0.168
+        uses: anthropics/claude-code-action@6b082c41935b4c8a3b8b0ef85ba4ba4d9eeb8975 # v1.0.189
         with:
           anthropic_api_key: ${{ secrets.DIAL_API_KEY }}
           prompt: |

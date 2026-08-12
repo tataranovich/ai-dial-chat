@@ -8,9 +8,11 @@ import {
 
 import { PublishRequestDialAIEntityModel } from '@/src/types/models';
 import {
+  ToolsetAuthErrorDetails,
   ToolsetCredentialsLevel,
   ToolsetEditorSteps,
   ToolsetModel,
+  ToolsetTool,
 } from '@/src/types/toolsets';
 
 import { ToolsetState } from '@/src/store/toolset/toolset.types';
@@ -30,6 +32,9 @@ const initialState: ToolsetState = {
   editorStep: ToolsetEditorSteps.General,
 
   publishRequestToolsets: [],
+
+  allowedTools: undefined,
+  allowedToolsStatus: UploadStatus.UNINITIALIZED,
 };
 
 export const toolsetSlice = createSlice({
@@ -67,7 +72,9 @@ export const toolsetSlice = createSlice({
     },
     createToolsetFailed: (
       state,
-      _action: PayloadAction<{ message: string } | undefined>,
+      _action: PayloadAction<
+        { message?: string; traceId?: string } | undefined
+      >,
     ) => {
       state.toolsetDetailsStatus = UploadStatus.FAILED;
     },
@@ -197,7 +204,10 @@ export const toolsetSlice = createSlice({
         payload.reference,
       );
     },
-    deleteToolsetFail: (state) => state,
+    deleteToolsetFail: (
+      state,
+      _action: PayloadAction<{ traceId?: string } | undefined>,
+    ) => state,
 
     startSignInProcess: (
       state,
@@ -238,7 +248,7 @@ export const toolsetSlice = createSlice({
     logInToolsetFail: (
       state,
       _action: PayloadAction<
-        { skipToastMessage?: boolean; traceId?: string } | undefined
+        (ToolsetAuthErrorDetails & { skipToastMessage?: boolean }) | undefined
       >,
     ) => {
       state.toolsetDetailsStatus = UploadStatus.LOADED;
@@ -294,6 +304,26 @@ export const toolsetSlice = createSlice({
       _action: PayloadAction<{ id: string; status?: number; traceId?: string }>,
     ) => {
       state.toolsetDetailsStatus = UploadStatus.LOADED;
+    },
+    getAllowedTools: (state, _action: PayloadAction<{ id: string }>) => {
+      state.allowedToolsStatus = UploadStatus.LOADING;
+    },
+    getAllowedToolsSuccess: (
+      state,
+      { payload }: PayloadAction<{ id: string; tools: ToolsetTool[] }>,
+    ) => {
+      state.allowedToolsStatus = UploadStatus.LOADED;
+      state.allowedTools = {
+        endpoint: state.toolsetsMap[payload.id]?.endpoint as string,
+        tools: payload.tools,
+      };
+    },
+    getAllowedToolsFailed: (
+      state,
+      _action: PayloadAction<{ traceId?: string } | undefined>,
+    ) => {
+      state.allowedToolsStatus = UploadStatus.FAILED;
+      state.allowedTools = undefined;
     },
   },
 });

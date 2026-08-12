@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useFormContext, useWatch } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
@@ -62,6 +69,9 @@ export const AppsEditorView = ({
   const schema = useAppSelector(
     ApplicationTypesSchemasSelectors.selectDetailedApplicationTypeSchema,
   );
+  const editorSelectedEntity = useAppSelector(
+    ApplicationSelectors.selectEditorSelectedEntity,
+  );
 
   const screenState = useScreenState();
   const { control } = useFormContext<AppsEditorFormType>();
@@ -117,7 +127,14 @@ export const AppsEditorView = ({
     [onAutoSave],
   );
 
-  const handlePureAutoSave = useCallback(() => onAutoSave(), [onAutoSave]);
+  const handlePureAutoSave = useCallback(
+    (e?: MouseEvent<HTMLDivElement>) => {
+      const target = e?.relatedTarget as HTMLDivElement | undefined;
+      if (target?.dataset?.floatingOverlay || editorSelectedEntity) return;
+      onAutoSave();
+    },
+    [onAutoSave, editorSelectedEntity],
+  );
 
   useEffect(() => {
     if (

@@ -25,6 +25,7 @@ export enum Attributes {
   ariaDetails = 'aria-details',
   ariaColcount = 'aria-colcount',
   checked = 'checked',
+  open = 'open',
 }
 
 export enum AttributeValues {
@@ -43,9 +44,12 @@ export enum AttributeValues {
   blank = '_blank',
   textStart = 'text-start',
   aspectAuto = 'aspect-auto',
+  overflowYAuto = 'overflow-y-auto',
   maxHFull = 'max-h-full',
   maxWFull = 'max-w-full',
   password = 'password',
   text = 'text',
   textEllipsis = 'text-ellipsis',
+  absolute = 'absolute',
+  end2 = 'end-2',
 }

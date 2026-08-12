@@ -27,6 +27,7 @@ import { FilesSelectors } from '@/src/store/files/files.selectors';
 import { useAppDispatch, useAppSelector } from '@/src/store/hooks';
 import { ConversationsSelectors } from '@/src/store/selectors';
 
+import { MAX_NEW_FOLDER_PATH_SEGMENTS } from '@/src/constants/folders';
 import { ChatI18nKeys } from '@/src/constants/i18n';
 import { OUTSIDE_PRESS_AND_MOUSE_EVENT } from '@/src/constants/modal';
 
@@ -272,10 +273,15 @@ export const FileManagerModal = memo(
           UIActions.showToast({
             type: ToastType.Error,
             title: t(ChatI18nKeys.TooManyFilesSelected),
-            message: t(ChatI18nKeys.TooManyFilesDescription, {
-              count: accumulatedIds.size,
-              limit: maximumAttachmentsAmount,
-            }),
+            message: t(
+              maximumAttachmentsAmount === 1
+                ? ChatI18nKeys.TooManyFilesDescriptionSingular
+                : ChatI18nKeys.TooManyFilesDescription,
+              {
+                count: accumulatedIds.size,
+                limit: maximumAttachmentsAmount,
+              },
+            ),
           }),
         );
         return;
@@ -363,6 +369,8 @@ export const FileManagerModal = memo(
       handleUploadArchive,
       handleMoveFiles,
       handleRenameValidation,
+      handleCreateFolderValidate,
+      showMaxDepthError,
       sharedWithMeIds,
 
       uploadEnabled,
@@ -458,9 +466,14 @@ export const FileManagerModal = memo(
                 &nbsp;
                 {maximumAttachmentsAmount !== Number.MAX_SAFE_INTEGER &&
                   !!maximumAttachmentsAmount &&
-                  t(ChatI18nKeys.UpToFiles, {
-                    maxAttachmentsAmount: maximumAttachmentsAmount,
-                  })}
+                  t(
+                    maximumAttachmentsAmount === 1
+                      ? ChatI18nKeys.UpToFilesSingular
+                      : ChatI18nKeys.UpToFiles,
+                    {
+                      maxAttachmentsAmount: maximumAttachmentsAmount,
+                    },
+                  )}
               </p>
             )}
             {warningMessage && <p>{warningMessage}</p>}
@@ -503,7 +516,9 @@ export const FileManagerModal = memo(
               onUploadArchive={handleUploadArchive}
               onMoveToFiles={handleMoveFiles}
               onRenameValidate={handleRenameValidation}
-              onCreateFolderValidate={handleRenameValidation}
+              onCreateFolderValidate={handleCreateFolderValidate}
+              maxNewFolderDepth={MAX_NEW_FOLDER_PATH_SEGMENTS}
+              onNewFolderDepthExceeded={showMaxDepthError}
               sharedWithMeIds={sharedWithMeIds}
               uploadEnabled={uploadEnabled}
               getDisabledTooltip={getDisabledTooltip}

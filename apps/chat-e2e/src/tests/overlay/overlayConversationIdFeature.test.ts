@@ -39,7 +39,7 @@ dialOverlayTest(
     overlayChatBar,
     overlayOrganizationConversations,
   }) => {
-    setTestIds('EPMRTC-4835');
+    setTestIds('EPMDIAL-2302');
     let plotlyConversation: Conversation;
     let playbackConversation: Conversation;
     let plotlyImageUrl: string;
@@ -130,8 +130,8 @@ dialOverlayTest(
         await overlayPlaybackControl.playbackNextButton.click();
         await page.keyboard.press(keys.arrowRight);
         await overlayChatMessages
-          .getChatMessageAttachment(2, Attachment.plotlyName)
-          .waitForState();
+          .getChatMessageAttachmentTitle(2, Attachment.plotlyName)
+          .waitFor({ state: 'visible' });
         const expandAttachmentResponse =
           await overlayChatMessages.expandChatMessageAttachment(
             2,

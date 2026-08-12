@@ -1,10 +1,11 @@
 import { useDismiss, useFloating, useInteractions } from '@floating-ui/react';
-import { IconBulb, IconCheck } from '@tabler/icons-react';
+import { IconBulb } from '@tabler/icons-react';
 import React, {
   DragEvent,
   MouseEventHandler,
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -48,6 +49,7 @@ import {
 import { stopBubbling } from '@/src/constants/chat';
 
 import { ReviewDot } from '@/src/components/Chat/Publish/ReviewDot';
+import { Checkbox } from '@/src/components/Common/Checkbox';
 import { ItemContextMenu } from '@/src/components/Common/ItemContextMenu';
 import { ShareIcon } from '@/src/components/Common/ShareIcon';
 import { Tooltip } from '@/src/components/Common/Tooltip';
@@ -118,7 +120,15 @@ export const PromptComponent = memo(
       if (hasParentWithFloatingOverlay(e.target as Element)) {
         return;
       }
+      window.getSelection()?.removeAllRanges();
       setIsContextMenu(true);
+    }, []);
+
+    const handleContextMenuOpenChange = useCallback((open: boolean) => {
+      if (open) {
+        window.getSelection()?.removeAllRanges();
+      }
+      setIsContextMenu(open);
     }, []);
 
     useScrollToEntity({
@@ -127,6 +137,19 @@ export const PromptComponent = memo(
     });
 
     useContextMenuTrigger(handleContextMenuOpen, promptRef);
+
+    useEffect(() => {
+      const element = promptRef.current;
+      if (!element) {
+        return;
+      }
+
+      const handleSelectStart = (e: Event) => e.preventDefault();
+      element.addEventListener('selectstart', handleSelectStart);
+
+      return () =>
+        element.removeEventListener('selectstart', handleSelectStart);
+    }, []);
 
     const screenState = useScreenState();
     const isMobileOrTablet =
@@ -155,7 +178,7 @@ export const PromptComponent = memo(
 
     const { refs, context } = useFloating({
       open: isContextMenu,
-      onOpenChange: setIsContextMenu,
+      onOpenChange: handleContextMenuOpenChange,
     });
 
     const dismiss = useDismiss(context);
@@ -178,6 +201,7 @@ export const PromptComponent = memo(
       ) => {
         e.stopPropagation();
         e.preventDefault();
+        window.getSelection()?.removeAllRanges();
 
         dispatch(
           PromptsActions.selectPrompt({
@@ -283,19 +307,10 @@ export const PromptComponent = memo(
                 isSelectMode && isChosen && !isExternal ? 'flex' : 'hidden',
               )}
             >
-              <input
-                className={classNames(
-                  'checkbox peer size-[18px] bg-layer-3',
-                  additionalItemData?.isSidePanelItem && 'me-0',
-                )}
-                type="checkbox"
+              <Checkbox
+                className={additionalItemData?.isSidePanelItem && 'me-0'}
                 checked={isChosen}
                 onChange={handleToggle}
-                data-qa={isChosen ? 'checked' : 'unchecked'}
-              />
-              <IconCheck
-                size={18}
-                className="pointer-events-none invisible absolute text-accent-primary peer-checked:visible"
               />
             </div>
             <ShareIcon
@@ -374,7 +389,7 @@ export const PromptComponent = memo(
                     ? undefined
                     : handleUnpublish
                 }
-                onOpenChange={setIsContextMenu}
+                onOpenChange={handleContextMenuOpenChange}
                 onDuplicate={handleDuplicate}
                 onView={handleOpenViewModal}
                 isOpen={isContextMenu}

@@ -34,13 +34,21 @@ import {
 import { cleanSchemaId } from '@/src/utils/app/application-type-schema';
 import { getLastPathSegment, getSafeRedirectUrl } from '@/src/utils/app/common';
 import { ApplicationService } from '@/src/utils/app/data/application-service';
+import { ApplicationTypesSchemasService } from '@/src/utils/app/data/application-type-schemas-service';
 import { DataService } from '@/src/utils/app/data/data-service';
+import { DefaultsService } from '@/src/utils/app/data/defaults-service';
 import { BrowserStorage } from '@/src/utils/app/data/storages/browser-storage';
 import { navigateAndThen } from '@/src/utils/app/epics-helpers/application.epic-helpers';
 import { parseApiError } from '@/src/utils/app/epics-helpers/common.epic-helpers';
 import {
+  getFileMovesFromResult,
+  updatePathOnMove,
+} from '@/src/utils/app/folders';
+import {
+  isApplicationId,
   isEntityIdExternal,
   isEntityIdLocal,
+  isMyApplication,
   isMyEntity,
 } from '@/src/utils/app/id';
 import { isMarketplaceEditorStep } from '@/src/utils/app/marketplace';
@@ -49,7 +57,10 @@ import { translateErrorMessage } from '@/src/utils/app/translateErrorMessage';
 import { translate } from '@/src/utils/app/translation';
 import { parseEntityApiKey } from '@/src/utils/server/api';
 
-import { ApplicationTypeSchemaProperties } from '@/src/types/application-type-schema';
+import {
+  ApiDetailedApplicationTypeSchema,
+  ApplicationTypeSchemaProperties,
+} from '@/src/types/application-type-schema';
 import {
   ApplicationStatus,
   CustomApplicationModel,
@@ -64,6 +75,7 @@ import {
   ApplicationTypesSchemasActions,
   ChatActions,
   ConversationsActions,
+  FilesActions,
   MarketplaceActions,
   ModelsActions,
   PromptsActions,
@@ -191,6 +203,7 @@ const createApplicationEpic: AppEpic = (action$) =>
 
         catchError((err) => {
           console.error('Failed to create application:', err);
+          const { traceId } = parseApiError(err);
 
           return concat(
             of(ApplicationActions.createFail()),
@@ -204,6 +217,7 @@ const createApplicationEpic: AppEpic = (action$) =>
                       ns: Translation.Common,
                     },
                   ),
+                  traceId,
                 }),
               ),
               EMPTY,
@@ -246,7 +260,8 @@ const deleteApplicationEpic: AppEpic = (action$) =>
         }),
         catchError((err) => {
           console.error('Failed to delete application:', err);
-          return of(ApplicationActions.deleteFail());
+          const { traceId } = parseApiError(err);
+          return of(ApplicationActions.deleteFail({ traceId }));
         }),
       ),
     ),
@@ -424,7 +439,14 @@ const updateApplicationEpic: AppEpic = (action$, state$) =>
 
                 const schemaId =
                   updatedCustomApplication.applicationTypeSchemaId;
-                if (schemaId && schemaId === DEFAULT_QUICK_APPS_SCHEMA_2_ID) {
+                if (
+                  schemaId &&
+                  schemaId ===
+                    DefaultsService.get(
+                      'quickAppsSchemaId2',
+                      DEFAULT_QUICK_APPS_SCHEMA_2_ID,
+                    )
+                ) {
                   actions.push(
                     of(
                       ChatActions.getConfigurationSchema({
@@ -439,6 +461,7 @@ const updateApplicationEpic: AppEpic = (action$, state$) =>
               }),
               catchError((err) => {
                 console.error('Failed to update application:', err);
+                const { traceId, message } = parseApiError(err);
                 return concat(
                   of(
                     ApplicationActions.updateFail({
@@ -453,13 +476,14 @@ const updateApplicationEpic: AppEpic = (action$, state$) =>
                           ns: Translation.Common,
                         },
                       ),
+                      traceId,
                     }),
                   ),
                   iif(
                     () => !!payload.shouldSetEditorError,
                     of(
                       ApplicationActions.setEditorError(
-                        err.message ??
+                        message ??
                           translate(
                             MarketplaceI18nKeys.AppSettingsNotMatchingSchema,
                             {
@@ -515,7 +539,14 @@ const editApplicationEpic: AppEpic = (action$, state$) =>
           ];
 
           const schemaId = payload.updatedApplication.applicationTypeSchemaId;
-          if (schemaId && schemaId === DEFAULT_QUICK_APPS_SCHEMA_2_ID) {
+          if (
+            schemaId &&
+            schemaId ===
+              DefaultsService.get(
+                'quickAppsSchemaId2',
+                DEFAULT_QUICK_APPS_SCHEMA_2_ID,
+              )
+          ) {
             actions.push(
               of(
                 ChatActions.getConfigurationSchema({
@@ -538,6 +569,7 @@ const editApplicationEpic: AppEpic = (action$, state$) =>
         }),
         catchError((err) => {
           console.error('Failed to edit application:', err);
+          const { traceId } = parseApiError(err);
           return of(
             ApplicationActions.editFail({
               oldApplication: payload.oldApplication,
@@ -546,6 +578,7 @@ const editApplicationEpic: AppEpic = (action$, state$) =>
               message: translate(CommonI18nKeys.FailedToUpdateApplication, {
                 ns: Translation.Common,
               }),
+              traceId,
             }),
           );
         }),
@@ -591,7 +624,10 @@ const getApplicationEpic: AppEpic = (action$, state$) =>
           if (!modelFromState || acceptSharedWithMe) {
             const isQuickApp2 =
               application.applicationTypeSchemaId ===
-              DEFAULT_QUICK_APPS_SCHEMA_2_ID;
+              DefaultsService.get(
+                'quickAppsSchemaId2',
+                DEFAULT_QUICK_APPS_SCHEMA_2_ID,
+              );
             const featuresRecord = {
               ...(dialEntity?.features ?? application.features ?? {}),
             };
@@ -767,11 +803,12 @@ const continueUpdatingApplicationStatusEpic: AppEpic = (action$) =>
 
               return EMPTY;
             }),
-            catchError(() =>
+            catchError((err) =>
               of(
                 ApplicationActions.updateFunctionStatusFail({
                   id: payload.id,
                   status: payload.status,
+                  ...parseApiError(err),
                 }),
               ),
             ),
@@ -937,11 +974,13 @@ const enterEditModeEpic: AppEpic = (action$, state$, { router }) =>
       return concat(initialAction$, dispatchActions$, waitForData$).pipe(
         catchError((err) => {
           console.error('Failed to enter edit mode:', err);
+          const { traceId } = parseApiError(err);
           return of(
             UIActions.showErrorToast({
               message: translate(CommonI18nKeys.FailedToEnterEditMode, {
                 ns: Translation.Common,
               }),
+              traceId,
             }),
           );
         }),
@@ -1112,6 +1151,75 @@ const setQueryParamsEpic: AppEpic = (action$, state$, { router }) =>
     }),
   );
 
+const updateApplicationIconsOnFileMoveEpic: AppEpic = (action$, state$) =>
+  action$.pipe(
+    ofType(FilesActions.moveFilesSuccess.type),
+    mergeMap(({ payload }) => {
+      const moves = getFileMovesFromResult(payload.result);
+
+      if (!moves.size) {
+        return EMPTY;
+      }
+
+      const affectedApplications = ModelsSelectors.selectModels(state$.value)
+        .filter(
+          (model) =>
+            isApplicationId(model.id) &&
+            isMyApplication(model) &&
+            !!model.iconUrl,
+        )
+        .map((model) => ({
+          id: model.id,
+          newIconUrl: updatePathOnMove(model.iconUrl ?? '', moves),
+          currentIconUrl: model.iconUrl,
+        }))
+        .filter(
+          ({ newIconUrl, currentIconUrl }) => newIconUrl !== currentIconUrl,
+        );
+
+      if (!affectedApplications.length) {
+        return EMPTY;
+      }
+
+      return from(affectedApplications).pipe(
+        mergeMap(({ id, newIconUrl }) =>
+          ApplicationService.get(id).pipe(
+            mergeMap((application) => {
+              if (!application) {
+                return EMPTY;
+              }
+
+              const schema$: Observable<
+                ApiDetailedApplicationTypeSchema | undefined
+              > = application.applicationTypeSchemaId
+                ? ApplicationTypesSchemasService.getApplicationTypeSchema(
+                    application.applicationTypeSchemaId,
+                  )
+                : of(undefined);
+
+              return schema$.pipe(
+                map((schema) =>
+                  ApplicationActions.edit({
+                    oldApplication: application,
+                    updatedApplication: { ...application, iconUrl: newIconUrl },
+                    schema,
+                  }),
+                ),
+              );
+            }),
+            catchError((err) => {
+              console.error(
+                'Failed to update application icon after file move:',
+                err,
+              );
+              return EMPTY;
+            }),
+          ),
+        ),
+      );
+    }),
+  );
+
 export const ApplicationEpics = combineEpics(
   initEpic,
   createApplicationEpic,
@@ -1130,4 +1238,5 @@ export const ApplicationEpics = combineEpics(
   setSelectedWidgetEpic,
   initQueryParamsEpic,
   setQueryParamsEpic,
+  updateApplicationIconsOnFileMoveEpic,
 );

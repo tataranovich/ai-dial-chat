@@ -23,6 +23,8 @@ export class ChatMessages extends BaseElement {
     super(page, ChatSelectors.chatMessages, parentLocator);
   }
 
+  public referenceButton = new Button(this.page, ChatSelectors.referenceButton);
+
   public loadingCursor = this.getChildElementBySelector(
     ChatSelectors.loadingCursor,
   );
@@ -67,6 +69,31 @@ export class ChatMessages extends BaseElement {
       ChatSelectors.stageLoader,
     );
 
+  public messageStageContent = (messagesIndex: number, stageIndex: number) =>
+    this.messageStage(messagesIndex, stageIndex).locator(
+      `~${ChatSelectors.stageContent}`,
+    );
+
+  public messageStageContentCopyButton = (
+    messagesIndex: number,
+    stageIndex: number,
+  ) =>
+    new Button(
+      this.page,
+      ChatSelectors.stageContentCopyButton,
+      this.messageStageContent(messagesIndex, stageIndex),
+    );
+
+  public messageStageContentDownloadButton = (
+    messagesIndex: number,
+    stageIndex: number,
+  ) =>
+    new Button(
+      this.page,
+      ChatSelectors.stageContentDownloadButton,
+      this.messageStageContent(messagesIndex, stageIndex),
+    );
+
   public showMoreButton = this.getChildElementBySelector(
     ChatSelectors.showMore,
   );
@@ -99,12 +126,9 @@ export class ChatMessages extends BaseElement {
     return this.getChatMessage(message).locator(ChatSelectors.rate(rate));
   }
 
-  public getChatMessageAttachment(
-    message: string | number,
-    attachmentTitle: string,
-  ) {
+  public getChatMessageAttachment(message: string | number) {
     return this.createElementFromLocator(
-      this.getChatMessage(message).getByTitle(attachmentTitle),
+      this.getChatMessage(message).locator(ChatSelectors.attachmentName),
     );
   }
 
@@ -118,7 +142,9 @@ export class ChatMessages extends BaseElement {
     message: string | number,
     title: string,
   ) {
-    return this.getChatMessage(message).getByTitle(title);
+    return this.getChatMessageAttachment(message).getElementLocatorByText(
+      title,
+    );
   }
 
   public getChatMessageAttachmentIcon(message: string | number) {
@@ -191,6 +217,61 @@ export class ChatMessages extends BaseElement {
     );
   }
 
+  public getChatMessageTableDownloadIcon(message: string | number) {
+    return this.getChatMessageTableControls(message).locator(
+      TableSelectors.downloadCsvIcon,
+    );
+  }
+
+  public getChatMessageTableHeaderScrollContainer(message: string | number) {
+    return this.createElementFromLocator(
+      this.getChatMessageTable(message).locator(
+        TableSelectors.headerScrollContainer,
+      ),
+    );
+  }
+
+  public getChatMessageTableBodyScrollContainer(message: string | number) {
+    return this.createElementFromLocator(
+      this.getChatMessageTable(message).locator(
+        TableSelectors.bodyScrollContainer,
+      ),
+    );
+  }
+
+  public getChatMessageDetailsSection(
+    message: string | number,
+    index?: number,
+  ) {
+    const detailsSections = this.createElementFromLocator(
+      this.getChatMessageContent(message).locator(Tags.details),
+    );
+    return index ? detailsSections.getNthElement(index) : detailsSections;
+  }
+
+  public getChatMessageDetailsSummary(
+    message: string | number,
+    index?: number,
+  ) {
+    const detailsSummaries = this.createElementFromLocator(
+      this.getChatMessageContent(message).locator(Tags.summary),
+    );
+    return index ? detailsSummaries.getNthElement(index) : detailsSummaries;
+  }
+
+  public async expandDetailsSummary(message: string | number, index: number) {
+    await this.getChatMessageDetailsSummary(message, index).click();
+  }
+
+  public async getChatMessageContentLines(message: string | number) {
+    const messageContent =
+      await this.getChatMessageContent(message).innerText();
+    return messageContent
+      .split('\n')
+      .map((row) => row.trim())
+      .filter((row) => row.length > 0);
+  }
+
   public getChatMessageTableHeaderColumns(message: string | number) {
     return this.getChatMessageTable(message)
       .locator(Tags.table)
@@ -205,9 +286,21 @@ export class ChatMessages extends BaseElement {
       .locator(Tags.td);
   }
 
-  public getMessageStage(messagesIndex: number, stageIndex: number) {
+  public getExpandedMessageStage(messagesIndex: number, stageIndex: number) {
     return this.messageStage(messagesIndex, stageIndex).locator(
       ChatSelectors.openedStage,
+    );
+  }
+
+  public getCollapsedMessageStage(messagesIndex: number, stageIndex: number) {
+    return this.messageStage(messagesIndex, stageIndex).locator(
+      ChatSelectors.closedStage,
+    );
+  }
+
+  public getStageErrorIcon(messagesIndex: number, stageIndex: number) {
+    return this.messageStage(messagesIndex, stageIndex).locator(
+      IconSelectors.exclamationCircleIcon,
     );
   }
 
@@ -217,8 +310,12 @@ export class ChatMessages extends BaseElement {
 
   public getAttachmentLink(message: string | number) {
     return this.getChatMessage(message).locator(
-      `${Tags.a}[${Attributes.href}]`,
+      ChatSelectors.attachmentReferenceLink,
     );
+  }
+
+  public getMessageContentLink(message: string | number) {
+    return this.getChatMessageContent(message).locator(Tags.a);
   }
 
   public getChatMessageMaxWidth(message: string | number) {
@@ -293,6 +390,25 @@ export class ChatMessages extends BaseElement {
     );
   }
 
+  public getChatMessageAttachmentContent(
+    message: string | number,
+    attachmentTitle: string,
+  ) {
+    return this.getChatMessage(message)
+      .filter({ hasText: attachmentTitle })
+      .locator(ChatSelectors.attachmentContent);
+  }
+
+  public getChatMessageAttachmentReference(
+    message: string | number,
+    attachmentTitle: string,
+  ) {
+    return this.getChatMessageAttachmentContent(
+      message,
+      attachmentTitle,
+    ).locator(this.referenceButton.getElementLocator());
+  }
+
   public getChatMessageContent(message: string | number) {
     return this.getChatMessage(message).locator(ChatSelectors.messageContent);
   }
@@ -303,7 +419,7 @@ export class ChatMessages extends BaseElement {
     { isHttpMethodTriggered = true }: { isHttpMethodTriggered?: boolean } = {},
   ) {
     await this.getCollapsedChatMessageAttachment(message).waitFor();
-    const messageAttachment = this.getChatMessageAttachment(
+    const messageAttachment = this.getChatMessageAttachmentTitle(
       message,
       attachmentTitle,
     );
@@ -327,7 +443,7 @@ export class ChatMessages extends BaseElement {
     await this.getChatMessage(message)
       .locator(ChatSelectors.attachmentExpanded)
       .waitFor();
-    await this.getChatMessageAttachment(message, attachmentTitle).click();
+    await this.getChatMessageAttachmentTitle(message, attachmentTitle).click();
   }
 
   public async getChatMessageAttachmentUrl(message: string | number) {
@@ -468,11 +584,7 @@ export class ChatMessages extends BaseElement {
     );
     await thumb.hover({ force: true });
     await thumb.waitFor();
-    const respPromise = this.page.waitForResponse(
-      (resp) => resp.request().method() === 'POST' && resp.status() === 200,
-    );
     await thumb.click();
-    return respPromise;
   }
 
   public async openDeleteCompareRowMessageDialog(
@@ -548,7 +660,7 @@ export class ChatMessages extends BaseElement {
   }
 
   public async isMessageStageOpened(messagesIndex: number, stageIndex: number) {
-    return this.getMessageStage(messagesIndex, stageIndex).isVisible();
+    return this.getExpandedMessageStage(messagesIndex, stageIndex).isVisible();
   }
 
   public async openMessageStage(messagesIndex: number, stageIndex: number) {
@@ -705,5 +817,23 @@ export class ChatMessages extends BaseElement {
   public async openMessageTemplateModal(message: string | number) {
     const chatMessage = await this.hoverOverMessage(message);
     await this.setMessageTemplateIcon(chatMessage).click();
+  }
+
+  public async likeMessage(messageIndex: number) {
+    await this.hoverOverMessage(messageIndex);
+    const respPromise = this.page.waitForResponse(
+      (resp) => resp.request().method() === 'POST' && resp.status() === 200,
+    );
+    await this.getChatMessageRate(messageIndex, Rate.like).click({
+      force: true,
+    });
+    await respPromise;
+  }
+
+  public async dislikeMessage(messageIndex: number) {
+    await this.hoverOverMessage(messageIndex);
+    await this.getChatMessageRate(messageIndex, Rate.dislike).click({
+      force: true,
+    });
   }
 }

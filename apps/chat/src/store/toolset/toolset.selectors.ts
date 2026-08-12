@@ -10,6 +10,7 @@ import {
   getGroupMarketplaceEntityKey,
   groupMarketplaceEntityAndSaveOrder,
 } from '@/src/utils/app/marketplace';
+import { compareLocalizedNames } from '@/src/utils/app/marketplace-localization';
 import {
   filterHiddenEntities,
   shouldShowHiddenEntities,
@@ -37,21 +38,25 @@ const selectToolsetsMap = (state: RootState) => rootSelector(state).toolsetsMap;
 const _toolsetsFromMap = (toolsetsMap: ToolsetsMap) =>
   uniq(Object.values(toolsetsMap).filter((t): t is ToolsetModel => t != null));
 
+const _selectCurrentLocale = (state: RootState) => state.ui.locale;
+
 const selectToolsets = createSelector(
   [
     selectToolsetsMap,
     SettingsSelectors.selectHiddenEntityTag,
+    _selectCurrentLocale,
     (_state, showHidden?: boolean) => showHidden,
   ],
-  (toolsetsMap, hiddenEntityTag, showHidden) => {
+  (toolsetsMap, hiddenEntityTag, locale, showHidden) => {
     const toolsets = _toolsetsFromMap(toolsetsMap);
     const filteredHidden = shouldShowHiddenEntities(hiddenEntityTag, showHidden)
       ? toolsets
       : filterHiddenEntities(toolsets, hiddenEntityTag);
     const withoutPlaceholder =
       withoutFileManagerPlaceholderByName(filteredHidden);
-    const sortedToolsets = sortBy(withoutPlaceholder, (toolset) =>
-      toolset.name.toLowerCase(),
+    // Sorted by the *displayed* (current locale) name.
+    const sortedToolsets = [...withoutPlaceholder].sort((a, b) =>
+      compareLocalizedNames(locale, a.name, b.name),
     );
 
     return groupMarketplaceEntityAndSaveOrder(sortedToolsets).flatMap(
@@ -172,6 +177,13 @@ const selectPublicFolders = createSelector([selectToolsets], (toolsets) => {
   );
 });
 
+const selectAllowedTools = (state: RootState) =>
+  rootSelector(state).allowedTools?.tools ?? [];
+const selectAllowedToolsEndpoint = (state: RootState) =>
+  rootSelector(state).allowedTools?.endpoint;
+const selectAllowedToolsStatus = (state: RootState) =>
+  rootSelector(state).allowedToolsStatus;
+
 export const ToolsetSelectors = {
   selectInitialized,
   selectToolsetsMap,
@@ -191,4 +203,7 @@ export const ToolsetSelectors = {
   selectAllGroupToolsetsKeySet,
   selectToolsetsTopics,
   selectPublicFolders,
+  selectAllowedTools,
+  selectAllowedToolsEndpoint,
+  selectAllowedToolsStatus,
 };

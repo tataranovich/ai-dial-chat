@@ -1,7 +1,5 @@
 import { useCallback, useMemo } from 'react';
 
-import { useRouter } from 'next/router';
-
 import classNames from 'classnames';
 
 import { useScreenState } from '@/src/hooks/useScreenState';
@@ -29,7 +27,11 @@ import { Translation } from '@/src/types/translation';
 
 import { ConversationsActions } from '@/src/store/actions';
 import { useAppDispatch, useAppSelector } from '@/src/store/hooks';
-import { ModelsSelectors, SettingsSelectors } from '@/src/store/selectors';
+import {
+  ModelsSelectors,
+  SettingsSelectors,
+  UISelectors,
+} from '@/src/store/selectors';
 
 import { ChatI18nKeys } from '@/src/constants/i18n';
 import { DEFAULT_ICON_SIZES } from '@/src/constants/icons';
@@ -68,7 +70,7 @@ const getModelName = (
   }
 
   if (model) {
-    return getOpenAIEntityFullName(model);
+    return getOpenAIEntityFullName(model, locale);
   }
 
   return conversation.model.id;
@@ -81,10 +83,10 @@ const EmptyChatDescriptionView = ({
   isApplicationPreviewChat,
 }: EmptyChatDescriptionViewProps) => {
   const dispatch = useAppDispatch();
-  const router = useRouter();
 
   const { t } = useTranslation(Translation.Chat);
 
+  const locale = useAppSelector(UISelectors.selectLocale);
   const modelsMap = useAppSelector(ModelsSelectors.selectModelsMap);
   const installedModelIds = useAppSelector(
     ModelsSelectors.selectInstalledModelIds,
@@ -150,7 +152,7 @@ const EmptyChatDescriptionView = ({
 
   const isReplayAsIs = isReplayAsIsConversation(conversation);
   const isPlayback = isPlaybackConversation(conversation);
-  const modelName = getModelName(conversation, model, router.locale, t);
+  const modelName = getModelName(conversation, model, locale, t);
   const isEmptyChatChangeAgentHidden =
     enabledFeatures.has(Feature.HideEmptyChatChangeAgent) ||
     isApplicationPreviewChat;
@@ -243,7 +245,7 @@ const EmptyChatDescriptionView = ({
                 />
                 {model && <FunctionStatusIndicator entity={model} />}
               </div>
-              {!!getModelDescription(model) && (
+              {!!getModelDescription(model, locale) && (
                 <span
                   className="whitespace-pre-wrap text-secondary"
                   data-qa="agent-descr"
@@ -252,7 +254,7 @@ const EmptyChatDescriptionView = ({
                     className="!text-base"
                     isShortDescription
                   >
-                    {getModelDescription(model)}
+                    {getModelDescription(model, locale)}
                   </EntityMarkdownDescription>
                 </span>
               )}

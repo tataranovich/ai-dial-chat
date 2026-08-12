@@ -13,6 +13,7 @@ import {
 } from '@/src/utils/app/application';
 import { arraysHaveSameElements } from '@/src/utils/app/common';
 import { getValidFormFields } from '@/src/utils/app/forms';
+import { withEntityIdName } from '@/src/utils/app/marketplace-localization';
 import { isEntityIdPublic } from '@/src/utils/app/publications';
 import { isTruthyQuery } from '@/src/utils/app/route';
 
@@ -43,6 +44,7 @@ import { Routes } from '@/src/constants/routes';
 
 import { AppsEditorHeader } from '@/src/components/AppsEditor/AppsEditorHeader';
 import { AppsEditorView } from '@/src/components/AppsEditor/AppsEditorView';
+import { EditorSelectedEntityModal } from '@/src/components/AppsEditor/EditorSelectedEntityModal';
 import {
   AppsEditorFormType,
   QuickApp2Form,
@@ -104,7 +106,6 @@ export const AppsEditor = () => {
   const schema = useAppSelector(
     ApplicationTypesSchemasSelectors.selectDetailedApplicationTypeSchema,
   );
-
   const appDetails = useAppSelector(
     ApplicationSelectors.selectApplicationDetail,
   );
@@ -131,7 +132,7 @@ export const AppsEditor = () => {
   const isAppPublic = !!appDetails && isEntityIdPublic(appDetails);
 
   const modelsWithFolder = useMemo(
-    () => models.map((m) => ({ ...m, folderId: '' })),
+    () => models.map((m) => withEntityIdName({ ...m, folderId: '' })),
     [models],
   );
 
@@ -439,18 +440,22 @@ export const AppsEditor = () => {
   }, [idQuery, formMethods.trigger, isAppPublic]);
 
   return (
-    <FormProvider {...formMethods}>
-      <div className="flex size-full flex-col">
-        <AppsEditorHeader
-          onTabClick={handleTabClick}
-          onSave={handleSaveAndExit}
-        />
+    <>
+      <FormProvider {...formMethods}>
+        <div className="flex size-full flex-col">
+          <AppsEditorHeader
+            onTabClick={handleTabClick}
+            onSave={handleSaveAndExit}
+          />
 
-        <AppsEditorView
-          onNextClick={handleNextClick}
-          onAutoSave={handleAutoSave}
-        />
-      </div>
-    </FormProvider>
+          <AppsEditorView
+            onNextClick={handleNextClick}
+            onAutoSave={handleAutoSave}
+          />
+        </div>
+      </FormProvider>
+
+      <EditorSelectedEntityModal />
+    </>
   );
 };

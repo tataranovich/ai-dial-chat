@@ -203,6 +203,16 @@ export const filesSlice = createSlice({
         (id) => !payload.ids.includes(id),
       );
     },
+    resetDeviceAttachmentFlag: (
+      state,
+      { payload }: PayloadAction<{ ids: string[] }>,
+    ) => {
+      state.files = state.files.map((file) =>
+        payload.ids.includes(file.id) && file.isFromDeviceAttachment
+          ? { ...file, isFromDeviceAttachment: false }
+          : file,
+      );
+    },
     uploadFileSuccess: (
       state,
       {
@@ -247,6 +257,8 @@ export const filesSlice = createSlice({
         payload,
       }: PayloadAction<{
         id: string;
+        errorMessage?: string;
+        traceId?: string;
       }>,
     ) => {
       const updatedFile = state.files.find((file) => file.id === payload.id);
@@ -362,7 +374,10 @@ export const filesSlice = createSlice({
         state.chosenFileIds = xor(state.chosenFileIds, idsToReselect.fileIds);
       }
     },
-    getFilesFail: (state) => {
+    getFilesFail: (
+      state,
+      _action: PayloadAction<{ traceId?: string } | undefined>,
+    ) => {
       state.filesStatus = UploadStatus.FAILED;
     },
     getFileMetadata: (
@@ -385,7 +400,10 @@ export const filesSlice = createSlice({
       state.loadingFileMetadata = false;
       state.fileMetadata = payload.metadata as UIKitDialFile;
     },
-    getFileMetadataFail: (state) => {
+    getFileMetadataFail: (
+      state,
+      _action: PayloadAction<{ traceId?: string } | undefined>,
+    ) => {
       state.loadingFileMetadata = false;
       state.fileMetadata = null;
     },
@@ -438,8 +456,25 @@ export const filesSlice = createSlice({
         const inScopeFiles = payload.files
           .filter((f) => !f.folderId.endsWith(`/${CLIENTDATA_PATH}`))
           .map((newFile) => {
+            const cachedSize = state.localFileSizeCache[newFile.id];
+            if (newFile.contentLength) {
+              delete state.localFileSizeCache[newFile.id];
+            }
+
             const oldFile = prevById[newFile.id];
-            return oldFile ? { ...oldFile, ...newFile } : newFile;
+            if (!oldFile) {
+              return {
+                ...newFile,
+                contentLength: newFile.contentLength || cachedSize,
+              };
+            }
+
+            return {
+              ...oldFile,
+              ...newFile,
+              contentLength:
+                newFile.contentLength || oldFile.contentLength || cachedSize,
+            };
           });
         const uploadingInScope = state.files.filter(
           (f) =>
@@ -512,6 +547,12 @@ export const filesSlice = createSlice({
       state,
       _action: PayloadAction<{
         paths?: (string | undefined)[];
+        /**
+         * Also list the files of every path. Listing folders alone marks the
+         * path as fully loaded, so without this nothing ever fetches the files
+         * and the branch renders empty. Issue #3325
+         */
+        withFiles?: boolean;
       }>,
     ) => state,
     getFoldersSuccess: (
@@ -565,6 +606,7 @@ export const filesSlice = createSlice({
         payload,
       }: PayloadAction<{
         folderId?: string;
+        traceId?: string;
       }>,
     ) => {
       state.loadingFolderId = undefined;
@@ -720,6 +762,7 @@ export const filesSlice = createSlice({
       state,
       _action: PayloadAction<{
         fileName: string;
+        traceId?: string;
       }>,
     ) => state,
     downloadFilesList: (
@@ -1070,18 +1113,18 @@ export const filesSlice = createSlice({
         .filter((f) => f.nodeType === DialFileNodeType.FOLDER)
         .map((f) => f.sourceUrl);
 
-      state.files = state.files.filter(
-        (f) =>
-          !movedFoldersSourceUrls.some((sourceUrl) =>
-            f.folderId.startsWith(sourceUrl),
-          ),
-      );
+      // Compare on path segments, otherwise a sibling sharing the name prefix
+      // ("parent" vs "parent2") is dropped from the store as well. Issue #3325
+      const isInsideMovedFolder = (folderId: string) =>
+        movedFoldersSourceUrls.some(
+          (sourceUrl) =>
+            folderId === sourceUrl || folderId.startsWith(`${sourceUrl}/`),
+        );
+
+      state.files = state.files.filter((f) => !isInsideMovedFolder(f.folderId));
 
       state.folders = state.folders.filter(
-        (f) =>
-          !movedFoldersSourceUrls.some((sourceUrl) =>
-            f.folderId.startsWith(sourceUrl),
-          ),
+        (f) => !isInsideMovedFolder(f.folderId),
       );
     },
     moveFilesSuccess: (
@@ -1271,6 +1314,7 @@ export const filesSlice = createSlice({
       }: PayloadAction<{
         files: DialUploadFileItem[];
         destinationUrl: string;
+        isFromDeviceAttachment?: boolean;
       }>,
     ) => {
       state.isUploadingFiles = true;
@@ -1299,6 +1343,7 @@ export const filesSlice = createSlice({
           fileContent,
           contentLength: file.fileContent.size,
           contentType: fileContent.type,
+          isFromDeviceAttachment: payload.isFromDeviceAttachment ?? false,
         });
 
         if (file.fileContent.size) {

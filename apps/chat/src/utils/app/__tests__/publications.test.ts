@@ -1,10 +1,53 @@
 import { describe, expect, it } from 'vitest';
 
 import { transformIdToRootEntityId } from '@/src/utils/app/id';
-import { buildDedupedPublicationFileTargetsFromConversations } from '@/src/utils/app/publications';
+import {
+  buildDedupedPublicationFileTargetsFromConversations,
+  createPublicationIconTargetUrl,
+  getPublicItemIdForVersionCheck,
+} from '@/src/utils/app/publications';
 import { ApiUtils } from '@/src/utils/server/api';
 
 import { Conversation } from '@epam/ai-dial-shared';
+
+describe('createPublicationIconTargetUrl', () => {
+  const targetFolder = 'public/Organization';
+
+  it('puts the icon into a folder named after the published entity', () => {
+    expect(
+      createPublicationIconTargetUrl({
+        entityId: 'applications/mybucket/myapp__0.0.1',
+        iconUrl: 'files/mybucket/folder1/icon.svg',
+        targetFolder,
+      }),
+    ).toBe('files/public/Organization/myapp__0.0.1/icon.svg');
+  });
+
+  it('keeps icons of two app versions apart when the file names match', () => {
+    const first = createPublicationIconTargetUrl({
+      entityId: 'applications/mybucket/myapp__0.0.1',
+      iconUrl: 'files/mybucket/folder1/icon.svg',
+      targetFolder,
+    });
+    const second = createPublicationIconTargetUrl({
+      entityId: 'applications/mybucket/myapp__0.0.2',
+      iconUrl: 'files/mybucket/folder2/icon.svg',
+      targetFolder,
+    });
+
+    expect(first).not.toBe(second);
+  });
+
+  it('drops the source folder of the icon', () => {
+    expect(
+      createPublicationIconTargetUrl({
+        entityId: 'toolsets/mybucket/folder/mytoolset__1.0.0',
+        iconUrl: 'files/mybucket/deeply/nested/folder/icon.svg',
+        targetFolder,
+      }),
+    ).toBe('files/public/Organization/mytoolset__1.0.0/icon.svg');
+  });
+});
 
 describe('buildDedupedPublicationFileTargetsFromConversations', () => {
   const entityFolderId = 'conversations/mybucket/folder02';
@@ -85,5 +128,33 @@ describe('buildDedupedPublicationFileTargetsFromConversations', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].newUrl).toBe(transformIdToRootEntityId(decoded));
+  });
+});
+
+describe('getPublicItemIdForVersionCheck', () => {
+  const rootLevelId = 'conversations/mybucket/gpt__myChat';
+
+  it('returns the id unchanged when not in publish model', () => {
+    expect(
+      getPublicItemIdForVersionCheck(rootLevelId, 'public/dept', false),
+    ).toBe(rootLevelId);
+  });
+
+  it('rewrites the bucket segment to the root public target folder', () => {
+    expect(getPublicItemIdForVersionCheck(rootLevelId, 'public', true)).toBe(
+      'conversations/public/gpt__myChat',
+    );
+  });
+
+  it('rewrites the bucket segment to a nested public target folder', () => {
+    expect(
+      getPublicItemIdForVersionCheck(rootLevelId, 'public/dept', true),
+    ).toBe('conversations/public/dept/gpt__myChat');
+  });
+
+  it('returns the id unchanged when it has no path separator', () => {
+    expect(getPublicItemIdForVersionCheck('single', 'public/dept', true)).toBe(
+      'single',
+    );
   });
 });

@@ -14,7 +14,7 @@ import { useTranslation } from '@/src/hooks/useTranslation';
 
 import { getSharedTooltip } from '@/src/utils/app/application';
 import { constructPath, getNextFileName } from '@/src/utils/app/file';
-import { getFileRootId, isMyEntity } from '@/src/utils/app/id';
+import { getEntityBucket, getFileRootId, isMyEntity } from '@/src/utils/app/id';
 import {
   doesAgentSupportMcp,
   doesModelAllowTemperature,
@@ -44,6 +44,7 @@ import {
   MarketplaceI18nKeys,
   SettingsI18nKeys,
 } from '@/src/constants/i18n';
+import { getPendingAttachmentTypeError } from '@/src/constants/validation-helpers';
 
 import { FormCollapsibleSection } from '@/src/components/AppsEditor/EditorForm/FormCollapsibleSection';
 import { AgentSkillsField } from '@/src/components/AppsEditor/EditorForm/QuickApp2Form/AgentSkillsField';
@@ -54,7 +55,7 @@ import { ModelField } from '@/src/components/AppsEditor/EditorForm/QuickApp2Form
 import { StartersBehaviourRadioGroup } from '@/src/components/AppsEditor/EditorForm/QuickApp2Form/StartersBehaviourRadioGroup';
 import {
   QuickApp2Form as QuickApp2FormType,
-  getAttachmentTypeErrorHandlers,
+  getPendingAttachmentTypeProps,
 } from '@/src/components/AppsEditor/form';
 import { TemperatureSlider } from '@/src/components/Chat/ChatSettings/Temperature';
 import { FilesSelector } from '@/src/components/Common/FilesSelector/FilesSelector';
@@ -109,11 +110,14 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
   );
   const files = useAppSelector(FilesSelectors.selectFiles);
 
-  const { control, setError, clearErrors, setValue, getValues } =
-    useFormContext<QuickApp2FormType>();
+  const { control, setValue, getValues } = useFormContext<QuickApp2FormType>();
   const { errors } = useFormState<QuickApp2FormType>({ control });
 
   const modelId = useWatch({ control, name: 'model' });
+  const pendingAttachmentType = useWatch({
+    control,
+    name: 'pendingInputAttachmentType',
+  });
   const starters = useWatch({ control, name: 'starters' });
   const autoSubmit = useWatch({ control, name: 'autoSubmit' });
   const chatMessageInputDisabled = useWatch({
@@ -239,6 +243,37 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
     }
   }, [dispatch, isPublicationReview, reviewBucket]);
 
+  const handleRemoveFile = useCallback(
+    (document: string) => {
+      const currentValue = documentRelativeUrls ?? [];
+      setValue(
+        'documentRelativeUrl',
+        currentValue.filter((url) => url !== document),
+        { shouldDirty: true },
+      );
+
+      if (
+        isPublicationReview &&
+        reviewBucket &&
+        getEntityBucket({ id: document }) === reviewBucket
+      ) {
+        dispatch(
+          FilesActions.deleteFiles({
+            files: [{ sourceUrl: document, nodeType: DialFileNodeType.ITEM }],
+            folderUrl: getFileRootId(reviewBucket),
+          }),
+        );
+      }
+    },
+    [
+      dispatch,
+      documentRelativeUrls,
+      isPublicationReview,
+      reviewBucket,
+      setValue,
+    ],
+  );
+
   return (
     <div
       className="flex size-full grow flex-col divide-y divide-tertiary overflow-hidden overflow-y-auto bg-layer-2"
@@ -274,20 +309,22 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
           </div>
         )}
 
-        <Controller
-          name="instructions"
-          control={control}
-          render={({ field }) => (
-            <DialMarkdownEditorContainer
-              label={t(MarketplaceI18nKeys.InstructionsMarketplace)}
-              placeholder={t(MarketplaceI18nKeys.InstructionsPlaceholder)}
-              value={field.value}
-              onChangeValue={field.onChange}
-              height={200}
-              theme={theme as EditorTheme}
-            />
-          )}
-        />
+        <div data-qa="instructions-field">
+          <Controller
+            name="instructions"
+            control={control}
+            render={({ field }) => (
+              <DialMarkdownEditorContainer
+                label={t(MarketplaceI18nKeys.InstructionsMarketplace)}
+                placeholder={t(MarketplaceI18nKeys.InstructionsPlaceholder)}
+                value={field.value}
+                onChangeValue={field.onChange}
+                height={200}
+                theme={theme as EditorTheme}
+              />
+            )}
+          />
+        </div>
 
         {showProcessLargeFiles && (
           <Controller
@@ -305,6 +342,8 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
                 )}
                 info={t(MarketplaceI18nKeys.ProcessFilesDescription)}
                 className="flex items-center gap-2"
+                disabled={isAppPublic}
+                tooltip={isAppPublicTooltip}
               />
             )}
           />
@@ -330,11 +369,7 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
                 label={t(MarketplaceI18nKeys.ContextFiles)}
                 info={t(MarketplaceI18nKeys.ContextFilesInfo)}
                 onAddFiles={handleSelectFiles}
-                onRemoveFile={(document) =>
-                  field.onChange(
-                    field.value?.filter((field) => field !== document),
-                  )
-                }
+                onRemoveFile={handleRemoveFile}
                 readonly={isSharedWithMe || isAppPublic}
                 error={errors.documentRelativeUrl?.message}
                 fileManagerTitle={t(MarketplaceI18nKeys.SelectDocuments)}
@@ -375,6 +410,50 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
               )}
               info={t(MarketplaceI18nKeys.FileToolsDescription)}
               className="flex items-center gap-2"
+              disabled={isAppPublic}
+              tooltip={isAppPublicTooltip}
+            />
+          )}
+        />
+
+        <Controller
+          name="addAttachment"
+          control={control}
+          render={({ field }) => (
+            <ToggleSwitchField
+              isOn={field.value}
+              handleSwitch={() => field.onChange(!field.value)}
+              switchOnText="ON"
+              switchOFFText="OFF"
+              label={t(MarketplaceI18nKeys.AddAttachment)}
+              additionalText={t(
+                MarketplaceI18nKeys.AllowTheAgentToAttachFilesToTheResponse,
+              )}
+              info={t(MarketplaceI18nKeys.AddAttachmentDescription)}
+              className="flex items-center gap-2"
+              disabled={isAppPublic}
+              tooltip={isAppPublicTooltip}
+            />
+          )}
+        />
+
+        <Controller
+          name="webFetch"
+          control={control}
+          render={({ field }) => (
+            <ToggleSwitchField
+              isOn={field.value}
+              handleSwitch={() => field.onChange(!field.value)}
+              switchOnText="ON"
+              switchOFFText="OFF"
+              label={t(MarketplaceI18nKeys.WebFetch)}
+              additionalText={t(
+                MarketplaceI18nKeys.AllowTheAgentToFetchWebResources,
+              )}
+              info={t(MarketplaceI18nKeys.WebFetchDescription)}
+              className="flex items-center gap-2"
+              disabled={isAppPublic}
+              tooltip={isAppPublicTooltip}
             />
           )}
         />
@@ -413,11 +492,17 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
               hasDeleteAll
               hideSuggestions
               itemHeightClassName="h-[31px]"
-              error={errors.inputAttachmentTypes?.message}
+              error={
+                errors.inputAttachmentTypes?.message ??
+                getPendingAttachmentTypeError(pendingAttachmentType)
+              }
               disabled={isAppPublic}
               tooltip={isAppPublicTooltip}
               dataQa="attachment-types-field"
-              {...getAttachmentTypeErrorHandlers(setError, clearErrors)}
+              {...getPendingAttachmentTypeProps(
+                pendingAttachmentType,
+                setValue,
+              )}
             />
           )}
         />
@@ -553,6 +638,8 @@ export const QuickApp2Form: FC<AppsEditorProps> = ({ onAutoSave }) => {
               switchOFFText="OFF"
               additionalText={t(MarketplaceI18nKeys.TimeAwareness)}
               className="flex items-center gap-2"
+              disabled={isAppPublic}
+              tooltip={isAppPublicTooltip}
             />
           )}
         />

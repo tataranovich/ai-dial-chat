@@ -1,6 +1,6 @@
 import { IconExclamationCircle, IconPencil } from '@tabler/icons-react';
 import { useCallback, useEffect, useMemo } from 'react';
-import { useFormContext, useFormState } from 'react-hook-form';
+import { useFormContext, useFormState, useWatch } from 'react-hook-form';
 
 import { useRouter } from 'next/router';
 
@@ -27,9 +27,11 @@ import {
   isPromptId,
   isToolsetId,
 } from '@/src/utils/app/id';
+import { withEntityIdName } from '@/src/utils/app/marketplace-localization';
 import {
   allEditedFoldersAreValid,
   getFirstReviewUrl,
+  getPublicItemIdForVersionCheck,
   getReviewItems,
   orderByType,
 } from '@/src/utils/app/publications';
@@ -38,6 +40,7 @@ import { ScreenState } from '@/src/types/common';
 import {
   Publication,
   PublicationHandlerState,
+  PublicationResource,
   ResourceToReview,
 } from '@/src/types/publication';
 import { Translation } from '@/src/types/translation';
@@ -156,6 +159,13 @@ export const PublicationHandlerFooter = ({
 
   const { control } = useFormContext<PublicationRequestFormData>();
   const { errors, isValid } = useFormState({ control });
+  const publishToUrl = useWatch<
+    PublicationRequestFormData,
+    typeof PublishRequestFieldsNames.PUBLISH_TO_URL
+  >({
+    control,
+    name: PublishRequestFieldsNames.PUBLISH_TO_URL,
+  });
 
   const formError =
     formErrors[
@@ -201,8 +211,8 @@ export const PublicationHandlerFooter = ({
         ...files,
         ...conversations,
         ...prompts,
-        ...applications,
-        ...toolsets,
+        ...applications.map(withEntityIdName),
+        ...toolsets.map(withEntityIdName),
       ].filter((entity) => entity.publicationInfo?.isNotExist),
     [conversations, files, prompts, applications, toolsets],
   );
@@ -393,31 +403,69 @@ export const PublicationHandlerFooter = ({
     isFileId(resource.reviewUrl),
   );
   const isAllResourcesReviewed = resourcesToReview.every((r) => r.reviewed);
-  const isNamesOrVersionsInvalid = Object.entries(entitiesEditState).some(
-    ([key, { version, name }]) => {
-      const isInvalidName = !isEntityNameValid(name);
+  const shouldApplyTargetFolder = !!publishModel || isEditMode;
 
+  const isVersionExemptFromCheck = (
+    key: string,
+    resource: PublicationResource | undefined,
+  ) =>
+    resource?.action === PublishActions.DELETE ||
+    publishModel?.action === PublishActions.DELETE ||
+    isFileId(key);
+
+  const isVersionValidForResource = (
+    key: string,
+    version: string,
+    name: string,
+    resource: PublicationResource | undefined,
+  ) =>
+    isVersionExemptFromCheck(key, resource) ||
+    (isVersionValid(version.trim()) &&
+      !isVersionExists(
+        version,
+        getPublicItemIdForVersionCheck(
+          key,
+          publishToUrl,
+          shouldApplyTargetFolder,
+        ),
+        publicVersionGroups,
+        name,
+      ) &&
+      (!isApplicationId(key) || isVersionPartSizeValid(version)));
+
+  const hasDuplicateVersion = Object.entries(entitiesEditState).some(
+    ([key, { version, name }]) => {
       const resource = publication.resources.find(
         ({ reviewUrl }) => reviewUrl === key,
       );
-
-      const isValidVersion =
-        resource?.action === PublishActions.DELETE ||
-        publishModel?.action === PublishActions.DELETE ||
-        isFileId(key) ||
-        (isVersionValid(version.trim()) &&
-          !isVersionExists(
-            version,
+      return (
+        !isVersionExemptFromCheck(key, resource) &&
+        isVersionExists(
+          version,
+          getPublicItemIdForVersionCheck(
             key,
-            publicVersionGroups,
-            name,
-            publication.targetFolder,
-          ) &&
-          (!isApplicationId(key) || isVersionPartSizeValid(version)));
-
-      return isInvalidName || !isValidVersion;
+            publishToUrl,
+            shouldApplyTargetFolder,
+          ),
+          publicVersionGroups,
+          name,
+        )
+      );
     },
   );
+
+  const isNamesOrVersionsInvalid = Object.entries(entitiesEditState).some(
+    ([key, { version, name }]) => {
+      const resource = publication.resources.find(
+        ({ reviewUrl }) => reviewUrl === key,
+      );
+      return (
+        !isEntityNameValid(name) ||
+        !isVersionValidForResource(key, version, name, resource)
+      );
+    },
+  );
+
   const isFoldersInvalid = !allEditedFoldersAreValid(foldersEditState);
 
   const isEditInvalid =
@@ -470,6 +518,9 @@ export const PublicationHandlerFooter = ({
       if (areNoChanges) {
         return ChatI18nKeys.NothingIsSelectedAndRulesHaveNotChanged;
       }
+      if (hasDuplicateVersion) {
+        return ChatI18nKeys.DuplicateVersionFound;
+      }
 
       return ChatI18nKeys.RequestCantBePublishedAsSomeItemsAreInvalid;
     }
@@ -492,7 +543,18 @@ export const PublicationHandlerFooter = ({
     isValid,
     formError,
     isDraftRuleFilterOpen,
+    hasDuplicateVersion,
   ]);
+
+  const getDisabledUpdateTooltipText = useCallback(() => {
+    if (hasDuplicateVersion) {
+      return ChatI18nKeys.DuplicateVersionFound;
+    }
+
+    return isEditInvalid
+      ? ChatI18nKeys.RequestCannotBeUpdated
+      : ChatI18nKeys.MakeChangesToUpdate;
+  }, [hasDuplicateVersion, isEditInvalid]);
 
   const isApproveOrSendDisabled =
     (isApproveDisabled && !publishModel) ||
@@ -622,11 +684,7 @@ export const PublicationHandlerFooter = ({
               data-qa="update"
               tooltipProps={{
                 hideTooltip: !isEditDisabled,
-                tooltip: t(
-                  isEditInvalid
-                    ? ChatI18nKeys.RequestCannotBeUpdated
-                    : ChatI18nKeys.MakeChangesToUpdate,
-                ),
+                tooltip: t(getDisabledUpdateTooltipText()),
               }}
             />
           </>

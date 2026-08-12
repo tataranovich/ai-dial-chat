@@ -1,3 +1,4 @@
+import { Tags } from '@/src/ui/domData';
 import { ErrorLabelSelectors } from '@/src/ui/selectors/chatSelectors';
 import { InputSelectors } from '@/src/ui/selectors/commonSelectors';
 
@@ -10,6 +11,12 @@ export const ConfirmationDialogSelectors = {
 
 export const Popup = {
   errorPopup: '[style*="animation"]',
+};
+
+export const DownloadTableCsvModalSelectors = {
+  modalContainer: '[data-qa="download-csv-modal"]',
+  title: '[data-qa="modal-entity-name"]',
+  filenameInput: '[data-qa="download-filename-input"]',
 };
 
 export const PromptModal = {
@@ -79,6 +86,7 @@ export const ReviewEntityDialog = {
   completionUrl: '[data-qa="app-completion-url"]',
   externalUrlLabel: '[data-qa="app-external-url-label"]',
   externalUrl: '[data-qa="app-external-url"]',
+  editApplicationButton: '[data-qa="admin-edit-application"]',
   endpoint: '[data-qa="toolset-endpoint"]',
   transport: '[data-qa="toolset-transport"]',
   authType: '[data-qa="toolset-authentication-type"]',
@@ -295,6 +303,7 @@ export const EntityEditorEntitySettingsPreviewSelectors = {
   entityInfoContainer: '[data-qa="entity-info-container"]',
   entityInfo: '[data-qa="entity-info"]',
   entityName: '[data-qa="entity-name"]',
+  introText: '[data-qa="intro-text"]',
 };
 
 export const AddEntityGeneralInfoFormSelector = {
@@ -308,10 +317,9 @@ export const AddEntityGeneralInfoFormSelector = {
   descriptionLabel: '[for="description"]',
   topicsDropdownContainer: '#topics-dropdown',
   nextButton: '[data-qa="save-entity-general-info"]',
-  topicsDropdownToggle: '[class*="-indicatorContainer"]', // Selector for the dropdown arrow within the container
   selectedTopicPills: '[class*="-multiValue"]', // Selector for the selected topic pills within the container
   selectedTopicPillRemoveIcon: (topicName: string) =>
-    `[role="button"][aria-label="Remove ${topicName}"]`, // Selector for the 'x' icon within the pill
+    `button[aria-label="Remove ${topicName}"]`, // Selector for the 'x' icon within the pill
   clearAllTopicsButton: '[data-qa="clear-dropdown-selection"]', // Selector for the main clear button within the container
 };
 
@@ -339,12 +347,22 @@ export const AddQuickApp2SettingsFormSelector = {
   contextToolsSection: '[data-qa="context-tools-section"]',
   attachmentsSection: '[data-qa="attachments-section"]',
   conversationStartersSection: '[data-qa="conversation-starters-section"]',
+  conversationStartersList: '[data-qa="conversation-starters-list"]', // rendered only when the starters section is expanded
+  introTextInput: '#introText', // Intro text field; disabled until at least one starter exists
 
   // Orchestrator section — model + temperature
   orchestratorModel: '[data-qa="orchestrator-model"]',
   orchestratorModelName: '[data-qa="orchestrator-model-name"]',
   changeModelButtonLabel: 'Change', // aria-label of the model "Change" button
   temperatureSlider: '[data-qa="temp-slider"]', // shown only for temperature-capable models
+  orchestratorModelError: '[data-qa="error-message"]', // validation error under the model field
+  instructionsField: '[data-qa="instructions-field"]',
+  instructionsInput: Tags.textarea, // the markdown editor's edit textarea (single one in the field)
+
+  // Attachments section (collapsed by default)
+  sectionToggle: 'button[aria-expanded]', // FormCollapsibleSection header (scope by section)
+  attachmentTypesField: '[data-qa="attachment-types-field"]', // combobox container (drive via Combobox)
+  maxAttachmentsField: '[data-qa="max-attachment-number-field"]',
 
   // Context & Tools subsections
   agentsAndToolsetsField: '[data-qa="agents-and-toolsets-field"]',
@@ -368,10 +386,13 @@ export const AddQuickApp2SettingsFormSelector = {
   chipName: '[data-qa="chip-name"]',
   chipVersion: '[data-qa="chip-version"]',
   chipRemoveButtonLabel: 'Remove item', // aria-label of the chip remove button
-  errorChipClass: 'bg-error', // class on a not-available (red) chip
+  errorChipClass: 'bg-error', // class on a not-available or logged-out (red) chip
+  activeChipClass: 'bg-accent-primary-alpha', // class on a healthy (blue) chip
 
   // Code Interpreter toggle
   codeInterpreterToggle: '[data-qa="toggle-switch"]',
+  codeInterpreterLabel: '[data-qa="code-interpreter-label"]',
+  codeInterpreterInfoIcon: '[data-qa="code-interpreter-info"]',
 };
 
 // Shared by both agents browser modals (Talk to / Select agents and toolsets).
@@ -431,6 +452,18 @@ export const InformationModalSelectors = {
   createdDateValue: '[data-qa="created-at-value"]',
   authorLabel: '[data-qa="author-label"]',
   authorValue: '[data-qa="author-value"]',
+};
+
+export const PdfPreviewModalSelectors = {
+  container: '[data-qa="pdf-preview-modal"]',
+  pagesLabel: '[data-qa="viewer-pages"]',
+  title: '[data-qa="modal-entity-name"]',
+  titleValue: '#name-value',
+  pagesSidebar: '[data-qa="pages-sidebar"]',
+  pageThumbnail: (pageNumber: number) => `button[data-page="${pageNumber}"]`,
+  viewerContainer: '[data-qa="pdf-viewer-container"]',
+  zoomSelect: '[aria-controls="list-zoom-select"]',
+  pdfPage: (pageNumber: number) => `[data-page-number="${pageNumber}"]`,
 };
 
 export const ReplaceConfirmationModalSelectors = {
