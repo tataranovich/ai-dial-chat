@@ -31,6 +31,7 @@ jobs:
       filter-version: '0\.[0-9]+'
       primary-branch-pattern: '^development-old$'
       release-branch-pattern: '^release-0\.[0-9]+$'
+      docker-development-tag: 'development-old'
       # Disable long running parts
       docker-build-enabled: false
       publish-enabled: false
