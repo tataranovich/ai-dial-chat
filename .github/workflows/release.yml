@@ -2,7 +2,7 @@ name: Release Workflow
 
 on:
   push:
-    branches: [development-old, release-0.*]
+    branches: [development-legacy, release-0.*]
   workflow_dispatch:
     inputs:
       promote:
@@ -29,9 +29,9 @@ jobs:
       maximize-build-space: false
       draft-stable-releases: false
       filter-version: '0\.[0-9]+'
-      primary-branch-pattern: '^development-old$'
+      primary-branch-pattern: '^development-legacy$'
       release-branch-pattern: '^release-0\.[0-9]+$'
-      docker-development-tag: 'development-old'
+      docker-development-tag: 'development-legacy'
       # Disable long running parts
       docker-build-enabled: true
       publish-enabled: false
