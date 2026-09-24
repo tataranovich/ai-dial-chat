@@ -18,8 +18,13 @@ import { promptsApi } from './api-client';
 export const listPrompts = (): Promise<PromptListResponseDto> =>
   promptsApi.listPrompts();
 
-export const getPrompt = (path: string): Promise<PromptResponseDto> =>
-  promptsApi.getPrompt({ path });
+/**
+ * `id` is the full `prompts/{bucket}/{path}` resource path — the caller's own
+ * bucket for a personal prompt, or the owner bucket for a prompt shared with
+ * the caller. DIAL Core authorises the read either way.
+ */
+export const getPrompt = (id: string): Promise<PromptResponseDto> =>
+  promptsApi.getPrompt({ id });
 
 export const createPrompt = (
   body: CreatePromptDto,
@@ -27,19 +32,19 @@ export const createPrompt = (
   promptsApi.createPrompt({ createPromptDto: body });
 
 export const updatePrompt = (
-  path: string,
+  id: string,
   body: UpdatePromptDto,
 ): Promise<PromptResponseDto> =>
-  promptsApi.updatePrompt({ path, updatePromptDto: body });
+  promptsApi.updatePrompt({ id, updatePromptDto: body });
 
-export const deletePrompt = (path: string): Promise<void> =>
-  promptsApi.deletePrompt({ path });
+export const deletePrompt = (id: string): Promise<void> =>
+  promptsApi.deletePrompt({ id });
 
 export const movePrompt = (
-  path: string,
+  id: string,
   body: MovePromptDto,
 ): Promise<PromptResponseDto> =>
-  promptsApi.movePrompt({ path, movePromptDto: body });
+  promptsApi.movePrompt({ id, movePromptDto: body });
 
 /* ------------------------------------------------------------------ */
 /* Organisation (public) prompts                                        */

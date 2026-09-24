@@ -5,9 +5,11 @@ import {
 } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
   GhostIconButton,
   Highlight,
+  LinkButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconCopy } from '@tabler/icons-react';
 import { memo, useMemo, useState, type FC, type ReactNode } from 'react';
@@ -19,7 +21,7 @@ import type { QuotationSource } from '../../models/quotation-source';
 import styles from './SourcesSection.module.scss';
 
 /** Props for the `SourcesSection` component. */
-export interface SourcesSectionProps {
+interface SourcesSectionProps {
   /** Heading text for the sources section. */
   title: ReactNode;
   /** List of sources to display. */
@@ -81,15 +83,27 @@ const SourcesSection: FC<SourcesSectionProps> = ({
         {sources.map((source) => (
           <li key={source.url} className="flex flex-col gap-1">
             <div className="flex min-w-0 items-center justify-between gap-2">
-              <a
+              <LinkButton
                 href={source.url}
                 target="_blank"
-                rel="noopener noreferrer"
+                size={ElementSize.Small}
                 className={mergeClasses(
-                  linkClassName,
                   styles.link,
-                  'min-w-0 flex-1 truncate',
+                  'min-w-0 flex-1 justify-start',
                 )}
+                textClassName={mergeClasses(linkClassName, 'min-w-0 truncate')}
+                label={
+                  searchQuery ? (
+                    <Highlight
+                      text={source.title}
+                      query={searchQuery}
+                      maxLines={1}
+                    />
+                  ) : (
+                    source.title
+                  )
+                }
+                aria-label={source.title}
                 onClick={
                   onSourceClick
                     ? (e) => {
@@ -98,21 +112,15 @@ const SourcesSection: FC<SourcesSectionProps> = ({
                       }
                     : undefined
                 }
-              >
-                {searchQuery ? (
-                  <Highlight
-                    text={source.title}
-                    query={searchQuery}
-                    maxLines={1}
-                  />
-                ) : (
-                  source.title
-                )}
-              </a>
+              />
               <GhostIconButton
                 size={ElementSize.Small}
                 icon={
-                  <IconCopy size={DIAL_ICON_SIZE.SM} stroke={1.5} aria-hidden />
+                  <IconCopy
+                    size={DIAL_ICON_SIZE.SM}
+                    stroke={DIAL_KIT_ICON_STROKE}
+                    aria-hidden
+                  />
                 }
                 aria-label={copyLabel}
                 onClick={() => void handleCopy(source.url)}

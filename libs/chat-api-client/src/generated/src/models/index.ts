@@ -7,7 +7,7 @@
  */
 export interface AcceptInvitationResponseDto {
   /**
-   * Identifier (DIAL Core resource path) of the entity the invitation grants access to.
+   * Identifier (DIAL Core resource path) of the entity the invitation grants access to. A prompt path is returned decoded, matching the id its listing endpoints report.
    * @type {string}
    * @memberof AcceptInvitationResponseDto
    */
@@ -24,6 +24,222 @@ export interface AcceptInvitationResponseDto {
    * @memberof AcceptInvitationResponseDto
    */
   sharedToolset?: DialToolsetDto;
+  /**
+   * List-item summary of the shared skill, resolved by id at accept time so the frontend can show its details panel without waiting on a bulk skills list refresh. Omitted when itemId is not a skill, or when resolution failed (a best-effort step that never fails the accept call itself).
+   * @type {SkillMetadataItemDto}
+   * @memberof AcceptInvitationResponseDto
+   */
+  sharedSkill?: SkillMetadataItemDto;
+}
+/**
+ *
+ * @export
+ * @interface AnnotationBodyDto
+ */
+export interface AnnotationBodyDto {
+  /**
+   *
+   * @type {AnnotationBodyDtoSelector}
+   * @memberof AnnotationBodyDto
+   */
+  selector?: AnnotationBodyDtoSelector;
+  /**
+   * Title of the cited source
+   * @type {string}
+   * @memberof AnnotationBodyDto
+   */
+  title?: string;
+  /**
+   * Quoted excerpt from the cited source
+   * @type {string}
+   * @memberof AnnotationBodyDto
+   */
+  quote?: string;
+  /**
+   *
+   * @type {AnnotationSourceDto}
+   * @memberof AnnotationBodyDto
+   */
+  source?: AnnotationSourceDto;
+}
+/**
+ * @type AnnotationBodyDtoSelector
+ * Location in the cited document; PDF page numbers are 1-based
+ * @export
+ */
+export type AnnotationBodyDtoSelector =
+  AnnotationSelectorDto | Array<AnnotationSelectorDto>;
+/**
+ *
+ * @export
+ * @interface AnnotationDto
+ */
+export interface AnnotationDto {
+  /**
+   * Zero-based position in the list
+   * @type {number}
+   * @memberof AnnotationDto
+   */
+  index?: number;
+  /**
+   *
+   * @type {AnnotationTargetDto}
+   * @memberof AnnotationDto
+   */
+  target?: AnnotationTargetDto;
+  /**
+   *
+   * @type {AnnotationBodyDto}
+   * @memberof AnnotationDto
+   */
+  body?: AnnotationBodyDto;
+}
+/**
+ *
+ * @export
+ * @interface AnnotationSelectorDto
+ */
+export interface AnnotationSelectorDto {
+  /**
+   * Selector discriminator, e.g. 'text_character_range', 'pdf_bbox', 'html_tag', 'excel_rc_range'
+   * @type {string}
+   * @memberof AnnotationSelectorDto
+   */
+  type?: string;
+  /**
+   *
+   * @type {AnnotationSelectorDtoStart}
+   * @memberof AnnotationSelectorDto
+   */
+  start?: AnnotationSelectorDtoStart;
+  /**
+   *
+   * @type {AnnotationSelectorDtoEnd}
+   * @memberof AnnotationSelectorDto
+   */
+  end?: AnnotationSelectorDtoEnd | null;
+  /**
+   * 1-based PDF page number
+   * @type {number}
+   * @memberof AnnotationSelectorDto
+   */
+  page?: number;
+  /**
+   * PDF bounding box left edge
+   * @type {number}
+   * @memberof AnnotationSelectorDto
+   */
+  x1?: number;
+  /**
+   * PDF bounding box top edge
+   * @type {number}
+   * @memberof AnnotationSelectorDto
+   */
+  y1?: number;
+  /**
+   * PDF bounding box right edge
+   * @type {number}
+   * @memberof AnnotationSelectorDto
+   */
+  x2?: number;
+  /**
+   * PDF bounding box bottom edge
+   * @type {number}
+   * @memberof AnnotationSelectorDto
+   */
+  y2?: number;
+  /**
+   * Inline tag name, e.g. 'cit'
+   * @type {string}
+   * @memberof AnnotationSelectorDto
+   */
+  tag?: string;
+  /**
+   * Inline tag's id attribute value
+   * @type {string}
+   * @memberof AnnotationSelectorDto
+   */
+  id?: string;
+  /**
+   * DOCX story name a character range lives in, e.g. 'body' (opaque — no closed set is confirmed)
+   * @type {string}
+   * @memberof AnnotationSelectorDto
+   */
+  story?: string;
+  /**
+   * DOCX source-tree element indices identifying the paragraph, matched element-wise
+   * @type {Array<number>}
+   * @memberof AnnotationSelectorDto
+   */
+  path?: Array<number>;
+  /**
+   * 1-based PPTX slide number
+   * @type {number}
+   * @memberof AnnotationSelectorDto
+   */
+  slide?: number;
+  /**
+   * PPTX shape identifier, compared as a string
+   * @type {string}
+   * @memberof AnnotationSelectorDto
+   */
+  shapeId?: string;
+  /**
+   * XLSX sheet name, matched exactly
+   * @type {string}
+   * @memberof AnnotationSelectorDto
+   */
+  sheet?: string;
+  /**
+   * Cited text for a DOCX/PPTX range, compared against the text resolved over `start`/`end`
+   * @type {string}
+   * @memberof AnnotationSelectorDto
+   */
+  text?: string;
+}
+/**
+ * @type AnnotationSelectorDtoEnd
+ * Range end. For `text_character_range`/`pdf_bbox`, an inclusive character offset. For `docx_text_range`/`pptx_text_range`, an already-exclusive character offset (confirmed against captured DIAL Core responses). For `excel_rc_range`, a 1-based cell address naming the range's last (inclusive) cell. `null` and omitted are equivalent
+ * @export
+ */
+export type AnnotationSelectorDtoEnd = CellAddressDto | number;
+/**
+ * @type AnnotationSelectorDtoStart
+ * Range start: a character offset (inclusive), or a 1-based cell address for an `excel_rc_range` selector
+ * @export
+ */
+export type AnnotationSelectorDtoStart = CellAddressDto | number;
+/**
+ *
+ * @export
+ * @interface AnnotationSourceDto
+ */
+export interface AnnotationSourceDto {
+  /**
+   * Always 'attachment' for file-based sources
+   * @type {string}
+   * @memberof AnnotationSourceDto
+   */
+  type?: string;
+  /**
+   *
+   * @type {AttachmentResourceDto}
+   * @memberof AnnotationSourceDto
+   */
+  attachment?: AttachmentResourceDto;
+}
+/**
+ *
+ * @export
+ * @interface AnnotationTargetDto
+ */
+export interface AnnotationTargetDto {
+  /**
+   *
+   * @type {AnnotationSelectorDto}
+   * @memberof AnnotationTargetDto
+   */
+  selector?: AnnotationSelectorDto;
 }
 /**
  *
@@ -82,11 +298,17 @@ export interface ApplicationDetailsDto {
    */
   displayName?: string;
   /**
-   * Non-secret custom application properties reported by DIAL Core
+   * Non-secret custom application properties reported by DIAL Core — a verbatim passthrough of the stored application_properties object, never merged with customAppFeatures or features.
    * @type {{ [key: string]: unknown }}
    * @memberof ApplicationDetailsDto
    */
   applicationProperties?: { [key: string]: unknown };
+  /**
+   * The raw top-level DIAL Core "features" JSON read from getCustomApplication — what the plain Custom App editor's Features textarea reads and writes through updateApplication's features field. Distinct from applicationProperties.features (a schema-specific key some applications, e.g. Quick Apps, store as part of their own config) and from features (allow-listed capability flags below).
+   * @type {{ [key: string]: unknown }}
+   * @memberof ApplicationDetailsDto
+   */
+  customAppFeatures?: { [key: string]: unknown };
   /**
    * Runtime environment for the function
    * @type {string}
@@ -123,6 +345,12 @@ export interface ApplicationDetailsDto {
    * @memberof ApplicationDetailsDto
    */
   inputAttachmentTypes?: Array<string>;
+  /**
+   *
+   * @type {ModelCatalogPropertiesDto}
+   * @memberof ApplicationDetailsDto
+   */
+  catalogProperties?: ModelCatalogPropertiesDto;
   /**
    * URI of the custom application type schema, when present
    * @type {string}
@@ -206,6 +434,98 @@ export interface ApplicationDto {
 /**
  *
  * @export
+ * @interface ApplicationExternalServiceDto
+ */
+export interface ApplicationExternalServiceDto {
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  displayName: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  description?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  authenticationType: ApplicationExternalServiceDtoAuthenticationTypeEnum;
+  /**
+   * USER-level credential status ('SIGNED_IN' | 'SIGNED_OUT' | 'FAILED'), when Core reports one.
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  userLevelAuthStatus?: string;
+  /**
+   * APPLICATION-level status. For DIAL_NATIVE, indicates application consent managed by an administrator.
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  appLevelAuthStatus?: string;
+  /**
+   * GLOBAL-level credential status ('SIGNED_IN' | 'SIGNED_OUT' | 'FAILED'), when Core reports one.
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  globalAuthStatus?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  clientId?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  authorizationEndpoint?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof ApplicationExternalServiceDto
+   */
+  scopesSupported?: Array<string>;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  codeChallenge?: string;
+  /**
+   *
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  codeChallengeMethod?: string;
+  /**
+   * External-service identifier within the application
+   * @type {string}
+   * @memberof ApplicationExternalServiceDto
+   */
+  id: string;
+}
+
+/**
+ * @export
+ */
+export const ApplicationExternalServiceDtoAuthenticationTypeEnum = {
+  None: 'NONE',
+  ApiKey: 'API_KEY',
+  Oauth: 'OAUTH',
+  DialNative: 'DIAL_NATIVE',
+} as const;
+export type ApplicationExternalServiceDtoAuthenticationTypeEnum =
+  (typeof ApplicationExternalServiceDtoAuthenticationTypeEnum)[keyof typeof ApplicationExternalServiceDtoAuthenticationTypeEnum];
+
+/**
+ *
+ * @export
  * @interface ApplicationSchemaSummaryDto
  */
 export interface ApplicationSchemaSummaryDto {
@@ -258,6 +578,79 @@ export interface ApplicationSchemasResponseDto {
    * @memberof ApplicationSchemasResponseDto
    */
   schemas: Array<ApplicationSchemaSummaryDto>;
+}
+/**
+ *
+ * @export
+ * @interface ApplicationVisualizerDto
+ */
+export interface ApplicationVisualizerDto {
+  /**
+   * The postMessage protocol namespace, NOT a display label. Every message exchanged with the iframe is prefixed "${title}/…", and the visualizer application must be constructed with this identical string as its appName. A mismatch is a silent failure — the iframe loads but never receives data. Also used as the inline frame's header text.
+   * @type {string}
+   * @memberof ApplicationVisualizerDto
+   */
+  title: string;
+  /**
+   * Human-readable description of the visualizer. Accepted for schema parity; not consumed by the host UI.
+   * @type {string}
+   * @memberof ApplicationVisualizerDto
+   */
+  description?: string;
+  /**
+   * Icon URL or identifier for the visualizer. Accepted for schema parity; not consumed by the host UI.
+   * @type {string}
+   * @memberof ApplicationVisualizerDto
+   */
+  icon?: string;
+  /**
+   * MIME type(s) this entry claims, as a comma-separated list (e.g. "application/vnd.plotly.v1+json, application/vnd.vega.v5+json"). Optional, unlike the required field of the same name on CustomVisualizerDto: when omitted, the entry claims every attachment of the message that carries a URL. Attachments it does not claim render as ordinary attachment tiles.
+   * @type {string}
+   * @memberof ApplicationVisualizerDto
+   */
+  contentType?: string;
+  /**
+   * Absolute HTTP(S) URL of the visualizer iframe.
+   * @type {string}
+   * @memberof ApplicationVisualizerDto
+   */
+  url: string;
+  /**
+   * Milliseconds to wait for a send() request response before rejecting. Defaults to 10000 when unset. Does not bound the initial READY_TO_INTERACT handshake.
+   * @type {number}
+   * @memberof ApplicationVisualizerDto
+   */
+  requestTimeout?: number;
+  /**
+   * Suggested initial width of the visualizer surface in pixels.
+   * @type {number}
+   * @memberof ApplicationVisualizerDto
+   */
+  width?: number;
+  /**
+   * Suggested initial height of the visualizer surface in pixels. Also used by the host to size the inline frame in the message.
+   * @type {number}
+   * @memberof ApplicationVisualizerDto
+   */
+  height?: number;
+  /**
+   * Suggested height on mobile-sized screens in pixels. Also used by the host to size the inline frame on a mobile viewport.
+   * @type {number}
+   * @memberof ApplicationVisualizerDto
+   */
+  mobileHeight?: number;
+  /**
+   * Whether the host should pass auth info to the visualizer. Accepted for schema parity; inert, because 1.0 auth is server-side and the browser holds no access token.
+   * @type {boolean}
+   * @memberof ApplicationVisualizerDto
+   */
+  passAuthInfo?: boolean;
+  /**
+   * Whether the host should pass an explicit access token. Accepted for schema parity; inert, because 1.0 auth is server-side and the browser holds no access token.
+   * @type {boolean}
+   * @memberof ApplicationVisualizerDto
+   */
+  passExplicitToken?: boolean;
 }
 /**
  *
@@ -317,6 +710,19 @@ export type ArchiveItemDtoNodeTypeEnum =
 /**
  *
  * @export
+ * @interface AttachGenerationDto
+ */
+export interface AttachGenerationDto {
+  /**
+   * Conversation sub-path (bucket-stripped), e.g. "gpt-4o__My Chat".
+   * @type {string}
+   * @memberof AttachGenerationDto
+   */
+  path: string;
+}
+/**
+ *
+ * @export
  * @interface AttachmentDto
  */
 export interface AttachmentDto {
@@ -362,6 +768,50 @@ export interface AttachmentDto {
    * @memberof AttachmentDto
    */
   referenceUrl?: string;
+}
+/**
+ *
+ * @export
+ * @interface AttachmentResourceDto
+ */
+export interface AttachmentResourceDto {
+  /**
+   * MIME type of the attached file
+   * @type {string}
+   * @memberof AttachmentResourceDto
+   */
+  type?: string;
+  /**
+   * Remote URL pointing to the file content
+   * @type {string}
+   * @memberof AttachmentResourceDto
+   */
+  url?: string;
+  /**
+   * Human-readable display name for the file
+   * @type {string}
+   * @memberof AttachmentResourceDto
+   */
+  title?: string;
+}
+/**
+ *
+ * @export
+ * @interface CellAddressDto
+ */
+export interface CellAddressDto {
+  /**
+   * 1-based row number
+   * @type {number}
+   * @memberof CellAddressDto
+   */
+  row?: number;
+  /**
+   * 1-based column number
+   * @type {number}
+   * @memberof CellAddressDto
+   */
+  col?: number;
 }
 /**
  *
@@ -525,6 +975,30 @@ export interface ClientConfigDto {
    */
   dialCoreExternalUrl?: string | null;
   /**
+   * Isolated-origin URL of the deployed MCP Apps sandbox-proxy app. Null when MCP_APP_SANDBOX_URL is not configured.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  mcpAppSandboxUrl?: string | null;
+  /**
+   * Admin-controlled color theme override for MCP App Views. Null when MCP_APP_THEME is not configured — each client uses its own active theme.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  mcpAppTheme?: ClientConfigDtoMcpAppThemeEnum | null;
+  /**
+   * Host application identifier sent to MCP App Views in hostContext.userAgent. Null when MCP_APP_USER_AGENT is not configured — defaults to "ai-dial-chat" on the client.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  mcpAppUserAgent?: string | null;
+  /**
+   * Host application identifier sent to every mounted MCP App as hostInfo.name during its ui/initialize handshake. Null when MCP_APP_HOST_NAME is not configured — defaults to "ai-dial-chat" on the client.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  mcpAppHostName?: string | null;
+  /**
    * Which File Manager tabs are shown to users. Defaults to all three currently-supported tabs.
    * @type {Array<string>}
    * @memberof ClientConfigDto
@@ -573,11 +1047,11 @@ export interface ClientConfigDto {
    */
   announcements: Array<AnnouncementItemDto>;
   /**
-   * Tool ID for the Deep Research deployment-configuration property. Null when DEEP_RESEARCH_TOOL_ID is not set.
+   * Plain-text copy shown below the greeting heading on the new-chat start screen. Never interpreted as markup. Null when WELCOME_SCREEN_DESCRIPTION is not configured or is blank.
    * @type {string}
    * @memberof ClientConfigDto
    */
-  deepResearchToolId?: string | null;
+  welcomeScreenDescription?: string | null;
   /**
    * Operator-authored HTML footer message shown below the chat input (desktop) and in the mobile user panel. Empty string when FOOTER_HTML_MESSAGE is not configured. Sanitized server-side; supports %%VERSION%% token.
    * @type {string}
@@ -591,12 +1065,41 @@ export interface ClientConfigDto {
    */
   customVisualizers: Array<CustomVisualizerDto>;
   /**
+   * Registry of application id → grouped visualizer mappings, keyed by a message's effective deployment id. Sourced from APPLICATION_VISUALIZERS. Every attachment an entry claims is delivered to one iframe together; an entry takes precedence over customVisualizers for the attachments it claims. The origin of each entry URL must also appear in ALLOWED_IFRAME_ORIGINS or the browser blocks the iframe. Each entry's passAuthInfo and passExplicitToken are accepted for configuration parity and are not consumed — auth is server-side and the browser holds no access token. Empty when unset — the feature is dark by default.
+   * @type {{ [key: string]: ApplicationVisualizerDto; }}
+   * @memberof ClientConfigDto
+   */
+  applicationVisualizers: { [key: string]: ApplicationVisualizerDto };
+  /**
+   * Public client-owned variables from CUSTOM_CLIENT_VARIABLES. Arbitrary JSON object; empty when unset or invalid. The BFF does not interpret its keys. Never put secrets here.
+   * @type {{ [key: string]: unknown }}
+   * @memberof ClientConfigDto
+   */
+  customVariables: { [key: string]: unknown };
+  /**
    * Allowed claim/category names selectable as a publication access rule's source. Sourced from PUBLICATION_FILTER_SOURCES; falls back to the legacy default when unset or empty.
    * @type {Array<string>}
    * @memberof ClientConfigDto
    */
   publicationFilterSources: Array<string>;
+  /**
+   * Maximum attachment/upload file size in bytes. Sourced from FILE_UPLOAD_MAX_BYTES — the same variable that bounds the POST /api/v1/files Multer limit — so the client can reject an oversized file before attempting to upload it.
+   * @type {number}
+   * @memberof ClientConfigDto
+   */
+  maxAttachmentFileSizeBytes: number;
 }
+
+/**
+ * @export
+ */
+export const ClientConfigDtoMcpAppThemeEnum = {
+  Light: 'light',
+  Dark: 'dark',
+} as const;
+export type ClientConfigDtoMcpAppThemeEnum =
+  (typeof ClientConfigDtoMcpAppThemeEnum)[keyof typeof ClientConfigDtoMcpAppThemeEnum];
+
 /**
  *
  * @export
@@ -747,12 +1250,6 @@ export interface ConversationListItemDto {
    */
   publishedWithMe: boolean;
   /**
-   * How many other users currently hold shared access to this conversation, for conversations the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.
-   * @type {number}
-   * @memberof ConversationListItemDto
-   */
-  recipientsCount?: number;
-  /**
    * True when the user has pinned this conversation.
    * @type {boolean}
    * @memberof ConversationListItemDto
@@ -821,6 +1318,24 @@ export interface ConversationMessageCustomContentDto {
    */
   attachments?: Array<AttachmentDto>;
   /**
+   * Assistant "thinking step" output streamed alongside the message text
+   * @type {Array<StageDto>}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  stages?: Array<StageDto>;
+  /**
+   * Citations/annotations attached to the message text
+   * @type {Array<AnnotationDto>}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  annotations?: Array<AnnotationDto>;
+  /**
+   * JSON schema describing an embedded form widget
+   * @type {object}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  formSchema?: object;
+  /**
    * Form/button submission value (e.g. `{ button: 1 }`).
    * @type {object}
    * @memberof ConversationMessageCustomContentDto
@@ -838,6 +1353,12 @@ export interface ConversationMessageCustomContentDto {
    * @memberof ConversationMessageCustomContentDto
    */
   state?: object;
+  /**
+   * Skills used with this message, each entry carrying the skill resource URL (DIAL Core PR #1956)
+   * @type {Array<RequestSkillDto>}
+   * @memberof ConversationMessageCustomContentDto
+   */
+  skills?: Array<RequestSkillDto>;
   /**
    * Status event discriminator when role is status
    * @type {string}
@@ -1321,7 +1842,7 @@ export interface CreateApplicationBodyDto {
    */
   description?: string;
   /**
-   *
+   * An absolute https?:// URL, or a DIAL file id (files/{bucket}/{path}) picked through the file manager.
    * @type {string}
    * @memberof CreateApplicationBodyDto
    */
@@ -1550,27 +2071,12 @@ export interface CreateShareLinkDto {
    */
   itemId: string;
   /**
-   * Set to `prompt` when `itemId` is a bucket-relative prompt path (as returned by the prompts endpoints) rather than a full DIAL Core resource path. The caller's own bucket is then used to qualify it.
-   * @type {string}
-   * @memberof CreateShareLinkDto
-   */
-  resourceKind?: CreateShareLinkDtoResourceKindEnum;
-  /**
    * Access levels granted to holders of the share link. Edit access implies view access, so this is `[View, Edit]` rather than `[Edit]` alone.
    * @type {Array<string>}
    * @memberof CreateShareLinkDto
    */
   access: Array<CreateShareLinkDtoAccessEnum>;
 }
-
-/**
- * @export
- */
-export const CreateShareLinkDtoResourceKindEnum = {
-  Prompt: 'prompt',
-} as const;
-export type CreateShareLinkDtoResourceKindEnum =
-  (typeof CreateShareLinkDtoResourceKindEnum)[keyof typeof CreateShareLinkDtoResourceKindEnum];
 
 /**
  * @export
@@ -1613,8 +2119,7 @@ export interface CreatedApplicationDto {
  * @export
  */
 export type CreatedApplicationDtoDisplayName =
-  | string
-  | { [key: string]: string };
+  string | { [key: string]: string };
 /**
  *
  * @export
@@ -1669,6 +2174,12 @@ export interface CreatedScheduledTaskDto {
    * @memberof CreatedScheduledTaskDto
    */
   isActive?: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof CreatedScheduledTaskDto
+   */
+  isDeleted?: boolean;
   /**
    *
    * @type {string}
@@ -2116,6 +2627,12 @@ export interface DeploymentFeaturesDetailsDto {
    */
   responsesApi?: boolean;
   /**
+   * Supports custom skills in chat requests
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDetailsDto
+   */
+  skillsSupported?: boolean;
+  /**
    * Supports the max_tokens parameter
    * @type {boolean}
    * @memberof DeploymentFeaturesDetailsDto
@@ -2182,6 +2699,12 @@ export interface DeploymentFeaturesDto {
    * @memberof DeploymentFeaturesDto
    */
   chatCompletion?: boolean;
+  /**
+   * Whether the deployment supports custom skills in chat requests
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  skillsSupported?: boolean;
 }
 /**
  *
@@ -2315,12 +2838,6 @@ export interface DeploymentItemDto {
    * @memberof DeploymentItemDto
    */
   sharedWithMe?: boolean;
-  /**
-   * How many other users currently hold shared access to this deployment, for deployments the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.
-   * @type {number}
-   * @memberof DeploymentItemDto
-   */
-  recipientsCount?: number;
   /**
    * Parent folder path for application-type deployments (absent for root-level or non-application items)
    * @type {string}
@@ -3138,12 +3655,6 @@ export interface DialToolsetDto {
    * @memberof DialToolsetDto
    */
   sharedWithMe?: boolean;
-  /**
-   * How many other users currently hold shared access to this toolset, for toolsets the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.
-   * @type {number}
-   * @memberof DialToolsetDto
-   */
-  recipientsCount?: number;
 }
 /**
  * @type DialToolsetDtoDescription
@@ -3328,7 +3839,7 @@ export interface DialToolsetListResponseDto {
  */
 export interface DiscardSharedCatalogItemDto {
   /**
-   * Identifier (DIAL Core resource path) of the catalog item or conversation to discard access to.
+   * Identifier of the catalog item, skill, conversation, or prompt to discard access to — a full DIAL Core resource path.
    * @type {string}
    * @memberof DiscardSharedCatalogItemDto
    */
@@ -3509,6 +4020,12 @@ export interface ExternalServiceSigninBodyDto {
    * @memberof ExternalServiceSigninBodyDto
    */
   redirectUri?: string;
+  /**
+   * Whether the user consents to the application using this credential while they are offline. Required for on-behalf-of use (e.g. scheduled runs).
+   * @type {boolean}
+   * @memberof ExternalServiceSigninBodyDto
+   */
+  offlineUsageConsent?: boolean;
 }
 
 /**
@@ -3675,6 +4192,12 @@ export interface GetExternalServiceResponseDto {
    */
   userLevelAuthStatus?: string;
   /**
+   * APPLICATION-level status. For DIAL_NATIVE, indicates application consent managed by an administrator.
+   * @type {string}
+   * @memberof GetExternalServiceResponseDto
+   */
+  appLevelAuthStatus?: string;
+  /**
    * GLOBAL-level credential status ('SIGNED_IN' | 'SIGNED_OUT' | 'FAILED'), when Core reports one.
    * @type {string}
    * @memberof GetExternalServiceResponseDto
@@ -3719,10 +4242,36 @@ export const GetExternalServiceResponseDtoAuthenticationTypeEnum = {
   None: 'NONE',
   ApiKey: 'API_KEY',
   Oauth: 'OAUTH',
+  DialNative: 'DIAL_NATIVE',
 } as const;
 export type GetExternalServiceResponseDtoAuthenticationTypeEnum =
   (typeof GetExternalServiceResponseDtoAuthenticationTypeEnum)[keyof typeof GetExternalServiceResponseDtoAuthenticationTypeEnum];
 
+/**
+ *
+ * @export
+ * @interface GetOfflineCredentialsResponseDto
+ */
+export interface GetOfflineCredentialsResponseDto {
+  /**
+   *
+   * @type {boolean}
+   * @memberof GetOfflineCredentialsResponseDto
+   */
+  available: boolean;
+  /**
+   *
+   * @type {boolean}
+   * @memberof GetOfflineCredentialsResponseDto
+   */
+  connected: boolean;
+  /**
+   *
+   * @type {OfflineCredentialsConnectDto}
+   * @memberof GetOfflineCredentialsResponseDto
+   */
+  connect?: OfflineCredentialsConnectDto;
+}
 /**
  *
  * @export
@@ -3741,6 +4290,12 @@ export interface LimitStatsDto {
    * @memberof LimitStatsDto
    */
   used: number;
+  /**
+   * Optional ISO-8601 instant with an explicit UTC designator marking the exclusive end of this stat's current calendar accumulation period — at that instant the period rolls over and DIAL Core begins reporting against a fresh window. Its presence establishes that the day, week, and month stats are calendar periods anchored to UTC boundaries (UTC midnight, UTC week start, UTC month start), not trailing windows. DIAL Core may omit it on a given stat, and its absence is not an error. The BFF forwards the value verbatim and never parses, reformats, converts, clamps, drops, or synthesizes it.
+   * @type {string}
+   * @memberof LimitStatsDto
+   */
+  resetsAt?: string;
 }
 /**
  *
@@ -3878,6 +4433,32 @@ export interface ListFilesResponseDto {
 /**
  *
  * @export
+ * @interface ListMcpAppToolsResponseDto
+ */
+export interface ListMcpAppToolsResponseDto {
+  /**
+   *
+   * @type {Array<McpAppToolSummaryDto>}
+   * @memberof ListMcpAppToolsResponseDto
+   */
+  tools: Array<McpAppToolSummaryDto>;
+}
+/**
+ *
+ * @export
+ * @interface ListMcpToolNamesResponseDto
+ */
+export interface ListMcpToolNamesResponseDto {
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof ListMcpToolNamesResponseDto
+   */
+  toolNames: Array<string>;
+}
+/**
+ *
+ * @export
  * @interface ListScheduledTaskRunsResponseDto
  */
 export interface ListScheduledTaskRunsResponseDto {
@@ -3989,6 +4570,74 @@ export interface LocaleTextEntryDto {
 /**
  *
  * @export
+ * @interface McpAppToolCallRequestDto
+ */
+export interface McpAppToolCallRequestDto {
+  /**
+   *
+   * @type {string}
+   * @memberof McpAppToolCallRequestDto
+   */
+  toolName: string;
+  /**
+   *
+   * @type {object}
+   * @memberof McpAppToolCallRequestDto
+   */
+  arguments: object;
+  /**
+   * Which of Core's MCP proxy route prefixes to use for this deployment.
+   * @type {string}
+   * @memberof McpAppToolCallRequestDto
+   */
+  kind: McpAppToolCallRequestDtoKindEnum;
+}
+
+/**
+ * @export
+ */
+export const McpAppToolCallRequestDtoKindEnum = {
+  Toolset: 'toolset',
+  Application: 'application',
+} as const;
+export type McpAppToolCallRequestDtoKindEnum =
+  (typeof McpAppToolCallRequestDtoKindEnum)[keyof typeof McpAppToolCallRequestDtoKindEnum];
+
+/**
+ *
+ * @export
+ * @interface McpAppToolCallResponseDto
+ */
+export interface McpAppToolCallResponseDto {
+  /**
+   * Unwrapped `result` field of the tool's JSON-RPC response.
+   * @type {object}
+   * @memberof McpAppToolCallResponseDto
+   */
+  result: object;
+}
+/**
+ *
+ * @export
+ * @interface McpAppToolSummaryDto
+ */
+export interface McpAppToolSummaryDto {
+  /**
+   *
+   * @type {string}
+   * @memberof McpAppToolSummaryDto
+   */
+  toolName: string;
+  /**
+   *
+   * @type {string}
+   * @memberof McpAppToolSummaryDto
+   */
+  resourceUri: string;
+}
+/**
+ *
+ * @export
  * @interface MessageCustomContentDto
  */
 export interface MessageCustomContentDto {
@@ -3998,6 +4647,24 @@ export interface MessageCustomContentDto {
    * @memberof MessageCustomContentDto
    */
   attachments?: Array<AttachmentDto>;
+  /**
+   * Assistant "thinking step" output streamed alongside the message text
+   * @type {Array<StageDto>}
+   * @memberof MessageCustomContentDto
+   */
+  stages?: Array<StageDto>;
+  /**
+   * Citations/annotations attached to the message text
+   * @type {Array<AnnotationDto>}
+   * @memberof MessageCustomContentDto
+   */
+  annotations?: Array<AnnotationDto>;
+  /**
+   * JSON schema describing an embedded form widget
+   * @type {object}
+   * @memberof MessageCustomContentDto
+   */
+  formSchema?: object;
   /**
    * Form/button submission value (e.g. `{ button: 1 }`).
    * @type {object}
@@ -4016,6 +4683,12 @@ export interface MessageCustomContentDto {
    * @memberof MessageCustomContentDto
    */
   state?: object;
+  /**
+   * Skills used with this message, each entry carrying the skill resource URL (DIAL Core PR #1956)
+   * @type {Array<RequestSkillDto>}
+   * @memberof MessageCustomContentDto
+   */
+  skills?: Array<RequestSkillDto>;
 }
 /**
  *
@@ -4112,6 +4785,43 @@ export interface ModelCapabilitiesDto {
 /**
  *
  * @export
+ * @interface ModelCatalogPropertiesDto
+ */
+export interface ModelCatalogPropertiesDto {
+  /**
+   * Model provider for catalog display
+   * @type {string}
+   * @memberof ModelCatalogPropertiesDto
+   */
+  provider?: string;
+  /**
+   * Model vendor for catalog display
+   * @type {string}
+   * @memberof ModelCatalogPropertiesDto
+   */
+  vendor?: string;
+  /**
+   * Model license for catalog display
+   * @type {string}
+   * @memberof ModelCatalogPropertiesDto
+   */
+  license?: string;
+  /**
+   * Model knowledge cutoff date for catalog display
+   * @type {string}
+   * @memberof ModelCatalogPropertiesDto
+   */
+  knowledgeCutoffDate?: string;
+  /**
+   * Model parameter count for catalog display
+   * @type {string}
+   * @memberof ModelCatalogPropertiesDto
+   */
+  parameters?: string;
+}
+/**
+ *
+ * @export
  * @interface ModelDetailsDto
  */
 export interface ModelDetailsDto {
@@ -4140,17 +4850,23 @@ export interface ModelDetailsDto {
    */
   limits?: ModelLimitsDto;
   /**
-   *
-   * @type {ModelPricingDto}
+   * Pricing as reported by DIAL Core: `unit` names the billing unit and every other key holds a scalar price or conditional pricing tree
+   * @type {{ [key: string]: ModelDetailsDtoPricingValue; }}
    * @memberof ModelDetailsDto
    */
-  pricing?: ModelPricingDto;
+  pricing?: { [key: string]: ModelDetailsDtoPricingValue };
   /**
    *
    * @type {DeploymentFeaturesDetailsDto}
    * @memberof ModelDetailsDto
    */
   features?: DeploymentFeaturesDetailsDto;
+  /**
+   * Known model catalog properties allow-listed from DIAL Core catalog_properties
+   * @type {ModelCatalogPropertiesDto}
+   * @memberof ModelDetailsDto
+   */
+  catalogProperties?: ModelCatalogPropertiesDto;
   /**
    * Owner of the deployment as reported by DIAL Core
    * @type {string}
@@ -4176,6 +4892,12 @@ export interface ModelDetailsDto {
    */
   createdAt?: number;
 }
+/**
+ * @type ModelDetailsDtoPricingValue
+ *
+ * @export
+ */
+export type ModelDetailsDtoPricingValue = ModelPricingRateDto | string;
 /**
  *
  * @export
@@ -4204,27 +4926,33 @@ export interface ModelLimitsDto {
 /**
  *
  * @export
- * @interface ModelPricingDto
+ * @interface ModelPricingRateDto
  */
-export interface ModelPricingDto {
+export interface ModelPricingRateDto {
   /**
-   * The pricing unit
-   * @type {string}
-   * @memberof ModelPricingDto
+   *
+   * @type {ModelPricingRateDto}
+   * @memberof ModelPricingRateDto
    */
-  unit?: string;
+  ifFalse?: ModelPricingRateDto;
   /**
-   * Per-unit price for the completion request
-   * @type {string}
-   * @memberof ModelPricingDto
+   *
+   * @type {ModelPricingRateDto}
+   * @memberof ModelPricingRateDto
    */
-  prompt?: string;
+  ifTrue?: ModelPricingRateDto;
   /**
-   * Per-unit price for the completion response
+   * Per-unit price for this pricing branch
    * @type {string}
-   * @memberof ModelPricingDto
+   * @memberof ModelPricingRateDto
    */
-  completion?: string;
+  rate?: string;
+  /**
+   * Condition selecting the applicable pricing branch
+   * @type {{ [key: string]: unknown }}
+   * @memberof ModelPricingRateDto
+   */
+  test?: { [key: string]: unknown };
 }
 /**
  *
@@ -4366,6 +5094,69 @@ export interface MutatedToolsetDto {
 /**
  *
  * @export
+ * @interface OfflineCredentialsAuthResultDto
+ */
+export interface OfflineCredentialsAuthResultDto {
+  /**
+   *
+   * @type {boolean}
+   * @memberof OfflineCredentialsAuthResultDto
+   */
+  success: boolean;
+}
+/**
+ *
+ * @export
+ * @interface OfflineCredentialsConnectDto
+ */
+export interface OfflineCredentialsConnectDto {
+  /**
+   *
+   * @type {string}
+   * @memberof OfflineCredentialsConnectDto
+   */
+  authorizationEndpoint: string;
+  /**
+   *
+   * @type {string}
+   * @memberof OfflineCredentialsConnectDto
+   */
+  clientId: string;
+  /**
+   *
+   * @type {string}
+   * @memberof OfflineCredentialsConnectDto
+   */
+  redirectUri?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof OfflineCredentialsConnectDto
+   */
+  scopes: Array<string>;
+}
+/**
+ *
+ * @export
+ * @interface OfflineCredentialsSigninBodyDto
+ */
+export interface OfflineCredentialsSigninBodyDto {
+  /**
+   * OAuth authorization code.
+   * @type {string}
+   * @memberof OfflineCredentialsSigninBodyDto
+   */
+  code: string;
+  /**
+   * OAuth redirect URI used for the code exchange. Must resolve to the configured AUTH_CALLBACK_BASE_URL origin and one of the app's own callback paths.
+   * @type {string}
+   * @memberof OfflineCredentialsSigninBodyDto
+   */
+  redirectUri: string;
+}
+/**
+ *
+ * @export
  * @interface PromptFolderResponseDto
  */
 export interface PromptFolderResponseDto {
@@ -4406,6 +5197,18 @@ export interface PromptListResponseDto {
    * @memberof PromptListResponseDto
    */
   sharedWithMe: Array<PromptResponseDto>;
+  /**
+   *
+   * @type {Array<PromptResponseDto>}
+   * @memberof PromptListResponseDto
+   */
+  publicPrompts?: Array<PromptResponseDto>;
+  /**
+   *
+   * @type {Array<PromptFolderResponseDto>}
+   * @memberof PromptListResponseDto
+   */
+  publicFolders?: Array<PromptFolderResponseDto>;
 }
 /**
  *
@@ -4414,7 +5217,7 @@ export interface PromptListResponseDto {
  */
 export interface PromptResponseDto {
   /**
-   * Prompt path within the prompts namespace (used as stable ID)
+   * Full DIAL Core resource path identifying the prompt (`prompts/{bucket}/{path}`), the same shape every other resource type exposes. For a prompt shared with the caller, `bucket` is the owner bucket, not the caller bucket.
    * @type {string}
    * @memberof PromptResponseDto
    */
@@ -4444,6 +5247,12 @@ export interface PromptResponseDto {
    */
   folderId: string;
   /**
+   * Resource author reported by DIAL Core, when it is known
+   * @type {string}
+   * @memberof PromptResponseDto
+   */
+  author?: string;
+  /**
    * Creation timestamp (Unix ms)
    * @type {number}
    * @memberof PromptResponseDto
@@ -4455,6 +5264,30 @@ export interface PromptResponseDto {
    * @memberof PromptResponseDto
    */
   updatedAt: number;
+  /**
+   * Whether the prompt belongs to the requestor
+   * @type {boolean}
+   * @memberof PromptResponseDto
+   */
+  isMy?: boolean;
+  /**
+   * Whether the requestor may update the prompt. Organisation prompts are always read-only.
+   * @type {boolean}
+   * @memberof PromptResponseDto
+   */
+  canEdit?: boolean;
+  /**
+   * Whether another user shared the prompt with the requestor
+   * @type {boolean}
+   * @memberof PromptResponseDto
+   */
+  sharedWithMe?: boolean;
+  /**
+   * READ/WRITE/SHARE permissions applicable to the requestor
+   * @type {Array<string>}
+   * @memberof PromptResponseDto
+   */
+  permissions?: Array<string>;
 }
 /**
  *
@@ -4463,7 +5296,7 @@ export interface PromptResponseDto {
  */
 export interface PromptsConfigDto {
   /**
-   * Favorited prompt paths.
+   * Favorited prompt resource ids (`prompts/{bucket}/{path}`).
    * @type {Array<string>}
    * @memberof PromptsConfigDto
    */
@@ -4520,17 +5353,29 @@ export interface PublishCatalogEntityDto {
    */
   folderPath: string;
   /**
-   * Version label for this publish.
+   * Optional version label. When omitted, versioned resource ids recover it from their {name}__{version} suffix; unversioned resources use an empty version.
    * @type {string}
    * @memberof PublishCatalogEntityDto
    */
-  version: string;
+  version?: string;
+  /**
+   * Display author recorded on the publication as `displayAuthor`, surfaced in the catalog as the published entity's "Hosted by" value. Omitted, blank, or whitespace-only falls back to the session's own display name, which is what every caller got before this field existed.
+   * @type {string}
+   * @memberof PublishCatalogEntityDto
+   */
+  author?: string;
   /**
    * Access-restriction rules combined with AND; forwarded to DIAL Core unchanged. Omitted or empty means no additional restriction.
    * @type {Array<PublishRuleDto>}
    * @memberof PublishCatalogEntityDto
    */
   rules?: Array<PublishRuleDto>;
+  /**
+   * Publish the entity together with the publisher's own credentials for it. DIAL Core honours it by copying the credential onto the published copy, so members of the organization use the entity without authorising individually. Omitted or `false` sends exactly the request every caller sent before this field existed. The flag grants no additional authorization: Core still derives the actor from the bearer token, enforces target-folder write access, and holds the publication `PENDING` until an administrator approves it. No credential value ever crosses the wire — only this boolean.
+   * @type {boolean}
+   * @memberof PublishCatalogEntityDto
+   */
+  publishCredentials?: boolean;
 }
 /**
  *
@@ -4544,6 +5389,12 @@ export interface PublishConversationDto {
    * @memberof PublishConversationDto
    */
   folderPath: string;
+  /**
+   * Display author recorded on the publication as `displayAuthor`. Omitted, blank, or whitespace-only falls back to the session's own display name, which is what every caller got before this field existed.
+   * @type {string}
+   * @memberof PublishConversationDto
+   */
+  author?: string;
   /**
    * Access-restriction rules combined with AND; forwarded to DIAL Core unchanged. Omitted or empty means no additional restriction.
    * @type {Array<PublishRuleDto>}
@@ -4624,6 +5475,12 @@ export interface PublishHistoryEntryDto {
    * @memberof PublishHistoryEntryDto
    */
   publishedBy: string;
+  /**
+   * Whether this publication requested that the publisher's own credential for the entity be published alongside it. Reports what was requested, not what DIAL Core ultimately applied — Core is the authority on that. A publication that predates the field reports `false`.
+   * @type {boolean}
+   * @memberof PublishHistoryEntryDto
+   */
+  publishCredentials: boolean;
 }
 
 /**
@@ -4633,6 +5490,8 @@ export const PublishHistoryEntryDtoEntityTypeEnum = {
   Model: 'model',
   Toolset: 'toolset',
   Application: 'application',
+  Prompt: 'prompt',
+  Skill: 'skill',
 } as const;
 export type PublishHistoryEntryDtoEntityTypeEnum =
   (typeof PublishHistoryEntryDtoEntityTypeEnum)[keyof typeof PublishHistoryEntryDtoEntityTypeEnum];
@@ -4688,6 +5547,8 @@ export const PublishResultDtoEntityTypeEnum = {
   Model: 'model',
   Toolset: 'toolset',
   Application: 'application',
+  Prompt: 'prompt',
+  Skill: 'skill',
 } as const;
 export type PublishResultDtoEntityTypeEnum =
   (typeof PublishResultDtoEntityTypeEnum)[keyof typeof PublishResultDtoEntityTypeEnum];
@@ -4767,11 +5628,11 @@ export interface RateMessageDto {
    */
   modelId: string;
   /**
-   * Rating value — 1 (like/thumbs-up) or -1 (dislike/thumbs-down). DIAL Core adds this value to the message like count.
+   * Rating value — 1 (like/thumbs-up), -1 (dislike/thumbs-down), or null to clear a previously sent rating. DIAL Core's `/v1/{modelId}/rate` only accepts a boolean `rate`: this value is mapped to `true` for 1 and to `false` for both -1 and null, since DIAL Core has no separate state for "cleared".
    * @type {number}
    * @memberof RateMessageDto
    */
-  rate: RateMessageDtoRateEnum;
+  rate: RateMessageDtoRateEnum | null;
   /**
    * Optional free-text comment from the user
    * @type {string}
@@ -4967,6 +5828,19 @@ export type ReportClientChannelDtoResultEnum =
 /**
  *
  * @export
+ * @interface RequestSkillDto
+ */
+export interface RequestSkillDto {
+  /**
+   * The skill's resource URL (skills/{bucket}/{path})
+   * @type {string}
+   * @memberof RequestSkillDto
+   */
+  url: string;
+}
+/**
+ *
+ * @export
  * @interface RevokeAccessDto
  */
 export interface RevokeAccessDto {
@@ -5016,7 +5890,7 @@ export interface RevokeAccessResponseDto {
  */
 export interface RevokeSharedAccessDto {
   /**
-   * Identifier (DIAL Core resource path) of the owned catalog item or conversation to revoke all shared access to.
+   * Identifier of the owned catalog item, skill, conversation, or prompt to revoke all shared access to — a full DIAL Core resource path.
    * @type {string}
    * @memberof RevokeSharedAccessDto
    */
@@ -5148,6 +6022,12 @@ export interface ScheduledTaskDto {
   isActive?: boolean;
   /**
    *
+   * @type {boolean}
+   * @memberof ScheduledTaskDto
+   */
+  isDeleted?: boolean;
+  /**
+   *
    * @type {string}
    * @memberof ScheduledTaskDto
    */
@@ -5224,6 +6104,12 @@ export interface ScheduledTaskRunDto {
    * @memberof ScheduledTaskRunDto
    */
   durationSeconds?: number;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskRunDto
+   */
+  conversationId?: string;
 }
 
 /**
@@ -5341,6 +6227,408 @@ export const ShareLinkResponseDtoAccessEnum = {
 } as const;
 export type ShareLinkResponseDtoAccessEnum =
   (typeof ShareLinkResponseDtoAccessEnum)[keyof typeof ShareLinkResponseDtoAccessEnum];
+
+/**
+ *
+ * @export
+ * @interface ShareRecipientsResponseDto
+ */
+export interface ShareRecipientsResponseDto {
+  /**
+   * The resource the count belongs to, echoed from the request.
+   * @type {string}
+   * @memberof ShareRecipientsResponseDto
+   */
+  itemId: string;
+  /**
+   * How many users currently hold shared access to the resource. Counts accepted invitations only — an issued but unopened share link is not counted, so `0` means "nobody holds access", not "never shared".
+   * @type {number}
+   * @memberof ShareRecipientsResponseDto
+   */
+  recipientsCount: number;
+}
+/**
+ *
+ * @export
+ * @interface SkillCatalogListResponseDto
+ */
+export interface SkillCatalogListResponseDto {
+  /**
+   *
+   * @type {Array<SkillMetadataItemDto>}
+   * @memberof SkillCatalogListResponseDto
+   */
+  skills: Array<SkillMetadataItemDto>;
+  /**
+   *
+   * @type {Array<SkillMetadataItemDto>}
+   * @memberof SkillCatalogListResponseDto
+   */
+  sharedWithMe: Array<SkillMetadataItemDto>;
+  /**
+   *
+   * @type {Array<SkillMetadataItemDto>}
+   * @memberof SkillCatalogListResponseDto
+   */
+  publicSkills: Array<SkillMetadataItemDto>;
+}
+/**
+ *
+ * @export
+ * @interface SkillFileDeleteResponseDto
+ */
+export interface SkillFileDeleteResponseDto {
+  /**
+   * New ETag of the skill after file deletion, when DIAL Core returns one
+   * @type {string}
+   * @memberof SkillFileDeleteResponseDto
+   */
+  etag?: string;
+}
+/**
+ *
+ * @export
+ * @interface SkillFileListResponseDto
+ */
+export interface SkillFileListResponseDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof SkillFileListResponseDto
+   */
+  bucket: string;
+  /**
+   * The listed grouping-folder path
+   * @type {string}
+   * @memberof SkillFileListResponseDto
+   */
+  path: string;
+  /**
+   *
+   * @type {Array<SkillMetadataItemDto>}
+   * @memberof SkillFileListResponseDto
+   */
+  items: Array<SkillMetadataItemDto>;
+  /**
+   * Pagination continuation token
+   * @type {string}
+   * @memberof SkillFileListResponseDto
+   */
+  nextToken?: string;
+}
+/**
+ *
+ * @export
+ * @interface SkillFileUploadResponseDto
+ */
+export interface SkillFileUploadResponseDto {
+  /**
+   * New ETag of the uploaded file, when DIAL Core returns one
+   * @type {string}
+   * @memberof SkillFileUploadResponseDto
+   */
+  etag?: string;
+}
+/**
+ *
+ * @export
+ * @interface SkillGroupingFolderResponseDto
+ */
+export interface SkillGroupingFolderResponseDto {
+  /**
+   * ETag of the created grouping folder, when DIAL Core returns one
+   * @type {string}
+   * @memberof SkillGroupingFolderResponseDto
+   */
+  etag?: string;
+}
+/**
+ *
+ * @export
+ * @interface SkillImportResponseDto
+ */
+export interface SkillImportResponseDto {
+  /**
+   * The created skill's name, derived from its manifest
+   * @type {string}
+   * @memberof SkillImportResponseDto
+   */
+  name: string;
+  /**
+   * The created skill's destination path within the bucket
+   * @type {string}
+   * @memberof SkillImportResponseDto
+   */
+  path: string;
+  /**
+   * The created skill's DIAL Core resource URL
+   * @type {string}
+   * @memberof SkillImportResponseDto
+   */
+  url: string;
+  /**
+   * New ETag of the created skill, when DIAL Core returns one
+   * @type {string}
+   * @memberof SkillImportResponseDto
+   */
+  etag?: string;
+}
+/**
+ *
+ * @export
+ * @interface SkillListResponseDto
+ */
+export interface SkillListResponseDto {
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof SkillListResponseDto
+   */
+  bucket: string;
+  /**
+   * The listed grouping-folder path
+   * @type {string}
+   * @memberof SkillListResponseDto
+   */
+  path: string;
+  /**
+   *
+   * @type {Array<SkillMetadataItemDto>}
+   * @memberof SkillListResponseDto
+   */
+  items: Array<SkillMetadataItemDto>;
+  /**
+   * Pagination continuation token
+   * @type {string}
+   * @memberof SkillListResponseDto
+   */
+  nextToken?: string;
+}
+/**
+ *
+ * @export
+ * @interface SkillMetadataItemDto
+ */
+export interface SkillMetadataItemDto {
+  /**
+   * Resource name (last path segment)
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  name: string;
+  /**
+   * Relative path within the bucket
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  path: string;
+  /**
+   * Full DIAL Core resource URL (skills/{bucket}/{path})
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  url: string;
+  /**
+   * DIAL Core bucket name
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  bucket: string;
+  /**
+   *
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  nodeType: SkillMetadataItemDtoNodeTypeEnum;
+  /**
+   * Parent grouping-folder path
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  parentPath?: string;
+  /**
+   * READ/WRITE/SHARE permissions on this resource
+   * @type {Array<string>}
+   * @memberof SkillMetadataItemDto
+   */
+  permissions?: Array<string>;
+  /**
+   * Resource version ETag (item only)
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  etag?: string;
+  /**
+   * Author (item only)
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  author?: string;
+  /**
+   * Unix timestamp ms (item only)
+   * @type {number}
+   * @memberof SkillMetadataItemDto
+   */
+  createdAt?: number;
+  /**
+   * Unix timestamp ms (item only)
+   * @type {number}
+   * @memberof SkillMetadataItemDto
+   */
+  updatedAt?: number;
+  /**
+   * Manifest-derived description (item only, Core attributes.description)
+   * @type {string}
+   * @memberof SkillMetadataItemDto
+   */
+  description?: string;
+  /**
+   * Whether the skill belongs to the requestor
+   * @type {boolean}
+   * @memberof SkillMetadataItemDto
+   */
+  isMy?: boolean;
+  /**
+   * Whether the requestor may update the skill. Organisation skills are always read-only.
+   * @type {boolean}
+   * @memberof SkillMetadataItemDto
+   */
+  canEdit?: boolean;
+  /**
+   * Whether another user shared the skill with the requestor
+   * @type {boolean}
+   * @memberof SkillMetadataItemDto
+   */
+  sharedWithMe?: boolean;
+}
+
+/**
+ * @export
+ */
+export const SkillMetadataItemDtoNodeTypeEnum = {
+  Folder: 'folder',
+  Item: 'item',
+} as const;
+export type SkillMetadataItemDtoNodeTypeEnum =
+  (typeof SkillMetadataItemDtoNodeTypeEnum)[keyof typeof SkillMetadataItemDtoNodeTypeEnum];
+
+/**
+ *
+ * @export
+ * @interface SkillOperationResultDto
+ */
+export interface SkillOperationResultDto {
+  /**
+   * Always true on success
+   * @type {boolean}
+   * @memberof SkillOperationResultDto
+   */
+  success?: boolean;
+}
+/**
+ *
+ * @export
+ * @interface SkillUploadResponseDto
+ */
+export interface SkillUploadResponseDto {
+  /**
+   * New aggregate ETag of the uploaded skill, when DIAL Core returns one
+   * @type {string}
+   * @memberof SkillUploadResponseDto
+   */
+  etag?: string;
+}
+/**
+ *
+ * @export
+ * @interface SkillsConfigDto
+ */
+export interface SkillsConfigDto {
+  /**
+   * Favorited skill resource URLs.
+   * @type {Array<string>}
+   * @memberof SkillsConfigDto
+   */
+  installed: Array<string>;
+}
+/**
+ *
+ * @export
+ * @interface StageAttachmentDto
+ */
+export interface StageAttachmentDto {
+  /**
+   * Zero-based position in the list
+   * @type {number}
+   * @memberof StageAttachmentDto
+   */
+  index?: number;
+  /**
+   * Display name of the attachment
+   * @type {string}
+   * @memberof StageAttachmentDto
+   */
+  title?: string;
+  /**
+   * Inline base-64 encoded content
+   * @type {string}
+   * @memberof StageAttachmentDto
+   */
+  data?: string;
+}
+/**
+ *
+ * @export
+ * @interface StageDto
+ */
+export interface StageDto {
+  /**
+   * Zero-based position in the list
+   * @type {number}
+   * @memberof StageDto
+   */
+  index?: number;
+  /**
+   * Stage title. `null` on the chunk that opens the stage, before the name streams in
+   * @type {string}
+   * @memberof StageDto
+   */
+  name?: string;
+  /**
+   * Stage text content
+   * @type {string}
+   * @memberof StageDto
+   */
+  content?: string;
+  /**
+   * Terminal state of the stage. Absent or `null` while the stage is still running
+   * @type {string}
+   * @memberof StageDto
+   */
+  status?: StageDtoStatusEnum | null;
+  /**
+   * Short source/category label shown beside the stage name (e.g. `MCP`)
+   * @type {string}
+   * @memberof StageDto
+   */
+  tag?: string;
+  /**
+   * Files produced or referenced by this stage
+   * @type {Array<StageAttachmentDto>}
+   * @memberof StageDto
+   */
+  attachments?: Array<StageAttachmentDto>;
+}
+
+/**
+ * @export
+ */
+export const StageDtoStatusEnum = {
+  Completed: 'completed',
+  Failed: 'failed',
+} as const;
+export type StageDtoStatusEnum =
+  (typeof StageDtoStatusEnum)[keyof typeof StageDtoStatusEnum];
 
 /**
  *
@@ -5704,7 +6992,7 @@ export interface ToolsetBodyDto {
    */
   description?: string;
   /**
-   *
+   * An absolute https?:// URL, or a DIAL file id (files/{bucket}/{path}) picked through the file manager.
    * @type {string}
    * @memberof ToolsetBodyDto
    */
@@ -5812,6 +7100,12 @@ export interface ToolsetDetailsDto {
    */
   features?: DeploymentFeaturesDetailsDto;
   /**
+   *
+   * @type {ModelCatalogPropertiesDto}
+   * @memberof ToolsetDetailsDto
+   */
+  catalogProperties?: ModelCatalogPropertiesDto;
+  /**
    * Timestamp of creation time from DIAL Core (e.g. 1714768496000)
    * @type {number}
    * @memberof ToolsetDetailsDto
@@ -5860,6 +7154,12 @@ export interface ToolsetLoginBodyDto {
    * @memberof ToolsetLoginBodyDto
    */
   redirectUri?: string;
+  /**
+   * Whether the user consents to an application using this credential while they are offline. Required for on-behalf-of use (e.g. scheduled runs).
+   * @type {boolean}
+   * @memberof ToolsetLoginBodyDto
+   */
+  offlineUsageConsent?: boolean;
 }
 
 /**
@@ -5980,6 +7280,126 @@ export interface TranscribeAudioDto {
 /**
  *
  * @export
+ * @interface UnpublishCatalogEntityDto
+ */
+export interface UnpublishCatalogEntityDto {
+  /**
+   * Published folder to submit the removal request for, in the same plain form the publish endpoint accepts. Empty means the public root.
+   * @type {string}
+   * @memberof UnpublishCatalogEntityDto
+   */
+  folderPath: string;
+  /**
+   * Optional version label, echoed in the response and in DIAL Core's request name so the admin queue shows which version's publication is being reversed. When omitted, versioned resource ids recover it from their {name}__{version} suffix; unversioned Prompt and Skill resources use an empty version.
+   * @type {string}
+   * @memberof UnpublishCatalogEntityDto
+   */
+  version?: string;
+}
+/**
+ *
+ * @export
+ * @interface UnpublishConversationDto
+ */
+export interface UnpublishConversationDto {
+  /**
+   * Published folder to submit the removal request for, in the same plain form the publish endpoint accepts. Empty means the public root.
+   * @type {string}
+   * @memberof UnpublishConversationDto
+   */
+  folderPath: string;
+}
+/**
+ *
+ * @export
+ * @interface UnpublishConversationResultDto
+ */
+export interface UnpublishConversationResultDto {
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishConversationResultDto
+   */
+  path: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishConversationResultDto
+   */
+  folderPath: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishConversationResultDto
+   */
+  requestedAt: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishConversationResultDto
+   */
+  requestedBy: string;
+}
+/**
+ *
+ * @export
+ * @interface UnpublishResultDto
+ */
+export interface UnpublishResultDto {
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishResultDto
+   */
+  entityId: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishResultDto
+   */
+  entityType: UnpublishResultDtoEntityTypeEnum;
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishResultDto
+   */
+  folderPath: string;
+  /**
+   * Empty for unversioned Prompt and Skill resources.
+   * @type {string}
+   * @memberof UnpublishResultDto
+   */
+  version: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishResultDto
+   */
+  requestedAt: string;
+  /**
+   *
+   * @type {string}
+   * @memberof UnpublishResultDto
+   */
+  requestedBy: string;
+}
+
+/**
+ * @export
+ */
+export const UnpublishResultDtoEntityTypeEnum = {
+  Model: 'model',
+  Toolset: 'toolset',
+  Application: 'application',
+  Prompt: 'prompt',
+  Skill: 'skill',
+} as const;
+export type UnpublishResultDtoEntityTypeEnum =
+  (typeof UnpublishResultDtoEntityTypeEnum)[keyof typeof UnpublishResultDtoEntityTypeEnum];
+
+/**
+ *
+ * @export
  * @interface UpdateApplicationBodyDto
  */
 export interface UpdateApplicationBodyDto {
@@ -5996,7 +7416,7 @@ export interface UpdateApplicationBodyDto {
    */
   description?: string;
   /**
-   *
+   * An absolute https?:// URL, or a DIAL file id (files/{bucket}/{path}) picked through the file manager.
    * @type {string}
    * @memberof UpdateApplicationBodyDto
    */
@@ -6038,6 +7458,12 @@ export interface UpdateApplicationBodyDto {
    */
   maxInputAttachments?: number;
   /**
+   * When supplied, fully replaces the stored Settings-step configuration (application_properties). Omit, or send null, to leave it unchanged.
+   * @type {object}
+   * @memberof UpdateApplicationBodyDto
+   */
+  applicationProperties?: object;
+  /**
    *
    * @type {Array<LocaleTextEntryDto>}
    * @memberof UpdateApplicationBodyDto
@@ -6076,7 +7502,7 @@ export interface UpdateInstalledDto {
  */
 export interface UpdateInstalledPromptDto {
   /**
-   * Prompt path within the prompts namespace.
+   * Full prompt resource path (`prompts/{bucket}/{path}`).
    * @type {string}
    * @memberof UpdateInstalledPromptDto
    */
@@ -6085,6 +7511,25 @@ export interface UpdateInstalledPromptDto {
    * Pass `true` to favorite the prompt, `false` to unfavorite it.
    * @type {boolean}
    * @memberof UpdateInstalledPromptDto
+   */
+  isInstalled: boolean;
+}
+/**
+ *
+ * @export
+ * @interface UpdateInstalledSkillDto
+ */
+export interface UpdateInstalledSkillDto {
+  /**
+   * Full skill resource URL.
+   * @type {string}
+   * @memberof UpdateInstalledSkillDto
+   */
+  id: string;
+  /**
+   * Pass `true` to favorite the skill, `false` to unfavorite it.
+   * @type {boolean}
+   * @memberof UpdateInstalledSkillDto
    */
   isInstalled: boolean;
 }
@@ -6263,6 +7708,12 @@ export interface UpdatedScheduledTaskDto {
   isActive?: boolean;
   /**
    *
+   * @type {boolean}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  isDeleted?: boolean;
+  /**
+   *
    * @type {string}
    * @memberof UpdatedScheduledTaskDto
    */
@@ -6377,6 +7828,49 @@ export interface UserConfigDto {
    * @memberof UserConfigDto
    */
   prompts: PromptsConfigDto;
+  /**
+   *
+   * @type {SkillsConfigDto}
+   * @memberof UserConfigDto
+   */
+  skills: SkillsConfigDto;
+}
+/**
+ *
+ * @export
+ * @interface UserLimitStatsResponseDto
+ */
+export interface UserLimitStatsResponseDto {
+  /**
+   * Per-deployment rate-limit and calendar-period usage stats, keyed by deployment name. Models only — applications, toolsets, and routes never appear here. On GET /v1/user/limits every deployment visible to the caller is present, including ones never used (reported against zero usage). On GET /v1/user/usage only deployments the caller used within the currently reported calendar periods are present; absence means zero usage, not "unknown".
+   * @type {{ [key: string]: DeploymentLimitsResponseDto; }}
+   * @memberof UserLimitStatsResponseDto
+   */
+  deployments?: { [key: string]: DeploymentLimitsResponseDto };
+  /**
+   * The caller's global cost budget for the current UTC minute and spend against it. Unlike the identically-named field nested inside a `deployments` entry (that is per-deployment attributed spend whose `total` is the unlimited sentinel in every payload observed to date; consumers detect the sentinel rather than assume it), this is the caller's actual money budget. A `total` at or above 9007199254740992 (2^53) represents the upstream "unlimited" sentinel (`Long.MAX_VALUE`, which exceeds `Number.MAX_SAFE_INTEGER`) and must be treated as unlimited rather than rendered as a used/total ratio.
+   * @type {LimitStatsDto}
+   * @memberof UserLimitStatsResponseDto
+   */
+  minuteCostStats?: LimitStatsDto;
+  /**
+   * The caller's global cost budget for the current UTC day and spend against it. See minuteCostStats for the unlimited-sentinel and global-vs-per-deployment scope notes.
+   * @type {LimitStatsDto}
+   * @memberof UserLimitStatsResponseDto
+   */
+  dayCostStats?: LimitStatsDto;
+  /**
+   * The caller's global cost budget for the current UTC week and spend against it. See minuteCostStats for the unlimited-sentinel and global-vs-per-deployment scope notes.
+   * @type {LimitStatsDto}
+   * @memberof UserLimitStatsResponseDto
+   */
+  weekCostStats?: LimitStatsDto;
+  /**
+   * The caller's global cost budget for the current UTC month and spend against it. See minuteCostStats for the unlimited-sentinel and global-vs-per-deployment scope notes.
+   * @type {LimitStatsDto}
+   * @memberof UserLimitStatsResponseDto
+   */
+  monthCostStats?: LimitStatsDto;
 }
 /**
  *

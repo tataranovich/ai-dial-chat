@@ -1,12 +1,10 @@
+import type { FilterTab } from '@epam/ai-dial-chat-shared';
 import type { DropdownItem } from '@epam/ai-dial-ui-kit';
-import type { FilterTab } from '../types/conversation-classification';
 import { VirtualRowKind } from '../types/virtual-row';
 import type { ConversationItem } from './panel-props';
 
-export { VirtualRowKind };
-
 /** A collapsible group header row in the virtual list. */
-export interface GroupHeaderRow {
+interface GroupHeaderRow {
   /** Row discriminant. */
   kind: VirtualRowKind.Header;
   /** Identifies which group this header belongs to. */
@@ -16,7 +14,7 @@ export interface GroupHeaderRow {
 }
 
 /** A single conversation item row in the virtual list. */
-export interface ConversationItemRow {
+interface ConversationItemRow {
   /** Row discriminant. */
   kind: VirtualRowKind.Item;
   /** The conversation to render. */
@@ -29,7 +27,7 @@ export interface ConversationItemRow {
 export type VirtualRow = GroupHeaderRow | ConversationItemRow;
 
 /** Typography/class overrides applied to virtual row elements. */
-export interface RowStyles {
+interface RowStyles {
   /** Typography class applied to group header buttons. */
   groupHeaderClassName?: string;
   /** Typography class applied to conversation title text. */

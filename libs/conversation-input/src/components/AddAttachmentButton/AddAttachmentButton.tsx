@@ -8,12 +8,14 @@ import {
 import {
   BASE_ICON_SIZE,
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   Dropdown,
   ElementSize,
   GhostIconButton,
+  MenuItemMark,
 } from '@epam/ai-dial-ui-kit';
 import {
-  IconCheck,
+  IconMicrophone,
   IconChevronRight,
   IconPaperclip,
   IconPlus,
@@ -27,15 +29,16 @@ import {
   useMemo,
   useState,
 } from 'react';
-import type { ChatSettingsConfig } from '../../models/Input';
+import type { ChatSettingsConfig, MenuOverlayConfig } from '../../models/Input';
 import { BottomSheet } from '../BottomSheet/BottomSheet';
+import { BottomSheetShell } from '../BottomSheetShell/BottomSheetShell';
 import { ChatSettingsBottomSheet } from '../ChatSettingsBottomSheet/ChatSettingsBottomSheet';
 import { ChatSettingsModal } from '../ChatSettingsModal/ChatSettingsModal';
 import { ToolsBottomSheet } from '../ToolsBottomSheet/ToolsBottomSheet';
 import styles from './AddAttachmentButton.module.scss';
 
 /** A single item injected into the attachment menu by the host app. */
-export interface ExtraMenuItem {
+interface ExtraMenuItem {
   /** Unique key for the item. */
   key: string;
   /** Display label. */
@@ -50,6 +53,10 @@ export interface ExtraMenuItem {
 interface AddAttachmentButtonProps {
   /** Callback invoked when the user picks "Attach file". When absent, the "Attach file" item is not rendered. */
   onAttachClick?: () => void;
+  /** Starts recording an audio attachment immediately, before the settings item. */
+  onRecordVoice?: () => void;
+  /** Label for the audio recording item. Defaults to 'Record voice'. */
+  recordVoiceLabel?: string;
   /** Label for the "Attach file" menu item. */
   attachLabel: string;
   /** Aria-label for the + trigger button. */
@@ -60,7 +67,7 @@ interface AddAttachmentButtonProps {
   menuCloseLabel: string;
   /** CSS custom-property overrides forwarded to the mobile BottomSheet. */
   style?: CSSProperties;
-  /** Width class applied to the desktop dropdown list. Defaults to `'!w-[240px]'`. */
+  /** Width class applied to the desktop dropdown list. Defaults to `'w-[240px]'`. */
   listClassName?: string;
   /** When `true`, the trigger button is disabled and the menu cannot open. */
   isDisabled?: boolean;
@@ -76,14 +83,23 @@ interface AddAttachmentButtonProps {
   toolsMenuTitle?: string;
   /** Accessible label for the back arrow in the mobile tools bottom sheet. Defaults to `'Back'`. */
   toolsBackLabel?: string;
+  /**
+   * Host-injected overlay entries, rendered as menu items between the
+   * "Tools" item and "Chat settings", in array order. Each item's submenu
+   * (desktop flyout / mobile stacked bottom sheet) renders the entry's
+   * host-owned overlay. On desktop this is a real nested `Dropdown` submenu
+   * (via `renderSubMenu`) that stays open alongside the main attachment
+   * menu, mirroring how the "Tools" item's submenu behaves. Each overlay's
+   * `renderOverlay` receives a callback to close the whole menu once
+   * selection is complete.
+   */
+  menuOverlays?: MenuOverlayConfig[];
   /** Color overrides. */
   colors?: AddAttachmentButtonColors;
 }
 
 /** Color overrides for `AddAttachmentButton`, applied as CSS custom properties with app theme fallbacks. */
-export interface AddAttachmentButtonColors {
-  /** Checkmark icon color for a selected tool in the Tools submenu. Fallback: `--text-accent`. */
-  selectedToolIcon?: string;
+interface AddAttachmentButtonColors {
   /** Icon color for each tool row in the Tools submenu. Fallback: `--text-secondary`. */
   toolIcon?: string;
   /** Chevron icon color on the mobile "Tools"/"Chat settings" rows. Fallback: `--text-secondary`. */
@@ -93,6 +109,8 @@ export interface AddAttachmentButtonColors {
 /** "+" trigger button that opens an attachment/settings menu (desktop dropdown or mobile bottom sheet). */
 export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
   onAttachClick,
+  onRecordVoice,
+  recordVoiceLabel = 'Record voice',
   attachLabel,
   addMenuTitle,
   menuTitle,
@@ -106,42 +124,35 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
   onToolToggle,
   toolsMenuTitle = 'Tools',
   toolsBackLabel = 'Back',
+  menuOverlays,
   colors,
 }) => {
   const isMobile = useIsMobile();
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [isChatSettingsOpen, setIsChatSettingsOpen] = useState(false);
   const [isToolsSheetOpen, setIsToolsSheetOpen] = useState(false);
+  const [openMenuOverlayKey, setOpenMenuOverlayKey] = useState<string | null>(
+    null,
+  );
+  const [isDesktopMenuOpen, setIsDesktopMenuOpen] = useState(false);
 
   const cssVars = useMemo(
     () =>
       buildCssVars({
-        '--aab-selected-tool-icon': colors?.selectedToolIcon,
         '--aab-tool-icon': colors?.toolIcon,
         '--aab-chevron-icon': colors?.chevronIcon,
       }),
-    [colors?.selectedToolIcon, colors?.toolIcon, colors?.chevronIcon],
+    [colors?.toolIcon, colors?.chevronIcon],
   );
 
   const hasTools = toolsMenuItems.length > 0 && onToolToggle != null;
+  const hasMenuOverlays = menuOverlays != null && menuOverlays.length > 0;
 
   const toolsSubmenuChildren = useMemo(
     () =>
       toolsMenuItems.map((item) => ({
         key: item.id,
-        label: (
-          <span className="flex flex-1 items-center gap-2">
-            <span className="flex-1">{item.label}</span>
-            {item.isSelected && (
-              <IconCheck
-                size={BASE_ICON_SIZE}
-                style={cssVars}
-                className={styles.selectedToolIcon}
-                aria-hidden
-              />
-            )}
-          </span>
-        ),
+        label: item.label,
         icon: (
           <span
             style={cssVars}
@@ -150,6 +161,9 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
             {item.icon}
           </span>
         ),
+        selectable: true,
+        mark: MenuItemMark.Check,
+        checked: item.isSelected,
         onClick: () => onToolToggle?.(item.id),
       })),
     [toolsMenuItems, onToolToggle, cssVars],
@@ -162,7 +176,13 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
             {
               key: 'attach',
               label: attachLabel,
-              icon: <IconPaperclip size={BASE_ICON_SIZE} aria-hidden />,
+              icon: (
+                <IconPaperclip
+                  size={BASE_ICON_SIZE}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              ),
               onClick: onAttachClick,
             },
           ]
@@ -173,7 +193,13 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
             {
               key: 'tools',
               label: toolsMenuTitle,
-              icon: <IconTool size={BASE_ICON_SIZE} aria-hidden />,
+              icon: (
+                <IconTool
+                  size={BASE_ICON_SIZE}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              ),
               onClick: isMobile
                 ? () => {
                     setIsToolsSheetOpen(true);
@@ -185,7 +211,7 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
                     iconAfter: (
                       <IconChevronRight
                         size={BASE_ICON_SIZE}
-                        stroke={1.5}
+                        stroke={DIAL_KIT_ICON_STROKE}
                         style={cssVars}
                         className={mergeClasses(
                           'rtl:scale-x-[-1]',
@@ -201,16 +227,81 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
             },
           ]
         : []),
+      ...(menuOverlays ?? []).map((overlay) => ({
+        key: overlay.key,
+        label: overlay.title,
+        icon: overlay.icon,
+        onClick: isMobile
+          ? () => {
+              setOpenMenuOverlayKey(overlay.key);
+              setIsSheetOpen(false);
+            }
+          : () => undefined,
+        ...(isMobile
+          ? {
+              iconAfter: (
+                <IconChevronRight
+                  size={BASE_ICON_SIZE}
+                  stroke={DIAL_KIT_ICON_STROKE}
+                  style={cssVars}
+                  className={mergeClasses(
+                    'rtl:scale-x-[-1]',
+                    styles.chevronIcon,
+                  )}
+                  aria-hidden
+                />
+              ),
+            }
+          : {
+              /*
+               * The ui-kit only treats an item as submenu-capable (caret,
+               * hover/keyboard open, floating panel) when `children` is a
+               * non-empty array; `renderSubMenu` alone does not open a
+               * submenu, it only overrides what's rendered *inside* one
+               * once that gate passes. This placeholder is never rendered
+               * (renderSubMenu fully replaces the submenu content).
+               */
+              children: [{ key: `${overlay.key}-panel`, label: '' }],
+              renderSubMenu: () =>
+                overlay.renderOverlay(() => setIsDesktopMenuOpen(false)),
+            }),
+      })),
+      ...(onRecordVoice != null
+        ? [
+            {
+              key: 'record-voice',
+              label: recordVoiceLabel,
+              icon: (
+                <IconMicrophone
+                  size={BASE_ICON_SIZE}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              ),
+              onClick: () => {
+                setIsSheetOpen(false);
+                setIsDesktopMenuOpen(false);
+                onRecordVoice();
+              },
+            },
+          ]
+        : []),
       ...(chatSettings != null
         ? [
             {
               key: 'chat-settings',
               label: chatSettings.menuItemLabel ?? 'Chat settings',
-              icon: <IconSettings size={BASE_ICON_SIZE} aria-hidden />,
+              icon: (
+                <IconSettings
+                  size={BASE_ICON_SIZE}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              ),
               iconAfter: isMobile ? (
                 <IconChevronRight
                   size={BASE_ICON_SIZE}
-                  stroke={1.5}
+                  stroke={DIAL_KIT_ICON_STROKE}
                   style={cssVars}
                   className={mergeClasses(
                     'rtl:scale-x-[-1]',
@@ -227,24 +318,57 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
     [
       attachLabel,
       onAttachClick,
+      onRecordVoice,
+      recordVoiceLabel,
       chatSettings,
       extraMenuItems,
       isMobile,
       hasTools,
       toolsMenuTitle,
       toolsSubmenuChildren,
+      menuOverlays,
       cssVars,
     ],
   );
 
   if (menuItems.length === 0) return null;
 
+  const desktopTrigger = (
+    <Dropdown
+      matchReferenceWidth={false}
+      placement="bottom-start"
+      listClassName={listClassName}
+      items={menuItems}
+      open={hasMenuOverlays ? isDesktopMenuOpen : undefined}
+      onOpenChange={hasMenuOverlays ? setIsDesktopMenuOpen : undefined}
+    >
+      <GhostIconButton
+        icon={
+          <IconPlus
+            size={DIAL_ICON_SIZE.LG}
+            aria-hidden
+            stroke={DIAL_KIT_ICON_STROKE}
+          />
+        }
+        aria-label={addMenuTitle}
+        tooltipProps={{ tooltip: addMenuTitle }}
+        disabled={isDisabled}
+      />
+    </Dropdown>
+  );
+
   return (
     <>
       {isMobile ? (
         <>
           <GhostIconButton
-            icon={<IconPlus size={DIAL_ICON_SIZE.LG} aria-hidden />}
+            icon={
+              <IconPlus
+                size={DIAL_ICON_SIZE.LG}
+                aria-hidden
+                stroke={DIAL_KIT_ICON_STROKE}
+              />
+            }
             aria-label={addMenuTitle}
             size={ElementSize.Large}
             tooltipProps={{ tooltip: addMenuTitle }}
@@ -277,6 +401,23 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
               onToolToggle={onToolToggle}
             />
           )}
+          {menuOverlays?.map((overlay) => (
+            <BottomSheetShell
+              key={overlay.key}
+              isOpen={openMenuOverlayKey === overlay.key}
+              title={overlay.title}
+              closeLabel={menuCloseLabel}
+              onBack={() => {
+                setOpenMenuOverlayKey(null);
+                setIsSheetOpen(true);
+              }}
+              backLabel={overlay.backLabel ?? 'Back'}
+              onClose={() => setOpenMenuOverlayKey(null)}
+              style={style}
+            >
+              {overlay.renderOverlay(() => setOpenMenuOverlayKey(null))}
+            </BottomSheetShell>
+          ))}
           {chatSettings != null && (
             <ChatSettingsBottomSheet
               isOpen={isChatSettingsOpen}
@@ -316,19 +457,7 @@ export const AddAttachmentButton: FC<AddAttachmentButtonProps> = ({
         </>
       ) : (
         <>
-          <Dropdown
-            matchReferenceWidth={false}
-            placement="bottom-start"
-            listClassName={listClassName}
-            items={menuItems}
-          >
-            <GhostIconButton
-              icon={<IconPlus size={DIAL_ICON_SIZE.LG} aria-hidden />}
-              aria-label={addMenuTitle}
-              tooltipProps={{ tooltip: addMenuTitle }}
-              disabled={isDisabled}
-            />
-          </Dropdown>
+          {desktopTrigger}
 
           {chatSettings != null && isChatSettingsOpen && (
             <ChatSettingsModal

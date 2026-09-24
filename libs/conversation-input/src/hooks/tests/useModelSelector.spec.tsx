@@ -1,7 +1,8 @@
 import type { DeploymentItem } from '@epam/ai-dial-chat-shared';
-import { act, renderHook } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { CONVERSATION_INPUT_CLASS } from '../../constants/public-class-names';
 import { useModelSelector } from '../useModelSelector';
 
 const mockDeployments = [
@@ -182,11 +183,28 @@ describe('useModelSelector — menuItems', () => {
       { initialProps: { selectedDeploymentId: 'gpt-4o' } },
     );
 
-    expect(result.current.menuItems[1].className).toBeUndefined();
+    /*
+     * Every row carries the public `modelMenuItem` class; only the selected one
+     * additionally carries `modelMenuItemSelected`.
+     */
+    expect(result.current.menuItems[0].className).toContain(
+      CONVERSATION_INPUT_CLASS.modelMenuItemSelected,
+    );
+    expect(result.current.menuItems[1].className).toContain(
+      CONVERSATION_INPUT_CLASS.modelMenuItem,
+    );
+    expect(result.current.menuItems[1].className).not.toContain(
+      CONVERSATION_INPUT_CLASS.modelMenuItemSelected,
+    );
 
     rerender({ selectedDeploymentId: 'claude-3' });
 
-    expect(result.current.menuItems[0].className).toBeUndefined();
+    expect(result.current.menuItems[1].className).toContain(
+      CONVERSATION_INPUT_CLASS.modelMenuItemSelected,
+    );
+    expect(result.current.menuItems[0].className).not.toContain(
+      CONVERSATION_INPUT_CLASS.modelMenuItemSelected,
+    );
   });
 
   it('item onClick calls onDeploymentChange with item id', () => {
@@ -236,15 +254,13 @@ describe('useModelSelector — search filtering', () => {
         deployments: mockDeployments,
       }),
     );
-    act(() => {
-      /*
-       * Simulate search by closing and re-opening would not work in isolation;
-       * instead we access the internal setter via onOpenChange side-effect.
-       * We need to trigger the search — the hook exposes no direct setter,
-       * so we test filtering indirectly via DialSearch onChange in integration.
-       * Here we verify the baseline (no query) returns all items.
-       */
-    });
+    /*
+     * Simulate search by closing and re-opening would not work in isolation;
+     * instead we access the internal setter via onOpenChange side-effect.
+     * We need to trigger the search — the hook exposes no direct setter,
+     * so we test filtering indirectly via Search onChange in integration.
+     * Here we verify the baseline (no query) returns all items.
+     */
     expect(result.current.menuItems).toHaveLength(3);
   });
 });

@@ -15,9 +15,15 @@ import type {
   SetTemperatureResponse,
 } from '../protocol';
 import { ChatOverlay } from './ChatOverlay';
-import { setStyles } from './internal/dom-styles';
+import { injectStyleSheet, setStyles } from './internal/dom-styles';
 
-const MOBILE_BREAKPOINT_PX = 768;
+/*
+ * Mirrors MOBILE_MAX_WIDTH_PX from @epam/ai-dial-chat-shared's breakpoint
+ * constants — this package has no dependencies, so the value is repeated
+ * here and pinned to the constant by
+ * apps/chat/src/hooks/breakpoint/breakpoint-sync.spec.ts.
+ */
+const MOBILE_BREAKPOINT_PX = 1279;
 const DEFAULT_WIDTH = 380;
 const DEFAULT_HEIGHT = 600;
 const DEFAULT_Z_INDEX = 999999;
@@ -32,13 +38,13 @@ const ICON_FULLSCREEN =
 
 const STYLE_ELEMENT_ID = 'dial-overlay-manager-styles';
 
-const ensureManagerStylesInjected = (): void => {
-  if (document.getElementById(STYLE_ELEMENT_ID)) {
-    return;
-  }
-  const style = document.createElement('style');
-  style.id = STYLE_ELEMENT_ID;
-  style.textContent = `
+/*
+ * The chrome palette is read through custom properties with literal fallbacks,
+ * so a host retheming the toggle sets `--dial-overlay-btn-*` on any ancestor
+ * instead of overriding the injected source order. See `OverlayCssVariable`
+ * for the loader's equivalent knobs.
+ */
+const MANAGER_CSS = `
 .dial-overlay-btn {
   display: inline-flex;
   align-items: center;
@@ -48,17 +54,19 @@ const ensureManagerStylesInjected = (): void => {
   border: none;
   border-radius: 999px;
   cursor: pointer;
-  background: #2764d9;
-  color: #ffffff;
+  background: var(--dial-overlay-btn-background, #2764d9);
+  color: var(--dial-overlay-btn-color, #ffffff);
 }
 .dial-overlay-btn:hover,
 .dial-overlay-btn:focus-visible {
-  background: #1d4fb8;
-  outline: 2px solid #1d4fb8;
+  background: var(--dial-overlay-btn-background-hover, #1d4fb8);
+  outline: 2px solid var(--dial-overlay-btn-outline, #1d4fb8);
   outline-offset: 2px;
 }
 `;
-  document.head.appendChild(style);
+
+const ensureManagerStylesInjected = (): void => {
+  injectStyleSheet(STYLE_ELEMENT_ID, MANAGER_CSS);
 };
 
 const createButton = (

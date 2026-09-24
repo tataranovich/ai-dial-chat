@@ -1,14 +1,15 @@
-import type { CatalogEntityType } from '../types/entity-type';
+import type { CatalogEntityType } from '@epam/ai-dial-chat-shared';
+import type { ListViewColumnVisibility } from '../components/ListView/columns';
 import { CatalogItem } from './catalog-item';
 /** Typography class overrides for `ListView` cells. */
 export interface ListViewTypography {
-  /** Typography class for item name text. Default: `'dial-h3-text'`. */
+  /** Typography class for item name text. Default: `'dial-small-semi-text'`. */
   nameClassName?: string;
   /** Typography class for item version text. Default: `'dial-tiny-text'`. */
   versionClassName?: string;
-  /** Typography class for folder path text. Default: `'dial-small-text'`. */
+  /** Typography class for the full folder path shown in the folder cell's tooltip. Default: `'dial-small-text'`. */
   folderClassName?: string;
-  /** Typography class for the last (deepest) folder segment. Default: `'dial-small-semi-text'`. */
+  /** Typography class for the last (deepest) folder segment, the one the folder cell displays. Default: `'dial-small-semi-text'`. */
   folderLastSegmentClassName?: string;
 }
 
@@ -24,11 +25,13 @@ export interface ListViewColors {
   rowDivider?: string;
   /** Color of the filled star icon in the favorite column. Fallback: `--text-warning-icon`. */
   starFilled?: string;
+  /** Color of the folder icon in the folder column. Fallback: `--text-secondary`. */
+  folderIcon?: string;
   /** Background color of even-indexed grid rows. Fallback: `--bg-layer-base`. */
   rowEvenBackground?: string;
-  /** Border color of the selected row. Fallback: `--stroke-info`. */
+  /** Border color of the selected row. Fallback: `--stroke-accent`. */
   selectedRowBorder?: string;
-  /** Background color (tint) of the selected row. Fallback: `--bg-accent-primary-alpha`. */
+  /** Background color (tint) of the selected row. Fallback: `--bg-control-accent-alpha-active`. */
   selectedRowBackground?: string;
   /** Color of the checkmark icon in the selected row's name cell. Fallback: `--text-accent`. */
   selectedRowCheckIcon?: string;
@@ -58,6 +61,8 @@ export interface ListViewProps {
   styles?: ListViewStyles;
   /** Called when the star icon is toggled on a row. */
   onToggleFavorite?: (id: string, isStarred: boolean) => void;
+  /** Rule for whether the favorite star is shown on a row; `false` hides it and makes the item non-favoritable. Defaults to visible when omitted. */
+  isFavoriteVisible?: (item: CatalogItem) => boolean;
   /** Called when a table row is clicked (excluding the star column). */
   onItemClick?: (item: CatalogItem) => void;
   /**
@@ -69,6 +74,17 @@ export interface ListViewProps {
   stickyHeaderTop?: number;
   /** ID of an item to visually mark as selected (border, tint, and checkmark). */
   selectedItemId?: string;
-  /** Credentials-status badge label shown when signed out. Default: `'LOGGED OUT'`. */
+  /** Accessible label for the logged-out warning icon on the entity avatar, and the text shown in its hover tooltip. Default: `'Authorize to use this toolset.'`. */
   credentialsBadgeLoggedOutLabel?: string;
+  /** Renders the list read-only: the "Favorite" column is dropped entirely. Default: false. */
+  isReadonly?: boolean;
+  /**
+   * Per-column overrides for whether an optional column (`folder`, `tags`,
+   * `favorite`) renders for the active tab, given its entity `type`.
+   * Independent of `isFavoriteVisible` (which only gates the star on
+   * individual rows, not the column). Replaces that column's built-in
+   * default rule; columns omitted from this map keep their default.
+   * `favorite` is additionally combined (AND) with `isReadonly`.
+   */
+  columnVisibility?: ListViewColumnVisibility;
 }

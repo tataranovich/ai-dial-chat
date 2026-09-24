@@ -8,14 +8,18 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { SessionUser } from '../auth/session/session.types';
-import { getUserDisplayName } from '../common/utils/user-display-name';
+import {
+  getUserDisplayName,
+  resolveDisplayAuthor,
+} from '../common/utils/user-display-name';
 import { CatalogEntityParamsDto } from './dto/catalog-entity-params.dto';
 import { PublishCatalogEntityDto } from './dto/publish-catalog-entity.dto';
 import { PublishHistoryEntryDto } from './dto/publish-history-entry.dto';
 import { PublishResultDto } from './dto/publish-result.dto';
+import { UnpublishCatalogEntityDto } from './dto/unpublish-catalog-entity.dto';
+import { UnpublishResultDto } from './dto/unpublish-result.dto';
 import { PublishService } from './publish.service';
 
 /** Controller for publishing catalog entities to an Organization folder and reading their publish history, both proxied through DIAL Core's Publication API. */
@@ -26,14 +30,19 @@ export class PublishController {
 
   @Post(':entityType/:entityId/publish')
   @HttpCode(201)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({
     operationId: 'publishCatalogEntity',
     summary: 'Publish a catalog entity to an Organization folder',
     description:
-      'Publishes a catalog entity (Toolset or Application) to a folder under the Organization/public ' +
+      'Publishes a catalog entity (Toolset, Application, Prompt, or Skill) to a folder under the Organization/public ' +
       "bucket by proxying DIAL Core's Publication API (`createPublication`). This endpoint keeps no " +
-      'publish records of its own — DIAL Core is the sole source of truth.',
+      'publish records of its own — DIAL Core is the sole source of truth. The optional `author` sets the ' +
+      "publication's displayed author (the catalog's **Hosted by** value); when it is omitted or blank the " +
+      "caller's own session display name is used, as it always was. The optional `publishCredentials` flag asks " +
+      "Core to copy the publisher's own credential for the entity onto the published copy, so members of the " +
+      'organization use it without authorising individually; it is forwarded unchanged and changes no ' +
+      'authorization — Core still derives the actor from the bearer token, enforces target-folder write access, ' +
+      'and holds the publication PENDING until an administrator approves it.',
   })
   @ApiBody({ type: PublishCatalogEntityDto })
   @ApiResponse({
@@ -44,7 +53,7 @@ export class PublishController {
   @ApiResponse({
     status: 400,
     description:
-      'Validation error — invalid entityType, entityId, or folderPath',
+      'Validation error — invalid entityType, entityId, folderPath, version, or rules',
   })
   @ApiResponse({
     status: 401,
@@ -54,7 +63,6 @@ export class PublishController {
     status: 403,
     description: 'Caller lacks write access to the target folder',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -66,23 +74,92 @@ export class PublishController {
   publish(
     @Req() req: Request,
     @Param() { entityType, entityId }: CatalogEntityParamsDto,
-    @Body() { folderPath, version, rules }: PublishCatalogEntityDto,
+    @Body()
+    {
+      folderPath,
+      version,
+      author,
+      rules,
+      publishCredentials,
+    }: PublishCatalogEntityDto,
   ): Promise<PublishResultDto> {
-    const { at, claims } = req.user as SessionUser;
+    const { at, bucket, claims } = req.user as SessionUser;
     return this.publishService.publish(
       at,
+      bucket,
+      entityType,
+      entityId,
+      folderPath,
+      version,
+      resolveDisplayAuthor(author, claims),
+      rules,
+      publishCredentials,
+    );
+  }
+
+  @Post(':entityType/:entityId/unpublish')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'unpublishCatalogEntity',
+    summary: 'Request removal of a published catalog entity from a folder',
+    description:
+      'Submits a removal request for one already-published folder of a catalog entity (Toolset, Application, ' +
+      "Prompt, or Skill) by proxying DIAL Core's Publication API (`createPublication`) with a single " +
+      '`DELETE`-action resource. **The removal takes effect only after an administrator approves the ' +
+      'request.** Until then the published copy stays visible to everyone who could already see it, and the ' +
+      'folder continues to appear in the entity’s publish history. This endpoint keeps no records of its ' +
+      'own — DIAL Core is the sole source of truth.',
+  })
+  @ApiBody({ type: UnpublishCatalogEntityDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Unpublish request submitted for administrator approval',
+    type: UnpublishResultDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Validation error — invalid entityType, entityId, folderPath, or version',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Not authenticated — valid session cookie required',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Caller lacks write access to the target folder',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'DIAL Core reports the entity or target folder as unknown',
+  })
+  @ApiResponse({
+    status: 502,
+    description: 'DIAL Core returned an error response',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'DIAL Core is unavailable or timed out',
+  })
+  unpublish(
+    @Req() req: Request,
+    @Param() { entityType, entityId }: CatalogEntityParamsDto,
+    @Body() { folderPath, version }: UnpublishCatalogEntityDto,
+  ): Promise<UnpublishResultDto> {
+    const { at, bucket, claims } = req.user as SessionUser;
+    return this.publishService.unpublish(
+      at,
+      bucket,
       entityType,
       entityId,
       folderPath,
       version,
       getUserDisplayName(claims),
-      rules,
     );
   }
 
   @Get(':entityType/:entityId/publish-history')
   @HttpCode(200)
-  @Throttle({ default: { limit: 60, ttl: 60000 } })
   @ApiOperation({
     operationId: 'getCatalogPublishHistory',
     summary: 'Get publish history for a catalog entity',
@@ -104,7 +181,6 @@ export class PublishController {
     status: 401,
     description: 'Not authenticated — valid session cookie required',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -117,7 +193,12 @@ export class PublishController {
     @Req() req: Request,
     @Param() { entityType, entityId }: CatalogEntityParamsDto,
   ): Promise<PublishHistoryEntryDto[]> {
-    const { at } = req.user as SessionUser;
-    return this.publishService.getPublishHistory(at, entityType, entityId);
+    const { at, bucket } = req.user as SessionUser;
+    return this.publishService.getPublishHistory(
+      at,
+      bucket,
+      entityType,
+      entityId,
+    );
   }
 }

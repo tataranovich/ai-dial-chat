@@ -7,6 +7,7 @@ import { ScheduledTaskRunStatus } from '../../../types/scheduled-task-run-status
 import { ScheduledTaskRunHistoryList } from '../ScheduledTaskRunHistoryList';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   Spinner: () => <div role="progressbar" />,
   Skeleton: (props: Record<string, unknown>) => (
@@ -26,6 +27,7 @@ vi.mock('@tabler/icons-react', () => ({
   IconCircleCheck: () => <svg data-icon="success" />,
   IconCircleX: () => <svg data-icon="error" />,
   IconAlertTriangle: () => <svg data-icon="missed" />,
+  IconClipboardX: () => <svg data-icon="empty" />,
 }));
 
 const labels: ScheduledTaskRunHistoryListLabels = {
@@ -78,6 +80,7 @@ describe('ScheduledTaskRunHistoryList', () => {
     );
 
     expect(
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- skeleton rows are plain divs with no accessible role/text; only their data-skeleton CSS hook distinguishes them
       container.querySelectorAll('[data-skeleton]').length,
     ).toBeGreaterThan(0);
   });
@@ -129,14 +132,14 @@ describe('ScheduledTaskRunHistoryList', () => {
     );
 
     expect(
-      screen.getByRole('listitem').getAttribute('aria-current'),
+      screen.queryByRole('listitem')?.getAttribute('aria-current'),
     ).toBeNull();
   });
 
-  it('rows are not clickable when onRunClick is not supplied', () => {
+  it('rows are not clickable when onRunClick is not supplied, even with a conversationId', () => {
     render(
       <ScheduledTaskRunHistoryList
-        items={[buildRun({ id: 'run_1' })]}
+        items={[buildRun({ id: 'run_1', conversationId: 'conversations/c1' })]}
         labels={labels}
       />,
     );
@@ -145,7 +148,38 @@ describe('ScheduledTaskRunHistoryList', () => {
     expect(row.getAttribute('role')).toBeNull();
   });
 
-  it('invokes onRunClick with the run id when a row is clicked and onRunClick is supplied', async () => {
+  it('invokes onRunClick with the run when a row with a conversationId is clicked', async () => {
+    const onRunClick = vi.fn();
+    const run = buildRun({ id: 'run_1', conversationId: 'conversations/c1' });
+    render(
+      <ScheduledTaskRunHistoryList
+        items={[run]}
+        onRunClick={onRunClick}
+        labels={labels}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /Succeeded/ }));
+    expect(onRunClick).toHaveBeenCalledWith(run);
+  });
+
+  it('invokes onRunClick when a row is activated via keyboard', async () => {
+    const onRunClick = vi.fn();
+    const run = buildRun({ id: 'run_1', conversationId: 'conversations/c1' });
+    render(
+      <ScheduledTaskRunHistoryList
+        items={[run]}
+        onRunClick={onRunClick}
+        labels={labels}
+      />,
+    );
+
+    screen.getByRole('button', { name: /Succeeded/ }).focus();
+    await userEvent.keyboard('{Enter}');
+    expect(onRunClick).toHaveBeenCalledWith(run);
+  });
+
+  it('does not render as clickable, and never invokes onRunClick, when the run has no conversationId', async () => {
     const onRunClick = vi.fn();
     render(
       <ScheduledTaskRunHistoryList
@@ -155,8 +189,50 @@ describe('ScheduledTaskRunHistoryList', () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: /Succeeded/ }));
-    expect(onRunClick).toHaveBeenCalledWith('run_1');
+    const row = screen.getByRole('listitem');
+    expect(row.getAttribute('role')).toBeNull();
+    expect(row.className).not.toContain('cursor-pointer');
+
+    await userEvent.click(row);
+    expect(onRunClick).not.toHaveBeenCalled();
+  });
+
+  it('folds the unread label into the row accessible name when isUnread is true', () => {
+    render(
+      <ScheduledTaskRunHistoryList
+        items={[buildRun({ id: 'run_1', isUnread: true })]}
+        labels={labels}
+      />,
+    );
+
+    expect(screen.getByRole('listitem', { name: /Unread$/ })).toBeTruthy();
+  });
+
+  it('uses a custom unreadIndicatorLabel when provided', () => {
+    render(
+      <ScheduledTaskRunHistoryList
+        items={[buildRun({ id: 'run_1', isUnread: true })]}
+        labels={{ ...labels, unreadIndicatorLabel: 'New task' }}
+      />,
+    );
+
+    expect(screen.getByRole('listitem', { name: /New task$/ })).toBeTruthy();
+    expect(screen.queryByRole('listitem', { name: /Unread$/ })).toBeNull();
+  });
+
+  it('does not append an unread suffix when isUnread is false or omitted', () => {
+    render(
+      <ScheduledTaskRunHistoryList
+        items={[buildRun({ id: 'run_1', isUnread: false })]}
+        labels={labels}
+      />,
+    );
+
+    expect(
+      screen.getByRole('listitem', {
+        name: 'Succeeded today at 9:01 AM (99s)',
+      }),
+    ).toBeTruthy();
   });
 
   it('renders the supplied footer after the rows', () => {
@@ -181,8 +257,11 @@ describe('ScheduledTaskRunHistoryList', () => {
     );
 
     expect(screen.getAllByRole('listitem')).toHaveLength(1);
-    expect(container.querySelectorAll('li').length).toBeGreaterThan(1);
     expect(
+      screen.getAllByRole('listitem', { hidden: true }).length,
+    ).toBeGreaterThan(1);
+    expect(
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- skeleton rows are plain divs with no accessible role/text; only their data-skeleton CSS hook distinguishes them
       container.querySelectorAll('[data-skeleton]').length,
     ).toBeGreaterThan(0);
   });

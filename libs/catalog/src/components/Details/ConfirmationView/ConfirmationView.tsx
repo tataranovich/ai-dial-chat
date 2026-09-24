@@ -17,6 +17,15 @@ export interface ConfirmationViewProps {
   variant?: DetailsConfirmationVariant;
   /** Typography class applied to the message and the bullet list. Defaults to `'dial-small-text'`. */
   messageClassName?: string;
+  /**
+   * Optional interactive slot rendered after the consequence bullets, for a
+   * confirmation that needs an input before it can be confirmed — today,
+   * choosing which published folder to unpublish from. This component stays
+   * presentational: whoever passes the slot owns its state, and disabling the
+   * confirm button until the input is satisfied is the panel's job. A kind
+   * that needs no input passes nothing and renders exactly as before.
+   */
+  children?: ReactNode;
 }
 
 /** Body of the details panel's in-place confirmation step: an item identity card, the confirmation copy, and an optional consequence list. */
@@ -26,11 +35,16 @@ export const ConfirmationView: FC<ConfirmationViewProps> = ({
   consequences,
   variant = DetailsConfirmationVariant.Info,
   messageClassName = 'dial-small-text',
+  children,
 }) => (
   <div className="flex flex-col gap-4 px-6 py-4">
     <InfoCard item={item} variant={variant} />
 
-    <p className={mergeClasses(messageClassName, styles.message)}>{message}</p>
+    <p
+      className={mergeClasses(messageClassName, 'break-words', styles.message)}
+    >
+      {message}
+    </p>
 
     {consequences != null && consequences.length > 0 && (
       <ul
@@ -45,5 +59,7 @@ export const ConfirmationView: FC<ConfirmationViewProps> = ({
         ))}
       </ul>
     )}
+
+    {children}
   </div>
 );

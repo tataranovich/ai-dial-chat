@@ -1,10 +1,27 @@
 import type { ConversationResponseDto } from '@epam/ai-dial-chat-api-client';
+import {
+  attachmentsToDtos,
+  findDeploymentByIdOrReference,
+  getApiErrorDetails,
+  getConversationPath,
+  getQuickAppConversationStarters,
+  getStarterConversationText,
+  getStartersFromSchema,
+  hasActiveToolConfig,
+  useToolsMenu,
+} from '@epam/ai-dial-chat-hooks';
 import type {
   Attachment,
   DeploymentItem,
   StarterOption,
 } from '@epam/ai-dial-chat-shared';
-import { NotificationVariant } from '@epam/ai-dial-ui-kit';
+import {
+  BASE_ICON_SIZE,
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  NoDataContent,
+} from '@epam/ai-dial-ui-kit';
+import { IconPrompt, IconTelescope } from '@tabler/icons-react';
 import {
   FC,
   memo,
@@ -12,6 +29,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,31 +38,34 @@ import { useDeploymentSelectorOverlay } from '../../components/DeploymentSelecto
 import NewConversationComposer, {
   type NewConversationChatSettings,
 } from '../../components/NewConversationComposer/NewConversationComposer';
+import {
+  PendingParametersPrompt,
+  usePromptSelectorOverlay,
+} from '../../components/PromptSelector/usePromptSelectorOverlay';
 import RouteFallback from '../../components/RouteFallback/RouteFallback';
+import { useSkillSelectorOverlay } from '../../components/SkillSelector/useSkillSelectorOverlay';
 import StarterButtons from '../../components/StarterButtons/StarterButtons';
 import { getConversationRoute } from '../../constants/routes';
-import { ChatI18nKeys, ToolsI18nKeys } from '../../constants/translation-keys';
+import {
+  ChatI18nKeys,
+  PromptSelectorI18nKeys,
+  ToolsI18nKeys,
+} from '../../constants/translation-keys';
 import { useDeployments } from '../../context/DeploymentsContext';
+import {
+  sanitizeIsolatedModelId,
+  useIsolatedModelView,
+} from '../../context/IsolatedModelViewContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useOptionalOverlay } from '../../context/overlay/OverlayContext';
-import { useToolsMenu } from '../../hooks/conversation/useToolsMenu';
 import { useLanguage } from '../../hooks/language/useLanguage';
-import { getApiErrorDetails } from '../../server-api/api-error';
 import {
   createConversation as apiCreateConversation,
+  renameConversation,
   saveConversation,
 } from '../../server-api/conversations.api';
-import { attachmentsToDtos } from '../../utils/attachment-to-dto';
-import { getConversationPath } from '../../utils/conversation-path';
-import { findDeploymentByIdOrReference } from '../../utils/deployment-id';
 import { resolveCatalogIconUrl } from '../../utils/icon-path';
 import { resolveLocalizedText } from '../../utils/locale';
-import { hasActiveToolConfig } from '../../utils/message-utils';
-import { getQuickAppConversationStarters } from '../../utils/quick-app-conversation-starters';
-import {
-  getStarterConversationText,
-  getStartersFromSchema,
-} from '../../utils/starter-option';
 
 /*
  * TODO: rename page and component
@@ -59,9 +80,52 @@ const ConversationRoute: FC = () => {
     ?.deploymentId;
   const routePromptContent = (state as { promptContent?: string } | null)
     ?.promptContent;
+  const routePendingPrompt = (
+    state as { pendingPrompt?: PendingParametersPrompt } | null
+  )?.pendingPrompt;
+  const routeSkillId = (state as { skillId?: string } | null)?.skillId;
   const [inputMessage, setInputMessage] = useState<string | undefined>();
-  const { showNotification } = useNotification();
-  const overlay = useOptionalOverlay();
+  const [inputMessageRevision, setInputMessageRevision] = useState(0);
+  /*
+   * A picked prompt is inserted at the caret rather than written to
+   * `inputMessage`, so it cannot discard a draft the user has already typed on
+   * this screen (issue #8754). The route-state seeding below still replaces,
+   * because it arrives with a fresh navigation onto an empty composer.
+   */
+  const [inputInsertion, setInputInsertion] = useState({
+    revision: 0,
+    text: '',
+  });
+
+  const handleInsertText = useCallback((text: string) => {
+    setInputInsertion((prev) => ({ revision: prev.revision + 1, text }));
+  }, []);
+  const {
+    renderOverlay: renderPromptsOverlay,
+    promptCatalogModal,
+    parametersPopup: promptParametersPopup,
+    openParametersPopup,
+  } = usePromptSelectorOverlay({ onInsertText: handleInsertText });
+  const promptsMenuOverlays = useMemo(
+    () =>
+      renderPromptsOverlay
+        ? [
+            {
+              key: 'prompts',
+              title: t(PromptSelectorI18nKeys.AddMenuLabel),
+              icon: (
+                <IconPrompt
+                  size={BASE_ICON_SIZE}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              ),
+              renderOverlay: renderPromptsOverlay,
+            },
+          ]
+        : undefined,
+    [renderPromptsOverlay, t],
+  );
   const {
     items,
     selectedItemId,
@@ -73,10 +137,63 @@ const ConversationRoute: FC = () => {
     error,
   } = useDeployments();
 
+  const selectedDeployment = useMemo(
+    () => findDeploymentByIdOrReference(items, selectedItemId),
+    [items, selectedItemId],
+  );
+
+  const {
+    skillMenuOverlay,
+    commandMenu,
+    skillCatalogModal,
+    skillDetailsPanel,
+    selectedSkillElement,
+    selectedSkills,
+    isSkillUnsupported,
+    selectSkill,
+    removeSelectedSkill,
+  } = useSkillSelectorOverlay({
+    isSkillsSupported: selectedDeployment?.features?.skillsSupported === true,
+  });
   /*
-   * Honors a deploymentId passed as router state (e.g. by the overlay's
-   * conversation-list bridge opening the composer with a pre-selected
-   * deployment) without persisting it as the user's own preference.
+   * The first message's skills payload comes from the overlay hook. On a
+   * successful create this route navigates away and unmounts (clearing the
+   * selection with it); on failure the create promise rejects and the
+   * selection survives for the retry.
+   */
+  /*
+   * The Skills entry joins the Prompts entry in array order, so it renders
+   * below Prompts in the `+` menu; `undefined` when both are flag-disabled
+   * keeps the `+` button's empty-menu rule intact.
+   */
+  const menuOverlays = useMemo(() => {
+    const entries = [
+      ...(promptsMenuOverlays ?? []),
+      ...(skillMenuOverlay ? [skillMenuOverlay] : []),
+    ];
+    return entries.length > 0 ? entries : undefined;
+  }, [promptsMenuOverlays, skillMenuOverlay]);
+  const { showErrorNotification } = useNotification();
+  const overlay = useOptionalOverlay();
+  // TODO: remove in next release
+  const {
+    isActive: isIsolatedView,
+    isNotFound: isIsolatedModelNotFound,
+    resolvedDeploymentId: isolatedModelId,
+  } = useIsolatedModelView();
+
+  const hasConsumedRouteDeploymentRef = useRef(false);
+  // TODO: remove in next release
+  const hasConsumedIsolatedModelIdRef = useRef(false);
+
+  /*
+   * Honors a deploymentId passed as router state (by the catalog's "Use in
+   * chat" action, or by the overlay's conversation-list bridge opening the
+   * composer with a pre-selected deployment) without persisting it as the
+   * user's own preference. The state is one-shot, like the prompt state below:
+   * `history.state` survives a reload, so leaving it in place would make a
+   * refresh keep re-applying a stale pick instead of resolving the configured
+   * default.
    *
    * Otherwise, re-resolves selectedItemId back to the user's own preference:
    * having viewed a different conversation may have left a transient,
@@ -87,7 +204,30 @@ const ConversationRoute: FC = () => {
    */
   useEffect(() => {
     if (routeDeploymentId) {
+      hasConsumedRouteDeploymentRef.current = true;
       restoreSelectedItemId(routeDeploymentId);
+      navigate(pathname, { replace: true, state: null });
+      return;
+    }
+    /*
+     * The clearing navigation above re-runs this effect with no
+     * routeDeploymentId. Restoring the default here would immediately undo the
+     * selection just applied, so the consumed state is remembered for the
+     * lifetime of this mount. A reload or a fresh navigation remounts the
+     * route, resetting the flag, and the default resolves normally again.
+     */
+    if (hasConsumedRouteDeploymentRef.current) return;
+    /*
+     * TODO: remove in next release. Isolated view pins the deployment once it
+     * resolves, and must never fall through to the default selection even
+     * while still resolving — a briefly-wrong default would visibly flip to
+     * the pinned model a moment later.
+     */
+    if (isIsolatedView) {
+      if (isolatedModelId && !hasConsumedIsolatedModelIdRef.current) {
+        hasConsumedIsolatedModelIdRef.current = true;
+        restoreSelectedItemId(isolatedModelId);
+      }
       return;
     }
     if (!overlay?.pendingModelId) {
@@ -98,6 +238,10 @@ const ConversationRoute: FC = () => {
     restoreDefaultSelection,
     routeDeploymentId,
     overlay?.pendingModelId,
+    navigate,
+    pathname,
+    isIsolatedView,
+    isolatedModelId,
   ]);
 
   /*
@@ -109,8 +253,33 @@ const ConversationRoute: FC = () => {
   useEffect(() => {
     if (routePromptContent == null) return;
     setInputMessage(routePromptContent);
+    setInputMessageRevision((prev) => prev + 1);
     navigate(pathname, { replace: true, state: null });
   }, [routePromptContent, navigate, pathname]);
+
+  /*
+   * Seeds the "Prompt parameters" popup from a parameterized prompt the user
+   * picked via the Catalog page's "Use in chat" action. Same one-shot state
+   * clearing as the plain-text case above.
+   */
+  useEffect(() => {
+    if (routePendingPrompt == null) return;
+    openParametersPopup(routePendingPrompt);
+    navigate(pathname, { replace: true, state: null });
+  }, [routePendingPrompt, openParametersPopup, navigate, pathname]);
+
+  /*
+   * Seeds the composer's selected skill from a skill the user picked via the
+   * catalog's "Use in chat" action. Same one-shot state clearing as the
+   * prompt cases above, so a later back-navigation to `/` cannot re-apply a
+   * stale pick — and `history.state` surviving a reload cannot keep
+   * re-selecting it.
+   */
+  useEffect(() => {
+    if (routeSkillId == null) return;
+    selectSkill(routeSkillId);
+    navigate(pathname, { replace: true, state: null });
+  }, [routeSkillId, selectSkill, navigate, pathname]);
 
   /*
    * This is the "no conversation selected" empty state. Overlay mode must
@@ -123,23 +292,39 @@ const ConversationRoute: FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [Boolean(overlay)]);
 
-  const { toolsMenuItems, onToolToggle, toolConfigurationValue } =
-    useToolsMenu();
-
-  const selectedDeployment = useMemo(
-    () => findDeploymentByIdOrReference(items, selectedItemId),
-    [items, selectedItemId],
+  const { toolsMenuItems, onToolToggle, toolConfigurationValue } = useToolsMenu(
+    {
+      selectedItemId,
+      selectedDeploymentConfiguration,
+      toolIcon: (
+        <IconTelescope
+          size={DIAL_ICON_SIZE.SM}
+          aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
+        />
+      ),
+    },
   );
 
   const deploymentItems: DeploymentItem[] = useMemo(
     () =>
-      items.map(({ id, displayName, iconUrl, type, inputAttachmentTypes }) => ({
-        id,
-        displayName: resolveLocalizedText(displayName, language),
-        iconUrl: iconUrl ? resolveCatalogIconUrl(iconUrl) : undefined,
-        type,
-        inputAttachmentTypes,
-      })),
+      items.map(
+        ({
+          id,
+          displayName,
+          displayVersion,
+          iconUrl,
+          type,
+          inputAttachmentTypes,
+        }) => ({
+          id,
+          displayName: resolveLocalizedText(displayName, language),
+          displayVersion,
+          iconUrl: iconUrl ? resolveCatalogIconUrl(iconUrl) : undefined,
+          type,
+          inputAttachmentTypes,
+        }),
+      ),
     [items, language],
   );
 
@@ -192,9 +377,23 @@ const ConversationRoute: FC = () => {
         selectedItemId,
         attachmentDtos,
         hasToolConfig ? toolConfigurationValue : undefined,
+        undefined,
+        selectedSkills,
       );
+      // TODO: remove in next release
+      const isolatedName =
+        isIsolatedView && isolatedModelId
+          ? `isolated_${sanitizeIsolatedModelId(isolatedModelId)}`
+          : null;
+      if (isolatedName) {
+        await renameConversation(
+          getConversationPath(conversation.id),
+          isolatedName,
+        );
+      }
       const savedConversation = {
         ...conversation,
+        ...(isolatedName ? { name: isolatedName } : {}),
         prompt: chatSettingsValues.systemPrompt,
         temperature: chatSettingsValues.temperature,
         responseFormat: chatSettingsValues.responseFormat,
@@ -207,7 +406,14 @@ const ConversationRoute: FC = () => {
         state: { conversation: savedConversation },
       });
     },
-    [navigate, selectedItemId, toolConfigurationValue],
+    [
+      navigate,
+      selectedItemId,
+      toolConfigurationValue,
+      isIsolatedView,
+      isolatedModelId,
+      selectedSkills,
+    ],
   );
 
   const handleStarterSelect = useCallback(
@@ -234,12 +440,18 @@ const ConversationRoute: FC = () => {
               [],
               hasConfig ? mergedConfigurationValue : undefined,
             );
+            // TODO: remove in next release
+            if (isIsolatedView && isolatedModelId) {
+              await renameConversation(
+                getConversationPath(conversation.id),
+                `isolated_${sanitizeIsolatedModelId(isolatedModelId)}`,
+              );
+            }
             navigate(getConversationRoute(conversation.id));
           } catch (err) {
             const { message: errorMessage, traceId } =
               await getApiErrorDetails(err);
-            showNotification({
-              variant: NotificationVariant.Error,
+            showErrorNotification({
               message: errorMessage ?? t(ChatI18nKeys.CreateConversationError),
               requestId: traceId,
             });
@@ -257,13 +469,28 @@ const ConversationRoute: FC = () => {
       propertyKey,
       selectedItemId,
       navigate,
-      showNotification,
+      showErrorNotification,
       t,
       toolConfigurationValue,
+      isIsolatedView,
+      isolatedModelId,
     ],
   );
 
   const { renderOverlay, catalogModal } = useDeploymentSelectorOverlay();
+
+  // TODO: remove in next release
+  if (isIsolatedModelNotFound) {
+    return (
+      <div className="flex size-full items-center justify-center">
+        <NoDataContent
+          title={t(ChatI18nKeys.IsolatedModelNotFoundTitle)}
+          description={t(ChatI18nKeys.IsolatedModelNotFoundDescription)}
+          live
+        />
+      </div>
+    );
+  }
 
   return (
     <Suspense fallback={<RouteFallback />}>
@@ -278,13 +505,19 @@ const ConversationRoute: FC = () => {
         placeholder={t(ChatI18nKeys.Placeholder)}
         introText={starterIntroText}
         message={inputMessage}
+        messageRevision={inputMessageRevision}
+        inputInsertion={inputInsertion}
         onCreateConversation={handleCreateConversation}
         modelPickerOverlay={renderOverlay}
+        menuOverlays={menuOverlays}
+        inlineStartSlot={selectedSkillElement}
+        onInlineStartRemove={removeSelectedSkill}
+        isSkillUnsupported={isSkillUnsupported}
+        commandMenu={commandMenu}
         toolsMenuItems={toolsMenuItems}
         onToolToggle={onToolToggle}
         toolsMenuTitle={t(ToolsI18nKeys.MenuTitle)}
         toolsChipLabels={{
-          countLabel: (count) => t(ToolsI18nKeys.SelectedCount, { count }),
           removeLabel: (label) => t(ToolsI18nKeys.RemoveTool, { label }),
         }}
       >
@@ -294,6 +527,10 @@ const ConversationRoute: FC = () => {
         />
       </NewConversationComposer>
       {catalogModal}
+      {promptCatalogModal}
+      {promptParametersPopup}
+      {skillCatalogModal}
+      {skillDetailsPanel}
     </Suspense>
   );
 };

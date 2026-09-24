@@ -13,18 +13,12 @@ const renderBanner = () =>
 
 const contextMocks = vi.hoisted(() => ({
   status: 'task-conversation' as
-    | 'resolving'
-    | 'not-a-task-conversation'
-    | 'task-conversation',
+    'resolving' | 'not-a-task-conversation' | 'task-conversation',
   scheduleId: 'schedule-1' as string | undefined,
   runId: 'run-1' as string | undefined,
   conversationUpdatedAt: undefined as number | undefined,
   taskState: 'success' as
-    | 'idle'
-    | 'loading'
-    | 'error'
-    | 'unavailable'
-    | 'success',
+    'idle' | 'loading' | 'error' | 'unavailable' | 'success',
   task: { id: 'schedule-1', displayName: 'Weekly digest' } as {
     displayName: string;
   } | null,
@@ -90,12 +84,12 @@ describe('ScheduledTaskConversationBanner', () => {
       } as ScheduledTaskRunDto,
     ];
 
-    const { container } = renderBanner();
+    renderBanner();
 
     expect(screen.getByText('Weekly digest')).toBeTruthy();
-    expect(container.querySelector('span')?.textContent).toContain(
-      'scheduledTasks.detail.historyDurationSuffix',
-    );
+    expect(
+      screen.getByText(/scheduledTasks\.detail\.historyDurationSuffix/),
+    ).toBeTruthy();
   });
 
   it('shows a loading placeholder and no task name while loading', () => {
@@ -134,6 +128,6 @@ describe('ScheduledTaskConversationBanner', () => {
 
     const { container } = renderBanner();
 
-    expect(container.firstChild).toBeNull();
+    expect(container.innerHTML).toBe('');
   });
 });

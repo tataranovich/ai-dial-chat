@@ -1,7 +1,10 @@
+import {
+  ToolsetAuthTypes,
+  ToolsetLoginOutcomeType,
+} from '@epam/ai-dial-chat-hooks';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ToolsetAuthTypes } from '../../../constants/toolsets';
 import {
   ButtonsI18nKeys,
   ToolsetSigninI18nKeys,
@@ -13,19 +16,17 @@ import {
   ExternalServiceLoginOutcomeType,
   useExternalServiceLogin,
 } from '../../../hooks/externalServices/useExternalServiceLogin';
-import {
-  ToolsetLoginOutcomeType,
-  useToolsetLogin,
-} from '../../../hooks/toolsets/useToolsetLogin';
+import { useToolsetLogin } from '../../../hooks/toolsets/useToolsetLogin';
 import { useUiFeature } from '../../../hooks/useUiFeature';
 import { getExternalService } from '../../../server-api/external-services';
 import { getToolset } from '../../../server-api/toolsets';
 import { PendingSigninEventKind } from '../../../types/client-channel';
 import SigninInterruptDialog from '../SigninInterruptDialog';
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useFeatureFlag: vi.fn(),
-}));
+vi.mock(
+  '../../../context/AppConfigContext',
+  async () => import('../../../context/tests/app-config-context-mock'),
+);
 vi.mock('../../../context/ClientChannelContext', () => ({
   useClientChannel: vi.fn(),
 }));
@@ -108,6 +109,8 @@ const makeDeploymentsValue = (toolsets: unknown[] = []) => ({
   toolsets,
   refetchToolsets: vi.fn().mockResolvedValue(undefined),
   refetchDeployments: vi.fn().mockResolvedValue(undefined),
+  selectedDeploymentDetails: null,
+  isDeploymentDetailsLoading: false,
   mergeSharedItem: vi.fn(),
 });
 
@@ -127,12 +130,14 @@ describe('SigninInterruptDialog', () => {
       pendingEvents: [],
       reportEvent: vi.fn(),
       ensureConnected: vi.fn(),
+      waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+      notifyGenerationSettled: vi.fn(),
     });
     mockUseDeployments.mockReturnValue(makeDeploymentsValue() as never);
     mockUseToolsetLogin.mockReturnValue({ login: vi.fn() });
 
     const { container } = render(<SigninInterruptDialog />);
-    expect(container.firstChild).toBeNull();
+    expect(container.innerHTML).toBe('');
   });
 
   it('renders the toolset display name and version when known', () => {
@@ -141,6 +146,8 @@ describe('SigninInterruptDialog', () => {
       pendingEvents: [toolsetEvent('evt-1', apiKeyToolset.id)],
       reportEvent: vi.fn(),
       ensureConnected: vi.fn(),
+      waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+      notifyGenerationSettled: vi.fn(),
     });
     mockUseDeployments.mockReturnValue(
       makeDeploymentsValue([apiKeyToolset]) as never,
@@ -163,6 +170,8 @@ describe('SigninInterruptDialog', () => {
       pendingEvents: [toolsetEvent('evt-1', apiKeyToolset.id)],
       reportEvent,
       ensureConnected: vi.fn(),
+      waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+      notifyGenerationSettled: vi.fn(),
     });
     mockUseDeployments.mockReturnValue(
       makeDeploymentsValue([apiKeyToolset]) as never,
@@ -176,6 +185,15 @@ describe('SigninInterruptDialog', () => {
     });
     expect(loginButton.hasAttribute('disabled')).toBe(true);
 
+    /*
+     * The popup's focus manager pulls focus onto the dialog root shortly
+     * after mount; typing before that lands loses the keystrokes. Wait for
+     * the initial focus to settle so the click inside `type` keeps the input
+     * focused.
+     */
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute('role')).toBe('dialog'),
+    );
     await user.type(
       screen.getByLabelText(ToolsetSigninI18nKeys.ApiKeyLabel),
       'secret-key',
@@ -206,6 +224,8 @@ describe('SigninInterruptDialog', () => {
       pendingEvents: [toolsetEvent('evt-1', apiKeyToolset.id)],
       reportEvent,
       ensureConnected: vi.fn(),
+      waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+      notifyGenerationSettled: vi.fn(),
     });
     mockUseDeployments.mockReturnValue(
       makeDeploymentsValue([apiKeyToolset]) as never,
@@ -237,13 +257,15 @@ describe('SigninInterruptDialog', () => {
         pendingEvents: [externalServiceEvent('evt-1', APP_ID, SERVICE_NAME)],
         reportEvent: vi.fn(),
         ensureConnected: vi.fn(),
+        waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+        notifyGenerationSettled: vi.fn(),
       });
       mockUseDeployments.mockReturnValue(makeDeploymentsValue([]) as never);
       mockUseToolsetLogin.mockReturnValue({ login: vi.fn() });
 
       render(<SigninInterruptDialog />);
 
-      await waitFor(() => expect(screen.getByText('FinHub API')).toBeTruthy());
+      expect(await screen.findByText('FinHub API')).toBeTruthy();
       expect(mockGetExternalService).toHaveBeenCalledWith(APP_ID, SERVICE_NAME);
     });
 
@@ -254,6 +276,8 @@ describe('SigninInterruptDialog', () => {
         pendingEvents: [externalServiceEvent('evt-1', APP_ID, SERVICE_NAME)],
         reportEvent: vi.fn(),
         ensureConnected: vi.fn(),
+        waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+        notifyGenerationSettled: vi.fn(),
       });
       mockUseDeployments.mockReturnValue(makeDeploymentsValue([]) as never);
       mockUseToolsetLogin.mockReturnValue({ login: vi.fn() });
@@ -276,12 +300,14 @@ describe('SigninInterruptDialog', () => {
         pendingEvents: [externalServiceEvent('evt-1', APP_ID, SERVICE_NAME)],
         reportEvent,
         ensureConnected: vi.fn(),
+        waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+        notifyGenerationSettled: vi.fn(),
       });
       mockUseDeployments.mockReturnValue(makeDeploymentsValue([]) as never);
       mockUseToolsetLogin.mockReturnValue({ login: vi.fn() });
 
       render(<SigninInterruptDialog />);
-      await waitFor(() => screen.getByText('FinHub API'));
+      await screen.findByText('FinHub API');
       /*
        * A single atomic `change` event, rather than `user.type`'s
        * char-by-char keystrokes, avoids racing the metadata-fetch effect's
@@ -310,6 +336,54 @@ describe('SigninInterruptDialog', () => {
       );
     });
 
+    it.each([
+      [
+        ExternalServiceLoginOutcomeType.AdminConsentRequired,
+        ToolsetSigninI18nKeys.AdminConsentRequired,
+      ],
+      [
+        ExternalServiceLoginOutcomeType.OfflineUnavailable,
+        ToolsetSigninI18nKeys.OfflineUnavailable,
+      ],
+    ])(
+      'shows the actionable DIAL_NATIVE error %s without reporting success',
+      async (type, message) => {
+        const reportEvent = vi.fn();
+        mockGetExternalService.mockResolvedValue({
+          displayName: 'DIAL native',
+          authenticationType: 'DIAL_NATIVE',
+        });
+        mockUseExternalServiceLogin.mockReturnValue({
+          login: vi.fn().mockResolvedValue({ type }),
+        });
+        mockUseClientChannel.mockReturnValue({
+          channelId: 'channel-1',
+          pendingEvents: [externalServiceEvent('evt-1', APP_ID, 'dial-native')],
+          reportEvent,
+          ensureConnected: vi.fn(),
+          waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+          notifyGenerationSettled: vi.fn(),
+        });
+        mockUseDeployments.mockReturnValue(makeDeploymentsValue([]) as never);
+        mockUseToolsetLogin.mockReturnValue({ login: vi.fn() });
+        render(<SigninInterruptDialog />);
+        await screen.findByText('DIAL native');
+        expect(screen.queryByRole('checkbox')).toBeNull();
+        expect(
+          screen.queryByLabelText(ToolsetSigninI18nKeys.ApiKeyLabel),
+        ).toBeNull();
+        expect(
+          screen.getByText(ToolsetSigninI18nKeys.DialNativeHint),
+        ).toBeTruthy();
+        fireEvent.click(
+          screen.getByRole('button', { name: ButtonsI18nKeys.LogIn }),
+        );
+        expect(await screen.findByText(message)).toBeTruthy();
+        expect(screen.getByRole('alert')).toBeTruthy();
+        expect(reportEvent).not.toHaveBeenCalled();
+      },
+    );
+
     it('auto-resolves a NONE-auth external service without user interaction', async () => {
       const reportEvent = vi.fn().mockResolvedValue(undefined);
       mockGetExternalService.mockResolvedValue({
@@ -321,6 +395,8 @@ describe('SigninInterruptDialog', () => {
         pendingEvents: [externalServiceEvent('evt-1', APP_ID, SERVICE_NAME)],
         reportEvent,
         ensureConnected: vi.fn(),
+        waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+        notifyGenerationSettled: vi.fn(),
       });
       mockUseDeployments.mockReturnValue(makeDeploymentsValue([]) as never);
       mockUseToolsetLogin.mockReturnValue({ login: vi.fn() });
@@ -344,6 +420,8 @@ describe('SigninInterruptDialog', () => {
         ],
         reportEvent,
         ensureConnected: vi.fn(),
+        waitForChannel: vi.fn().mockResolvedValue('channel-1'),
+        notifyGenerationSettled: vi.fn(),
       });
       mockUseDeployments.mockReturnValue(
         makeDeploymentsValue([apiKeyToolset]) as never,
@@ -355,10 +433,12 @@ describe('SigninInterruptDialog', () => {
         screen.getByRole('button', { name: ToolsetSigninI18nKeys.DeclineAll }),
       );
 
-      await waitFor(() => {
-        expect(reportEvent).toHaveBeenCalledWith('evt-1', 'denied');
-        expect(reportEvent).toHaveBeenCalledWith('evt-2', 'denied');
-      });
+      await waitFor(() =>
+        expect(reportEvent).toHaveBeenCalledWith('evt-1', 'denied'),
+      );
+      await waitFor(() =>
+        expect(reportEvent).toHaveBeenCalledWith('evt-2', 'denied'),
+      );
     });
   });
 });

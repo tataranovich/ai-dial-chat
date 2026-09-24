@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { StringUtils } from '../common/utils/string-utils';
 import type { CreateScheduledTaskBodyDto } from './dto/create-scheduled-task.dto';
 import type {
   ScheduleCronDto,
@@ -65,6 +66,7 @@ export interface UpstreamScheduleResponse {
   service_id?: string;
   created_by?: string;
   description?: string;
+  is_deleted?: boolean;
   properties?: {
     payload?: {
       model?: string;
@@ -127,7 +129,7 @@ const toUpstreamTrigger = (
  * call never ends up with a double slash before /openai.
  */
 export const buildScheduledTaskChatCompletionUrl = (baseUrl: string): string =>
-  `${baseUrl.replace(/\/+$/, '')}/openai`;
+  `${StringUtils.stripTrailingSlashes(baseUrl)}/openai`;
 
 export const toUpstreamSchedulePayload = (
   body: CreateScheduledTaskBodyDto,
@@ -193,6 +195,7 @@ export const fromUpstreamSchedule = (
   updatedAt: upstream.updated_at,
   triggerType: upstream.trigger_type as ScheduleTriggerType | undefined,
   isActive: deriveIsActive(upstream),
+  isDeleted: upstream.is_deleted ?? false,
   serviceId: upstream.service_id,
   createdBy: upstream.created_by,
   description: upstream.description,
@@ -205,6 +208,7 @@ export interface UpstreamScheduleRun {
   status: 'success' | 'error' | 'in_progress' | 'missed' | string;
   start_time: string;
   end_time?: string | null;
+  conversation_id?: string | null;
 }
 
 const UPSTREAM_RUN_STATUS_MAP: Record<string, ScheduledTaskRunStatus> = {
@@ -237,4 +241,5 @@ export const fromUpstreamRun = (
     upstream.start_time,
     upstream.end_time,
   ),
+  conversationId: upstream.conversation_id ?? undefined,
 });

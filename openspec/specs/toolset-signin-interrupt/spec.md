@@ -6,15 +6,21 @@ TBD - created by archiving change interactive-toolset-login-chat. Update Purpose
 
 ### Requirement: `ClientChannelProvider` owns subscription lifecycle and pending events
 
-A `ClientChannelProvider` (React Context, `apps/chat/src/context/ClientChannelContext.tsx`, consumer hook `useClientChannel`) SHALL be mounted once inside `RequireAuth` in `apps/chat/src/main.tsx`, at the same level as `GenerationProvider`, so it survives conversation route navigation. Its context value SHALL be wrapped in `useMemo`. It SHALL own: the current channel id (or none), connection status, and a `Map<eventId, PendingSigninEvent>` of pending `toolset/signin` events parsed from the SSE stream. The consumer hook SHALL throw if used outside the provider, matching the `ThemeContext` reference pattern.
+A `ClientChannelProvider` (React Context, `apps/chat/src/context/ClientChannelContext.tsx`, consumer hook `useClientChannel`) SHALL be mounted once inside `RequireAuth` in `apps/chat/src/main.tsx`, at the same level as `GenerationProvider`, so it survives conversation route navigation. Its context value SHALL be wrapped in `useMemo`. It SHALL own: the current channel id (or none), connection status, a `Map<eventId, PendingSigninEvent>` of pending `toolset/signin` events parsed from the SSE stream, and the **connection demand registry** that decides whether a subscription should exist at all (see `client-channel-demand-lifecycle`). The consumer hook SHALL throw if used outside the provider, matching the `ThemeContext` reference pattern.
+
+The demand registry SHALL remain internal to the provider: it SHALL NOT appear on `ClientChannelContextValue`, so consumers — `SigninInterruptDialog`, `Conversation`, and `AppPreviewChat` — see an unchanged context surface. Mounting the provider SHALL NOT itself create demand and SHALL NOT open a subscription.
 
 #### Scenario: Provider survives conversation navigation
 - **WHEN** the user navigates from one conversation to another while a channel subscription is active
-- **THEN** the subscription and any pending signin events remain intact, unaffected by the route change
+- **THEN** the subscription, any pending signin events, and any outstanding demand remain intact, unaffected by the route change
 
 #### Scenario: Consumer used outside provider
 - **WHEN** `useClientChannel` is called from a component not wrapped by `ClientChannelProvider`
 - **THEN** it throws a clear error identifying the missing provider
+
+#### Scenario: Mounting the provider opens no subscription
+- **WHEN** `ClientChannelProvider` mounts with the flag enabled on a streaming-capable route
+- **THEN** it holds no subscription and no demand until a completion is requested
 
 ### Requirement: SSE event parsing tolerates fragmented network chunks
 
@@ -30,21 +36,41 @@ The client-channel SSE reader SHALL buffer partial reads and only parse complete
 
 ### Requirement: Reconnect with bounded retries
 
-On stream error or close, the provider SHALL retry subscribing with capped exponential backoff (1s, 2s, 4s, 8s, 16s — 5 attempts), sending the previous channel id (if any) on each retry attempt. After 5 failed attempts it SHALL stop retrying automatically and resume only when a new completion is issued or the tab regains visibility. Pending events already known to the dialog SHALL NOT be cleared merely because the connection dropped.
+On stream error or close, the provider SHALL retry subscribing with capped exponential backoff (1s, 2s, 4s, 8s, 16s — 5 attempts), sending the previous channel id (if any) on each retry attempt. After 5 failed attempts it SHALL stop retrying automatically and resume only when a new completion is issued. Pending events already known to the dialog SHALL NOT be cleared merely because the connection dropped.
+
+Retries SHALL be attempted only while the connection is still justified — that is, while the flag and route condition hold **and** connection demand is outstanding, or while a sign-in event is still unresolved. A dropped connection that nothing is waiting on SHALL NOT be retried: the retry timer SHALL be cleared and the provider SHALL settle into a disconnected state until the next completion requests a channel. An unresolved sign-in event SHALL keep reconnect available even when the route condition is false, so a stream error cannot leave that event permanently unreportable.
+
+Tab visibility SHALL NOT resume retrying. The retry budget SHALL be reset when fresh demand is acquired for a new completion, which is what recovers a channel whose retries were exhausted; it SHALL NOT be reset by a `visibilitychange` event.
 
 #### Scenario: Transient disconnect recovers
-- **WHEN** the SSE connection drops and reconnects successfully within the retry window
+- **WHEN** the SSE connection drops while a completion still holds demand, and reconnects successfully within the retry window
 - **THEN** the channel id is resumed (or a fresh one issued) and pending events remain visible in the dialog throughout
 
 #### Scenario: Retries exhausted
 - **WHEN** 5 consecutive reconnect attempts fail
-- **THEN** the provider stops retrying and marks connection status as disconnected until the next completion or visibility change triggers a fresh attempt
+- **THEN** the provider stops retrying and marks connection status as disconnected until a new completion acquires demand and triggers a fresh attempt
+
+#### Scenario: A drop with nothing waiting is not retried
+- **GIVEN** the channel dropped after every generation settled, with no pending sign-in event and no outstanding demand
+- **WHEN** the stream close is observed
+- **THEN** no reconnect is scheduled and no retry timer remains armed
+
+#### Scenario: A pinned channel reconnects off-route
+- **GIVEN** the sign-in dialog lists an unresolved event and the user has navigated to a non-streaming-capable route
+- **WHEN** the pinned channel's stream drops
+- **THEN** reconnect is still attempted under the capped backoff, reusing the existing channel id, so the event stays reportable
+
+#### Scenario: Visibility does not resume exhausted retries
+- **WHEN** the retry budget is exhausted with no demand outstanding and the tab is backgrounded and then made visible
+- **THEN** no new subscribe attempt is made and the retry budget is not reset
 
 ### Requirement: Global non-dismissible toolset sign-in dialog
 
-When one or more `toolset/signin` events are pending and the `liveChatInteraction` flag is enabled, a global `ToolsetSigninDialog` (`apps/chat/src/components/ToolsetSigninDialog/ToolsetSigninDialog.tsx`) SHALL render, mounted at the authenticated-application level (visible regardless of which route/conversation is active). The dialog SHALL NOT be dismissible by clicking outside, pressing Escape, or any action other than resolving every listed event (login or decline). It SHALL list every pending event as a row showing the toolset's name/version (or a fallback derived from the toolset id while metadata is loading) and per-row `Log in` / `Decline` actions, plus a single `Decline all` action. Only the row currently being processed SHALL be disabled; other rows remain actionable.
+When one or more `toolset/signin` events are pending and the `liveChatInteraction` flag is enabled, a global `SigninInterruptDialog` (`apps/chat/src/components/SigninInterruptDialog/SigninInterruptDialog.tsx`) SHALL render, mounted at the authenticated-application level (visible regardless of which route/conversation is active). The dialog SHALL NOT be dismissible by clicking outside, pressing Escape, or any action other than resolving every listed event (login or decline). It SHALL list every pending event as a row showing the toolset's name/version (or a fallback derived from the toolset id while metadata is loading) and per-row `Log in` / `Decline` actions, plus a single `Decline all` action. Only the row currently being processed SHALL be disabled; other rows remain actionable.
 
-i18n keys: `toolsetSignin.dialogTitle`, `toolsetSignin.rowLogin`, `toolsetSignin.rowDecline`, `toolsetSignin.declineAll`, `toolsetSignin.fallbackName`, `toolsetSignin.apiKeyPlaceholder`, `toolsetSignin.errorRetry`.
+"Not dismissible" constrains the client-channel lifecycle, not only the dialog's own event handlers: the dialog renders `ClientChannelProvider`'s pending-event map, so any teardown that clears that map dismisses the dialog on the user's behalf. While the dialog lists at least one unresolved event, the subscription SHALL therefore be pinned open — the idle-disconnect timer SHALL NOT fire and leaving a streaming-capable route SHALL NOT tear the channel down (see the `client-channel-protocol` requirements for the flag gate and the idle disconnect). The pin is also what keeps the event resolvable at all, since a `report` is addressed to the channel id Core is blocked on. The two teardowns that end the mechanism rather than idling it — the `liveChatInteraction` flag flipping off, and the provider unmounting on logout or app teardown — remain unconditional and do clear the pending events.
+
+i18n keys: every member of `ToolsetSigninI18nKeys` in `apps/chat/src/constants/translation-keys.ts` (`toolsetSignin.dialogTitle`, `toolsetSignin.dialogDescription`, `toolsetSignin.rowDecline`, `toolsetSignin.declineAll`, `toolsetSignin.apiKeyLabel`, `toolsetSignin.apiKeyPlaceholder`, `toolsetSignin.errorLoginFailed`, `toolsetSignin.errorPopupBlocked`, `toolsetSignin.errorDeclineFailed`, `toolsetSignin.errorRetry`, `toolsetSignin.statusLoginSuccess`, `toolsetSignin.statusDeclineSuccess`, `toolsetSignin.noCredentialsRequired`, `toolsetSignin.offlineUsageConsent`, `toolsetSignin.offlineUsageConsentHint`).
 
 RTL: dialog and row layout use logical Tailwind utilities (`ps-*`/`pe-*`/`text-start`, etc.) and no directional icons beyond a symmetric close-suppression (no close icon at all, since the dialog is non-dismissible); fully mirrors under `dir="rtl"` with no icon-flip needed since it uses no directional icons.
 
@@ -57,6 +83,14 @@ Accessibility: dialog root uses `role="dialog"` + `aria-modal="true"` + `aria-la
 #### Scenario: Dialog cannot be dismissed without resolving events
 - **WHEN** the user presses Escape or clicks outside the dialog while events remain pending
 - **THEN** the dialog remains open and no event is resolved
+
+#### Scenario: The dialog outlives the generation that produced its event
+- **WHEN** the completion that carried the `toolset/signin` event ends or errors out while the event is still unresolved, so nothing is generating any more
+- **THEN** the dialog stays open with the event listed and resolvable — the idle-disconnect grace period does not elapse into a teardown that would clear it
+
+#### Scenario: The dialog survives a route change
+- **WHEN** the application navigates away from the streaming-capable route while the dialog still lists an unresolved event
+- **THEN** the dialog stays open, its rows stay actionable, and a subsequent login or decline reports successfully on the same channel
 
 #### Scenario: Metadata not yet loaded shows a fallback name
 - **WHEN** a pending event references a toolset whose metadata has not finished loading

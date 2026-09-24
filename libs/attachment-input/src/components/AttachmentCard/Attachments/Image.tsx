@@ -5,12 +5,14 @@ import {
 } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   Skeleton,
   SkeletonVariant,
 } from '@epam/ai-dial-ui-kit';
 import { IconPhoto } from '@tabler/icons-react';
 import { CSSProperties, type FC, type KeyboardEvent, useMemo } from 'react';
 import { ATTACHMENT_TILE_BASE_CLASS } from '../../../constants/attachment-group';
+import { ATTACHMENT_INPUT_CLASS } from '../../../constants/public-class-names';
 import {
   LazyImageLoadStatus,
   useLazyImageLoad,
@@ -48,8 +50,12 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
   styles: cardStyles,
   isSelected,
 }) => {
-  const { clickLabel = 'Open attachment', expandLabel = 'Expand pasted text' } =
-    labels ?? {};
+  const {
+    clickLabel = 'Open attachment',
+    expandLabel = 'Expand pasted text',
+    removeLabel = 'Remove attachment',
+    downloadLabel = 'Download attachment',
+  } = labels ?? {};
   const { className } = cardStyles ?? {};
   const { id, name } = attachment;
   const imageSrc = attachment.previewUrl ?? attachment.url;
@@ -78,6 +84,12 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    /*
+     * Only the tile itself activates on Enter/Space — see FileAttachment for
+     * why the corner action buttons must not have their activation cancelled
+     * by the preventDefault() below.
+     */
+    if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       handleCardClick();
@@ -91,6 +103,8 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
     styles.tile,
     isSelected && styles.selected,
     className,
+    ATTACHMENT_INPUT_CLASS.tile,
+    isSelected && ATTACHMENT_INPUT_CLASS.tileSelected,
   );
 
   return (
@@ -106,20 +120,24 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
       }
     >
       <div className="relative h-full w-full overflow-hidden">
-        {onRemove && (
-          <RemoveAction
-            onClick={onRemove}
-            id={id}
-            className={styles.imageActionButton}
-          />
-        )}
-        {onDownload && (
-          <DownloadAction
-            onClick={onDownload}
-            id={id}
-            className={styles.imageActionButton}
-          />
-        )}
+        <div className="absolute end-1 top-1 z-10 flex gap-1">
+          {onRemove && (
+            <RemoveAction
+              ariaLabel={removeLabel}
+              onClick={onRemove}
+              id={id}
+              className={styles.imageActionButton}
+            />
+          )}
+          {onDownload && (
+            <DownloadAction
+              ariaLabel={downloadLabel}
+              onClick={onDownload}
+              id={id}
+              className={styles.imageActionButton}
+            />
+          )}
+        </div>
         {imageLoadStatus !== LazyImageLoadStatus.Loaded && (
           <Skeleton
             variant={SkeletonVariant.Rectangular}
@@ -131,6 +149,7 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
                 size={DIAL_ICON_SIZE.LG}
                 className={styles.typeText}
                 aria-hidden
+                stroke={DIAL_KIT_ICON_STROKE}
               />
             }
             className="absolute inset-0 rounded-xl"

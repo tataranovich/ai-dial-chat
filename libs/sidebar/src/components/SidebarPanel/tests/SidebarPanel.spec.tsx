@@ -1,10 +1,12 @@
 import { render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import type { SidebarPanelProps } from '../../../models/panel-props';
 import { SidebarOrientation } from '../../../types/orientation';
 import { SidebarPanel } from '../SidebarPanel';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { LG: 24 },
   GhostIconButton: ({
     'aria-label': ariaLabel,
@@ -13,14 +15,12 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     'aria-label': string;
     onClick: () => void;
   }) => <button type="button" aria-label={ariaLabel} onClick={onClick} />,
-  DialEllipsisTooltip: ({ text }: { text: React.ReactNode }) => (
-    <span>{text}</span>
-  ),
+  EllipsisTooltip: ({ text }: { text: React.ReactNode }) => <span>{text}</span>,
   ResizableContainerSide: {
     Left: 'left',
     Right: 'right',
   },
-  DialConditionalResizableContainer: ({
+  ConditionalResizableContainer: ({
     children,
   }: {
     children: React.ReactNode;
@@ -45,14 +45,14 @@ describe('SidebarPanel', () => {
   });
 
   it('has role=complementary and aria-label', () => {
-    const { container } = render(
+    render(
       <SidebarPanel {...defaultProps}>
         <span />
       </SidebarPanel>,
     );
-    const aside = container.querySelector('aside');
-    expect(aside?.getAttribute('role')).toBe('complementary');
-    expect(aside?.getAttribute('aria-label')).toBe('Test panel');
+    expect(
+      screen.getByRole('complementary', { name: 'Test panel' }),
+    ).toBeTruthy();
   });
 
   it('renders leftActions in the left header group', () => {
@@ -96,18 +96,15 @@ describe('SidebarPanel', () => {
     );
   });
 
-  it('side=right: applies border-s divider', () => {
-    const { container } = render(
+  it('side=right: renders without a divider', () => {
+    render(
       <SidebarPanel {...defaultProps} orientation={SidebarOrientation.Right}>
         <span />
       </SidebarPanel>,
     );
-    expect(
-      container.querySelector('aside')?.classList.contains('border-s'),
-    ).toBe(true);
-    expect(
-      container.querySelector('aside')?.classList.contains('border-e'),
-    ).toBe(false);
+    const aside = screen.getByRole('complementary');
+    expect(aside.classList.contains('border-s')).toBe(false);
+    expect(aside.classList.contains('border-e')).toBe(false);
   });
 
   // --- side='left' close placement ---
@@ -127,18 +124,34 @@ describe('SidebarPanel', () => {
     );
   });
 
-  it('side=left: applies border-e divider', () => {
-    const { container } = render(
-      <SidebarPanel {...defaultProps} orientation={SidebarOrientation.Left}>
+  it('side=left, open: applies the border-s divider facing the navigation rail', () => {
+    render(
+      <SidebarPanel
+        {...defaultProps}
+        orientation={SidebarOrientation.Left}
+        isOpen
+      >
         <span />
       </SidebarPanel>,
     );
-    expect(
-      container.querySelector('aside')?.classList.contains('border-e'),
-    ).toBe(true);
-    expect(
-      container.querySelector('aside')?.classList.contains('border-s'),
-    ).toBe(false);
+    const aside = screen.getByRole('complementary');
+    expect(aside.classList.contains('border-s')).toBe(true);
+    expect(aside.classList.contains('border-e')).toBe(false);
+  });
+
+  it('side=left, closed: renders without a divider', () => {
+    render(
+      <SidebarPanel
+        {...defaultProps}
+        orientation={SidebarOrientation.Left}
+        isOpen={false}
+      >
+        <span />
+      </SidebarPanel>,
+    );
+    const aside = screen.getByRole('complementary');
+    expect(aside.classList.contains('border-s')).toBe(false);
+    expect(aside.classList.contains('border-e')).toBe(false);
   });
 
   it('close button calls onClose', async () => {
@@ -153,7 +166,7 @@ describe('SidebarPanel', () => {
   });
 
   it('colors prop emits CSS custom properties', () => {
-    const { container } = render(
+    render(
       <SidebarPanel
         {...defaultProps}
         styles={{ colors: { background: '#ff0000' } }}
@@ -161,17 +174,17 @@ describe('SidebarPanel', () => {
         <span />
       </SidebarPanel>,
     );
-    const style = container.querySelector('aside')?.getAttribute('style') ?? '';
+    const style = screen.getByRole('complementary').getAttribute('style') ?? '';
     expect(style).toContain('--sb-bg: #ff0000');
   });
 
   it('no inline style when colors and typography are omitted', () => {
-    const { container } = render(
+    render(
       <SidebarPanel {...defaultProps}>
         <span />
       </SidebarPanel>,
     );
-    const style = container.querySelector('aside')?.getAttribute('style') ?? '';
+    const style = screen.getByRole('complementary').getAttribute('style') ?? '';
     expect(style).not.toContain('--sb-bg');
   });
 
@@ -185,6 +198,7 @@ describe('SidebarPanel', () => {
         <span />
       </SidebarPanel>,
     );
+    // eslint-disable-next-line testing-library/no-node-access -- the outermost width/style wrapper is a plain div with no accessible role or text
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.classList.contains('w-full')).toBe(true);
     expect(wrapper.style.width).toBe('');
@@ -196,7 +210,103 @@ describe('SidebarPanel', () => {
         <span />
       </SidebarPanel>,
     );
+    // eslint-disable-next-line testing-library/no-node-access -- the outermost width/style wrapper is a plain div with no accessible role or text
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.style.width).toBe('360px');
+  });
+});
+
+describe('SidebarPanel — open/close animation', () => {
+  const getPanelWrapper = (props?: Partial<SidebarPanelProps>) => {
+    const { container } = render(
+      <SidebarPanel {...defaultProps} {...props}>
+        <span />
+      </SidebarPanel>,
+    );
+
+    // eslint-disable-next-line testing-library/no-node-access -- the outermost width/transition wrapper is a plain div with no accessible role or text
+    return container.firstChild as HTMLElement;
+  };
+
+  it('keeps the stacking context while closed so the closing panel is not painted over', () => {
+    expect(getPanelWrapper({ isOpen: false }).classList.contains('z-50')).toBe(
+      true,
+    );
+  });
+
+  it('does not fade the panel region in, which would show the content behind a half-open panel', () => {
+    getPanelWrapper();
+    expect(screen.getByRole('complementary').getAttribute('class')).not.toMatch(
+      /appear/,
+    );
+  });
+
+  it('overlay mode: keeps full width and sets no inline width, so the content does not reflow', () => {
+    const wrapper = getPanelWrapper({
+      isOpen: false,
+      isOverlay: true,
+      defaultWidth: 360,
+    });
+    expect(wrapper.style.width).toBe('');
+    expect(wrapper.classList.contains('w-full')).toBe(true);
+  });
+
+  it('overlay mode: animates the transform instead of the layout width', () => {
+    const wrapper = getPanelWrapper({ isOverlay: true });
+    expect(wrapper.classList.contains('transition-transform')).toBe(true);
+    expect(wrapper.classList.contains('transition-[width]')).toBe(false);
+  });
+
+  it('overlay mode, left orientation, closed: slides out through the start edge in both directions', () => {
+    const wrapper = getPanelWrapper({
+      isOpen: false,
+      isOverlay: true,
+      orientation: SidebarOrientation.Left,
+    });
+    expect(wrapper.classList.contains('ltr:-translate-x-full')).toBe(true);
+    expect(wrapper.classList.contains('rtl:translate-x-full')).toBe(true);
+  });
+
+  it('overlay mode, right orientation, closed: slides out through the end edge in both directions', () => {
+    const wrapper = getPanelWrapper({
+      isOpen: false,
+      isOverlay: true,
+      orientation: SidebarOrientation.Right,
+    });
+    expect(wrapper.classList.contains('ltr:translate-x-full')).toBe(true);
+    expect(wrapper.classList.contains('rtl:-translate-x-full')).toBe(true);
+  });
+
+  it('overlay mode, open: rests at translate-x-0 so both states declare a transform', () => {
+    expect(
+      getPanelWrapper({ isOverlay: true }).classList.contains('translate-x-0'),
+    ).toBe(true);
+  });
+
+  it('non-overlay mode: still animates the layout width', () => {
+    const wrapper = getPanelWrapper();
+    expect(wrapper.classList.contains('transition-[width]')).toBe(true);
+    expect(wrapper.classList.contains('transition-transform')).toBe(false);
+  });
+
+  it('honours a reduced-motion preference', () => {
+    expect(
+      getPanelWrapper().classList.contains('motion-reduce:transition-none'),
+    ).toBe(true);
+  });
+
+  it('keeps the header actions mounted while closed so they do not pop in mid-animation', () => {
+    getPanelWrapper({
+      isOpen: false,
+      leftActions: <button aria-label="search" />,
+      rightActions: <button aria-label="download" />,
+    });
+    expect(screen.getByRole('button', { name: 'search' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'download' })).toBeTruthy();
+  });
+
+  it('marks the closed panel region inert so the mounted actions stay out of the tab order', () => {
+    getPanelWrapper({ isOpen: false });
+    expect(screen.getByRole('complementary').hasAttribute('inert')).toBe(true);
   });
 });

@@ -6,13 +6,15 @@ import {
   MIMEType,
 } from '@epam/ai-dial-chat-shared';
 import {
-  DialEllipsisTooltip,
-  GhostIconButton,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
+  EllipsisTooltip,
+  GhostIconButton,
   PrimaryButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
-import { FC, memo, ReactNode } from 'react';
+import { FC, ReactNode } from 'react';
+import { QUOTATIONS_CLASS } from '../../constants/public-class-names';
 import type { AnnotationGroup } from '../../utils/group-annotations-by-source';
 import styles from './CitationCard.module.scss';
 
@@ -36,8 +38,6 @@ export interface CitationCardLabels {
 
 /** Color overrides for `CitationCard`, applied as CSS custom properties with app theme fallbacks. */
 export interface CitationCardColors {
-  /** Card border color. Fallback: `--stroke-primary`. */
-  cardBorder?: string;
   /** Card background color. Fallback: `--bg-layer-raised`. */
   cardBackground?: string;
   /** Quoted excerpt text color. Fallback: `--text-secondary`. */
@@ -58,6 +58,8 @@ export interface CitationCardTypography {
   titleClassName?: string;
   /** CSS class applied to the quoted excerpt. Defaults to `'dial-small-text'`. */
   quoteClassName?: string;
+  /** CSS class applied to bold spans inside the quoted excerpt. Defaults to `'dial-small-semi-text'` — the semibold step matching the default `quoteClassName`. */
+  quoteStrongClassName?: string;
   /** CSS class applied to the pagination switcher text. Defaults to `'dial-tiny-text'`. */
   switcherClassName?: string;
 }
@@ -103,9 +105,7 @@ export const CitationCard: FC<CitationCardProps> = ({
   const total = group.annotations.length;
   const annotation = group.annotations[activeIndex] ?? group.primaryAnnotation;
   const hasSwitcher = total > 1;
-  const groupHasTitle = group.annotations.some((a) => a.body?.title);
-  const sourceContentType =
-    group.primaryAnnotation.body?.source?.attachment?.type;
+  const sourceContentType = annotation.body?.source?.attachment?.type;
   const isWebLink =
     onPreview == null ||
     sourceContentType === MIMEType.HTML ||
@@ -115,10 +115,11 @@ export const CitationCard: FC<CitationCardProps> = ({
     typography?.sourceNameClassName ?? 'dial-tiny-text';
   const titleClassName = typography?.titleClassName ?? 'dial-body-semi-text';
   const quoteClassName = typography?.quoteClassName ?? 'dial-small-text';
+  const quoteStrongClassName =
+    typography?.quoteStrongClassName ?? 'dial-small-semi-text';
   const switcherClassName = typography?.switcherClassName ?? 'dial-tiny-text';
 
   const cssVars = buildCssVars({
-    '--cc-card-border': colors?.cardBorder,
     '--cc-card-bg': colors?.cardBackground,
     '--cc-quote-text': colors?.quoteText,
     '--cc-title-text': colors?.titleText,
@@ -133,15 +134,16 @@ export const CitationCard: FC<CitationCardProps> = ({
       aria-label={labels.ariaLabel}
       style={cssVars}
       className={mergeClasses(
-        'flex w-[400px] flex-col gap-3 rounded-lg border p-4 shadow-lg',
+        'flex w-[400px] flex-col gap-3 rounded-lg p-4 shadow-lg',
         styles.card,
+        QUOTATIONS_CLASS.citationCard,
       )}
     >
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1">
           {headerIcon}
-          <DialEllipsisTooltip
+          <EllipsisTooltip
             text={group.sourceName}
             className={mergeClasses(
               sourceNameClassName,
@@ -153,7 +155,13 @@ export const CitationCard: FC<CitationCardProps> = ({
         {hasSwitcher && (
           <div className="flex shrink-0 items-center gap-1">
             <GhostIconButton
-              icon={<IconChevronLeft size={14} className="rtl:scale-x-[-1]" />}
+              icon={
+                <IconChevronLeft
+                  size={14}
+                  className="rtl:scale-x-[-1]"
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               size={ElementSize.Small}
               aria-label={labels.previousCitation}
               onClick={() => onIndexChange((activeIndex - 1 + total) % total)}
@@ -162,7 +170,13 @@ export const CitationCard: FC<CitationCardProps> = ({
               {labels.formatSwitcherText(activeIndex + 1, total)}
             </span>
             <GhostIconButton
-              icon={<IconChevronRight size={14} className="rtl:scale-x-[-1]" />}
+              icon={
+                <IconChevronRight
+                  size={14}
+                  className="rtl:scale-x-[-1]"
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               size={ElementSize.Small}
               aria-label={labels.nextCitation}
               onClick={() => onIndexChange((activeIndex + 1) % total)}
@@ -173,29 +187,34 @@ export const CitationCard: FC<CitationCardProps> = ({
 
       {(annotation.body?.title || annotation.body?.quote || hasSwitcher) && (
         <div className="flex flex-col gap-3">
-          {(annotation.body?.title || (hasSwitcher && groupHasTitle)) && (
+          {annotation.body?.title && (
             <p
               className={mergeClasses(
                 titleClassName,
                 styles.title,
                 'break-words',
-                hasSwitcher && groupHasTitle && 'min-h-[1lh]',
               )}
             >
-              {annotation.body?.title}
+              {annotation.body.title}
             </p>
           )}
           {(annotation.body?.quote || hasSwitcher) && (
-            <div className={mergeClasses(hasSwitcher && 'min-h-[3lh]')}>
+            <div
+              className={mergeClasses(
+                quoteClassName,
+                styles.quote,
+                'line-clamp-6 break-words',
+                hasSwitcher && 'min-h-[3lh]',
+              )}
+            >
               {annotation.body?.quote && (
                 <MarkdownRenderer
                   content={annotation.body.quote}
                   classNames={{
-                    p: mergeClasses(
-                      quoteClassName,
-                      'line-clamp-6',
-                      styles.quote,
-                    ),
+                    p: mergeClasses(quoteClassName, styles.quote),
+                    ul: mergeClasses(quoteClassName, 'ps-3'),
+                    ol: mergeClasses(quoteClassName, 'ps-3'),
+                    strong: quoteStrongClassName,
                   }}
                 />
               )}
@@ -222,5 +241,3 @@ export const CitationCard: FC<CitationCardProps> = ({
     </div>
   );
 };
-
-export default memo(CitationCard);

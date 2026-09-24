@@ -1,5 +1,9 @@
 # Spec: deployment-configuration
 
+## Purpose
+
+The deployment configuration schema endpoint and the conversation starters the frontend renders from it.
+
 ## Requirements
 
 ### Requirement: Backend exposes deployment configuration schema endpoint
@@ -9,8 +13,6 @@
 The decoded `deployment` parameter may be a single-segment static deployment name or a slash-separated DIAL resource identifier. The BFF MUST reject identifiers longer than 2048 characters, empty segments, `.` or `..` segments, and ASCII control characters with 400 before calling DIAL Core. For accepted values it MUST percent-encode every segment independently before passing the identifier to the DIAL SDK, preserving structural `/` separators.
 
 Cache: results SHALL be cached in-memory for 60 seconds, keyed as `deployments:configuration:<userSub>:<deploymentName>`.
-
-Rate limiting: inherits the global throttler default (no per-route override required).
 
 #### Scenario: Configuration returned for a configurable deployment
 
@@ -208,7 +210,7 @@ The `openapi.json` source SHALL include a `GET /api/v1/deployments/{deployment}/
 
 The system SHALL expose the deployment configuration schema (`DeploymentConfigurationSchema`) to frontend consumers for:
 1. Extracting starter options from `properties.*.oneOf` arrays (existing behavior).
-2. Extracting tool toggle metadata from boolean properties whose key matches a configured tool id (new behavior).
+2. Extracting tool toggle metadata from every boolean property of the schema.
 
 The `DeploymentsContext` SHALL continue to expose `selectedDeploymentConfiguration: DeploymentConfigurationSchema | null` unchanged. Downstream consumers (hooks, components) are responsible for interpreting specific schema properties.
 
@@ -216,14 +218,14 @@ The `DeploymentsContext` SHALL continue to expose `selectedDeploymentConfigurati
 - **WHEN** the deployment configuration schema contains a property with `oneOf` starter options and `dial:widget: "starter"`
 - **THEN** `getStartersFromSchema()` continues to extract and render starter buttons as before
 
-#### Scenario: Tool property extraction by configured id
-- **WHEN** the deployment configuration schema contains a property key matching the configured `deepResearchToolId` with boolean type
-- **THEN** the `useToolsMenu` hook extracts that property's `title` and `default` to construct a `ToolMenuItem`
+#### Scenario: Tool extraction from boolean properties
+- **WHEN** the deployment configuration schema contains a boolean-typed property
+- **THEN** the `useToolsMenu` hook extracts that property's `title` and `default` to construct a `ToolMenuItem`, one per boolean property
 
-#### Scenario: Non-matching properties ignored
-- **WHEN** the deployment configuration schema contains boolean properties whose keys do NOT match `deepResearchToolId`
-- **THEN** those properties are NOT rendered as tool menu items (they are ignored in this slice)
+#### Scenario: Non-boolean properties ignored
+- **WHEN** the deployment configuration schema contains non-boolean properties (strings, numbers, `oneOf` starters)
+- **THEN** those properties are NOT rendered as tool menu items
 
 #### Scenario: Schema with both starters and tools
-- **WHEN** the schema contains both a starter property (with `oneOf`) and a tool property (boolean matching configured id)
+- **WHEN** the schema contains both a starter property (with `oneOf`) and a boolean tool property
 - **THEN** both starter buttons and the Tools menu item render independently without interference

@@ -1,11 +1,16 @@
-## ADDED Requirements
+# file-download Specification
+
+## Purpose
+
+Downloading a file from DIAL Core through the BFF, with query DTO validation, a generated-client frontend wrapper, and resolving DIAL file ids embedded in assistant markdown to download URLs.
+
+## Requirements
 
 ### Requirement: Download file from DIAL Core via BFF
 The system SHALL expose `GET /api/v1/files/download` accepting `bucket` and `path` query parameters, validate all inputs, proxy the request to DIAL Core `GET /v1/files/{bucket}/{path}` under the authenticated user's session, and stream the binary response back to the browser.
 
 The handler SHALL forward an explicit allowlist of safe response headers from the DIAL Core response: `content-type`, `content-disposition`, `content-length`. All other headers SHALL be stripped. The endpoint SHALL not buffer the response body — it SHALL pipe the DIAL Core `fetch` response body stream directly to the NestJS `Response` object.
 
-- **Rate limit**: `@Throttle({ default: { limit: 60, ttl: 60000 } })`.
 - **HTTP method**: `GET`
 - **Route**: `/api/v1/files/download` (query-param shape chosen over path params; see design.md Decision 3)
 - **operationId**: `downloadFile` → generated SDK method `filesApi.downloadFile(...)` / `filesApi.downloadFileRaw(...)`.
@@ -98,3 +103,38 @@ The `filesApi` singleton SHALL be exported from `apps/chat/src/server-api/api-cl
 #### Scenario: Frontend wrapper propagates 404 error
 - **WHEN** the server returns `404 Not Found`
 - **THEN** the `downloadFileRaw()` promise rejects and the caller can catch and handle the error
+
+---
+
+### Requirement: Assistant markdown resolves DIAL file ids to download URLs
+
+Assistant message content rendered by `MarkdownRenderer`/`MDMessageViewer` (`libs/chat-shared/src/components/MarkdownRenderer/`) SHALL accept an optional `urlTransform` prop: a function applied to every markdown/raw-HTML `href`/`src` value before react-markdown's own protocol-safety check (`defaultUrlTransform`) runs. `MDMessageViewer`, `MessageBubble`/`AssistantMessageBubble` (`libs/conversation-messages/`) SHALL forward this prop through as `urlTransform`/`markdownUrlTransform` respectively, defaulting to no extra rewrite when omitted.
+
+`apps/chat` SHALL supply `resolveMarkdownUrl` (`apps/chat/src/utils/dial-file.ts`) as this transform for assistant messages (`ConversationMessageItem.tsx`), converting a DIAL file id embedded inline in markdown (`files/{bucket}/{path}`) to the BFF download URL `/api/v1/files/download?bucket={bucket}&path={encoded path}` via the existing `resolveDialFileDownloadUrl`. This is the mechanism that lets an assistant reply embed a code-interpreter-generated chart as `![alt](files/{bucket}/{path})` and have it render as a real `<img>` instead of a broken image (the literal `files/...` id is not itself a resolvable URL).
+
+Values that are not DIAL file ids (e.g. `https://` URLs) SHALL be passed through unchanged. The host transform's output SHALL still be passed through react-markdown's own `defaultUrlTransform`, so an unsafe protocol (e.g. `javascript:`) returned by a host transform is still stripped.
+
+#### Scenario: Markdown image src is rewritten to a download URL
+- **GIVEN** assistant markdown content `![Silver Lake chart](files/9gRuhxHb/appdata/applications/public/pg/chart.png)`
+- **WHEN** the message is rendered
+- **THEN** the rendered `<img>` has `src="/api/v1/files/download?bucket=9gRuhxHb&path=appdata%2Fapplications%2Fpublic%2Fpg%2Fchart.png"`
+
+#### Scenario: Markdown link href is rewritten to a download URL
+- **GIVEN** assistant markdown content `[report](files/bucket/report.pdf)` and a host `urlTransform`
+- **WHEN** the message is rendered
+- **THEN** the rendered `<a>` has `href` equal to the transform's output for that DIAL file id
+
+#### Scenario: Non-file URLs are left unchanged
+- **GIVEN** assistant markdown content `![logo](https://example.com/logo.png)`
+- **WHEN** the message is rendered
+- **THEN** the rendered `<img src>` is `https://example.com/logo.png`, unmodified
+
+#### Scenario: `urlTransform` is omitted
+- **GIVEN** a `MarkdownRenderer`/`MDMessageViewer` consumer that does not pass `urlTransform`
+- **WHEN** content contains `![chart](files/bucket/chart.png)`
+- **THEN** the rendered `<img src>` is the raw, unresolved `files/bucket/chart.png`
+
+#### Scenario: A host transform cannot reintroduce an unsafe protocol
+- **GIVEN** a host `urlTransform` that returns `javascript:alert(1)` for a given link
+- **WHEN** the message is rendered
+- **THEN** the rendered `<a href>` is empty (stripped by react-markdown's `defaultUrlTransform`), not the unsafe value

@@ -1,7 +1,13 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { CardShell, DIAL_ICON_SIZE, ElementSize } from '@epam/ai-dial-ui-kit';
+import {
+  CardShell,
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  ElementSize,
+} from '@epam/ai-dial-ui-kit';
 import { IconCheck } from '@tabler/icons-react';
 import { FC, KeyboardEvent, MouseEvent, useCallback, useState } from 'react';
+import { CATALOG_CLASS } from '../../constants/public-class-names';
 import { AppIdentityColors } from '../../models/app-identity-styles';
 import { CatalogItem } from '../../models/catalog-item';
 import { DeploymentSize } from '../../types/deployment-icon-size';
@@ -18,6 +24,8 @@ export interface FavoriteCardProps {
   initialIsStarred?: boolean;
   /** Called when the star button is toggled. */
   onToggle?: (id: string, isStarred: boolean) => void;
+  /** Rule for whether the favorite star is shown; `false` hides the star and makes the item non-favoritable. Defaults to visible when omitted. */
+  isFavoriteVisible?: (item: CatalogItem) => boolean;
   /** Called when the card body is clicked. */
   onClick?: (item: CatalogItem) => void;
   /** Typography CSS class for the entity name. Default: 'dial-body-semi-text'. */
@@ -36,7 +44,7 @@ export interface FavoriteCardProps {
   removeFromFavoritesAriaLabel?: string;
   /** Whether this card represents the currently selected item — shows an accent border, tinted background, and a checkmark. Default: false. */
   isSelected?: boolean;
-  /** Credentials-status badge label shown when signed out. Default: `'LOGGED OUT'`. */
+  /** Accessible label for the logged-out warning icon on the entity avatar, and the text shown in its hover tooltip. Default: `'Authorize to use this toolset.'`. */
   credentialsBadgeLoggedOutLabel?: string;
 }
 
@@ -45,6 +53,7 @@ export const FavoriteCard: FC<FavoriteCardProps> = ({
   item,
   initialIsStarred = true,
   onToggle,
+  isFavoriteVisible,
   onClick,
   nameClassName,
   colors,
@@ -93,6 +102,7 @@ export const FavoriteCard: FC<FavoriteCardProps> = ({
         'box-border min-w-0 cursor-pointer flex-row items-start gap-1 text-start',
         isLeaving && styles.cardLeaving,
         isSelected && styles.selectedCard,
+        CATALOG_CLASS.favoriteCard,
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
@@ -112,6 +122,7 @@ export const FavoriteCard: FC<FavoriteCardProps> = ({
             styles.selectedCheck,
           )}
           aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
         />
       )}
 
@@ -133,21 +144,25 @@ export const FavoriteCard: FC<FavoriteCardProps> = ({
               lastUsedClassName,
             },
           }}
-        />
-        <CredentialsBadge
-          credentials={item.credentials}
-          loggedOutLabel={credentialsBadgeLoggedOutLabel}
+          iconOverlay={
+            <CredentialsBadge
+              credentials={item.credentials}
+              loggedOutLabel={credentialsBadgeLoggedOutLabel}
+            />
+          }
         />
       </div>
-      <StarToggleButton
-        isStarred={isStarred}
-        size={ElementSize.Small}
-        onClick={handleToggle}
-        ariaLabel={
-          isStarred ? removeFromFavoritesAriaLabel : addToFavoritesAriaLabel
-        }
-        className="self-end"
-      />
+      {isFavoriteVisible?.(item) !== false && (
+        <StarToggleButton
+          isStarred={isStarred}
+          size={ElementSize.Small}
+          onClick={handleToggle}
+          ariaLabel={
+            isStarred ? removeFromFavoritesAriaLabel : addToFavoritesAriaLabel
+          }
+          className="self-end"
+        />
+      )}
     </CardShell>
   );
 };

@@ -8,9 +8,11 @@ import {
   Res,
 } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
-import type { SessionUser } from '../auth/session/session.types';
+import {
+  getJobTitleClaim,
+  type SessionUser,
+} from '../auth/session/session.types';
 import { DeploymentLimitsResponseDto } from '../openapi/openapi-response.dto';
 import { DeploymentsService } from './deployments.service';
 import { DeploymentConfigurationDto } from './dto/deployment-configuration.dto';
@@ -25,7 +27,6 @@ export class DeploymentsController {
   constructor(private readonly deploymentsService: DeploymentsService) {}
 
   @Get()
-  @Throttle({ default: { limit: 60, ttl: 60000 } })
   @ApiOperation({
     operationId: 'listDeployments',
     summary: 'List deployments by interface type',
@@ -52,7 +53,6 @@ export class DeploymentsController {
     description: 'Not authenticated — valid session cookie required',
   })
   @ApiResponse({ status: 403, description: 'Caller lacks permission' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -66,7 +66,7 @@ export class DeploymentsController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { sub, at, bucket } = req.user as SessionUser;
+    const { sub, at, bucket, claims } = req.user as SessionUser;
     res.setHeader(
       'Cache-Control',
       query.refresh ? 'private, no-store' : 'private, max-age=30',
@@ -77,6 +77,7 @@ export class DeploymentsController {
       bucket,
       query.interface_type,
       query.refresh,
+      getJobTitleClaim(claims),
     );
   }
 
@@ -113,7 +114,6 @@ export class DeploymentsController {
   }
 
   @Get(':deployment/limits')
-  @Throttle({ default: { limit: 60, ttl: 60000 } })
   @Header('Cache-Control', 'private, no-store')
   @ApiOperation({
     operationId: 'getDeploymentLimits',
@@ -141,7 +141,6 @@ export class DeploymentsController {
     status: 404,
     description: 'Deployment limits not found',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
   @ApiResponse({
     status: 502,
@@ -157,7 +156,7 @@ export class DeploymentsController {
   }
 
   @Get(':deployment/details')
-  @Throttle({ default: { limit: 60, ttl: 60000 } })
+  @Header('Cache-Control', 'private, no-store')
   @ApiOperation({
     operationId: 'getDeploymentDetails',
     summary: 'Get full details for a single deployment',
@@ -166,9 +165,8 @@ export class DeploymentsController {
       "(dispatching to DIAL Core's getModel/getApplication/getToolset based on the " +
       'resolved deployment type) and maps it into a frontend-safe DeploymentDetailsDto. ' +
       'Results are cached server-side for 60 seconds per user; the response ' +
-      'carries no client-facing Cache-Control so a browser never serves a ' +
-      "stale copy of another user's cache window or of credentials that " +
-      'changed since the last fetch.',
+      'sets Cache-Control to private, no-store so browsers and intermediaries ' +
+      'never reuse a stale copy after the active user or toolset credentials change.',
   })
   @ApiResponse({ status: 200, type: DeploymentDetailsDto })
   @ApiResponse({ status: 400, description: 'Invalid deployment identifier' })
@@ -177,7 +175,6 @@ export class DeploymentsController {
     description: 'Not authenticated — valid session cookie required',
   })
   @ApiResponse({ status: 404, description: 'Deployment not found' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',

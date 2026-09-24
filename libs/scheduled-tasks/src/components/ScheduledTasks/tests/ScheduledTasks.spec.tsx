@@ -7,35 +7,33 @@ import { ScheduledTasksProps } from '../../../models/scheduled-tasks-props';
 import { ScheduledTasksSortKey } from '../../../types/scheduled-tasks-sort-key';
 import { ScheduledTasks } from '../ScheduledTasks';
 
-vi.mock('@epam/ai-dial-kit', () => ({
-  SearchBar: ({
+vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@epam/ai-dial-ui-kit')>()),
+  Search: ({
     value,
     onChange,
-    labels,
+    placeholder,
+    clearLabel,
+    'aria-label': ariaLabel,
   }: {
-    value: string;
-    onChange: (v: string) => void;
-    labels?: {
-      placeholder?: string;
-      ariaLabel?: string;
-      clearLabel?: string;
-    };
+    value?: string;
+    onChange?: (v?: string) => void;
+    placeholder?: string;
+    clearLabel?: string;
+    'aria-label'?: string;
   }) => (
     <>
       <input
         value={value}
-        placeholder={labels?.placeholder}
-        aria-label={labels?.ariaLabel}
-        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        onChange={(e) => onChange?.(e.target.value)}
       />
       {value && (
-        <button aria-label={labels?.clearLabel} onClick={() => onChange('')} />
+        <button aria-label={clearLabel} onClick={() => onChange?.(undefined)} />
       )}
     </>
   ),
-}));
-
-vi.mock('@epam/ai-dial-ui-kit', () => ({
   GhostButton: ({
     label,
     onClick,
@@ -66,40 +64,25 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     <div data-skeleton data-color={color} />
   ),
   SkeletonVariant: { Default: 'default', Rectangular: 'rectangular' },
-  Dropdown: ({ children }: { children: ReactNode }) => <>{children}</>,
+  /* ButtonDropdown is deliberately NOT mocked: the sort menu's checked-state
+     semantics are the thing under test, and a stub would assert nothing. */
   IconButton: ({
     icon,
     ...rest
   }: { icon: ReactNode } & Record<string, unknown>) => (
     <button {...rest}>{icon}</button>
   ),
-  DialEllipsisTooltip: ({
+  EllipsisTooltip: ({
     text,
     className,
   }: {
     text: ReactNode;
     className?: string;
   }) => <span className={className}>{text}</span>,
-  DialNoDataContent: ({ title, icon }: { title: string; icon?: ReactNode }) => (
+  NoDataContent: ({ title, icon }: { title: string; icon?: ReactNode }) => (
     <div>
       {icon}
       <span>{title}</span>
-    </div>
-  ),
-  ButtonDropdown: ({
-    label,
-    items,
-  }: {
-    label?: string;
-    items: { key: string; label: string; onClick?: () => void }[];
-  }) => (
-    <div>
-      <button>{label}</button>
-      {items.map((item) => (
-        <button key={item.key} onClick={item.onClick}>
-          {item.label}
-        </button>
-      ))}
     </div>
   ),
   ButtonVariant: { Primary: 'primary', Neutral: 'neutral' },
@@ -110,6 +93,7 @@ vi.mock('@tabler/icons-react', () => ({
   IconArrowsSort: () => <svg />,
   IconCalendarTime: () => <svg />,
   IconCheck: () => <svg />,
+  IconChevronDown: () => <svg />,
   IconChevronUp: () => <svg />,
   IconChevronRight: () => <svg />,
   IconDotsVertical: () => <svg />,
@@ -141,8 +125,8 @@ const renderScheduledTasks = (overrides?: Partial<ScheduledTasksProps>) =>
         clearSearchLabel: 'Clear scheduled tasks search',
         sortLabel: 'Sort',
         sortOptions: [
-          { key: ScheduledTasksSortKey.FirstToRun, label: 'First to run' },
-          { key: ScheduledTasksSortKey.LastToRun, label: 'Last to run' },
+          { value: ScheduledTasksSortKey.FirstToRun, label: 'First to run' },
+          { value: ScheduledTasksSortKey.LastToRun, label: 'Last to run' },
         ],
         emptyStateLabel: 'No scheduled tasks yet',
         noResultsLabel: 'No results',
@@ -208,6 +192,34 @@ describe('ScheduledTasks', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it('keeps loaded cards visible and retries only a failed later page', async () => {
+    const onRetryLoadMore = vi.fn();
+    renderScheduledTasks({
+      items: [buildItem()],
+      loadMoreError: new Error('later page failed'),
+      onRetryLoadMore,
+      labels: {
+        title: 'Scheduled tasks',
+        subtitle: 'Automate recurring tasks with scheduled runs.',
+        createButtonLabel: 'New task',
+        searchPlaceholder: 'Search scheduled tasks...',
+        searchAriaLabel: 'Search scheduled tasks by name',
+        clearSearchLabel: 'Clear scheduled tasks search',
+        sortLabel: 'Sort',
+        sortOptions: [],
+        emptyStateLabel: 'No scheduled tasks yet',
+        noResultsLabel: 'No results',
+        errorLabel: 'Something went wrong',
+        loadMoreErrorLabel: 'Could not load more',
+        retryLabel: 'Retry more',
+      },
+    });
+
+    expect(screen.getByText('Competitor Updates')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry more' }));
+    expect(onRetryLoadMore).toHaveBeenCalledOnce();
   });
 
   it('renders the empty state when the source item list is empty', () => {
@@ -287,57 +299,57 @@ describe('ScheduledTasks', () => {
     expect(onSearchQueryChange).toHaveBeenCalledWith('a');
   });
 
-  const countSkeletonCards = (container: HTMLElement) =>
-    container.querySelectorAll('article[aria-hidden="true"]').length;
+  const countSkeletonCards = () =>
+    screen
+      .queryAllByRole('article', { hidden: true })
+      .filter((card) => card.getAttribute('aria-hidden') === 'true').length;
 
   it('renders exactly 6 skeleton cards below the loaded cards when isLoadingMore', () => {
-    const { container } = renderScheduledTasks({
+    renderScheduledTasks({
       items: [buildItem()],
       hasMore: true,
       isLoadingMore: true,
     });
 
-    expect(countSkeletonCards(container)).toBe(6);
+    expect(countSkeletonCards()).toBe(6);
   });
 
   it('forwards styles.colors.skeletonColor down to every skeleton bar', () => {
-    const { container } = renderScheduledTasks({
+    renderScheduledTasks({
       items: [buildItem()],
       hasMore: true,
       isLoadingMore: true,
       styles: { colors: { skeletonColor: '#ff00ff' } },
     });
 
-    const skeletonCards = container.querySelectorAll(
-      'article[aria-hidden="true"]',
-    );
+    const skeletonCards = screen
+      .queryAllByRole('article', { hidden: true })
+      .filter((card) => card.getAttribute('aria-hidden') === 'true');
     expect(skeletonCards.length).toBeGreaterThan(0);
     skeletonCards.forEach((card) => {
-      expect(
-        (card as HTMLElement).style.getPropertyValue('--stcs-skeleton-bg'),
-      ).toBe('#ff00ff');
+      expect(card.style.getPropertyValue('--stcs-skeleton-bg')).toBe('#ff00ff');
     });
   });
 
   it('renders a custom skeletonCount of placeholder cards', () => {
-    const { container } = renderScheduledTasks({
+    renderScheduledTasks({
       items: [buildItem()],
       hasMore: true,
       isLoadingMore: true,
       skeletonCount: 3,
     });
 
-    expect(countSkeletonCards(container)).toBe(3);
+    expect(countSkeletonCards()).toBe(3);
   });
 
   it('renders no skeleton cards when isLoadingMore is false', () => {
-    const { container } = renderScheduledTasks({
+    renderScheduledTasks({
       items: [buildItem()],
       hasMore: true,
       isLoadingMore: false,
     });
 
-    expect(countSkeletonCards(container)).toBe(0);
+    expect(countSkeletonCards()).toBe(0);
   });
 
   it('announces the loading-more label via the aria-live status region', () => {
@@ -353,13 +365,13 @@ describe('ScheduledTasks', () => {
   });
 
   it('renders no skeleton cards during the initial loading state', () => {
-    const { container } = renderScheduledTasks({
+    renderScheduledTasks({
       items: [],
       isLoading: true,
       isLoadingMore: true,
     });
 
-    expect(countSkeletonCards(container)).toBe(0);
+    expect(countSkeletonCards()).toBe(0);
     expect(screen.getByRole('progressbar')).toBeTruthy();
   });
 
@@ -469,6 +481,112 @@ describe('ScheduledTasks', () => {
       );
 
       expect(onCardClick).toHaveBeenCalledWith('sched_1');
+    });
+  });
+  describe('sort control', () => {
+    const openSortMenu = async (activeLabel: string) => {
+      await userEvent.click(screen.getByRole('button', { name: activeLabel }));
+    };
+
+    it('marks the active sort option as checked and leaves the others unchecked', async () => {
+      renderScheduledTasks({ sortKey: ScheduledTasksSortKey.LastToRun });
+      await openSortMenu('Last to run');
+
+      const options = screen.getAllByRole('menuitemradio');
+
+      expect(
+        options.map((option) => [
+          option.textContent,
+          option.getAttribute('aria-checked'),
+        ]),
+      ).toEqual([
+        ['First to run', 'false'],
+        ['Last to run', 'true'],
+      ]);
+    });
+
+    it('reports the chosen sort key and closes the menu', async () => {
+      const onSortChange = vi.fn();
+      renderScheduledTasks({ onSortChange });
+      await openSortMenu('First to run');
+
+      await userEvent.click(
+        screen.getByRole('menuitemradio', { name: 'Last to run' }),
+      );
+
+      expect(onSortChange).toHaveBeenCalledWith(
+        ScheduledTasksSortKey.LastToRun,
+      );
+      expect(screen.queryByRole('menuitemradio')).toBeNull();
+    });
+
+    it('shows the applied order on the trigger', () => {
+      renderScheduledTasks({ sortKey: ScheduledTasksSortKey.FirstToRun });
+
+      expect(screen.getByRole('button', { name: 'First to run' })).toBeTruthy();
+    });
+
+    /* The kit's `Button` derives its accessible name from `label`, so an
+       unrecognised sortKey would leave the trigger nameless without this. */
+    it('names the trigger after the control when the sort key matches no option', () => {
+      renderScheduledTasks({
+        sortKey: 'unknown-key' as ScheduledTasksSortKey,
+      });
+
+      expect(screen.getByRole('button', { name: 'Sort' })).toBeTruthy();
+    });
+  });
+
+  describe('banner slot', () => {
+    it('renders the banner between the toolbar and the content region when provided', () => {
+      renderScheduledTasks({
+        items: [buildItem({ displayName: 'Daily summary' })],
+        banner: <div>Example banner</div>,
+      });
+
+      const banner = screen.getByText('Example banner');
+      const searchInput = screen.getByPlaceholderText(
+        'Search scheduled tasks...',
+      );
+      const card = screen.getByText('Daily summary');
+
+      expect(
+        searchInput.compareDocumentPosition(banner) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        banner.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('renders nothing extra when banner is omitted', () => {
+      renderScheduledTasks({ items: [buildItem()] });
+
+      expect(screen.queryByText('Example banner')).toBeNull();
+    });
+
+    it('renders the banner during the loading state', () => {
+      renderScheduledTasks({
+        isLoading: true,
+        banner: <div>Example banner</div>,
+      });
+
+      expect(screen.getByText('Example banner')).toBeTruthy();
+    });
+
+    it('renders the banner during the error state', () => {
+      renderScheduledTasks({
+        error: new Error('boom'),
+        banner: <div>Example banner</div>,
+      });
+
+      expect(screen.getByText('Example banner')).toBeTruthy();
+    });
+
+    it('renders the banner during the empty state', () => {
+      renderScheduledTasks({ items: [], banner: <div>Example banner</div> });
+
+      expect(screen.getByText('Example banner')).toBeTruthy();
     });
   });
 });

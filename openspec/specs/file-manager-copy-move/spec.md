@@ -1,5 +1,11 @@
 # Spec: file-manager-copy-move
 
+## Purpose
+
+The copy and move endpoints, folder expansion via pagination, and their wiring into `useDialFileManager`.
+
+## Requirements
+
 ### Requirement: POST /api/v1/files/copy endpoint
 
 The BFF SHALL expose `POST /api/v1/files/copy` that accepts a batch of file/folder items, copies each via DIAL Core `copyResource`, and returns a per-item result array.
@@ -7,8 +13,6 @@ The BFF SHALL expose `POST /api/v1/files/copy` that accepts a batch of file/fold
 **State ownership**: `FilesBatchOperationsService` (`apps/chat-api/src/files/batch/files-batch-operations.service.ts`) owns all copy logic, sharing its per-child dispatch/fan-out/aggregate-partial-failure control flow with delete, rename, and move through one internal generic helper. It injects `FilesListingService` for `expandFolderContents`. `FilesController` delegates through the `FilesService` facade (`apps/chat-api/AGENTS.md`).
 
 **Authorization**: session cookie → `req.user.at` (bearer token forwarded to DIAL Core), identical to `/rename` and `/delete`. No additional role is required beyond an authenticated session with WRITE permission on the destination (enforced by DIAL Core, surfaced as a per-item `"Forbidden"` result).
-
-**Rate limit**: `@Throttle({ default: { limit: 10, ttl: 60000 } })` — 10 requests/minute per user, same as `/rename` and `/delete`.
 
 **Caching**: this endpoint does not read from or write to the NestJS in-memory cache. Frontend-side folder-listing caches (per-`useDialFileManager` instance, not shared/global) are invalidated by the hook on completion — see `file-manager-copy-move` frontend requirements below.
 
@@ -27,7 +31,7 @@ Folder = 'folder'
 | `bucket` | `string` | `@IsString @IsNotEmpty @Matches(BUCKET_NAME_PATTERN) @MaxLength(256)` | DIAL Core bucket |
 | `sourcePath` | `string` | `@IsString @IsNotEmpty @IsValidFilePath() @MaxLength(1024)` | Relative source path within bucket |
 | `destinationPath` | `string` | `@IsString @IsNotEmpty @IsValidFilePath() @MaxLength(1024)` | Relative destination path within bucket |
-| `overwrite` | `boolean?` | `@IsOptional @IsBoolean` | When `true`, replace an existing destination resource. Omitted or `false` preserves the conflict behavior and DIAL Core can return 409. |
+| `overwrite` | `boolean?` | `@IsOptional @IsBoolean` | When `true`, replace an existing destination resource. Omitted or `false` keeps the conflict behavior — DIAL Core rejects the transfer and the BFF reports `"Conflict"` (see **Upstream error mapping**). |
 | `nodeType` | `CopyItemNodeType` | `@IsEnum(CopyItemNodeType)` | `'item'` or `'folder'` |
 | `name` | `string` | `@IsString @IsNotEmpty @MaxLength(255)` | Display name (last segment) for error messages |
 
@@ -55,12 +59,10 @@ Folder = 'folder'
 ```typescript
 @Post('copy')
 @HttpCode(200)
-@Throttle({ default: { limit: 10, ttl: 60000 } })
 @ApiOperation({ summary: 'Copy files and folders' })
 @ApiResponse({ status: 200, type: CopyFilesResponseDto })
 @ApiResponse({ status: 400, description: 'Invalid request body' })
 @ApiResponse({ status: 401, description: 'Not authenticated' })
-@ApiResponse({ status: 429, description: 'Rate limit exceeded' })
 @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
 @ApiResponse({ status: 503, description: 'DIAL Core unreachable or timed out' })
 async copyFiles(
@@ -74,6 +76,21 @@ async copyFiles(
 - **operationId**: `filesControllerCopyFiles` → generated SDK method `filesApi.copyFiles({ copyFilesDto })`.
 - **Request DTO**: `CopyFilesDto` with `CopyItemDto.overwrite?: boolean`. **Response DTO**: `CopyFilesResponseDto`.
 - **Frontend caller**: `apps/chat/src/server-api/files.api.ts` exposes `copyFiles(items: CopyItemDto[]): Promise<CopyFilesResponseDto>` using the normal (non-`Raw`) generated method.
+
+#### Upstream error mapping
+
+`FilesBatchOperationsService.resolveTransferErrorMessage` maps a failed `copyResource` / `moveResource` call to the per-item `error` string:
+
+| DIAL Core response | `results[].error` |
+|--------------------|--------------------|
+| `403` | `"Forbidden"` |
+| `404` | `"Not found"` |
+| `400`, `overwrite` not requested, and the destination path exists | `"Conflict"` |
+| `400` in any other case | `"Copy failed"` / `"Move failed"` |
+| `409` (not part of the current DIAL Core contract; mapped defensively) | `"Conflict"` |
+| anything else, including timeouts and an unreachable Core | `"Copy failed"` / `"Move failed"` |
+
+**Destination-taken detection**: DIAL Core's transfer contract (`POST /v1/ops/resource/copy` and `/move`) declares `200`/`400`/`401`/`403`/`404`/`500` and **never** `409`, so a destination that is already taken while `overwrite` is `false` arrives as a plain `400`. The service SHALL probe the destination with `getFileMetadata` after — and only after — a non-overwriting transfer has already failed with `400`, and SHALL report `"Conflict"` when that probe returns `200` with metadata whose `url` matches the requested destination. When `overwrite: true` was requested, no probe is issued and the generic fallback stands, because an existing destination is not an error in that mode. The probe never runs on the success path. This mapping is shared with `/api/v1/files/rename` — see the `file-manager-rename-api` spec.
 
 **Example request**:
 ```json
@@ -108,8 +125,13 @@ POST /api/v1/files/copy
 
 #### Scenario: Single file copy returns conflict
 
-- **WHEN** DIAL Core returns 409 for `copyResource` because the destination already exists
-- **THEN** `results[0].success = false` and `results[0].error = "Conflict"`
+- **WHEN** DIAL Core returns 400 for `copyResource` without `overwrite` because the destination already exists
+- **THEN** the BFF probes `getFileMetadata` for that destination, and `results[0].success = false` with `results[0].error = "Conflict"`
+
+#### Scenario: Single file copy with overwrite does not probe the destination
+
+- **WHEN** DIAL Core returns 400 for `copyResource` on a request carrying `overwrite: true`
+- **THEN** no `getFileMetadata` probe is issued and `results[0].error = "Copy failed"`
 
 #### Scenario: Single file copy can overwrite an existing destination
 
@@ -173,7 +195,7 @@ When `nodeType === "folder"`, the BFF SHALL recursively list all files under the
 
 The BFF SHALL expose `POST /api/v1/files/move`, distinct from `POST /api/v1/files/rename`, that accepts a batch of file/folder items and relocates each across folders via DIAL Core `moveResource`, returning a per-item result array. `/move` and `/rename` share the same underlying DIAL Core operation (`moveResource`) but are separate endpoints so the existing `/rename` contract (same-folder inline rename) is not altered by this change. `FilesBatchOperationsService` owns this logic (same ownership and shared dispatch helper as copy/delete/rename above).
 
-**Authorization**, **rate limit** (`@Throttle({ default: { limit: 10, ttl: 60000 } })`), and **caching** posture are identical to `/copy` above.
+**Authorization** and **caching** posture are identical to `/copy` above.
 
 #### Request/Response DTOs
 
@@ -184,12 +206,10 @@ The BFF SHALL expose `POST /api/v1/files/move`, distinct from `POST /api/v1/file
 ```typescript
 @Post('move')
 @HttpCode(200)
-@Throttle({ default: { limit: 10, ttl: 60000 } })
 @ApiOperation({ summary: 'Move files and folders across folders' })
 @ApiResponse({ status: 200, type: MoveFilesResponseDto })
 @ApiResponse({ status: 400, description: 'Invalid request body' })
 @ApiResponse({ status: 401, description: 'Not authenticated' })
-@ApiResponse({ status: 429, description: 'Rate limit exceeded' })
 @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
 @ApiResponse({ status: 503, description: 'DIAL Core unreachable or timed out' })
 async moveFiles(
@@ -237,8 +257,13 @@ POST /api/v1/files/move
 
 #### Scenario: Single file move returns conflict
 
-- **WHEN** DIAL Core returns 409 for `moveResource`
-- **THEN** `results[0].success = false` and `results[0].error = "Conflict"`
+- **WHEN** DIAL Core returns 400 for `moveResource` without `overwrite` because the destination already exists
+- **THEN** the BFF probes `getFileMetadata` for that destination, and `results[0].success = false` with `results[0].error = "Conflict"`
+
+#### Scenario: Single file move with overwrite does not probe the destination
+
+- **WHEN** DIAL Core returns 400 for `moveResource` on a request carrying `overwrite: true`
+- **THEN** no `getFileMetadata` probe is issued and `results[0].error = "Move failed"`
 
 #### Scenario: Single file move can overwrite an existing destination
 
@@ -301,7 +326,7 @@ The BFF SHALL apply the identical folder-expansion algorithm used for folder cop
 
 ### Requirement: onCopyFiles wired on useDialFileManager
 
-`useDialFileManager` (`apps/chat/src/hooks/files/useDialFileManager.ts`) SHALL expose `onCopyFiles(items: DialCopiedItem[], destinationFolder: string)`, wired to ui-kit's `DialFileManager.onCopyFiles` prop, that maps `DialCopiedItem[]` to `CopyItemDto[]` (via `virtualPathToApiPath`, same resolution as `onMoveToFiles`) and calls the `copyFiles` server-api wrapper.
+`useDialFileManager` (`libs/chat-hooks/src/files/useDialFileManager/useDialFileManager.ts (@epam/ai-dial-chat-hooks)`) SHALL expose `onCopyFiles(items: DialCopiedItem[], destinationFolder: string)`, wired to ui-kit's `DialFileManager.onCopyFiles` prop, that maps `DialCopiedItem[]` to `CopyItemDto[]` (via `virtualPathToApiPath`, same resolution as `onMoveToFiles`) and calls the `copyFiles` server-api wrapper.
 
 **State ownership**: `useDialFileManager` owns `isCopying` state; no new context is introduced.
 

@@ -65,7 +65,7 @@ export interface AttachmentCardColors {
 export interface AttachmentCardTypography {
   /** Utility class applied to the file name text. Defaults to `'dial-tiny-text'`. */
   fontClassName?: string;
-  /** Utility class applied to the bottom meta label (file type / status). Defaults to `'dial-tiny-text'`. */
+  /** Utility class applied to the bottom meta label (file type / status). Defaults to `'dial-caption-text'`. */
   metaClassName?: string;
 }
 
@@ -91,6 +91,8 @@ export interface AttachmentCardLabels extends AttachmentTypeLabels {
   expandLabel?: string;
   /** Accessible label for the loading spinner shown while the attachment is uploading. Defaults to `'Loading attachment'`. */
   loadingLabel?: string;
+  /** Accessible label for the file card's in-progress upload progress bar. Defaults to `'Uploading'`. */
+  uploadingLabel?: string;
   /** Accessible label for the download button. Defaults to `'Download attachment'`. */
   downloadLabel?: string;
   /** Accessible label for the open-in-new-tab button. Defaults to `'Open in new tab'`. */

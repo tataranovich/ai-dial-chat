@@ -16,6 +16,7 @@ import { PublishService } from '../publish.service';
 const TEST_USER = {
   sub: 'user-123',
   at: 'test-access-token',
+  bucket: 'bucket-123',
   claims: { name: 'Test User' },
 };
 
@@ -94,11 +95,13 @@ describe('PublishController (integration)', () => {
       expect(res.body).toEqual(publishResult);
       expect(service.publish).toHaveBeenCalledWith(
         TEST_USER.at,
+        TEST_USER.bucket,
         'toolset',
         'tool-abc123',
         'Organization/Data Science',
         '1.2.0',
         'Test User',
+        undefined,
         undefined,
       );
     });
@@ -119,13 +122,138 @@ describe('PublishController (integration)', () => {
 
       expect(service.publish).toHaveBeenCalledWith(
         TEST_USER.at,
+        TEST_USER.bucket,
         'toolset',
         'tool-abc123',
         'Organization/Data Science',
         '1.2.0',
         'Test User',
         rules,
+        undefined,
       );
+    });
+
+    it('forwards a submitted author to the service in place of the session name', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+        .send({ ...validBody, author: 'DIAL Team' })
+        .expect(201);
+
+      expect(service.publish).toHaveBeenCalledWith(
+        TEST_USER.at,
+        TEST_USER.bucket,
+        'toolset',
+        'tool-abc123',
+        'Organization/Data Science',
+        '1.2.0',
+        'DIAL Team',
+        undefined,
+        undefined,
+      );
+    });
+
+    it('trims a submitted author before forwarding it', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+        .send({ ...validBody, author: '  DIAL Team  ' })
+        .expect(201);
+
+      expect(service.publish).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'toolset',
+        'tool-abc123',
+        'Organization/Data Science',
+        '1.2.0',
+        'DIAL Team',
+        undefined,
+        undefined,
+      );
+    });
+
+    it('falls back to the session display name when author is blank', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+        .send({ ...validBody, author: '   ' })
+        .expect(201);
+
+      expect(service.publish).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'toolset',
+        'tool-abc123',
+        'Organization/Data Science',
+        '1.2.0',
+        'Test User',
+        undefined,
+        undefined,
+      );
+    });
+
+    it('forwards publishCredentials: true from the request body to the service', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+        .send({ ...validBody, publishCredentials: true })
+        .expect(201);
+
+      expect(service.publish).toHaveBeenCalledWith(
+        TEST_USER.at,
+        TEST_USER.bucket,
+        'toolset',
+        'tool-abc123',
+        'Organization/Data Science',
+        '1.2.0',
+        'Test User',
+        undefined,
+        true,
+      );
+    });
+
+    /* The controller never derives, infers, or overrides the flag. */
+    it('forwards publishCredentials: false unchanged', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+        .send({ ...validBody, publishCredentials: false })
+        .expect(201);
+
+      expect(service.publish).toHaveBeenCalledWith(
+        TEST_USER.at,
+        TEST_USER.bucket,
+        'toolset',
+        'tool-abc123',
+        'Organization/Data Science',
+        '1.2.0',
+        'Test User',
+        undefined,
+        false,
+      );
+    });
+
+    it('returns 400 for a non-boolean publishCredentials without calling Core', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+        .send({ ...validBody, publishCredentials: 'yes' })
+        .expect(400);
+
+      expect(service.publish).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when author exceeds the 200-character limit', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+        .send({ ...validBody, author: 'a'.repeat(201) })
+        .expect(400);
+
+      expect(service.publish).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when author contains a control character', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+        .send({ ...validBody, author: 'DIAL Team\nInjected log line' })
+        .expect(400);
+
+      expect(service.publish).not.toHaveBeenCalled();
     });
 
     it('returns 400 for an invalid rule function enum value', async () => {
@@ -160,13 +288,26 @@ describe('PublishController (integration)', () => {
       expect(service.publish).not.toHaveBeenCalled();
     });
 
-    it('returns 400 when version is missing', async () => {
-      await request(app.getHttpServer())
-        .post('/api/v1/catalog/toolset/tool-abc123/publish')
+    it('accepts a skill publish request without version', async () => {
+      const res = await request(app.getHttpServer())
+        .post(
+          '/api/v1/catalog/skill/skills%2Fbucket-123%2Fteam-a%2Fdocs-helper/publish',
+        )
         .send({ folderPath: 'Organization/Data Science' })
-        .expect(400);
+        .expect(201);
 
-      expect(service.publish).not.toHaveBeenCalled();
+      expect(res.body).toEqual(publishResult);
+      expect(service.publish).toHaveBeenCalledWith(
+        TEST_USER.at,
+        TEST_USER.bucket,
+        'skill',
+        'skills/bucket-123/team-a/docs-helper',
+        'Organization/Data Science',
+        undefined,
+        'Test User',
+        undefined,
+        undefined,
+      );
     });
 
     it('returns 403 when the service throws ForbiddenException', async () => {
@@ -195,6 +336,7 @@ describe('PublishController (integration)', () => {
       expect(res.body).toEqual([publishResult]);
       expect(service.getPublishHistory).toHaveBeenCalledWith(
         TEST_USER.at,
+        TEST_USER.bucket,
         'toolset',
         'tool-abc123',
       );

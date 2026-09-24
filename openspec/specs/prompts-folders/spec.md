@@ -1,4 +1,10 @@
-## ADDED Requirements
+# prompts-folders Specification
+
+## Purpose
+
+Prompt folders as virtual path prefixes: the create, rename, delete, and move endpoints behind them.
+
+## Requirements
 
 ### Requirement: Prompt folders are virtual path prefixes with sentinel files
 
@@ -37,8 +43,6 @@ The service:
 2. Rejects with 409 if a sentinel already exists at that path.
 3. Writes sentinel resource `prompts/{sessionBucket}/{folderPath}/.folder` (empty content) to DIAL Core.
 4. Returns HTTP 201 with `PromptFolderResponseDto`: `{ "id": "<folderPath>", "name": "<name>" }`.
-
-Rate limiting: `@Throttle({ default: { limit: 20, ttl: 60000 } })`.
 
 Error codes:
 - `400 Bad Request` — DTO validation fails (name contains `/`, or disallowed characters)
@@ -135,49 +139,29 @@ Error codes:
 
 ---
 
-### Requirement: POST /api/v1/prompts/move?path= moves a prompt to a different folder
+### Requirement: POST /api/v1/prompts/move?id= moves a prompt to a different folder
 
-The backend SHALL expose `POST /api/v1/prompts/move` with a required `path` query parameter. The body is `MovePromptDto`:
+`POST /api/v1/prompts/move` SHALL accept a single required `id` query parameter carrying the prompt's full resource path (`prompts/{bucket}/{path}`) and `MovePromptDto { targetFolderId }`. The service moves the exact resource named by `id`, relying on DIAL Core to grant or reject the write — the caller's own prompt and a writable shared prompt in another bucket are handled by the identical code path, with no branch on whose bucket `id` names. `targetFolderId` remains a bucket-relative folder path, since the moved prompt always stays within the same bucket `id` already names. It preserves the existing target-path conflict check, write-new/delete-old sequence, timestamps, and `400`/`401`/`404`/`409`/`502`/`500` errors.
 
-```
-{
-  "targetFolderId": "<string @IsString @Matches(/^[a-zA-Z0-9 _.\-/]*$/)>"
-}
-```
+#### Scenario: Moving a personal prompt
 
-`targetFolderId` may be an empty string (moves the prompt to root).
+- **WHEN** `POST /api/v1/prompts/move?id=prompts%2Fmy-bucket%2Fgreeting` is called with `{ "targetFolderId": "Work" }`
+- **THEN** the caller's prompt moves to `prompts/my-bucket/Work/greeting`
 
-The service:
-1. Reads DIAL prompt resource `prompts/{sessionBucket}/{path}`.
-2. Derives the new path: `{targetFolderId ? targetFolderId + '/' : ''}{lastName}` where `lastName` is the last segment of the current path.
-3. Rejects with 409 if the new path already exists.
-4. Writes to the new path and deletes the old path; `updatedAt` is taken from resulting Core metadata.
-5. Returns HTTP 200 with `PromptResponseDto` reflecting the new path.
+#### Scenario: Moving a writable shared prompt preserves its owner
 
-Error codes:
-- `400 Bad Request` — DTO validation fails
-- `401 Unauthorized`
-- `404 Not Found` — no prompt at the source path
-- `409 Conflict` — a prompt already exists at the target path
-- `502 Bad Gateway`
-- `500 Internal Server Error`
-
-#### Scenario: Moving a prompt into a subfolder
-
-- **WHEN** `POST /api/v1/prompts/move?path=greeting` is called with `{ "targetFolderId": "Work" }`
-- **THEN** the response is 200 with `id: "Work/greeting"` and `folderId: "Work"`
-- **AND** the prompt no longer exists at `greeting` in DIAL Core
-
-#### Scenario: Moving a prompt to root
-
-- **WHEN** `POST /api/v1/prompts/move?path=Work/greeting` is called with `{ "targetFolderId": "" }`
-- **THEN** the response is 200 with `id: "greeting"` and `folderId: ""`
+- **WHEN** `POST /api/v1/prompts/move?id=prompts%2Fowner-bucket%2Fgreeting` is called with `{ "targetFolderId": "Work" }` by a requestor with `WRITE`
+- **THEN** the operation targets `prompts/owner-bucket/Work/greeting` and never the caller's own bucket
 
 #### Scenario: Move conflict returns 409
 
-- **WHEN** `POST /api/v1/prompts/move?path=greeting` is called with `{ "targetFolderId": "Work" }`
-- **AND** `Work/greeting` already exists
-- **THEN** the response is 409
+- **WHEN** the target path already exists in the resolved bucket
+- **THEN** the response status is 409
+
+#### Scenario: Malformed id is rejected before any DIAL Core call
+
+- **WHEN** `id` does not match the `prompts/{bucket}/{path}` allowlist
+- **THEN** the response status is 400
 
 ---
 

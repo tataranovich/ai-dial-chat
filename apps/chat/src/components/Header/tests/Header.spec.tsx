@@ -8,6 +8,7 @@ import {
   ButtonsI18nKeys,
   ChatI18nKeys,
   ConversationPanelI18nKeys,
+  NavigationI18nKeys,
   SidebarI18nKeys,
 } from '../../../constants/translation-keys';
 import { SourcesSidebarProvider } from '../../../context/SourcesSidebarContext';
@@ -23,6 +24,7 @@ vi.mock('@epam/ai-dial-attachment-canvas', () => ({
   useAttachmentCanvas: () => ({ closeCanvas: vi.fn() }),
 }));
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { LG: 24 },
   GhostIconButton: ({
     'aria-label': ariaLabel,
@@ -42,9 +44,12 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   ),
 }));
 
-const renderHeader = (props?: Partial<ComponentProps<typeof Header>>) =>
+const renderHeader = (
+  props?: Partial<ComponentProps<typeof Header>>,
+  route = `${ROUTES.Conversations}/test`,
+) =>
   render(
-    <MemoryRouter initialEntries={[`${ROUTES.Conversations}/test`]}>
+    <MemoryRouter initialEntries={[route]}>
       <SourcesSidebarProvider>
         <Header onMenuToggle={vi.fn()} {...props} />
       </SourcesSidebarProvider>
@@ -66,13 +71,34 @@ describe('Header', () => {
       isLoading: false,
     });
     mockUseUiFeature.mockImplementation(
-      (feature) => feature !== OverlayFeature.HideNewConversation,
+      (feature) =>
+        feature !== OverlayFeature.HideNewConversation &&
+        feature !== OverlayFeature.HideNavigationMenu,
     );
   });
 
+  it('hides the hamburger button when hide-navigation-menu is enabled', () => {
+    mockUseUiFeature.mockImplementation(
+      (feature) =>
+        feature !== OverlayFeature.HideNewConversation &&
+        feature !== OverlayFeature.ConversationsPanelToggle,
+    );
+    renderHeader();
+    expect(
+      screen.queryByRole('button', { name: NavigationI18nKeys.OpenMenu }),
+    ).toBeNull();
+  });
+
+  it('renders the hamburger button by default', () => {
+    renderHeader();
+    expect(
+      screen.getByRole('button', { name: NavigationI18nKeys.OpenMenu }),
+    ).toBeTruthy();
+  });
+
   it('renders Header component', () => {
-    const { container } = renderHeader();
-    expect(container.querySelector('header')).toBeTruthy();
+    renderHeader();
+    expect(screen.getByRole('banner')).toBeTruthy();
   });
 
   it('renders Logo component inside Header', () => {
@@ -81,11 +107,11 @@ describe('Header', () => {
   });
 
   it('applies expected container classes', () => {
-    const { container } = renderHeader();
-    const header = container.querySelector('header');
+    renderHeader();
+    const header = screen.getByRole('banner');
     expect(header?.classList.contains('relative')).toBe(true);
     expect(header?.classList.contains('z-30')).toBe(true);
-    expect(header?.classList.contains('min-h-[64px]')).toBe(true);
+    expect(header?.classList.contains('min-h-[48px]')).toBe(true);
     expect(header?.classList.contains('w-full')).toBe(true);
   });
 
@@ -124,8 +150,8 @@ describe('Header', () => {
     mockUseUiFeature.mockImplementation(
       (feature) => feature !== OverlayFeature.Header,
     );
-    const { container } = renderHeader();
-    expect(container.querySelector('header')).toBeNull();
+    renderHeader();
+    expect(screen.queryByRole('banner')).toBeNull();
   });
 
   it('hides the conversations-panel-toggle button when the feature is disabled', () => {
@@ -165,6 +191,31 @@ describe('Header', () => {
     renderHeader({ onNewChat: vi.fn() });
     expect(
       screen.getByRole('button', { name: ButtonsI18nKeys.NewChat }),
+    ).toBeTruthy();
+  });
+
+  it('hides the new-conversation button on the start page', () => {
+    /*
+     * Pin the flags locally rather than leaning on the shared mock: with
+     * hide-new-conversation explicitly off, the button's absence can only come
+     * from the route gate, and a later edit to `beforeEach` cannot silently
+     * turn this into a pass for the wrong reason.
+     */
+    mockUseUiFeature.mockImplementation(
+      (feature) => feature !== OverlayFeature.HideNewConversation,
+    );
+    renderHeader({ onNewChat: vi.fn() }, ROUTES.Root);
+    expect(
+      screen.queryByRole('button', { name: ButtonsI18nKeys.NewChat }),
+    ).toBeNull();
+  });
+
+  it('keeps the conversation-panel toggle on the start page', () => {
+    renderHeader({ onConversationPanelToggle: vi.fn() }, ROUTES.Root);
+    expect(
+      screen.getByRole('button', {
+        name: ConversationPanelI18nKeys.ToggleAriaLabel,
+      }),
     ).toBeTruthy();
   });
 });

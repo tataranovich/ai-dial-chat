@@ -50,21 +50,141 @@ The container SHALL:
 
 No new backend endpoint is introduced. `ShareConversationPopoverContainer` SHALL call the existing `getShareLink(itemId, access)` utility (`apps/chat/src/utils/share-link.ts`), which POSTs to `POST /api/v1/share` via `createShareLink` (`apps/chat/src/server-api/share.api.ts`), passing the conversation's DIAL Core resource path as `itemId` and `access: [ShareLinkAccess.View]`.
 
-The backend `POST /api/v1/share` (`apps/chat-api/src/share/share.controller.ts`) `@ApiOperation.description` SHALL be updated to state it creates a share link "for a DIAL Core resource (catalog entity or conversation)", replacing the catalog-only wording. `CreateShareLinkDto`, response DTOs, status codes (201/400/401/429/502/503), and the `@Throttle({ limit: 20, ttl: 60000 })` rate limit are unchanged.
+The backend `POST /api/v1/share` (`apps/chat-api/src/share/share.controller.ts`) `@ApiOperation.description` SHALL be updated to state it creates a share link "for a DIAL Core resource (catalog entity or conversation)", replacing the catalog-only wording. `CreateShareLinkDto` and response DTOs are unchanged. Conversation-specific related-resource resolution is defined below; non-conversation resources continue to be proxied directly without an additional lookup.
 
 #### Scenario: Conversation itemId is accepted by the existing endpoint
 
 - **WHEN** `POST /api/v1/share` is called with `{ itemId: '<owned-conversation-path>', access: ['view'] }`
-- **THEN** the request is validated and proxied to DIAL Core exactly as any other `itemId`, with no conversation-specific validation branch
+- **THEN** the request is validated, the conversation and its related DIAL file resources are resolved server-side, and all resolved resources are included in the request proxied to DIAL Core
+
+#### Scenario: Non-conversation, non-application itemId requires no related-resource lookup
+
+- **WHEN** `POST /api/v1/share` is called with a toolset, skill, model, or prompt `itemId`
+- **THEN** the backend does not call DIAL Core's conversation-read or application-read API and proxies the resolved `itemId` directly to the sharing API
 
 #### Scenario: Swagger description reflects conversation support
 
 - **WHEN** the OpenAPI spec is generated (`npm run openapi`)
 - **THEN** the `createShareLink` operation description mentions conversations as a valid shareable resource
 
+### Requirement: Sharing an application includes its attached prompt resources
+
+Before calling DIAL Core's `shareResource`, `ShareService.createShareLink` SHALL load a quick app whose resolved resource URL starts with `applications/`. The read SHALL parse `applications/{bucket}/{path}` via `parseDialApplicationResource` (`apps/chat-api/src/common/utils/dial-application-resource.ts`) into the `bucket`/`path` pair, call `getCustomApplication(bucket, path)`, and forward the caller's bearer token — the same resolution `buildApplicationDetails` already uses.
+
+The service SHALL collect unique DIAL prompt resource URLs from `application_properties.skills[]` entries whose `type` is exactly `'dial-prompt'`. Only entries whose `url` is a DIAL Core prompt resource url (`prompts/{bucket}/{path}`, per `isPromptResourceUrl`) are shareable. The `orchestrator.system_prompt` (`type: 'custom'`, inline content), `contexts[]` (file resources), `tool_sets[]`, and every other skill kind carry no separate DIAL resource and SHALL NOT be added to the sharing request. Deduplication is by exact url string, in first-seen order.
+
+The application resource SHALL remain the first item in `shareResource.resources`, followed by each unique related prompt resource. Every related prompt SHALL receive the same resolved permissions as the application (`READ` for view access, `READ` and `WRITE` for edit access).
+
+A referenced prompt whose bucket (`getResourceBucket`, segment `[1]` of a `prompts/{bucket}/...` url) is not the application's own bucket SHALL be silently omitted rather than failing the share. This covers two distinct cases: a prompt in another user's private bucket — DIAL Core rejects a single share request mixing more than one owning bucket, and the caller cannot grant access to a resource it doesn't own — and a prompt in the public/organization bucket (`PUBLIC_BUCKET`, `apps/chat-api/src/conversations/constants/conversation.constants.ts`), which is dropped for a different reason: `public` is DIAL Core's globally-readable bucket, already accessible to every authenticated user without a grant, and is not an owned resource `shareResource` can create an ACL entry for. Including a public-bucket resource in the request makes DIAL Core reject the whole batch with `"Incorrect resource link provided prompts/public/..."`.
+
+The application pre-read is best-effort: it MUST NOT block sharing the application itself. If the read throws, returns an upstream error, or returns no data (an empty body, or a plain custom application with no `application_properties`), the failure SHALL be logged as a warning and the share SHALL proceed with the application resource alone — no related prompts, no failure. Before this related-resource lookup existed, an `applications/...` itemId could be shared as long as `shareResource` succeeded; the pre-read never gates that baseline path. The attached prompts are an enhancement on top of it, not a precondition.
+
+#### Scenario: Attached dial-prompt is shared alongside the application
+
+- **GIVEN** an owned quick app references `prompts/owner-bucket/My prompt` via a `dial-prompt` skill
+- **WHEN** a view share link is created for `applications/owner-bucket/My%20App__1.0`
+- **THEN** `shareResource.resources` contains the application first and `prompts/owner-bucket/My prompt` second, both with `permissions: ['READ']`
+
+#### Scenario: Duplicate prompt references are shared once
+
+- **GIVEN** the same prompt url appears in multiple `dial-prompt` skill entries alongside a `type: 'custom'` skill
+- **WHEN** a share link is created
+- **THEN** the prompt url appears exactly once in `shareResource.resources` and the custom skill contributes nothing
+
+#### Scenario: Cross-bucket private prompt is dropped
+
+- **GIVEN** a quick app references `prompts/other-user-bucket/theirs` via a `dial-prompt` skill
+- **WHEN** a share link is created for `applications/owner-bucket/my-app__1.0`
+- **THEN** `prompts/other-user-bucket/theirs` is omitted from `shareResource.resources` and the share still succeeds
+
+#### Scenario: Public-bucket prompt is excluded
+
+- **GIVEN** a quick app references `prompts/public/shared` via a `dial-prompt` skill
+- **WHEN** a share link is created for `applications/owner-bucket/my-app__1.0`
+- **THEN** `prompts/public/shared` is omitted from `shareResource.resources` and the share still succeeds
+
+#### Scenario: Application pre-read failure degrades to app-only sharing without blocking
+
+- **WHEN** DIAL Core rejects or fails the application read performed before sharing
+- **THEN** the failure is logged as a warning and the share proceeds with the application resource alone (no related prompts), and `shareResource` is still called
+
+### Requirement: Sharing a conversation includes its related DIAL file resources
+
+Before calling DIAL Core's `shareResource`, `ShareInvitationService.createShareLink` (`apps/chat-api/src/share/invitation/share-invitation.service.ts`) SHALL load a conversation whose resolved resource URL starts with `conversations/`. The read SHALL use the owning bucket and encoded bucket-relative path derived from the conversation resource URL, and SHALL forward the caller's bearer token.
+
+The service SHALL collect unique DIAL file resource URLs from:
+
+- message-level `custom_content.attachments`;
+- `custom_content.stages[].attachments`;
+- citation attachments at `custom_content.annotations[].body.source.attachment`.
+
+Both `url` and `reference_url` fields SHALL be considered. Only URLs starting with `files/` are shareable DIAL resources; public/external URLs and inline `data` attachments SHALL NOT be added to the sharing request. A URL fragment such as `#page=2` identifies a view within a file rather than a distinct resource and SHALL be removed before deduplication and sharing.
+
+The conversation resource SHALL remain the first item in `shareResource.resources`, followed by each unique related file resource in first-seen order. Every related resource SHALL receive the same resolved permissions as the conversation (`READ` for view access, `READ` and `WRITE` for edit access).
+
+If the conversation read throws, returns an upstream error, or returns no conversation data, link creation SHALL fail through the existing DIAL error-mapping behavior and `shareResource` SHALL NOT be called with an incomplete resource set.
+
+#### Scenario: Message attachments are shared with the conversation
+
+- **GIVEN** an owned conversation references `files/owner-bucket/report.pdf` in a message attachment
+- **WHEN** a view-only share link is created for that conversation
+- **THEN** `shareResource.resources` contains the conversation first and `files/owner-bucket/report.pdf` second, both with `permissions: ['READ']`
+
+#### Scenario: Duplicate references are shared once
+
+- **GIVEN** the same DIAL file URL appears in multiple messages, stages, or citations
+- **WHEN** a share link is created
+- **THEN** the file URL appears exactly once in `shareResource.resources`
+
+#### Scenario: Reference fragment is removed
+
+- **GIVEN** an attachment has `reference_url: 'files/owner-bucket/source.pdf#page=2'`
+- **WHEN** a share link is created
+- **THEN** the related resource is shared as `files/owner-bucket/source.pdf`
+
+#### Scenario: Non-DIAL and inline attachments do not become shared resources
+
+- **GIVEN** a conversation contains an HTTPS attachment URL and an inline `data` attachment
+- **WHEN** a share link is created
+- **THEN** neither attachment is added to `shareResource.resources`
+
+#### Scenario: Conversation lookup failure prevents a partial invitation
+
+- **WHEN** DIAL Core rejects or fails the conversation read performed before sharing
+- **THEN** link creation fails through the existing DIAL error mapper and `shareResource` is not called
+
+### Requirement: Related file resources outside the conversation's own bucket are dropped
+
+A conversation duplicated from someone else's shared conversation keeps referencing the original owner's files in its messages — duplication copies the conversation into the caller's own bucket, but never copies the attachments it references. DIAL Core's `shareResource` rejects any single request whose `resources` mix more than one owning bucket, answering 400 with `"You're not allowed to share resources of different owners in a single request"`. The caller also does not own a file left behind in another user's bucket, so it is not theirs to grant access to regardless.
+
+A related file in the public/organization bucket (`PUBLIC_BUCKET`, `apps/chat-api/src/conversations/constants/conversation.constants.ts`) is dropped too, for a different reason: `public` is DIAL Core's globally-readable bucket, already accessible to every authenticated user without a grant, and is not an owned resource `shareResource` can create an ACL entry for. Including a public-bucket resource in the request makes DIAL Core reject the whole batch with `"Incorrect resource link provided files/public/..."`, even though the file itself is reachable and opens fine from within the conversation.
+
+`ShareInvitationService.getRelatedResourceUrls` SHALL filter the collected related file resource URLs to only those whose bucket (`getResourceBucket`, `apps/chat-api/src/publish/publish-target.util.ts` — segment `[1]` of a `files/{bucket}/...` url) matches the conversation's own resolved bucket. A related file in any other bucket — another user's private bucket, or the public bucket — is silently omitted rather than causing the whole share request to fail.
+
+#### Scenario: A file left in the original owner's bucket is excluded
+
+- **GIVEN** a conversation was duplicated from a shared conversation and now lives in the caller's own bucket
+- **AND** one of its message attachments still references `files/original-owner-bucket/report.pdf`
+- **WHEN** a share link is created for the duplicated conversation
+- **THEN** `shareResource.resources` contains only the conversation itself — `files/original-owner-bucket/report.pdf` is not included
+- **AND** the request to DIAL Core succeeds
+
+#### Scenario: Files in the conversation's own bucket are still shared
+
+- **GIVEN** an owned conversation references `files/{same-bucket}/report.pdf`, where `{same-bucket}` matches the conversation's own bucket
+- **WHEN** a share link is created
+- **THEN** `shareResource.resources` includes that file alongside the conversation, as before
+
+#### Scenario: Files in the public/organization bucket are excluded
+
+- **GIVEN** an owned conversation references `files/public/template.pdf`
+- **WHEN** a share link is created
+- **THEN** `shareResource.resources` contains only the conversation itself — `files/public/template.pdf` is not included
+- **AND** the request to DIAL Core succeeds
+
 ### Requirement: Accepting a conversation share invitation redirects into the conversation, not the catalog
 
-`ShareService.buildInvitationUrl` (`apps/chat-api/src/share/share.service.ts`) SHALL route the generated invitation URL based on the shared resource's `itemId`: when `itemId` starts with `conversations/` (the DIAL Core conversation resource-path prefix), the URL SHALL use the `/conversations/shared/:invitationId` path; otherwise it SHALL use the existing `/catalog/shared/:invitationId` path.
+`ShareInvitationService.buildInvitationUrl` (`apps/chat-api/src/share/invitation/share-invitation.service.ts`) SHALL route the generated invitation URL based on the shared resource's `itemId`: when `itemId` starts with `conversations/` (the DIAL Core conversation resource-path prefix), the URL SHALL use the `/conversations/shared/:invitationId` path; otherwise it SHALL use the existing `/catalog/shared/:invitationId` path.
 
 The frontend SHALL register `ROUTES.ConversationSharedInvitation = '/conversations/shared/:invitationId'` (`apps/chat/src/types/routes.ts`) alongside the existing `ROUTES.SharedInvitation`, both as top-level routes in `app.tsx` (not nested under `ChatLayout`).
 
@@ -72,12 +192,12 @@ The frontend SHALL register `ROUTES.ConversationSharedInvitation = '/conversatio
 
 #### Scenario: Conversation share link routes to the conversation accept page
 
-- **WHEN** `ShareService.createShareLink` is called with a conversation `itemId` (starting with `conversations/`)
+- **WHEN** `ShareInvitationService.createShareLink` is called with a conversation `itemId` (starting with `conversations/`)
 - **THEN** the returned `url` uses the `/conversations/shared/:invitationId` path
 
 #### Scenario: Catalog share link still routes to the catalog accept page
 
-- **WHEN** `ShareService.createShareLink` is called with a catalog `itemId` (not starting with `conversations/`)
+- **WHEN** `ShareInvitationService.createShareLink` is called with a catalog `itemId` (not starting with `conversations/`)
 - **THEN** the returned `url` uses the existing `/catalog/shared/:invitationId` path
 
 #### Scenario: Accepting a conversation invitation navigates into the conversation
@@ -183,16 +303,23 @@ Tests in `apps/chat/src/components/ShareConversationPopoverContainer/tests/Share
 
 ### Requirement: Accepting an invitation peeks the shared resource before accepting it
 
-`ShareService.acceptInvitation` (`apps/chat-api/src/share/share.service.ts`) SHALL resolve the shared resource's `itemId` from a **peek** call to DIAL Core's `getInvitation(invitationId)` **without** the `accept` query parameter, before issuing a **separate** call with `accept=true` to perform the actual grant. The accepting call's response body SHALL NOT be relied upon for `itemId` resolution — DIAL Core returns an empty body (`Content-Length: 0`, no `error`) for the accepting call once the grant succeeds, even though its documented schema for `GET /v1/invitations/{id}` claims a full `Invitation` payload on any `200`.
+`ShareInvitationService.acceptInvitation` (`apps/chat-api/src/share/invitation/share-invitation.service.ts`) SHALL resolve the shared resource's `itemId` from a **peek** call to DIAL Core's `getInvitation(invitationId)` **without** the `accept` query parameter, before issuing a **separate** call with `accept=true` to perform the actual grant. The accepting call's response body SHALL NOT be relied upon for `itemId` resolution — DIAL Core returns an empty body (`Content-Length: 0`, no `error`) for the accepting call once the grant succeeds, even though its documented schema for `GET /v1/invitations/{id}` claims a full `Invitation` payload on any `200`.
 
-Both calls SHALL forward the caller's DIAL Core access token via `Authorization: Bearer <token>`. An `error` response or thrown network/timeout error from either call SHALL map through the existing `mapDialHttpStatus`/`handleDialFetchError` machinery with a call-specific context string (`'peek invitation'` / `'accept invitation'`) for diagnosability — **except** when the accepting call returns `400` with a body indicating the caller already owns the resource (DIAL Core's own wording: a string containing `"already belong"`, e.g. `"Resource <id> already belong to you"`). DIAL Core returns this when the invited user opens their own share link, or re-opens a link they already accepted; the resource is already accessible to them, so `acceptInvitation` SHALL treat this specific case as a successful accept rather than throwing — proceeding to cache invalidation and summary resolution exactly as it does for a genuine `200`, using the `itemId` already resolved from the peek call. If the peek call succeeds but returns no `resources[0].url`, `acceptInvitation` SHALL throw `BadGatewayException('DIAL Core returned an invitation with no shared resource')` without attempting the accepting call.
+Both calls SHALL forward the caller's DIAL Core access token via `Authorization: Bearer <token>`. An `error` response or thrown network/timeout error from either call SHALL map through the existing `mapDialHttpStatus`/`handleDialFetchError` machinery with a call-specific context string (`'peek invitation'` / `'accept invitation'`) for diagnosability — **except** when the accepting call returns `400` with a body indicating the caller already owns the resource (DIAL Core's own wording: a string containing `"already belong"`, e.g. `"Resource <id> already belong to you"`). DIAL Core returns this when the invited user opens their own share link, or re-opens a link they already accepted; the resource is already accessible to them, so `acceptInvitation` SHALL treat this specific case as a successful accept rather than throwing — proceeding to cache invalidation and summary resolution exactly as it does for a genuine `200`, using the `itemId` already resolved from the peek call. If the peek call succeeds but returns a `resources` array with no resolvable primary resource URL, `acceptInvitation` SHALL throw `BadGatewayException('DIAL Core returned an invitation with no shared resource')` without attempting the accepting call.
 
-#### Scenario: Peek call resolves itemId, accept call grants access
+The `itemId` SHALL be the URL of the **primary resource** in the peek response: the first resource whose URL does not start with `files/`. If every resource URL starts with `files/`, `resources[0].url` is used as a fallback. DIAL Core does not guarantee resource array order; `itemId` MUST NOT be assumed to be at index 0.
 
-- **WHEN** `acceptInvitation(accessToken, invitationId, userSub)` is called for a valid, unexpired invitation
-- **THEN** DIAL Core's `getInvitation` is called first without `accept`, and its `resources[0].url` becomes the returned `itemId`
+#### Scenario: Peek call resolves itemId from the primary (non-file) resource
+
+- **WHEN** `acceptInvitation(accessToken, invitationId, userSub)` is called for a valid, unexpired invitation whose `resources` contains a conversation URL at a non-zero index and file URLs elsewhere
+- **THEN** DIAL Core's `getInvitation` is called first without `accept`, and the first non-`files/` resource URL becomes the returned `itemId`
 - **AND** DIAL Core's `getInvitation` is called a second time with `accept=true`
 - **AND** the accepting call's response body (or absence of one) does not affect the returned `itemId`
+
+#### Scenario: File-first resource order does not corrupt the itemId
+
+- **WHEN** the peek response has `resources[0].url` starting with `files/` and `resources[1].url` starting with `conversations/`
+- **THEN** `resources[1].url` is used as `itemId`, not the file path
 
 #### Scenario: Empty-bodied accept response no longer produces a 502
 
@@ -235,11 +362,13 @@ Cache keys invalidated: `deployments:list:<userSub>` and `deployments:list:<user
 - **WHEN** the frontend calls `refetchDeployments()`/`refetchToolsets()` immediately after `acceptInvitation` resolves
 - **THEN** the next `GET /api/v1/deployments` / `GET /api/v1/toolsets` request is a cache miss and reflects the newly shared resource
 
-### Requirement: Frontend refetches deployment/toolset lists before navigating past an accepted invitation
+### Requirement: Frontend refetches deployment/toolset/skill lists before navigating past an accepted invitation
 
-`SharedInvitationPage` (`apps/chat/src/pages/SharedInvitation/SharedInvitation.tsx`) SHALL call `useDeployments()`'s `refetchDeployments()` and `refetchToolsets()` (via `Promise.all`, awaited) after a successful `acceptInvitation` and before calling `navigate(getTargetRoute(itemId), { replace: true })`. These calls remain a consistency backstop; they are no longer the mechanism the details panel depends on to find the newly-shared item (see "Accepting an invitation resolves and returns the shared item's summary" below).
+`SharedInvitationPage` (`apps/chat/src/pages/SharedInvitation/SharedInvitation.tsx`) SHALL call `useDeployments()`'s `refetchDeployments()` and `refetchToolsets()`, and `useSkills()`'s `refetchSkills()`, (via a single `Promise.all`, awaited) after a successful `acceptInvitation` and before calling `navigate(getTargetRoute(itemId), { replace: true })`. These calls remain a consistency backstop; they are no longer the mechanism the details panel depends on to find the newly-shared item (see "Accepting an invitation resolves and returns the shared item's summary" below).
 
-`SharedInvitationPage` SHALL call `useDeployments()`'s `mergeSharedItem(item)` with the `sharedDeployment`/`sharedToolset` value from `acceptInvitation`'s response, **after** the `refetchDeployments()`/`refetchToolsets()` call above has resolved and **before** calling `navigate(...)`, whenever that field is present. This order is required, not incidental: `refetchDeployments`/`refetchToolsets` fully replace `DeploymentsContext`'s `rawDeployments`/`toolsets` arrays with whatever DIAL Core's bulk list returns, so merging before (or in parallel with) the refetch lets a stale bulk-list response — one that has not yet propagated the just-granted share — silently overwrite the merged item and remove it again. Running the merge after the refetch guarantees the backend-resolved item always wins. When neither field is present (the backend could not resolve the item, e.g. an upstream propagation gap — see the new requirement below), `SharedInvitationPage` SHALL still proceed with the existing refetch-then-navigate behavior unchanged.
+`SharedInvitationPage` SHALL call `useDeployments()`'s `mergeSharedItem(item)` with the `sharedDeployment`/`sharedToolset` value from `acceptInvitation`'s response, and `useSkills()`'s `mergeSharedSkill(item)` with the response's `sharedSkill` value, **after** the `Promise.all` refetch above has resolved and **before** calling `navigate(...)`, whenever the corresponding field is present. This order is required, not incidental: `refetchDeployments`/`refetchToolsets`/`refetchSkills` fully replace the respective context's item arrays with whatever DIAL Core's bulk list returns, so merging before (or in parallel with) the refetch lets a stale bulk-list response — one that has not yet propagated the just-granted share — silently overwrite the merged item and remove it again. Running the merge after the refetch guarantees the backend-resolved item always wins. When none of `sharedDeployment`/`sharedToolset`/`sharedSkill` is present (the backend could not resolve the item, e.g. an upstream propagation gap — see the new requirement below), `SharedInvitationPage` SHALL still proceed with the existing refetch-then-navigate behavior unchanged.
+
+`SkillsContext` (`apps/chat/src/context/SkillsContext.tsx`) SHALL expose a `mergeSharedSkill(item: SkillMetadataItemDto): void` method on its context value, mirroring `DeploymentsContext`'s `mergeSharedItem`. Calling it SHALL upsert `item` into `sharedWithMe` (replacing any existing entry with the same `url`, or appending a new entry) via the existing `setSharedWithMe` setter. `mergeSharedSkill` SHALL NOT issue any network request itself.
 
 `CatalogView` (`apps/chat/src/components/CatalogView/CatalogView.tsx`) SHALL treat the `itemId` search param (`CatalogQuery.ItemId`) it reads into `initialDetailsItemId` as a one-shot signal: after reading a non-empty value for a render, it SHALL clear that param from the URL via `setSearchParams` with `{ replace: true }`, so the param does not linger in the address bar once consumed.
 
@@ -257,8 +386,13 @@ Cache keys invalidated: `deployments:list:<userSub>` and `deployments:list:<user
 
 #### Scenario: Falls back to refetch-only behavior when the backend can't resolve the item
 
-- **WHEN** `acceptInvitation`'s response has neither `sharedDeployment` nor `sharedToolset` set
-- **THEN** `SharedInvitationPage` does not call `mergeSharedItem` and proceeds exactly as before: `refetchDeployments()`/`refetchToolsets()` then `navigate(...)`
+- **WHEN** `acceptInvitation`'s response has neither `sharedDeployment` nor `sharedToolset` nor `sharedSkill` set
+- **THEN** `SharedInvitationPage` does not call `mergeSharedItem`/`mergeSharedSkill` and proceeds exactly as before: `refetchDeployments()`/`refetchToolsets()`/`refetchSkills()` then `navigate(...)`
+
+#### Scenario: Catalog details panel opens for a newly shared skill on a fresh full-page navigation
+
+- **WHEN** a user accepts a share invitation for a skill via a full-page navigation to `/catalog/shared/:invitationId`, and `acceptInvitation`'s response includes a resolved `sharedSkill`
+- **THEN** `SharedInvitationPage` merges that item into `SkillsContext` via `mergeSharedSkill` before navigating to `${ROUTES.Catalog}?itemId=<id>`, so `SkillsContext`'s `sharedWithMe` already includes the shared skill by the time `CatalogView` mounts — independent of whether the skills listing endpoint itself reflects the grant yet — and `Catalog`'s `initialDetailsItemId` effect finds a match and opens the details panel on the first attempt, without requiring a page reload
 
 #### Scenario: itemId query param is cleared after being consumed
 
@@ -277,7 +411,7 @@ Cache keys invalidated: `deployments:list:<userSub>` and `deployments:list:<user
 
 ### Requirement: Accepting an invitation resolves and returns the shared item's summary
 
-`ShareService.acceptInvitation` (`apps/chat-api/src/share/share.service.ts`) SHALL, after successfully accepting the invitation and invalidating the list caches, resolve the shared `itemId`'s type and summary using the same prefix convention already used by `DeploymentsService.getDeploymentDetails` (`toolsets/` prefix → toolset; `applications/` prefix → application; otherwise ambiguous — try `getModel` → `getApplication` → `getToolset` in turn, falling through to the next on a 404).
+`ShareInvitationService.acceptInvitation` (`apps/chat-api/src/share/invitation/share-invitation.service.ts`) SHALL, after successfully accepting the invitation and invalidating the list caches, resolve the shared `itemId`'s type and summary using the same prefix convention already used by `DeploymentsService.getDeploymentDetails` (`toolsets/` prefix → toolset; `applications/` prefix → application; otherwise ambiguous — try `getModel` → `getApplication` → `getToolset` in turn, falling through to the next on a 404).
 
 For a `toolsets/`-prefixed id, `ShareService` SHALL call a new `ToolsetsService.resolveToolsetItem(id, accessToken): Promise<DialToolsetDto | null>` and set `AcceptInvitationResponseDto.sharedToolset` to its result. For every other id, `ShareService` SHALL call a new `DeploymentsService.resolveDeploymentItem(id, accessToken): Promise<DeploymentItemDto | null>` (extracted from, and reusing, `fetchDeploymentDetails`'s existing prefix-dispatch/ambiguous-fallback logic, mapped through the existing `mapToDeploymentItem`) and set `AcceptInvitationResponseDto.sharedDeployment` to its result.
 
@@ -320,4 +454,3 @@ This change requires regenerating the OpenAPI spec (`npm run openapi`, `npm run 
 
 - **WHEN** `mergeSharedItem` is called while a `refetchDeployments()`/`refetchToolsets()` call is in flight
 - **THEN** the in-flight refetch's eventual result is still applied or discarded solely based on `deploymentsRequestIdRef`/`toolsetsRequestIdRef`, unaffected by the merge
-

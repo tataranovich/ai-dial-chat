@@ -2,8 +2,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class PromptResponseDto {
   @ApiProperty({
-    description: 'Prompt path within the prompts namespace (used as stable ID)',
-    example: 'Work/AI/my-prompt',
+    description:
+      'Full DIAL Core resource path identifying the prompt (`prompts/{bucket}/{path}`), the same shape every other resource type exposes. For a prompt shared with the caller, `bucket` is the owner bucket, not the caller bucket.',
+    example: 'prompts/my-bucket/Work/AI/my-prompt',
   })
   id!: string;
 
@@ -22,6 +23,12 @@ export class PromptResponseDto {
   })
   folderId!: string;
 
+  @ApiPropertyOptional({
+    description: 'Resource author reported by DIAL Core, when it is known',
+    example: 'john.doe@example.com',
+  })
+  author?: string;
+
   @ApiProperty({
     description: 'Creation timestamp (Unix ms)',
     example: 1700000000000,
@@ -33,4 +40,26 @@ export class PromptResponseDto {
     example: 1700000001000,
   })
   updatedAt!: number;
+
+  @ApiPropertyOptional({
+    description: 'Whether the prompt belongs to the requestor',
+  })
+  isMy?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the requestor may update the prompt. Organisation prompts are always read-only.',
+  })
+  canEdit?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Whether another user shared the prompt with the requestor',
+  })
+  sharedWithMe?: boolean;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'READ/WRITE/SHARE permissions applicable to the requestor',
+  })
+  permissions?: string[];
 }

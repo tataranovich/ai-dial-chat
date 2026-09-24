@@ -1,3 +1,4 @@
+import type { AttachmentTrayStyles } from '@epam/ai-dial-attachment-input';
 import type {
   Attachment,
   AttachmentErrorReason,
@@ -6,8 +7,10 @@ import type {
   DisplayAttachment,
   ResponseFormat,
   ToolMenuItem,
+  UploadedAttachmentResult,
 } from '@epam/ai-dial-chat-shared';
 import type { ReactNode } from 'react';
+import type { TranscribeAudio } from './Voice';
 
 /** Controls which key combination submits the message in the `Input` component. */
 export enum SendOnEnter {
@@ -15,6 +18,14 @@ export enum SendOnEnter {
   Enter = 'enter',
   /** ⌘+Enter (macOS) / Ctrl+Enter (Windows/Linux) submits; bare Enter inserts a newline. */
   MetaEnter = 'meta-enter',
+}
+
+/** Controls how the `Input` component arranges the textarea and the controls around it. */
+export enum ActionRowLayout {
+  /** Textarea occupies its own line; the add button, tool chips, and footer actions wrap below it. */
+  Stacked = 'stacked',
+  /** Add button, textarea, and footer actions share one line; tool chips move to their own row above. Applies below the desktop breakpoint only when the host opts in. */
+  Inline = 'inline',
 }
 
 /** CSS custom-property overrides for the `Input` component. */
@@ -35,8 +46,12 @@ export interface InputColors {
   modelSelectorCaret?: string;
   /** Model-selector chip hover/active background color. Defaults to `--bg-control-accent-alpha-hover`/`--bg-control-accent-alpha-active`. */
   modelSelectorHoverBg?: string;
-  /** Model-selector chip caret color when disabled. Defaults to `--text-control-disable-beta`. */
+  /** Model-selector chip caret color when disabled. Defaults to `--text-control-disable-primary`. */
   modelSelectorDisabled?: string;
+  /** Model-selector chip name text color (desktop only). Defaults to `--text-primary`. */
+  modelSelectorName?: string;
+  /** Model-selector chip version text color (desktop only). Defaults to `--text-secondary`. */
+  modelSelectorVersion?: string;
   /** Voice bar error border/icon color. Defaults to `--stroke-error`/`--text-error`. */
   voiceError?: string;
   /** Voice bar waveform and timer text color. Defaults to `--text-primary`. */
@@ -65,14 +80,64 @@ export interface ModelSelectorLabels {
   searchPlaceholder?: string;
   /** Accessible label for the close button in the mobile bottom-sheet. Defaults to `'Close'`. */
   closeLabel?: string;
+  /** Tooltip shown when the selected deployment is no longer available (e.g. removed from the catalog). Defaults to `'This deployment is no longer available'`. */
+  unavailableTooltip?: string;
 }
 
-/** Labels for the selected-tools chip row that appears in the input when tools are active. */
+/** Labels for the tool chips rendered in the conversation input. */
 export interface ToolsChipLabels {
-  /** Formats the consolidated count label for the mobile chip. Receives the number of selected tools. Defaults to English pluralization. */
-  countLabel?: (count: number) => string;
-  /** Returns the accessible label for the close button on a desktop chip. Receives the tool label. Defaults to `"Remove {toolLabel}"`. */
+  /** Returns the accessible label for a chip's × button, which drops the tool from the input. Receives the tool label. Defaults to `"Remove {toolLabel}"`. */
   removeLabel?: (toolLabel: string) => string;
+}
+
+/** A host-injected overlay entry for the `+` menu: a menu item whose submenu renders host-owned content. */
+export interface MenuOverlayConfig {
+  /** Unique key identifying the entry; also keys the mobile sheet's open state. */
+  key: string;
+  /** Menu-item label and mobile sheet title. */
+  title: string;
+  /** Icon node rendered to the left of the menu-item label. */
+  icon: ReactNode;
+  /** Renders the overlay panel content. Receives a callback the panel calls to close the whole menu once selection is complete. */
+  renderOverlay: (onClose: () => void) => ReactNode;
+  /** Accessible label for the back arrow in the mobile stacked bottom sheet. Defaults to `'Back'`. */
+  backLabel?: string;
+}
+
+/** Context handed to a `CommandMenuConfig`'s `renderMenu` while the menu is open. */
+export interface CommandMenuContext {
+  /** Current query: the value typed after the trigger prefix, with no whitespace or second prefix character. */
+  query: string;
+  /**
+   * Closes the menu. Pass `{ consumeQuery: true }` to also remove the trigger
+   * prefix and query from the textarea (the selection path — the `/query`
+   * text is never sent); the default close leaves the text untouched.
+   */
+  close: (options?: { consumeQuery?: boolean }) => void;
+}
+
+/** Host-injected slash-command menu: an overlay opened by entering a trigger prefix into an empty textarea — typed or pasted. */
+export interface CommandMenuConfig {
+  /** Prefix that opens the menu when entered into an empty textarea (e.g. `'/'`) — typed as its first character, or arriving in a paste whose result is the prefix alone or with a whitespace-free query. */
+  triggerPrefix: string;
+  /** Renders the menu content for the current query. */
+  renderMenu: (ctx: CommandMenuContext) => ReactNode;
+  /**
+   * Hint rendered inside the text area immediately after the trigger prefix
+   * while the menu is open with an empty query (e.g. `'Type to filter'`), in
+   * the placeholder style. Absent renders no hint.
+   */
+  emptyQueryHint?: string;
+  /** Accessible name for the menu region. When absent, the content is rendered without a labeled wrapper. */
+  menuLabel?: string;
+}
+
+/** One-shot text hand-off that the `Input` inserts at the caret. */
+export interface TextInsertion {
+  /** Text inserted at the caret, replacing whatever is selected. */
+  text: string;
+  /** Token that performs the insertion; bump it to insert the same text again. */
+  revision: number;
 }
 
 /** Props accepted by the `Input` component. */
@@ -87,12 +152,22 @@ export interface InputProps {
    * when `message` itself is the same string as before.
    */
   messageRevision?: number;
+  /**
+   * Text inserted at the caret each time its `revision` changes, leaving the
+   * surrounding draft intact. Unlike `message`, this never replaces what the
+   * user has written, and `Ctrl`/`Cmd`+`Z` undoes it. The insert lands one
+   * microtask after the render that requests it, and leaves the caret after
+   * the inserted text.
+   */
+  textInsertion?: TextInsertion;
   /** Called on every keystroke with the current textarea value. */
   onChange?: (message: string) => void;
   /** Called when the user submits a message. */
   onSend?: (message: string, attachments: Attachment[]) => Promise<void> | void;
-  /** Called immediately after an attachment is added. Returns the uploaded attachment URL. */
-  onUploadAttachment?: (attachment: Attachment) => Promise<string>;
+  /** Called immediately after an attachment is added. Returns the uploaded attachment URL and stored name. */
+  onUploadAttachment?: (
+    attachment: Attachment,
+  ) => Promise<UploadedAttachmentResult>;
   /** Called when the user clicks the stop button during streaming. */
   onStop?: () => void;
   /** When `true`, shows a stop button instead of the send button. */
@@ -107,6 +182,11 @@ export interface InputProps {
   colors?: InputColors;
   /** Typography overrides applied as CSS custom properties. */
   typography?: InputTypography;
+  /**
+   * Style overrides for the attachment tray inside the composer and, through
+   * its `card` slot, for every tile in it.
+   */
+  attachmentTray?: AttachmentTrayStyles;
   /** Label for the attach-file menu item. */
   attachLabel?: string;
   /**
@@ -123,10 +203,14 @@ export interface InputProps {
   removeLabel?: string;
   /** Accessible label for each attachment card's retry button (error state only). */
   retryLabel?: string;
+  /** Accessible label for each attachment card's in-progress upload progress bar. Defaults to `'Uploading'`. */
+  uploadingLabel?: string;
   /** Accessible label for the send button. */
   sendLabel?: string;
   /** Tooltip shown on hover over the send button. */
-  sendTitle?: string;
+  sendTooltip?: string;
+  /** Tooltip for an empty composer (no text, attachments, or inline-start slot). Defaults to sendTooltip. */
+  emptyMessageTooltip?: string;
   /** Accessible label for the stop button. */
   stopLabel?: string;
   /** Extra class name(s) merged onto the root wrapper element. */
@@ -142,12 +226,31 @@ export interface InputProps {
   /** Character count above which a pasted plain-text string is converted to an attachment rather than inserted inline. Defaults to `4000`. Pass `Infinity` to disable. */
   pasteTextThreshold?: number;
   /**
+   * Maximum character count for the message text. Sending text at or above this
+   * length triggers `onMessageTooLong` instead of being accepted, on every model.
+   * Pasting text that long additionally triggers it when the paste-to-attachment
+   * conversion is disabled (`isAttachmentsEnabled` or `isTextAttachmentsAllowed`
+   * is `false`). Separate from `pasteTextThreshold`, which only decides when a
+   * paste becomes an attachment. Defaults to `50000`.
+   */
+  maxMessageLength?: number;
+  /**
    * When `false`, long pasted plain text is inserted inline instead of being
    * converted to a text attachment. Set to `false` when the selected model
    * does not support attachments so that pasting a long prompt does not
    * trigger an "Attachments not supported" error. Defaults to `true`.
    */
   isAttachmentsEnabled?: boolean;
+  /**
+   * When `false`, long pasted plain text is inserted inline instead of being
+   * converted to a text attachment even while `isAttachmentsEnabled` is `true`.
+   * The host resolves it from the selected model's allowed attachment MIME
+   * types: `true` when they accept `text/plain` (a `text/plain` entry, the
+   * `text/*` wildcard, or an all-types wildcard), `false` for models that
+   * accept only other kinds of attachments (e.g. images only), whose
+   * validation would reject a converted paste. Defaults to `true`.
+   */
+  isTextAttachmentsAllowed?: boolean;
   /**
    * List of deployment items to populate the model selector menu. When `undefined`, the selector is not rendered.
    * `iconUrl` on each item must already be a fully resolved URL usable in `<img src>` — the host app
@@ -166,13 +269,6 @@ export interface InputProps {
   menuCloseLabel?: string;
   /** Attachments pre-populated in the tray on mount (e.g. when editing an existing message). */
   initialAttachments?: Attachment[];
-  /**
-   * When `true`, the textarea always renders on its own row above the action bar
-   * (attach button at the start, footer actions at the end), instead of the
-   * compact single-row layout. Used by the
-   * edit-message UI, which always wants the stacked layout.
-   */
-  isStacked?: boolean;
   /**
    * When `true`, the attach (+) button and its associated hidden file input are
    * not rendered. Use this when the caller manages file picking outside the
@@ -193,6 +289,21 @@ export interface InputProps {
    * `EditMessageInput` where the action row lives outside the bordered box.
    */
   hideActionBar?: boolean;
+  /**
+   * How the action row arranges the textarea and the controls around it.
+   * Defaults to `ActionRowLayout.Stacked`. `ActionRowLayout.Inline` applies
+   * from the desktop breakpoint (1280px) up, unless
+   * `isInlineActionRowAllowedBelowDesktop` opts the narrower widths in.
+   */
+  actionRowLayout?: ActionRowLayout;
+  /**
+   * When `true`, `ActionRowLayout.Inline` also applies below the desktop
+   * breakpoint (1280px). Set it when the embedded composer is wide enough
+   * there — a phone-width one is not. Affects the action row alone: the add
+   * menu and model picker keep their bottom-sheet presentation. Defaults to
+   * `false`.
+   */
+  isInlineActionRowAllowedBelowDesktop?: boolean;
   /**
    * When provided, replaces the default send/stop/model-selector area with custom content.
    * Receives `canSend` (textarea has non-empty trimmed content) and `onSend` (triggers the
@@ -219,11 +330,21 @@ export interface InputProps {
   isSendDisabled?: boolean;
   /**
    * When `true`, the mic button is rendered and voice recording is enabled.
-   * Derived by the host app from the selected deployment's `inputAttachmentTypes`.
-   * When `false` or absent, the mic button is hidden and the voice bar is never shown.
+   * Derived by the host app from its recording/recognition capabilities.
+   * When `false` or absent, the dictation button is hidden.
    */
   isAudioMessageSupported?: boolean;
-  /** Accessible label for the mic button. Defaults to `'Record voice message'`. */
+  /** Enables Record voice in the add menu when attachments are enabled. Defaults to isAudioMessageSupported. */
+  isVoiceRecordingSupported?: boolean;
+  /** Label for the audio attachment recording menu item. Defaults to 'Record voice'. */
+  recordVoiceLabel?: string;
+  /** Host-owned recognition. When supplied, the microphone button inserts draft text; Record voice always attaches audio. */
+  onTranscribeAudio?: TranscribeAudio;
+  /** Status announced while recognizing speech. Defaults to 'Transcribing audio…'. */
+  transcribingLabel?: string;
+  /** Fallback recording/recognition error. Defaults to 'Voice input failed'. */
+  voiceErrorLabel?: string;
+  /** Accessible label for the mic button. Defaults to `'Dictate'`. */
   micLabel?: string;
   /** Accessible label for the stop-recording button inside the voice bar. Defaults to `'Stop recording'`. */
   stopRecordingLabel?: string;
@@ -249,12 +370,57 @@ export interface InputProps {
   toolsMenuItems?: ToolMenuItem[];
   /** Called when a tool row is toggled. Receives the tool id. */
   onToolToggle?: (toolId: string) => void;
+  /**
+   * When `false`, every tool chip is a persistent on/off toggle: chips render
+   * without a ×, and the `+` menu carries no "Tools" item, since there is
+   * nothing to bring back. Defaults to `true`.
+   */
+  canRemoveTools?: boolean;
   /** Label for the "Tools" menu item and mobile sheet title. Defaults to `'Tools'`. */
   toolsMenuTitle?: string;
   /** Accessible label for the back arrow in the mobile tools bottom sheet. Defaults to `'Back'`. */
   toolsBackLabel?: string;
-  /** Labels for the selected-tools chip row shown in the input when tools are active. */
+  /** Labels for the tool chips rendered in the input. */
   toolsChipLabels?: ToolsChipLabels;
+  /**
+   * Host-injected overlay entries, rendered as `+`-menu items between the
+   * "Tools" item and "Chat settings", in array order. Each item's submenu
+   * (desktop flyout / mobile stacked bottom sheet) renders the entry's
+   * host-owned overlay, mirroring `modelPickerOverlay`.
+   */
+  menuOverlays?: MenuOverlayConfig[];
+  /**
+   * Host-supplied content rendered inside the text area at its inline-start;
+   * typed text starts after it on the first line and wraps at full width
+   * below. The slot's width is measured and the first text line indents past
+   * it, and the placeholder is suppressed. Absent renders the text area
+   * unchanged.
+   */
+  inlineStartSlot?: ReactNode;
+  /**
+   * Called when Backspace is pressed with the caret collapsed at position 0
+   * while `inlineStartSlot` is present — the slot's remove gesture (there is
+   * nothing to delete backwards at position 0, so the keypress is redirected
+   * to the slot and suppressed). Absent leaves Backspace with no slot-side
+   * behavior.
+   */
+  onInlineStartRemove?: () => void;
+  /**
+   * Host-injected slash-command menu. When provided, typing `triggerPrefix`
+   * as the first character of an empty textarea — or pasting into an empty
+   * textarea a value that is exactly the prefix, or the prefix plus a
+   * whitespace-free, prefix-free query — opens an overlay above the input;
+   * it stays open while the value keeps matching the prefix followed by a
+   * query with no whitespace or second prefix character, and closes on
+   * unmatch, Escape, or an outside click (a dismissed menu reopens only
+   * after the value stops matching and the trigger is typed or pasted
+   * again). Any other pasted value, and any paste into a non-empty
+   * textarea, inserts as a regular paste and opens nothing. Selection
+   * typically goes through `ctx.close({ consumeQuery: true })`, which
+   * removes the `/query` text from the textarea. Absent disables the
+   * mechanism.
+   */
+  commandMenu?: CommandMenuConfig;
   /** When `true`, focuses the textarea on mount. Defaults to `false`. */
   autoFocus?: boolean;
   /**
@@ -301,9 +467,11 @@ export interface InputProps {
   /** Arbitrary slot rendered in the action row before the model selector. Use to inject app-level controls (e.g. a token-usage indicator). */
   usageLimitsSlot?: ReactNode;
   /**
-   * Called when the user pastes text whose length is ≥ `pasteTextThreshold` while
-   * `isAttachmentsEnabled` is `false`. The text is still inserted inline — the
-   * host is responsible for surfacing the error to the user.
+   * Called when the user sends text whose length is ≥ `maxMessageLength`, and when
+   * they paste text that long while the paste-to-attachment conversion is disabled
+   * (`isAttachmentsEnabled` or `isTextAttachmentsAllowed` is `false`). A blocked
+   * send leaves the textarea's content in place; a paste is still inserted inline.
+   * The host is responsible for surfacing the error to the user.
    */
   onMessageTooLong?: (length: number, max: number) => void;
 }

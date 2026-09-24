@@ -2,10 +2,15 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { ScheduledTaskItem } from '../../../models/scheduled-task-item';
+import { SCHEDULED_TASKS_CLASS } from '../../../constants/public-class-names';
+import {
+  ScheduledTaskPresentationStatus,
+  type ScheduledTaskItem,
+} from '../../../models/scheduled-task-item';
 import { ScheduledTaskCard } from '../ScheduledTaskCard';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   CardShell: ({
     children,
     ...rest
@@ -46,7 +51,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       ))}
     </div>
   ),
-  DialEllipsisTooltip: ({
+  EllipsisTooltip: ({
     text,
     className,
   }: {
@@ -103,7 +108,9 @@ describe('ScheduledTaskCard', () => {
   it('renders the card with a fixed height', () => {
     render(<ScheduledTaskCard item={buildItem()} />);
 
-    expect(screen.getByRole('group').className).toContain('h-[232px]');
+    expect(screen.getByRole('group').className).toContain(
+      'h-[var(--st-card-height,232px)]',
+    );
   });
 
   it('clamps a long description instead of growing the card', () => {
@@ -168,16 +175,47 @@ describe('ScheduledTaskCard', () => {
     expect(screen.getAllByText('Every Monday 12:00').length).toBeGreaterThan(0);
   });
 
-  it('pins the schedule pill to the bottom of the card regardless of description length', () => {
+  it('gives an explicit completed status precedence over legacy isActive', () => {
     render(
+      <ScheduledTaskCard
+        item={buildItem({
+          isActive: false,
+          presentationStatus: ScheduledTaskPresentationStatus.Completed,
+        })}
+        labels={{ completedBadgeLabel: 'Finished' }}
+      />,
+    );
+
+    expect(screen.getByText('Finished')).toBeTruthy();
+    expect(screen.queryByText('Paused')).toBeNull();
+  });
+
+  it('pins the schedule pill to the bottom of the card regardless of description length', () => {
+    const { container } = render(
       <ScheduledTaskCard
         item={buildItem({ locationSegments: ['Public', 'Project folder'] })}
       />,
     );
 
-    const pill = screen.getByText('Every Monday 12:00');
-    const bottomGroup = pill.closest('div.mt-auto');
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- verifying CSS layout (the mt-auto wrapper) which carries no accessible role/text of its own
+    const bottomGroup = container.querySelector('div.mt-auto');
     expect(bottomGroup).toBeTruthy();
-    expect(bottomGroup?.contains(screen.getByText('Public'))).toBe(true);
+    expect(bottomGroup?.textContent).toContain('Every Monday 12:00');
+    expect(bottomGroup?.textContent).toContain('Public');
+  });
+});
+
+describe('ScheduledTaskCard — public class names', () => {
+  it('stamps the card whether or not it is clickable', () => {
+    const { unmount } = render(<ScheduledTaskCard item={buildItem()} />);
+    expect(screen.getByRole('group').classList).toContain(
+      SCHEDULED_TASKS_CLASS.card,
+    );
+    unmount();
+
+    render(<ScheduledTaskCard item={buildItem()} onCardClick={vi.fn()} />);
+    expect(screen.getByRole('button').classList).toContain(
+      SCHEDULED_TASKS_CLASS.card,
+    );
   });
 });

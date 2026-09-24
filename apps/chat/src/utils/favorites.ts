@@ -1,5 +1,5 @@
-import { CatalogEntityType } from '@epam/ai-dial-catalog';
-import { FavoriteEntityType } from '../context/FavoriteApplicationsContext';
+import { FavoriteEntityType } from '@epam/ai-dial-chat-hooks';
+import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 
 /*
  * Each favoritable entity type writes to its own user-config section, so the
@@ -11,6 +11,7 @@ const FAVORITE_ENTITY_TYPE_BY_CATALOG_TYPE: Partial<
 > = {
   [CatalogEntityType.Toolset]: FavoriteEntityType.Toolset,
   [CatalogEntityType.Prompt]: FavoriteEntityType.Prompt,
+  [CatalogEntityType.Skill]: FavoriteEntityType.Skill,
 };
 
 /** Returns the user-config section a catalog item's favorite state is stored in. */

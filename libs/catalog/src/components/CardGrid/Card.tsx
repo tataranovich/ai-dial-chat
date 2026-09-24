@@ -1,7 +1,14 @@
-import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  buildCssVars,
+  FeaturedChip,
+  MarkdownRenderer,
+  MarkdownRendererClassNames,
+  mergeClasses,
+} from '@epam/ai-dial-chat-shared';
 import {
   CardShell,
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
   FolderPath,
 } from '@epam/ai-dial-ui-kit';
@@ -14,15 +21,21 @@ import {
   useEffect,
   useState,
 } from 'react';
+import { CATALOG_CLASS } from '../../constants/public-class-names';
 import type { CardProps } from '../../models/card-props';
 import { DeploymentSize } from '../../types/deployment-icon-size';
-import { getFeaturedEntityStyle } from '../../utils/styles';
 import { AppIdentity } from '../AppIdentity/AppIdentity';
 import { CredentialsBadge } from '../CredentialsBadge/CredentialsBadge';
-import { FeaturedChip } from '../FeaturedChip/FeaturedChip';
 import { StarToggleButton } from '../StarToggleButton/StarToggleButton';
 import { TopicsLine } from '../TopicTag/TopicTag';
 import styles from './CardGrid.module.scss';
+
+const DESCRIPTION_MARKDOWN_COMPONENTS = { img: () => null };
+
+const isLinkEvent = (
+  event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
+): boolean =>
+  event.target instanceof Element && event.target.closest('a') !== null;
 
 /** Browse grid card: AppIdentity header + description + topic chips + breadcrumbs + star. */
 export const Card: FC<CardProps> = ({
@@ -31,6 +44,7 @@ export const Card: FC<CardProps> = ({
   onClick,
   initialIsStarred = false,
   onToggle,
+  isFavoriteVisible,
   featuredLabel = 'Featured',
   addToFavoritesAriaLabel = 'Add to favorites',
   removeFromFavoritesAriaLabel = 'Remove from favorites',
@@ -38,6 +52,7 @@ export const Card: FC<CardProps> = ({
   className,
   styles: cardStyles,
   credentialsBadgeLoggedOutLabel,
+  isReadonly = false,
 }) => {
   const [isStarred, setIsStarred] = useState(initialIsStarred);
 
@@ -51,7 +66,7 @@ export const Card: FC<CardProps> = ({
   }, [item.id, initialIsStarred]);
 
   const descriptionClassName =
-    cardStyles?.typography?.descriptionClassName ?? 'dial-small-text';
+    cardStyles?.typography?.descriptionClassName ?? 'dial-small-paragraph-text';
 
   const featuredChipClassName = cardStyles?.typography?.featuredChipClassName;
   const folderLabelClassName =
@@ -67,11 +82,21 @@ export const Card: FC<CardProps> = ({
     '--cg-footer-border': cardStyles?.colors?.footerBorder,
   });
 
-  const handleClick = onClick ? () => onClick(item) : undefined;
+  const isFeaturedVisible = !isReadonly && item.isFeatured === true;
+  const isStarVisible = !isReadonly && isFavoriteVisible?.(item) !== false;
+  /* Read-only cards drop the whole footer row once the folder path — the only
+   * thing left in it without the star — has nothing to render. */
+  const isFooterVisible = !isReadonly || item.folder.length > 0;
+
+  const handleClick = onClick
+    ? (e: MouseEvent<HTMLElement>) => {
+        if (!isLinkEvent(e)) onClick(item);
+      }
+    : undefined;
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLElement>) => {
-      if (!onClick) return;
+      if (!onClick || isLinkEvent(e)) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         onClick(item);
@@ -101,20 +126,23 @@ export const Card: FC<CardProps> = ({
           }
         : {})}
       aria-label={item.name}
-      style={{ ...getFeaturedEntityStyle(item), ...cssVars }}
+      style={cssVars}
       className={mergeClasses(
-        'box-border cursor-pointer',
+        'box-border cursor-pointer gap-3',
         styles.card,
-        item.isFeatured ? styles.featuredCard : undefined,
+        isFeaturedVisible ? styles.featuredCard : undefined,
         isSelected ? styles.selectedCard : undefined,
         className,
+        CATALOG_CLASS.card,
       )}
     >
-      {item.isFeatured && (
+      {isFeaturedVisible && (
         <div className="absolute end-[22px] top-0 -translate-y-1/2">
           <FeaturedChip
             label={featuredLabel}
+            type={item.type}
             className={featuredChipClassName}
+            style={cardStyles?.colors?.featuredChipStyle}
           />
         </div>
       )}
@@ -127,6 +155,7 @@ export const Card: FC<CardProps> = ({
             styles.checkIcon,
           )}
           aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
         />
       )}
 
@@ -137,54 +166,90 @@ export const Card: FC<CardProps> = ({
         version={item.version}
         size={DeploymentSize.SM}
         query={query}
-        className="min-w-0 flex-1"
         iconClassName={styles.cardIcon}
+        iconOverlay={
+          <CredentialsBadge
+            credentials={item.credentials}
+            loggedOutLabel={credentialsBadgeLoggedOutLabel}
+          />
+        }
       />
 
-      {/* Description */}
-      <p
+      <div
         className={mergeClasses(
-          descriptionClassName,
-          'line-clamp-2 min-h-[44px] !leading-[22px]',
+          /*
+           * `min-h` is two line-heights, not a fixed px value: `line-clamp-2`
+           * limits the text to 2 lines but `overflow: hidden` clips at the box
+           * height, so any box taller than 2 lines paints the clamped-away
+           * lines. `2lh` tracks whichever typography class is applied.
+           */
+          'line-clamp-2 min-h-[2lh] break-words',
           styles.description,
         )}
       >
-        {item.description}
-      </p>
-
-      <div className="flex min-h-[28px] items-center justify-between gap-2">
-        <TopicsLine topics={item.topics} />
-        <CredentialsBadge
-          credentials={item.credentials}
-          loggedOutLabel={credentialsBadgeLoggedOutLabel}
-        />
+        {item.description && (
+          <MarkdownRenderer
+            content={item.description}
+            classNames={
+              {
+                p: descriptionClassName,
+                ul: descriptionClassName,
+                ol: descriptionClassName,
+                h1: descriptionClassName,
+                h2: descriptionClassName,
+                h3: descriptionClassName,
+                h4: descriptionClassName,
+                h5: descriptionClassName,
+                h6: descriptionClassName,
+              } satisfies MarkdownRendererClassNames
+            }
+            components={DESCRIPTION_MARKDOWN_COMPONENTS}
+          />
+        )}
       </div>
 
-      <div className={mergeClasses('mt-auto border-t pt-3', styles.footer)}>
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1">
-            {item.folder.length > 0 && (
-              <FolderPath
-                segments={item.folder}
-                labelClassName={folderLabelClassName}
-                leafClassName={folderLeafClassName}
+      {/* `mt-auto` pins the topics row and footer to the card bottom — the job
+       * `flex-1` on the description used to do before it broke the clamp. */}
+      <div className="mt-auto flex items-center gap-2">
+        <TopicsLine topics={item.topics} />
+      </div>
+
+      {isFooterVisible && (
+        <div
+          className={mergeClasses(
+            'pt-3',
+            !isReadonly && mergeClasses('border-t', styles.footer),
+          )}
+        >
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              {item.folder.length > 0 && (
+                <FolderPath
+                  segments={item.folder}
+                  labelClassName={folderLabelClassName}
+                  leafClassName={folderLeafClassName}
+                />
+              )}
+            </div>
+            {isStarVisible && (
+              <StarToggleButton
+                isStarred={isStarred}
+                size={ElementSize.Small}
+                onClick={handleStarToggle}
+                ariaLabel={
+                  isStarred
+                    ? removeFromFavoritesAriaLabel
+                    : addToFavoritesAriaLabel
+                }
+                className={mergeClasses(
+                  styles.starBtn,
+                  !isStarred && styles.emptyStarHidden,
+                )}
               />
             )}
           </div>
-          <StarToggleButton
-            isStarred={isStarred}
-            size={ElementSize.Small}
-            onClick={handleStarToggle}
-            ariaLabel={
-              isStarred ? removeFromFavoritesAriaLabel : addToFavoritesAriaLabel
-            }
-            className={mergeClasses(
-              styles.starBtn,
-              !isStarred && styles.emptyStarHidden,
-            )}
-          />
         </div>
-      </div>
+      )}
     </CardShell>
   );
 };

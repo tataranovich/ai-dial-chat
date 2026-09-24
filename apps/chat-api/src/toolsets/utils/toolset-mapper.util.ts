@@ -1,7 +1,10 @@
 import type { components, operations } from '@epam/ai-dial-typescript-sdk';
 import { BadRequestException } from '@nestjs/common';
 import type { LocalizedText } from '../../common/types/localized-text';
-import { composeLocalizedFields } from '../../common/utils/compose-localized-fields';
+import {
+  composeLocalizedFields,
+  toLocalizedValue,
+} from '../../common/utils/compose-localized-fields';
 import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
 import { getResourceDisplayNameFallback } from '../../common/utils/resource-name';
 import { safeDecodeURIComponent } from '../../common/utils/uri';
@@ -86,7 +89,7 @@ export interface RawDialToolset {
 }
 
 export type DialToolsetSaveBody = {
-  displayName: LocalizedText;
+  displayName: components['schemas']['LocalizedValue'];
   displayVersion: string;
   endpoint: string;
   transport: ToolsetBodyDto['transport'];
@@ -220,7 +223,7 @@ export const toDialToolsetBody = (
     body.primaryLocale,
   );
   const dialBody: DialToolsetSaveBody = {
-    displayName,
+    displayName: toLocalizedValue(displayName),
     displayVersion: version,
     endpoint: body.endpoint.trim(),
     transport: body.transport,
@@ -246,7 +249,11 @@ export const toDialToolsetBody = (
 export const resolveToolsetLoginUrl = (toolsetName: string): string => {
   const resource = parseDialToolsetResource(toolsetName);
   if (!resource) {
-    throw new BadRequestException('Toolset id must include bucket and path');
+    /*
+     * Platform toolsets and applications use deployment IDs without a bucket.
+     * Core resolves those IDs directly through the same signin/signout API.
+     */
+    return safeDecodeURIComponent(toolsetName);
   }
   return `${TOOLSET_RESOURCE_PREFIX}${resource.bucket}/${safeDecodeURIComponent(resource.path)}`;
 };
@@ -258,6 +265,8 @@ export const toDialToolsetSigninBody = (
   const base = {
     url: resolveToolsetLoginUrl(toolsetName),
     credentialsLevel: toDialCredentialsLevel(body.credentialsLevel),
+    // Forwarded exactly as sent, including an explicit `false`; never defaulted here.
+    offlineUsageConsent: body.offlineUsageConsent,
   };
 
   if (body.authenticationType === ToolsetAuthType.ApiKey) {

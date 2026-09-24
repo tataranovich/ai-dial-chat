@@ -1,0 +1,37 @@
+.rail {
+  background: var(--np-bg, var(--bg-layer-raised, #fcfcfc));
+  font-family: var(--np-font-family, inherit);
+}
+
+.item {
+  color: var(--np-item-text, var(--text-secondary, #57647a));
+
+  &:hover {
+    background: var(
+      --np-item-hover-bg,
+      var(--bg-control-accent-alpha-hover, #2764d924)
+    );
+  }
+
+  &:active {
+    background: var(
+      --np-item-active-bg,
+      var(--bg-control-accent-alpha-active, #2764d933)
+    );
+  }
+
+  a:focus-visible > & {
+    background: var(
+      --np-item-hover-bg,
+      var(--bg-control-accent-alpha-hover, #2764d924)
+    );
+  }
+}
+
+.itemActive {
+  background: var(
+    --np-item-selected-bg,
+    var(--bg-control-accent-alpha, #2764d90f)
+  );
+  color: var(--np-item-active-text, var(--text-accent, #1d4ed8));
+}

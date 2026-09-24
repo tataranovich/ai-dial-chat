@@ -1,10 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsString, ValidateIf } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  ValidateIf,
+} from 'class-validator';
 
 export enum ExternalServiceAuthType {
   None = 'NONE',
   ApiKey = 'API_KEY',
   OAuth = 'OAUTH',
+  DialNative = 'DIAL_NATIVE',
 }
 
 export enum ExternalServiceCredentialsLevel {
@@ -12,6 +21,12 @@ export enum ExternalServiceCredentialsLevel {
   Application = 'APPLICATION',
   User = 'USER',
 }
+
+const EXTERNAL_SERVICE_CREDENTIAL_AUTH_TYPES = [
+  ExternalServiceAuthType.None,
+  ExternalServiceAuthType.ApiKey,
+  ExternalServiceAuthType.OAuth,
+] as const;
 
 export class GetExternalServiceResponseDto {
   @ApiProperty({ example: 'FinHub API' })
@@ -32,6 +47,13 @@ export class GetExternalServiceResponseDto {
       "USER-level credential status ('SIGNED_IN' | 'SIGNED_OUT' | 'FAILED'), when Core reports one.",
   })
   userLevelAuthStatus?: string;
+
+  @ApiPropertyOptional({
+    example: 'SIGNED_IN',
+    description:
+      'APPLICATION-level status. For DIAL_NATIVE, indicates application consent managed by an administrator.',
+  })
+  appLevelAuthStatus?: string;
 
   @ApiPropertyOptional({
     example: 'SIGNED_OUT',
@@ -58,6 +80,14 @@ export class GetExternalServiceResponseDto {
   codeChallengeMethod?: string;
 }
 
+export class ApplicationExternalServiceDto extends GetExternalServiceResponseDto {
+  @ApiProperty({
+    description: 'External-service identifier within the application',
+    example: 'finhub-api2',
+  })
+  id!: string;
+}
+
 export class ExternalServiceSigninBodyDto {
   @ApiProperty({
     enum: ExternalServiceCredentialsLevel,
@@ -67,11 +97,14 @@ export class ExternalServiceSigninBodyDto {
   credentialsLevel!: ExternalServiceCredentialsLevel;
 
   @ApiProperty({
-    enum: ExternalServiceAuthType,
+    enum: EXTERNAL_SERVICE_CREDENTIAL_AUTH_TYPES,
     example: ExternalServiceAuthType.ApiKey,
   })
-  @IsEnum(ExternalServiceAuthType)
-  authenticationType!: ExternalServiceAuthType;
+  @IsIn(EXTERNAL_SERVICE_CREDENTIAL_AUTH_TYPES)
+  authenticationType!: Exclude<
+    ExternalServiceAuthType,
+    ExternalServiceAuthType.DialNative
+  >;
 
   @ApiPropertyOptional({ description: 'API key value (API_KEY auth).' })
   @ValidateIf(
@@ -103,6 +136,24 @@ export class ExternalServiceSigninBodyDto {
   @IsString()
   @IsNotEmpty()
   redirectUri?: string;
+
+  /*
+   * Whether the user permits the application to use this credential while they
+   * are not present. Core records it on the credential and gates every
+   * on-behalf-of mint on it, so a credential signed in without it fails with
+   * `consent-required` the moment an application uses it in the background.
+   *
+   * Optional and defaulted by the caller, never by this DTO: standing consent
+   * has to be a choice the user actually made.
+   */
+  @ApiPropertyOptional({
+    description:
+      'Whether the user consents to the application using this credential while ' +
+      'they are offline. Required for on-behalf-of use (e.g. scheduled runs).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  offlineUsageConsent?: boolean;
 }
 
 export class ExternalServiceLogoutBodyDto {
@@ -114,11 +165,14 @@ export class ExternalServiceLogoutBodyDto {
   credentialsLevel!: ExternalServiceCredentialsLevel;
 
   @ApiProperty({
-    enum: ExternalServiceAuthType,
+    enum: EXTERNAL_SERVICE_CREDENTIAL_AUTH_TYPES,
     example: ExternalServiceAuthType.ApiKey,
   })
-  @IsEnum(ExternalServiceAuthType)
-  authenticationType!: ExternalServiceAuthType;
+  @IsIn(EXTERNAL_SERVICE_CREDENTIAL_AUTH_TYPES)
+  authenticationType!: Exclude<
+    ExternalServiceAuthType,
+    ExternalServiceAuthType.DialNative
+  >;
 }
 
 export class ExternalServiceAuthResultDto {

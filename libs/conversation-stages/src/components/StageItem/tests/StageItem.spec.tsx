@@ -4,11 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { StageItem } from '../StageItem';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 14, MD: 16 },
   Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
     <span role="status" aria-label={ariaLabel} />
   ),
-  DialEllipsisTooltip: ({ text }: { text: string }) => <>{text}</>,
+  EllipsisTooltip: ({ text }: { text: string }) => <>{text}</>,
 }));
 
 vi.mock('@epam/ai-dial-attachment-input', () => ({
@@ -25,12 +26,10 @@ const baseStage = {
 
 describe('StageItem — optional-field rendering', () => {
   it('renders only the icon and name when no other field has data (minimum row)', () => {
-    const { container } = render(
-      <StageItem stage={baseStage} isLive={false} typography={{}} />,
-    );
+    render(<StageItem stage={baseStage} isLive={false} typography={{}} />);
 
     expect(screen.getByText('Parsed user intent')).toBeTruthy();
-    expect(container.querySelector('button')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('renders the tag only when the stage carries one', () => {
@@ -65,7 +64,12 @@ describe('StageItem — optional-field rendering', () => {
     const { container } = render(
       <StageItem stage={baseStage} isLive={false} typography={{}} />,
     );
-    // Exactly one svg (the status icon) — no second svg for a chevron.
+    /*
+     * Both the status icon and the chevron are aria-hidden decorative svgs
+     * with no accessible role, so counting them has no semantic query
+     * alternative.
+     */
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
     expect(container.querySelectorAll('svg')).toHaveLength(1);
   });
 
@@ -77,6 +81,7 @@ describe('StageItem — optional-field rendering', () => {
         typography={{}}
       />,
     );
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- decorative aria-hidden icons, no accessible query applies
     expect(container.querySelectorAll('svg')).toHaveLength(2);
   });
 
@@ -125,10 +130,8 @@ describe('StageItem — name cleanup', () => {
         typography={{}}
       />,
     );
-    const nameEl = screen
-      .getByText('My_OMDB_Agent__0_0_1_tool')
-      .closest('span');
-    expect(nameEl?.className).toMatch(/monoName|mono/i);
+    const nameEl = screen.getByText('My_OMDB_Agent__0_0_1_tool');
+    expect(nameEl.className).toMatch(/monoName|mono/i);
   });
 });
 
@@ -142,12 +145,18 @@ describe('StageItem — icon priority and failed styling', () => {
       />,
     );
     expect(screen.getByText('Failed')).toBeTruthy();
-    const nameEl = screen.getByText('Parsed user intent').closest('span');
-    expect(nameEl?.className).toMatch(/stageNameFailed|Failed/);
+    const nameEl = screen.getByText('Parsed user intent');
+    expect(nameEl.className).toMatch(/stageNameFailed|Failed/);
   });
 
-  it('shows the running spinner when isLive is true, regardless of status', () => {
-    render(<StageItem stage={baseStage} isLive typography={{}} />);
+  it('shows the running spinner for a live unresolved stage', () => {
+    render(
+      <StageItem
+        stage={{ ...baseStage, status: null }}
+        isLive
+        typography={{}}
+      />,
+    );
     expect(screen.getByRole('status')).toBeTruthy();
   });
 });
@@ -176,7 +185,7 @@ describe('StageItem — nameOverride (used for ×N attempts)', () => {
         typography={{}}
       />,
     );
-    const nameEl = screen.getByText('Attempt_1').closest('span');
-    expect(nameEl?.className).not.toMatch(/monoName/);
+    const nameEl = screen.getByText('Attempt_1');
+    expect(nameEl.className).not.toMatch(/monoName/);
   });
 });

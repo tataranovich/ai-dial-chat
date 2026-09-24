@@ -1,27 +1,14 @@
+import { DESKTOP_BREAKPOINT_PX } from '@epam/ai-dial-chat-shared';
 import { type RefObject, useEffect, useRef, useState } from 'react';
-import { CARD_ROW_HEIGHT } from '../constants/virtual-grid';
+import { CARD_ROW_HEIGHT, CONTENT_MAX_WIDTH } from '../constants/virtual-grid';
 import { getColumnCount } from './card-grid';
+import { getScrollParent } from './scroll-window';
 
 interface VirtualizerState {
   startRow: number;
   endRow: number;
   columnCount: number;
 }
-
-/** Returns the nearest scrollable ancestor, falling back to `<html>`. */
-const getScrollParent = (el: Element | null): Element => {
-  if (!el || el === document.body) return document.documentElement;
-  const { overflow, overflowY } = getComputedStyle(el);
-  if (
-    overflow === 'auto' ||
-    overflow === 'scroll' ||
-    overflowY === 'auto' ||
-    overflowY === 'scroll'
-  ) {
-    return el;
-  }
-  return getScrollParent(el.parentElement);
-};
 
 /** Return value of `useScrollVirtualizer`. */
 export interface ScrollVirtualizerResult {
@@ -39,21 +26,44 @@ export interface ScrollVirtualizerResult {
   totalHeight: number;
 }
 
-/** Virtualizes a card grid driven by the nearest scrollable ancestor; returns row window, column count, and total height. */
+/** Options for `useScrollVirtualizer`. */
+export interface ScrollVirtualizerOptions {
+  /** Rows kept rendered beyond each edge of the viewport. Defaults to `3`. */
+  overscan?: number;
+  /**
+   * Set when the grid renders without the `CONTENT_MAX_WIDTH` column cap, so
+   * the first-paint column guess matches the width the container actually
+   * gets. Defaults to `false`.
+   */
+  isFullWidth?: boolean;
+}
+
+/**
+ * Virtualizes a card grid driven by the nearest scrollable ancestor; returns
+ * row window, column count, and total height.
+ */
 export const useScrollVirtualizer = (
   itemCount: number,
-  overscan = 3,
+  { overscan = 3, isFullWidth = false }: ScrollVirtualizerOptions = {},
 ): ScrollVirtualizerResult => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [state, setState] = useState<VirtualizerState>(() => {
     const w = typeof window !== 'undefined' ? window.innerWidth : 1440;
     /*
-     * Approximate the grid container width: content column capped at 1180 px,
-     * minus sidebar (60 px on desktop) and 64 px horizontal padding (px-8 × 2).
+     * Approximate the grid container width: available width minus the sidebar
+     * (60 px on desktop) and 64 px horizontal padding (px-8 × 2), capped at
+     * CONTENT_MAX_WIDTH unless the grid spans the full width.
      */
-    const sidebarWidth = w > 768 ? 60 : 0;
-    const approxContainer = Math.min(1180, Math.max(0, w - sidebarWidth)) - 64;
+    /*
+     * The sidebar renders only from the desktop boundary up — the width is
+     * single-sourced from chat-shared's breakpoint constants so the grid
+     * math and the layout branches agree on the band.
+     */
+    const sidebarWidth = w >= DESKTOP_BREAKPOINT_PX ? 60 : 0;
+    const available = Math.max(0, w - sidebarWidth);
+    const approxContainer =
+      (isFullWidth ? available : Math.min(CONTENT_MAX_WIDTH, available)) - 64;
     const cols = getColumnCount(approxContainer);
     const rows = Math.ceil(itemCount / cols);
     return { startRow: 0, endRow: Math.min(rows, 12), columnCount: cols };
@@ -66,10 +76,17 @@ export const useScrollVirtualizer = (
     const scrollEl = getScrollParent(container.parentElement);
 
     const update = () => {
+      const containerWidth = container.clientWidth;
+      const viewportHeight = scrollEl.clientHeight;
+      /*
+       * Catalog keeps both views mounted. A hidden grid has zero width;
+       * preserve its rows and columns so revealing it does not rebuild
+       * every card from a temporary single-column layout.
+       */
+      if (containerWidth === 0 || viewportHeight === 0) return;
+
       const containerRect = container.getBoundingClientRect();
       const scrollElRect = scrollEl.getBoundingClientRect();
-      const viewportHeight = scrollEl.clientHeight;
-      const containerWidth = container.clientWidth;
 
       const cols = getColumnCount(containerWidth);
       const rows = Math.ceil(itemCount / cols);
@@ -85,12 +102,19 @@ export const useScrollVirtualizer = (
         startRow + Math.ceil(viewportHeight / CARD_ROW_HEIGHT) + 2 * overscan,
       );
 
-      setState({ startRow, endRow, columnCount: cols });
+      setState((previous) =>
+        previous.startRow === startRow &&
+        previous.endRow === endRow &&
+        previous.columnCount === cols
+          ? previous
+          : { startRow, endRow, columnCount: cols },
+      );
     };
 
     scrollEl.addEventListener('scroll', update, { passive: true });
     const ro = new ResizeObserver(update);
     ro.observe(container);
+    ro.observe(scrollEl);
     update();
 
     return () => {

@@ -1,3 +1,11 @@
+# unified-catalog Specification
+
+## Purpose
+
+The unified catalog endpoint and the `DeploymentsContext` that owns deployment selection in the frontend.
+
+## Requirements
+
 ### Requirement: Unified catalog endpoint
 The system SHALL expose `GET /api/v1/catalog` that returns models and applications merged into a single sorted list for the authenticated session user, optionally filtered by model capability query parameters.
 
@@ -10,7 +18,6 @@ The endpoint SHALL:
 - Apply `CatalogFilterService.apply` to the sorted merged list using the normalized capability-only `CatalogFilter` from `CatalogFilterService.parse(dto)`.
 - Record `total` (count before filtering) and `filtered` (count after filtering) and include them in `CatalogResponseDto`.
 - Cache the **unfiltered** merged list under key `catalog:list:<userSub>` for 30 000 ms; filtering is applied after cache retrieval and filtered results are NOT cached separately.
-- Apply `@Throttle({ default: { limit: 60, ttl: 60000 } })`.
 - Set response header `Cache-Control: private, max-age=30`.
 - Not log the access token, session cookie, or any secret.
 
@@ -49,10 +56,6 @@ The endpoint SHALL:
 #### Scenario: Unauthenticated request
 - **WHEN** a request arrives with no valid session cookie
 - **THEN** the endpoint responds 401
-
-#### Scenario: Rate limit exceeded
-- **WHEN** the request rate exceeds 60 per minute for the client
-- **THEN** the endpoint responds 429
 
 #### Scenario: Catalog cache hit — filter applied to cached list
 - **WHEN** `catalog:list:<userSub>` is present in the cache
@@ -142,7 +145,7 @@ Running `npm run openapi`, `npm run openapi:check`, `npm exec nx build chat-api-
 
 The generated `@epam/chat-api-client` request type SHALL be used directly as the param type (no hand-crafted wrapper type).
 
-`catalogApi` SHALL be instantiated in `api-client.ts` alongside `modelsApi` and `deploymentsApi`.
+`catalogApi` SHALL be instantiated in `api-client.ts` alongside `deploymentsApi` and `conversationsApi`.
 
 #### Scenario: getCatalogItems passes capability filter params to generated client
 - **WHEN** `getCatalogItems({ modelCapabilitiesChatCompletion: true, modelCapabilitiesEmbeddings: false })` is called
@@ -265,7 +268,6 @@ No new business logic SHALL be added to it. New consumers SHALL use `/api/v1/cat
 #### Scenario: Swagger marks endpoint as deprecated
 - **WHEN** the OpenAPI spec is generated
 - **THEN** `GET /api/deployments` appears with `deprecated: true`
-
 
 ---
 

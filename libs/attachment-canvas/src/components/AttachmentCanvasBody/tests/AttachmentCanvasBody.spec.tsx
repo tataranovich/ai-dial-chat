@@ -1,0 +1,425 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AttachmentCanvasContent } from '../../../models/attachment-canvas';
+import {
+  AttachmentContentType,
+  AttachmentErrorType,
+  OoxmlFileType,
+} from '../../../types/attachment-canvas';
+import { PdfContent } from '../../PdfContent/PdfContent';
+import { AttachmentCanvasBody } from '../AttachmentCanvasBody';
+
+vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-chat-shared')>();
+  return {
+    ...actual,
+    MarkdownRenderer: ({ content }: { content: string }) => (
+      <section aria-label="markdown-renderer">{content}</section>
+    ),
+  };
+});
+
+vi.mock('react-json-view-lite', () => ({
+  JsonView: ({ data }: { data: object }) => (
+    <section aria-label="json-viewer">{JSON.stringify(data)}</section>
+  ),
+  defaultStyles: {},
+}));
+
+vi.mock('@epam/ai-dial-visualizer-connector', () => ({
+  VisualizerConnector: vi.fn().mockImplementation(function () {
+    return {
+      ready: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      send: vi.fn(),
+      destroy: vi.fn(),
+    };
+  }),
+}));
+
+interface PdfContentMockProps {
+  url: string;
+  configurePdfWorker?: () => void | Promise<void>;
+  selectedPageNumber?: number;
+}
+
+vi.mock('../../PdfContent/PdfContent', () => ({
+  PdfContent: vi.fn(({ url }: PdfContentMockProps) => (
+    <section aria-label="pdf-content">{url}</section>
+  )),
+}));
+
+vi.mock('../../OoxmlContent/OoxmlContent', () => ({
+  OoxmlContent: ({
+    content,
+    formulaLabel,
+    formulaLabelClassName,
+    highlightsLabel,
+    highlightNavigatedLabel,
+  }: {
+    content: { format: string };
+    formulaLabel: string;
+    formulaLabelClassName: string;
+    highlightsLabel?: string;
+    highlightNavigatedLabel?: string;
+  }) => (
+    <section
+      aria-label="ooxml-content"
+      data-formula-label-class-name={formulaLabelClassName}
+      data-highlights-label={highlightsLabel}
+      data-highlight-navigated-label={highlightNavigatedLabel}
+    >
+      {content.format}:{formulaLabel}
+    </section>
+  ),
+}));
+
+const renderBody = (
+  content: AttachmentCanvasContent,
+  overrides: Partial<Parameters<typeof AttachmentCanvasBody>[0]> = {},
+) => render(<AttachmentCanvasBody content={content} {...overrides} />);
+
+describe('AttachmentCanvasBody', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders a spinner and no content while isLoading', () => {
+    renderBody(
+      { type: AttachmentContentType.PlainText, text: 'ignored' },
+      { isLoading: true },
+    );
+    expect(screen.queryByText('ignored')).toBeNull();
+    expect(screen.getByRole('status')).toBeTruthy();
+  });
+
+  it('renders PlainText content', () => {
+    renderBody({
+      type: AttachmentContentType.PlainText,
+      text: 'Hello, world!',
+    });
+    expect(screen.getByText('Hello, world!')).toBeTruthy();
+  });
+
+  it('renders an image and falls back to the error state on load failure', () => {
+    renderBody(
+      { type: AttachmentContentType.Image, url: 'blob:image-url' },
+      { fileName: 'photo.png', labels: { loadErrorLabel: 'Broken image' } },
+    );
+    const img = screen.getByRole('img');
+    expect(img.getAttribute('src')).toBe('blob:image-url');
+    fireEvent.error(img);
+    expect(screen.getByText('Broken image')).toBeTruthy();
+  });
+
+  it('renders an audio element with the given mimeType', () => {
+    renderBody(
+      {
+        type: AttachmentContentType.Audio,
+        url: 'blob:audio-url',
+        mimeType: 'audio/mpeg',
+      },
+      { fileName: 'track.mp3' },
+    );
+    expect(screen.getByLabelText('track.mp3')).toBeTruthy();
+  });
+
+  it('renders MarkdownRenderer for Markdown content', () => {
+    renderBody({
+      type: AttachmentContentType.Markdown,
+      text: '# Title',
+    });
+    expect(
+      screen.getByRole('region', { name: 'markdown-renderer' }),
+    ).toBeTruthy();
+  });
+
+  it('scrolls the body for a Markdown document taller than the panel', () => {
+    const { container } = renderBody({
+      type: AttachmentContentType.Markdown,
+      text: '# Title',
+    });
+
+    /* A markdown document flows as tall as its content, so clipping the body
+     * would make everything below the fold unreachable. */
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- asserting a CSS sizing class on the unlabeled body wrapper, which has no accessible role or text to query
+    expect(container.querySelector('.overflow-auto')).toBeTruthy();
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- same unlabeled wrapper; verifying the body itself is not clipped
+    expect(container.querySelector('.overflow-hidden')).toBeNull();
+  });
+
+  it('clips the body for MarkdownTable content so the table scrolls itself', () => {
+    const { container } = renderBody({
+      type: AttachmentContentType.MarkdownTable,
+      text: '| a |\n| - |\n| 1 |',
+    });
+
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- asserting a CSS sizing class on the unlabeled body wrapper, which has no accessible role or text to query
+    expect(container.querySelector('.overflow-hidden')).toBeTruthy();
+  });
+
+  it('renders JsonView for Json content', () => {
+    renderBody({
+      type: AttachmentContentType.Json,
+      value: { key: 'value' },
+    });
+    expect(screen.getByRole('region', { name: 'json-viewer' })).toBeTruthy();
+  });
+
+  it('renders plain code content when no language is set', () => {
+    renderBody({
+      type: AttachmentContentType.Code,
+      text: 'console.log(1)',
+    });
+    expect(screen.getByText('console.log(1)')).toBeTruthy();
+  });
+
+  it('renders HtmlContent for Html content via srcdoc', () => {
+    renderBody(
+      { type: AttachmentContentType.Html, srcdoc: '<p>hello</p>' },
+      { fileName: 'page.html' },
+    );
+    expect(screen.getByTitle('page.html')).toBeTruthy();
+  });
+
+  it('renders PdfContent for Pdf content, loaded lazily behind a Suspense boundary', async () => {
+    renderBody({
+      type: AttachmentContentType.Pdf,
+      url: 'blob:pdf-url',
+    });
+    /* `PdfContent` is behind `lazy()`, so it resolves asynchronously even
+     * though the mocked module itself is synchronous — `findByRole` waits
+     * for the Suspense fallback to be replaced by the real content. */
+    expect(
+      await screen.findByRole('region', { name: 'pdf-content' }),
+    ).toBeTruthy();
+  });
+
+  it('never loads the PdfContent module for non-Pdf content', () => {
+    renderBody({
+      type: AttachmentContentType.PlainText,
+      text: 'no pdf here',
+    });
+    expect(PdfContent).not.toHaveBeenCalled();
+  });
+
+  it('forwards configurePdfWorker to PdfContent', async () => {
+    const configurePdfWorker = vi.fn();
+    renderBody(
+      { type: AttachmentContentType.Pdf, url: 'blob:pdf-url' },
+      { configurePdfWorker },
+    );
+    await screen.findByRole('region', { name: 'pdf-content' });
+    const [props] = vi.mocked(PdfContent).mock.calls[0];
+    expect(props.configurePdfWorker).toBe(configurePdfWorker);
+  });
+
+  it('forwards content.page as selectedPageNumber to PdfContent', async () => {
+    renderBody({
+      type: AttachmentContentType.Pdf,
+      url: 'blob:pdf-url',
+      page: 7,
+    });
+    await screen.findByRole('region', { name: 'pdf-content' });
+    const [props] = vi.mocked(PdfContent).mock.calls[0];
+    expect(props.selectedPageNumber).toBe(7);
+  });
+
+  it('leaves selectedPageNumber undefined when content.page is absent', async () => {
+    renderBody({
+      type: AttachmentContentType.Pdf,
+      url: 'blob:pdf-url',
+    });
+    await screen.findByRole('region', { name: 'pdf-content' });
+    const [props] = vi.mocked(PdfContent).mock.calls[0];
+    expect(props.selectedPageNumber).toBeUndefined();
+  });
+
+  it("announces the pdfContentLoadingLabel while PdfContent's dynamic import is pending", async () => {
+    /*
+     * `PdfContent` is behind `lazy()`, so even a synchronously-resolving
+     * mocked module still suspends for the first render — the
+     * `LazyContentBoundary` pending state (asserted here) is what's on
+     * screen before that microtask settles.
+     */
+    renderBody(
+      { type: AttachmentContentType.Pdf, url: 'blob:pdf-url' },
+      { labels: { pdfContentLoadingLabel: 'Loading the PDF viewer…' } },
+    );
+
+    expect(screen.getByText('Loading the PDF viewer…')).toBeTruthy();
+
+    // Let the mocked dynamic import settle before the test ends, so its
+    // resolution doesn't land as an unwrapped `act(...)` update afterward.
+    await screen.findByRole('region', { name: 'pdf-content' });
+  });
+
+  it('renders OoxmlContent for OOXML content', () => {
+    renderBody({
+      type: AttachmentContentType.Ooxml,
+      url: 'blob:office-url',
+      format: OoxmlFileType.Docx,
+    });
+    expect(screen.getByRole('region', { name: 'ooxml-content' })).toBeTruthy();
+  });
+
+  it('forwards ooxmlHighlightsLabel and ooxmlHighlightNavigatedLabel to OoxmlContent', () => {
+    renderBody(
+      {
+        type: AttachmentContentType.Ooxml,
+        url: 'blob:office-url',
+        format: OoxmlFileType.Docx,
+      },
+      {
+        labels: {
+          ooxmlHighlightsLabel: 'Cited locations',
+          ooxmlHighlightNavigatedLabel: 'Scrolled to the cited location',
+        },
+      },
+    );
+
+    const region = screen.getByRole('region', { name: 'ooxml-content' });
+    expect(region.getAttribute('data-highlights-label')).toBe(
+      'Cited locations',
+    );
+    expect(region.getAttribute('data-highlight-navigated-label')).toBe(
+      'Scrolled to the cited location',
+    );
+  });
+
+  it('leaves the highlight labels undefined on OoxmlContent when omitted, so it falls back to its own defaults', () => {
+    renderBody({
+      type: AttachmentContentType.Ooxml,
+      url: 'blob:office-url',
+      format: OoxmlFileType.Docx,
+    });
+
+    const region = screen.getByRole('region', { name: 'ooxml-content' });
+    expect(region.getAttribute('data-highlights-label')).toBeNull();
+    expect(region.getAttribute('data-highlight-navigated-label')).toBeNull();
+  });
+
+  it('forwards the XLSX formula label to OoxmlContent', () => {
+    renderBody(
+      {
+        type: AttachmentContentType.Ooxml,
+        url: 'blob:office-url',
+        format: OoxmlFileType.Xlsx,
+      },
+      { labels: { xlsxFormulaLabel: 'Cell formula' } },
+    );
+
+    expect(screen.getByText('xlsx:Cell formula')).toBeTruthy();
+  });
+
+  it('forwards the default and overridden XLSX formula typography', () => {
+    const content = {
+      type: AttachmentContentType.Ooxml as const,
+      url: 'blob:office-url',
+      format: OoxmlFileType.Xlsx,
+    };
+    const view = renderBody(content);
+    expect(
+      screen
+        .getByRole('region', { name: 'ooxml-content' })
+        .getAttribute('data-formula-label-class-name'),
+    ).toBe('dial-italic-text');
+
+    view.unmount();
+    renderBody(content, {
+      styles: {
+        typography: { xlsxFormulaLabelClassName: 'custom-formula-text' },
+      },
+    });
+    expect(
+      screen
+        .getByRole('region', { name: 'ooxml-content' })
+        .getAttribute('data-formula-label-class-name'),
+    ).toBe('custom-formula-text');
+  });
+
+  it('exposes the OOXML colors as host-overridable CSS variables', () => {
+    const { container } = renderBody(
+      {
+        type: AttachmentContentType.Ooxml,
+        url: 'blob:office-url',
+        format: OoxmlFileType.Docx,
+      },
+      {
+        styles: {
+          colors: {
+            ooxmlBackground: 'rebeccapurple',
+            ooxmlFormulaBorder: 'gold',
+            ooxmlFormulaBackground: 'navy',
+            ooxmlFormulaText: 'white',
+          },
+        },
+      },
+    );
+
+    /* Set on the body root and inherited by OoxmlContent through the cascade. */
+    // eslint-disable-next-line testing-library/no-node-access -- reading an inline CSS custom property, which has no accessible representation to query
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.style.getPropertyValue('--ac-ooxml-bg')).toBe('rebeccapurple');
+    expect(root.style.getPropertyValue('--ac-ooxml-formula-border')).toBe(
+      'gold',
+    );
+    expect(root.style.getPropertyValue('--ac-ooxml-formula-bg')).toBe('navy');
+    expect(root.style.getPropertyValue('--ac-ooxml-formula-text')).toBe(
+      'white',
+    );
+  });
+
+  it('does not add its own scroll container for OOXML content', () => {
+    const { container } = renderBody({
+      type: AttachmentContentType.Ooxml,
+      url: 'blob:office-url',
+      format: OoxmlFileType.Docx,
+    });
+
+    /* The viewer manages its own scrolling — an outer scroll container would
+     * produce nested scrollbars. */
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- asserting a CSS sizing class on the unlabeled body wrapper, which has no accessible role or text to query
+    expect(container.querySelector('.overflow-hidden')).toBeTruthy();
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- same unlabeled wrapper; verifying the absence of a scroll container
+    expect(container.querySelector('.overflow-auto')).toBeNull();
+  });
+
+  it('mounts the visualizer renderer for Visualizer content', () => {
+    renderBody({
+      type: AttachmentContentType.Visualizer,
+      url: 'https://viz.example.com',
+      mimeType: 'application/x-my-viz',
+      data: {},
+      layout: { themeId: 'light' },
+      visualizerName: 'my-viz',
+    });
+    expect(screen.getByRole('status')).toBeTruthy();
+  });
+
+  it('renders the unsupported-format message', () => {
+    renderBody(
+      { type: AttachmentContentType.Unsupported },
+      { labels: { unsupportedLabel: 'Cannot preview this' } },
+    );
+    expect(screen.getByText('Cannot preview this')).toBeTruthy();
+  });
+
+  it('renders the LoadFailed error message', () => {
+    renderBody({
+      type: AttachmentContentType.Error,
+      errorType: AttachmentErrorType.LoadFailed,
+    });
+    expect(screen.getByText('Failed to load file')).toBeTruthy();
+  });
+
+  it('renders the Forbidden error message', () => {
+    renderBody({
+      type: AttachmentContentType.Error,
+      errorType: AttachmentErrorType.Forbidden,
+    });
+    expect(
+      screen.getByText("You don't have permission to access this file"),
+    ).toBeTruthy();
+  });
+});

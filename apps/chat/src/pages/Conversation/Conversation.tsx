@@ -1,16 +1,31 @@
 import type { ConversationResponseDto } from '@epam/ai-dial-chat-api-client';
 import {
+  getApiErrorDetails,
+  getConversationPath,
+  getLastDeploymentId,
+  getLastUserMessageToolConfiguration,
+  isAwaitingGenerationResume,
+  isConversationNotFoundError,
+  shouldWatchForDisplayNameUpdate,
+  useConversationHandlers,
+  useConversationStream,
+  useToolsMenu,
+} from '@epam/ai-dial-chat-hooks';
+import {
+  generateUUID,
   MessageRating,
   MessageRole,
   type Conversation,
   type Message,
 } from '@epam/ai-dial-chat-shared';
 import {
-  ConfirmationPopupVariant,
   ConfirmationPopup,
+  ConfirmationPopupVariant,
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   Spinner,
-  NotificationVariant,
 } from '@epam/ai-dial-ui-kit';
+import { IconTelescope } from '@tabler/icons-react';
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router';
@@ -27,6 +42,7 @@ import {
 } from '../../constants/translation-keys';
 import { useActiveScheduledTask } from '../../context/ActiveScheduledTaskContext';
 import { useUser } from '../../context/auth/UserContext';
+import { useClientChannel } from '../../context/ClientChannelContext';
 import { useConversations } from '../../context/ConversationsContext';
 import { useDeployments } from '../../context/DeploymentsContext';
 import {
@@ -38,11 +54,12 @@ import { useOptionalOverlay } from '../../context/overlay/OverlayContext';
 import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
 import { useActiveConversationBridge } from '../../hooks/conversation/useActiveConversationBridge';
 import { useAudioTranscription } from '../../hooks/conversation/useAudioTranscription';
-import { useConversationHandlers } from '../../hooks/conversation/useConversationHandlers';
-import { useConversationStream } from '../../hooks/conversation/useConversationStream';
-import { useToolsMenu } from '../../hooks/conversation/useToolsMenu';
 import { useDeploymentChangeEffect } from '../../hooks/useDeploymentChangeEffect';
-import { getApiErrorDetails } from '../../server-api/api-error';
+import {
+  conversationsApi as configuredConversationsApi,
+  filesApi as configuredFilesApi,
+  rateApi as configuredRateApi,
+} from '../../server-api/api-client';
 import { CompletionMode } from '../../server-api/chat-stream.api';
 import {
   getConversation as apiGetConversation,
@@ -51,10 +68,7 @@ import {
 import { ActiveScheduledTaskStatus } from '../../types/active-scheduled-task';
 import { ROUTES } from '../../types/routes';
 import { buildNetworkUploadErrorNotification } from '../../utils/attachment-network-error-notification';
-import { getConversationPath } from '../../utils/conversation-path';
-import { shouldWatchForDisplayNameUpdate } from '../../utils/display-name-watch';
-import { isAwaitingGenerationResume } from '../../utils/generation-resume';
-import { getLastDeploymentId } from '../../utils/message-utils';
+import { conversationStreamTransport } from '../../utils/conversation-stream-transport';
 
 interface Props {
   onDuplicateReadonly?: () => void;
@@ -75,13 +89,31 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   const displayNameWatchCleanupRef = useRef<(() => void) | null>(null);
   const displayNameWatchKeyRef = useRef<string | null>(null);
   const notificationShownForRef = useRef<string | null>(null);
+  const restoredToolConfigIdRef = useRef<string | null>(null);
   const navigate = useNavigate();
   const { t } = useTranslation();
   const {
     restoreSelectedItemId,
     selectedItemId: currentSelectedItemId,
+    selectedDeploymentConfiguration,
     isLoading: isDeploymentsLoading,
   } = useDeployments();
+  const {
+    toolsMenuItems,
+    onToolToggle,
+    toolConfigurationValue,
+    restoreToolConfiguration,
+  } = useToolsMenu({
+    selectedItemId: currentSelectedItemId,
+    selectedDeploymentConfiguration,
+    toolIcon: (
+      <IconTelescope
+        size={DIAL_ICON_SIZE.SM}
+        aria-hidden
+        stroke={DIAL_KIT_ICON_STROKE}
+      />
+    ),
+  });
   const { handleClose: handleCloseSourcesSidebar, setMessages } =
     useSourcesSidebar();
   const { user } = useUser();
@@ -91,30 +123,45 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     conversations,
     duplicateConversation,
     updateConversationTitle,
+    bumpConversationActivity,
     watchForDisplayNameUpdate,
+    removeConversationFromList,
   } = useConversations();
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const overlay = useOptionalOverlay();
-  const [overlayInputContent, setOverlayInputContent] = useState({
+  /*
+   * One-shot text hand-off into the composer's textarea. The two writers differ
+   * in kind, so they own separate channels: the overlay bridge's setInputContent
+   * replaces the whole draft, while a picked prompt is inserted at the caret and
+   * must leave the user's own writing alone (issue #8754).
+   */
+  const [pendingInputContent, setPendingInputContent] = useState({
     revision: 0,
     value: '',
   });
+  const [pendingInputInsertion, setPendingInputInsertion] = useState({
+    revision: 0,
+    text: '',
+  });
   const notifiedLoadedConversationIdRef = useRef<string | null>(null);
 
-  const { isAudioMessageSupported } = useAudioTranscription({
+  const {
+    isAudioMessageSupported,
+    isVoiceRecordingSupported,
+    handleTranscribeAudio,
+  } = useAudioTranscription({
     selectedDeploymentId: currentSelectedItemId,
   });
 
-  const { showNotification } = useNotification();
+  const { showSuccessNotification, showErrorNotification } = useNotification();
 
   const handleNetworkUploadError = useCallback(
     (filenames: string[]) => {
-      showNotification({
-        variant: NotificationVariant.Error,
+      showErrorNotification({
         ...buildNetworkUploadErrorNotification(filenames, t),
       });
     },
-    [showNotification, t],
+    [showErrorNotification, t],
   );
 
   const [pendingDislikeMessageIndex, setPendingDislikeMessageIndex] = useState<
@@ -172,11 +219,31 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
 
   useEffect(() => {
     setMessages(conversation?.messages ?? []);
-    return () => {
+  }, [conversation?.messages, setMessages]);
+
+  /*
+   * Switching to another conversation resets the sidebar, matching how the
+   * history panel and the attachment canvas behave on navigation. Route
+   * changes within `/conversations/*` do not unmount this page, so the reset
+   * has to be keyed on the id rather than left to the unmount cleanup below.
+   */
+  useEffect(() => {
+    handleCloseSourcesSidebar();
+  }, [conversationId, handleCloseSourcesSidebar]);
+
+  /*
+   * Cleanup must run only on unmount. Both callbacks are stable, so keeping
+   * `conversation?.messages` out of the deps stops the sources sidebar from
+   * closing on every message mutation (stream chunk, the post-stream
+   * conversation refetch, send, regenerate, edit, delete, status message).
+   */
+  useEffect(
+    () => () => {
       handleCloseSourcesSidebar();
       setMessages([]);
-    };
-  }, [handleCloseSourcesSidebar, conversation?.messages, setMessages]);
+    },
+    [handleCloseSourcesSidebar, setMessages],
+  );
 
   const addStatusMessage = useCallback(
     (msg: Message) => {
@@ -206,7 +273,23 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     isConversationLoaded,
   );
 
-  const { getGeneration } = useGeneration();
+  const { getGeneration, startGeneration, completeGeneration } =
+    useGeneration();
+  const {
+    channelId,
+    ensureConnected,
+    waitForChannel,
+    notifyGenerationSettled,
+  } = useClientChannel();
+  const channel = useMemo(
+    () => ({
+      channelId,
+      ensureConnected,
+      waitForChannel,
+      notifyGenerationSettled,
+    }),
+    [channelId, ensureConnected, waitForChannel, notifyGenerationSettled],
+  );
   /*
    * Conversation paths whose auto-stream has already been kicked off. Guards
    * against React 18 StrictMode double-mounting (and any other re-run of
@@ -215,24 +298,42 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
    */
   const autoStartedPathsRef = useRef<Set<string>>(new Set());
   const handleStopError = useCallback(() => {
-    showNotification({
-      variant: NotificationVariant.Error,
+    showErrorNotification({
       message: t(ChatI18nKeys.StreamError),
     });
-  }, [showNotification, t]);
+  }, [showErrorNotification, t]);
 
   const {
-    startStream,
+    startStream: startConversationStream,
     handleStop,
     resumeIfAwaitingGeneration,
+    restoreBufferedGeneration,
     isStreaming,
     canStopStreaming,
   } = useConversationStream({
     conversationId,
-    setConversation,
-    conversationRef,
+    state: { setConversation, conversationRef },
+    transport: conversationStreamTransport,
+    generation: { startGeneration, completeGeneration },
+    channel,
+    overlay,
     onStopError: handleStopError,
+    generationConflictMessage: t(ChatI18nKeys.GenerationConflict),
   });
+
+  /*
+   * Every generation this page can launch — send, regenerate, edit and the
+   * auto-continue on load — funnels through startStream, so bumping the
+   * sidebar entry here reorders the list by latest activity right away
+   * instead of leaving it stale until the next full re-fetch.
+   */
+  const startStream = useCallback<typeof startConversationStream>(
+    (streamedConversationId, ...rest) => {
+      bumpConversationActivity(streamedConversationId);
+      startConversationStream(streamedConversationId, ...rest);
+    },
+    [bumpConversationActivity, startConversationStream],
+  );
 
   useEffect(() => {
     return () => {
@@ -293,8 +394,9 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         setIsFetching(true);
       }
       try {
-        const result: Conversation =
+        const loadedConversation: Conversation =
           initialData ?? ((await apiGetConversation(id)) as Conversation);
+        const result = restoreBufferedGeneration(id, loadedConversation);
         if (result.name) {
           updateConversationTitle(id, result.name);
         }
@@ -308,6 +410,12 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
           lastDeploymentId ?? (result.assistantModelId || result.model.id);
         if (modelToSelect) {
           restoreSelectedItemId(modelToSelect);
+        }
+        if (restoredToolConfigIdRef.current !== id) {
+          restoredToolConfigIdRef.current = id;
+          restoreToolConfiguration(
+            getLastUserMessageToolConfiguration(result.messages),
+          );
         }
 
         const lastMsg = result.messages[result.messages.length - 1];
@@ -347,12 +455,13 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
               withPlaceholder.messages.length - 1,
               lastDeploymentId ?? result.model.id,
               lastMsg.custom_content,
-              crypto.randomUUID(),
+              generateUUID(),
               CompletionMode.ContinueLastUser,
             );
           }
         } else {
           setConversation(result);
+          conversationRef.current = result;
 
           /*
            * A hard refresh mid-generation loads the backend's empty
@@ -368,11 +477,16 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         if (notificationShownForRef.current !== id) {
           notificationShownForRef.current = id;
           const { traceId } = await getApiErrorDetails(error);
-          showNotification({
-            variant: NotificationVariant.Error,
+          showErrorNotification({
             message: t(ChatI18nKeys.ConversationNotFound),
             requestId: traceId,
           });
+        }
+        /* Self-heal the panel: a conversation the backend no longer has (deleted
+         * here, in another tab, or by emptying its messages) must not stay in the
+         * list, where every later open or delete would fail the same way. */
+        if (isConversationNotFoundError(error)) {
+          removeConversationFromList(id);
         }
         navigate(ROUTES.Root);
       } finally {
@@ -382,27 +496,42 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     [
       navigate,
       restoreSelectedItemId,
+      restoreToolConfiguration,
       startStream,
       resumeIfAwaitingGeneration,
+      restoreBufferedGeneration,
       updateConversationTitle,
       getGeneration,
-      showNotification,
+      removeConversationFromList,
+      showErrorNotification,
       t,
     ],
   );
+
+  /*
+   * `loadConversation` is recreated whenever `startStream` is (which itself
+   * changes identity on every client-channel connect/idle-disconnect cycle —
+   * see client-channel-idle-disconnect) — read the latest version through a
+   * ref so the mount-load effect below only re-runs for a real `conversationId`
+   * change, not for unrelated churn in one of loadConversation's many deps.
+   */
+  const loadConversationRef = useRef(loadConversation);
+  useEffect(() => {
+    loadConversationRef.current = loadConversation;
+  });
 
   useEffect(() => {
     if (!conversationId) {
       setIsFetching(false);
       return;
     }
-    void loadConversation(conversationId, prefetchedConversation);
+    void loadConversationRef.current(conversationId, prefetchedConversation);
     /*
      * prefetchedConversation intentionally omitted: it is router state captured at mount,
      * re-running when it changes would re-initialize an already-loaded conversation.
      */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId, loadConversation]);
+  }, [conversationId]);
 
   const clearedPrefetchIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -417,8 +546,15 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     navigate(`${pathname}${search}`, { replace: true, state: null });
   }, [conversationId, prefetchedConversation, navigate, pathname, search]);
 
-  const { toolsMenuItems, onToolToggle, toolConfigurationValue } =
-    useToolsMenu();
+  const resolveModelId = useCallback(
+    () => currentSelectedItemId ?? conversation?.model.id ?? '',
+    [currentSelectedItemId, conversation?.model.id],
+  );
+
+  const handleConversationDeleted = useCallback(() => {
+    if (conversationId) removeConversationFromList(conversationId);
+    navigate(ROUTES.Root);
+  }, [conversationId, navigate, removeConversationFromList]);
 
   const {
     handleSend,
@@ -443,9 +579,12 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     bucket,
     isStreaming,
     startStream,
-    conversationRef,
-    setConversation,
-    navigate,
+    state: { setConversation, conversationRef },
+    filesApi: configuredFilesApi,
+    conversationsApi: configuredConversationsApi,
+    rateApi: configuredRateApi,
+    resolveModelId,
+    onConversationDeleted: handleConversationDeleted,
     showNetworkError: handleNetworkUploadError,
     toolConfigurationValue,
   });
@@ -457,10 +596,17 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     overlay.notifyConversationLoaded();
   }, [overlay, isFetching, conversation, conversationId]);
 
-  const handleOverlayInputContent = useCallback((content: string) => {
-    setOverlayInputContent((prev) => ({
+  const handleSetPendingInputContent = useCallback((content: string) => {
+    setPendingInputContent((prev) => ({
       revision: prev.revision + 1,
       value: content,
+    }));
+  }, []);
+
+  const handleInsertText = useCallback((text: string) => {
+    setPendingInputInsertion((prev) => ({
+      revision: prev.revision + 1,
+      text,
     }));
   }, []);
 
@@ -470,21 +616,20 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     conversationRef,
     setConversation,
     handleSend,
-    setOverlayInputContent: handleOverlayInputContent,
+    setOverlayInputContent: handleSetPendingInputContent,
   });
 
   const handleLike = useCallback(
     async (messageIndex: number, rating: MessageRating | null) => {
       const success = await handleRateMessage(messageIndex, rating);
       if (success && rating === MessageRating.Like) {
-        showNotification({
-          variant: NotificationVariant.Success,
+        showSuccessNotification({
           title: t(RateI18nKeys.LikeToastTitle),
           message: t(RateI18nKeys.LikeToastDescription),
         });
       }
     },
-    [handleRateMessage, showNotification, t],
+    [handleRateMessage, showSuccessNotification, t],
   );
 
   const handleOpenDislikeModal = useCallback((messageIndex: number) => {
@@ -502,14 +647,13 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         comment,
       );
       if (success) {
-        showNotification({
-          variant: NotificationVariant.Success,
+        showSuccessNotification({
           title: t(RateI18nKeys.DislikeToastTitle),
           message: t(RateI18nKeys.LikeToastDescription),
         });
       }
     },
-    [pendingDislikeMessageIndex, handleRateMessage, showNotification, t],
+    [pendingDislikeMessageIndex, handleRateMessage, showSuccessNotification, t],
   );
 
   const handleDislikeModalClose = useCallback(() => {
@@ -555,17 +699,18 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
           onDuplicateConversation={handleDuplicateConversation}
           duplicateError={duplicateError ?? undefined}
           isAudioMessageSupported={isAudioMessageSupported}
+          isVoiceRecordingSupported={isVoiceRecordingSupported}
+          onTranscribeAudio={handleTranscribeAudio}
           conversation={conversation}
           onConversationChange={handleConversationChange}
-          inputContent={overlay ? overlayInputContent.value : undefined}
-          inputContentRevision={
-            overlay ? overlayInputContent.revision : undefined
-          }
+          inputContent={pendingInputContent.value}
+          inputContentRevision={pendingInputContent.revision}
+          inputInsertion={pendingInputInsertion}
+          onInsertText={handleInsertText}
           toolsMenuItems={toolsMenuItems}
           onToolToggle={onToolToggle}
           toolsMenuTitle={t(ToolsI18nKeys.MenuTitle)}
           toolsChipLabels={{
-            countLabel: (count) => t(ToolsI18nKeys.SelectedCount, { count }),
             removeLabel: (label) => t(ToolsI18nKeys.RemoveTool, { label }),
           }}
           topContent={

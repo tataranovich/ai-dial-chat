@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "../../dist/libs/conversation-panel",
+    "outDir": "out-tsc/lib",
 
     "jsx": "react-jsx",
 
@@ -32,9 +32,6 @@
     "src/**/*.spec.jsx"
   ],
   "references": [
-    {
-      "path": "../ai-dial-kit/tsconfig.lib.json"
-    },
     {
       "path": "../sidebar/tsconfig.lib.json"
     },

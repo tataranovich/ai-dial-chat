@@ -1,6 +1,8 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import { DIAL_KIT_ICON_STROKE } from '@epam/ai-dial-ui-kit';
 import { IconPlus } from '@tabler/icons-react';
 import { type FC, memo } from 'react';
+import { CONVERSATION_PANEL_CLASS } from '../../constants/public-class-names';
 import type { NewChatButtonColors } from '../../models/panel-props';
 import styles from './NewChatButton.module.scss';
 
@@ -14,11 +16,24 @@ export interface NewChatButtonProps {
   labelClassName?: string;
   /** Color overrides applied as CSS custom properties. */
   colors?: NewChatButtonColors;
+  /**
+   * Extra class name(s) merged onto the button. The button is `h-[36px]` with
+   * the `shadow-chat-button` elevation by default, and both are merged rather
+   * than fixed, so a `h-*` or `shadow-*` utility passed here replaces them.
+   * The corner radius is not a class: it reads the kit's `--radius-control`.
+   */
+  className?: string;
 }
 
 /** Full-width button rendered at the top of the conversation panel to start a new chat. */
 export const NewChatButton: FC<NewChatButtonProps> = memo(
-  ({ label, onClick, labelClassName = 'dial-small-semi-text', colors }) => {
+  ({
+    label,
+    onClick,
+    labelClassName = 'dial-small-semi-text',
+    colors,
+    className,
+  }) => {
     const cssVars = buildCssVars({
       '--cp-new-chat-bg': colors?.background,
       '--cp-new-chat-text': colors?.text,
@@ -31,11 +46,18 @@ export const NewChatButton: FC<NewChatButtonProps> = memo(
           onClick={onClick}
           type="button"
           className={mergeClasses(
-            'flex h-[36px] w-full cursor-pointer items-center justify-center gap-2 rounded-full px-3 py-1 shadow-sm hover:shadow-md active:shadow-xs',
+            'flex h-[36px] w-full cursor-pointer items-center justify-center gap-2 px-3 py-1 shadow-chat-button hover:shadow-xs focus-visible:shadow-xs active:shadow-xs',
             styles.button,
+            className,
+            CONVERSATION_PANEL_CLASS.newChatButton,
           )}
         >
-          <IconPlus size={18} stroke={2} className="shrink-0" />
+          <IconPlus
+            size={18}
+            stroke={DIAL_KIT_ICON_STROKE}
+            className="shrink-0"
+            aria-hidden
+          />
           <span className={labelClassName}>{label}</span>
         </button>
       </div>

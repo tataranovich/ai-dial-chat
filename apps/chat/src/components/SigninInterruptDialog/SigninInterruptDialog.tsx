@@ -1,6 +1,13 @@
 import type { DialToolsetDto } from '@epam/ai-dial-chat-api-client';
+import {
+  buildExternalServiceScopeId,
+  ToolsetAuthTypes,
+  ToolsetCredentialsLevel,
+  ToolsetLoginOutcomeType,
+} from '@epam/ai-dial-chat-hooks';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
+  Checkbox,
   DIAL_ICON_SIZE,
   Popup,
   Spinner,
@@ -22,10 +29,6 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  ToolsetAuthTypes,
-  ToolsetCredentialsLevel,
-} from '../../constants/toolsets';
-import {
   ButtonsI18nKeys,
   ToolsetSigninI18nKeys,
 } from '../../constants/translation-keys';
@@ -37,10 +40,7 @@ import {
   useExternalServiceLogin,
 } from '../../hooks/externalServices/useExternalServiceLogin';
 import { useLanguage } from '../../hooks/language/useLanguage';
-import {
-  ToolsetLoginOutcomeType,
-  useToolsetLogin,
-} from '../../hooks/toolsets/useToolsetLogin';
+import { useToolsetLogin } from '../../hooks/toolsets/useToolsetLogin';
 import { useUiFeature } from '../../hooks/useUiFeature';
 import type { ResolvedRowInfo } from '../../models/signin-interrupt';
 import { ClientChannelReportResult } from '../../server-api/client-channel';
@@ -56,7 +56,6 @@ import {
   type PendingSigninEvent,
 } from '../../types/client-channel';
 import { RowAuthType } from '../../types/signin-interrupt';
-import { buildExternalServiceScopeId } from '../../utils/external-services';
 import {
   resolveExternalServiceInfo,
   resolveToolsetInfo,
@@ -110,9 +109,6 @@ const SigninRow: FC<SigninRowProps> = ({
           {info.displayName}
           {info.displayVersion ? ` (${info.displayVersion})` : ''}
         </span>
-        {isProcessing && (
-          <Spinner size={16} ariaLabel={t(ButtonsI18nKeys.LogIn)} />
-        )}
       </div>
 
       {isApiKey && (
@@ -128,7 +124,10 @@ const SigninRow: FC<SigninRowProps> = ({
       )}
 
       {rowState.error && (
-        <div className="flex items-center gap-2 text-sm text-error">
+        <div
+          role="alert"
+          className="dial-small-text flex flex-wrap items-center gap-2 break-words text-error"
+        >
           <IconAlertCircleFilled size={DIAL_ICON_SIZE.SM} aria-hidden />
           <span>{rowState.error}</span>
           <button
@@ -139,6 +138,12 @@ const SigninRow: FC<SigninRowProps> = ({
             {t(ToolsetSigninI18nKeys.ErrorRetry)}
           </button>
         </div>
+      )}
+
+      {info.authenticationType === RowAuthType.DialNative && (
+        <p className="dial-small-text break-words text-secondary">
+          {t(ToolsetSigninI18nKeys.DialNativeHint)}
+        </p>
       )}
 
       {isNoAuth ? (
@@ -155,7 +160,13 @@ const SigninRow: FC<SigninRowProps> = ({
             onClick={() => onDecline(event.id)}
           />
           <PrimaryButton
-            label={t(ButtonsI18nKeys.LogIn)}
+            label={isProcessing ? undefined : t(ButtonsI18nKeys.LogIn)}
+            aria-label={isProcessing ? t(ButtonsI18nKeys.LogIn) : undefined}
+            iconBefore={
+              isProcessing ? (
+                <Spinner size={16} ariaLabel={t(ButtonsI18nKeys.LogIn)} />
+              ) : undefined
+            }
             disabled={isProcessing || !canSubmitLogin}
             onClick={() => onLogin(event, info)}
           />
@@ -177,6 +188,7 @@ const getResourceKey = (event: PendingSigninEvent): string =>
  * when a tool call or an application's external service needs fresh
  * credentials) and lets the user log in or decline each one.
  */
+
 const SigninInterruptDialog: FC = () => {
   const { t } = useTranslation();
   const { language } = useLanguage();
@@ -380,6 +392,15 @@ const SigninInterruptDialog: FC = () => {
     [reportEvent, setRowState, pendingEvents, infoByResourceKey, t],
   );
 
+  /*
+   * Standing permission for the application to use these credentials while the
+   * user is away; Core gates every on-behalf-of mint on it. Offered checked
+   * because the interrupt only appears when an application has said it needs to
+   * act for the user — but shown and declinable, never attached silently to the
+   * "Log in" click.
+   */
+  const [offlineUsageConsent, setOfflineUsageConsent] = useState(true);
+
   const handleDeclineAll = useCallback(() => {
     for (const event of pendingEvents) {
       void handleDecline(event.id);
@@ -438,6 +459,7 @@ const SigninInterruptDialog: FC = () => {
           apiKey: rowState.apiKey,
           oauthSettings: info.oauthSettings,
           forceStale: true,
+          offlineUsageConsent,
         });
         if (outcome.type === ToolsetLoginOutcomeType.Success) {
           await refetchToolsets();
@@ -469,6 +491,7 @@ const SigninInterruptDialog: FC = () => {
       finishLogin,
       setRowState,
       t,
+      offlineUsageConsent,
     ],
   );
 
@@ -492,9 +515,26 @@ const SigninInterruptDialog: FC = () => {
           apiKey: rowState.apiKey,
           oauthSettings: info.oauthSettings,
           forceStale: true,
+          offlineUsageConsent,
         });
         if (outcome.type === ExternalServiceLoginOutcomeType.Success) {
           await finishLogin(event, info);
+          return;
+        }
+        if (
+          outcome.type ===
+            ExternalServiceLoginOutcomeType.AdminConsentRequired ||
+          outcome.type === ExternalServiceLoginOutcomeType.OfflineUnavailable
+        ) {
+          setRowState(event.id, {
+            status: RowStatus.Idle,
+            error: t(
+              outcome.type ===
+                ExternalServiceLoginOutcomeType.AdminConsentRequired
+                ? ToolsetSigninI18nKeys.AdminConsentRequired
+                : ToolsetSigninI18nKeys.OfflineUnavailable,
+            ),
+          });
           return;
         }
         if (outcome.type === ExternalServiceLoginOutcomeType.PopupBlocked) {
@@ -515,7 +555,14 @@ const SigninInterruptDialog: FC = () => {
       };
       void run();
     },
-    [getRowState, loginExternalService, finishLogin, setRowState, t],
+    [
+      getRowState,
+      loginExternalService,
+      finishLogin,
+      setRowState,
+      t,
+      offlineUsageConsent,
+    ],
   );
 
   const handleLogin = useCallback(
@@ -590,6 +637,22 @@ const SigninInterruptDialog: FC = () => {
             );
           })}
         </div>
+        {pendingEvents.some((event) => {
+          const authType = infoByResourceKey.get(
+            getResourceKey(event),
+          )?.authenticationType;
+          return (
+            authType === RowAuthType.ApiKey || authType === RowAuthType.OAuth
+          );
+        }) && (
+          <Checkbox
+            className="mt-2"
+            isSelected={offlineUsageConsent}
+            onChange={setOfflineUsageConsent}
+            labelProps={{ label: t(ToolsetSigninI18nKeys.OfflineUsageConsent) }}
+            caption={t(ToolsetSigninI18nKeys.OfflineUsageConsentHint)}
+          />
+        )}
       </div>
     </Popup>
   );

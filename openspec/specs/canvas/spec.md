@@ -1,8 +1,16 @@
+# canvas Specification
+
+## Purpose
+
+The canvas side panel: its chrome, open and auto-close behavior, layout, and the content-type routing that picks a viewer.
+
 ## Capability: canvas
 
 ### Overview
 
-The `AttachmentCanvas` side panel opens to the right of the main conversation area when a user activates an attachment. It renders file content in a resizable, closeable panel that stays alongside the conversation. Content type is resolved from the `DisplayAttachment` at the app layer and passed as a typed payload to the lib.
+The `AttachmentCanvas` side panel opens to the right of the main conversation area when a user activates an attachment. It renders file content in a resizable, closeable panel that stays alongside the conversation. Content type is resolved from the `DisplayAttachment` and passed to the panel as a typed payload.
+
+Ownership note used throughout this document: the dispatch hook and every renderer live in `libs/attachment-canvas`; the content resolvers live in `libs/chat-hooks` and are host-agnostic — the genuinely app-specific parts (DIAL URL construction, auth) are injected into them as an `AttachmentCanvasUrlResolvers` object. `apps/chat/src/hooks/attachment/useAttachmentCanvasResolvers.ts` is the only app-side piece: it binds each resolver to the app's URL resolvers and hands the resulting callbacks to the hook. Where this document names a resolver, its real signature therefore takes that `resolvers` argument in addition to the attachment.
 
 ---
 
@@ -23,7 +31,7 @@ The `AttachmentCanvas` side panel opens to the right of the main conversation ar
 #### Open behavior
 
 1. User activates an attachment card.
-2. `useOpenAttachmentCanvas` (app hook at `apps/chat/src/hooks/attachment/useOpenAttachmentCanvas.ts`) resolves content from the `DisplayAttachment` (fetching file bytes if needed).
+2. `useOpenAttachmentCanvas` (`libs/attachment-canvas/src/hooks/useOpenAttachmentCanvas/useOpenAttachmentCanvas.ts`) resolves content from the `DisplayAttachment` (fetching file bytes if needed).
 3. Hook calls `openCanvas(content, fileName, attachmentId)` from `useAttachmentCanvas()`. For message attachments, `attachmentId` is a message-scoped composite key (`` `${messageIndex}:${attachment.id}` ``, built by `ConversationView.tsx`) rather than the raw `DisplayAttachment.id` — `id` alone is derived from content and can recur across different messages. Other callers (edit-message tray, `ConversationSourcesPanel`) omit the override and get the raw `attachment.id` default.
 4. `AttachmentCanvasContext` updates `isOpen = true`, `content`, `fileName`, and `attachmentId`. The context treats `attachmentId` as an opaque key — it has no knowledge of the composite-key format.
 5. `AttachmentCanvasContainer` (rendered in `app.tsx`) re-renders the panel open.
@@ -40,8 +48,8 @@ The canvas closes when the URL `pathname` changes (conversation switch, catalog 
 - **Download button**: shown only when `onDownload` is provided **and** `isDownloadable(content)` is `true`. `isDownloadable` returns `false` for `content.type === Unsupported` when `url` is `null`, `true` when `url` is present; and always `false` for `content.type === Error` with `errorType === Forbidden` (see "Error rendering" below).
 - **Close button**: calls `onClose` (`closeCanvas`).
 - **Resizability**: enabled on desktop, disabled on mobile (`isMobile` prop from `useIsMobile()`).
-- **Width defaults**: ~50% of viewport on desktop (capped at `canvasMaxWidth`; see below), full viewport on mobile. 600 px min. Max is `usePanelMaxWidth()` — `Math.max(0, viewportWidth − 400)`, reactive to window resize — so the chat area retains at least 400 px at all times. Width is not persisted between sessions.
-- **Resize constraint shared with sidebar**: both `AttachmentCanvas` and `ConversationSourcesPanel` derive their `maxWidth` from the shared `usePanelMaxWidth` hook (`apps/chat/src/hooks/usePanelMaxWidth.ts`), which guarantees `MIN_CONTENT_AREA_WIDTH = 400 px` of remaining chat space. The sidebar has its own `minWidth` of 312 px; the canvas has a separate `minWidth` of 600 px.
+- **Width defaults**: ~50% of the space between the minimum content area and the maximum panel width on desktop, full viewport on mobile. 600 px min. Width is not persisted between sessions.
+- **Resize constraint shared with sidebar**: both `AttachmentCanvas` and `ConversationSourcesPanel` derive their `maxWidth` from the shared `usePanelMaxWidth(minContentAreaWidth)` hook exported from `@epam/ai-dial-chat-hooks`, reactive to window resize. The app passes `MIN_CONTENT_AREA_WIDTH` (400 px, from `apps/chat/src/constants/layout.ts`) so the chat area always retains that much space. The reserved width is a host decision and is therefore a parameter, not a constant baked into the hook. The sidebar has its own `minWidth` of 312 px; the canvas has a separate `minWidth` of 600 px.
 - **Both panels**: `ConversationSourcesPanel` and `AttachmentCanvas` are mutually exclusive — opening either one closes the other. The primary path is synchronous: `useOpenAttachmentCanvas` calls `closePanel()` and `closeSourcesPanel()` at the start of `openAttachmentCanvas`, before any async content resolution, so panels disappear on click rather than after the file fetch completes. `SourcesSidebarToggle` calls `closeCanvas()` synchronously before `handleOpen()` for the reverse direction. A `useEffect` in `app.tsx` that watches `isCanvasOpen` acts as a safety net for the few call sites that call `openCanvas` directly (citation preview, collapsed stage attachments).
 - **Conversation panel**: The conversation history panel (`isPanelOpen`, managed by `ConversationPanelContext`) and `AttachmentCanvas` are mutually exclusive — opening either one closes the other. `useOpenAttachmentCanvas` calls `closePanel()` synchronously before async content resolution; `togglePanel` in `app.tsx` calls `closeCanvas()` before opening the panel. The `isCanvasOpen` safety-net effect in `app.tsx` covers direct `openCanvas` call sites.
 
@@ -57,7 +65,7 @@ All app-level strings are in `AttachmentCanvasI18nKeys` (`apps/chat/src/constant
 | `UnsupportedLabel` | `"Preview is not supported for this file"` |
 | `LoadErrorLabel` | `"Failed to load file"` |
 | `ForbiddenErrorLabel` | `"You don't have permission to access this file"` |
-| `CopyAsMarkdown` | `"Copy markdown"` |
+| `CopyAsMarkdown` | `"Copy as Markdown"` |
 | `Copied` | `"Copied!"` |
 | `HtmlFrameBlocked` | `"This page cannot be displayed in preview"` |
 | `HtmlOpenInNewTab` | `"Open in new tab"` |
@@ -93,7 +101,7 @@ None. The canvas is always available to authenticated users.
 - **`File`** — calls `closePanel()`, `closeSourcesPanel()`, and `openCanvasLoading(attachment.name)` synchronously, then delegates to `openFileCanvas` (async). If `openFileCanvas` returns `false` the loading state is cleared by calling `closeCanvas()`.
 - **`Pasted` / `Prompt`** — same synchronous close+loading pattern, then `resolveTextCanvasContent`.
 
-For `AttachmentType.File` attachments, `openFileCanvas` (`apps/chat/src/hooks/attachment/useOpenAttachmentCanvas.ts`) first checks whether the attachment is reference-only (`attachment.url == null && attachment.referenceUrl != null` — a RAG/search-grounding chunk). When true, it calls `referenceAttachmentToPdfCanvasContent({ type: attachment.contentType, url: attachment.referenceUrl, title: attachment.name })`; if that returns a non-`null` `PdfCanvasContent` (the `referenceUrl` targets a `.pdf`, optionally with a `#page=N` fragment), the canvas opens with it immediately and no further routing runs. If it returns `null`, routing falls through unchanged — this applies uniformly to `CollapsedGroup` stage attachments and the plain attachment tray, so a reference-only PDF-page chunk (e.g. `reference_url: 'files/{bucket}/report.pdf#page=81'`) opens the actual referenced PDF at the referenced page instead of rendering its own `data`/`contentType` as Markdown or plain text. Otherwise, it checks for a missing `contentType` with inline data (see "No-type inline-data fallback" below), then runs MIME-type routing (for stage attachments that carry a `contentType` but no file extension), then extension-based routing (lowercased):
+For `AttachmentType.File` attachments, `openFileCanvas` (`libs/attachment-canvas/src/hooks/useOpenAttachmentCanvas/useOpenAttachmentCanvas.ts`) first checks whether the attachment is reference-only (`attachment.url == null && attachment.referenceUrl != null` — a RAG/search-grounding chunk). When true, it calls `referenceAttachmentToPdfCanvasContent({ type: attachment.contentType, url: attachment.referenceUrl, title: attachment.name })`; if that returns a non-`null` `PdfCanvasContent` (the `referenceUrl` targets a `.pdf`, optionally with a `#page=N` fragment), the canvas opens with it immediately and no further routing runs. If it returns `null`, routing falls through unchanged — this applies uniformly to `CollapsedGroup` stage attachments and the plain attachment tray, so a reference-only PDF-page chunk (e.g. `reference_url: 'files/{bucket}/report.pdf#page=81'`) opens the actual referenced PDF at the referenced page instead of rendering its own `data`/`contentType` as Markdown or plain text. Otherwise, it checks for a missing `contentType` with inline data (see "No-type inline-data fallback" below), then runs MIME-type routing (for stage attachments that carry a `contentType` but no file extension), then extension-based routing (lowercased):
 
 | MIME type / Extension(s) | Resolver | Content type returned |
 |---|---|---|
@@ -102,6 +110,8 @@ For `AttachmentType.File` attachments, `openFileCanvas` (`apps/chat/src/hooks/at
 | `text/markdown` MIME | `resolveMarkdownCanvasContent` | `MarkdownCanvasContent` |
 | `application/json` MIME | `resolveJsonCanvasContent` | `JsonCanvasContent` or `PlainTextCanvasContent` |
 | `application/pdf` MIME | `resolvePdfCanvasContent` | `PdfCanvasContent` |
+| DOCX/XLSX/PPTX/CSV MIME (`getOoxmlFileType('', contentType)`) | `resolveOoxmlCanvasContent` | `OoxmlCanvasContent` |
+| `docx`, `xlsx`, `pptx`, `csv` extension (`getOoxmlFileType(fileName)`) | `resolveOoxmlCanvasContent` | `OoxmlCanvasContent` |
 | `md`, `markdown` extension | `resolveMarkdownCanvasContent` | `MarkdownCanvasContent` |
 | `json` extension | `resolveJsonCanvasContent` | `JsonCanvasContent` or `PlainTextCanvasContent` (parse failure) |
 | `pdf` extension | `resolvePdfCanvasContent` | `PdfCanvasContent` |
@@ -110,155 +120,15 @@ For `AttachmentType.File` attachments, `openFileCanvas` (`apps/chat/src/hooks/at
 | Other text-previewable (see `TEXT_EXTENSIONS`, excluding `html`/`htm`) | `resolveCodeCanvasContent` | `CodeCanvasContent` |
 | Everything else | `createUnsupportedCanvasContent` | `UnsupportedCanvasContent` |
 
-Extension checks for `md`/`markdown` and `json` run *before* the generic `isTextPreviewable` branch. The `html`/`htm` branch runs before the generic `isTextPreviewable` branch. The `isTextPreviewable` branch now routes to `resolveCodeCanvasContent` (returning `CodeCanvasContent`) instead of `resolveTextCanvasContent`.
+Extension checks for `md`/`markdown` and `json` run *before* the generic `isTextPreviewable` branch. The `html`/`htm` branch runs before the generic `isTextPreviewable` branch. The `isTextPreviewable` branch routes to `resolveCodeCanvasContent` (returning `CodeCanvasContent`) rather than `resolveTextCanvasContent`.
 
-#### Scenario: html extension routes to Html
-
-- **WHEN** `openFileCanvas` is called with an attachment whose name ends in `.html`
-- **THEN** `resolveHtmlCanvasContent` is called
-- **AND** the canvas opens with `HtmlCanvasContent`
-
-#### Scenario: ts extension routes to Code
-
-- **WHEN** `openFileCanvas` is called with an attachment whose name ends in `.ts`
-- **THEN** `resolveCodeCanvasContent` is called with `language: 'typescript'`
-- **AND** the canvas opens with `CodeCanvasContent`
+Each document-renderer check sits immediately ahead of the switch keyed on the same signal — the MIME one before the `contentType` switch, the extension one before the `ext` switch — and both return `true` even when their resolver yields nothing, opening `Unsupported` content instead, because the format *was* recognised (see the `attachment-canvas-ooxml-viewer` capability).
 
 ---
 
 ### Visualizer content type
 
 The requirements below extend the canvas with a `Visualizer` content type routed to a registry-driven iframe renderer (see the `custom-visualizers` capability for the registry, the postMessage protocol, and the connector classes).
-
-#### Requirement: `AttachmentContentType.Visualizer` variant
-
-`libs/attachment-canvas/src/types/attachment-canvas.ts` SHALL add a new enum member `AttachmentContentType.Visualizer`.
-
-`libs/attachment-canvas/src/models/attachment-canvas.ts` SHALL add a new member to the `AttachmentCanvasContent` discriminated union:
-
-```ts
-interface VisualizerCanvasContent {
-  type: AttachmentContentType.Visualizer;
-  url: string;                              // iframe src, from the registry entry's `url`
-  mimeType: string;                         // the attachment's own MIME (NOT the entry's raw
-                                            // `contentType`, which may be a comma-separated list)
-  data: unknown;                            // opaque attachment payload consumed by the visualizer
-  layout: CustomVisualizerDataLayout;       // themeId, width, height, mobileHeight
-  visualizerName: string;                   // postMessage type prefix — MUST be the registry
-                                            // entry's `title`; the iframe app is constructed
-                                            // with the identical string or nothing is received
-  requestTimeout?: number;                  // from the registry entry; bounds send(), default
-                                            // 10000ms. Does NOT bound the handshake.
-}
-```
-
-`isDownloadable(content)` SHALL return `false` for a `VisualizerCanvasContent` value.
-
-**RTL impact:** none directly; canvas panel chrome already handles direction.
-
-**i18n impact:** none; visualizer chrome carries no lib-side user-visible strings.
-
-##### Scenario: Visualizer content is not downloadable
-
-- **WHEN** the canvas is opened with a `VisualizerCanvasContent` and `onDownload` is provided
-- **THEN** the download button in the canvas header is not rendered
-
-##### Scenario: Panel opens with visualizer content
-
-- **WHEN** `openCanvas` is called with a `VisualizerCanvasContent` and `fileName`
-- **THEN** `AttachmentCanvasContext.content` equals the passed content
-- **AND** `AttachmentCanvasContainer` re-renders with the panel open and the visualizer renderer inside
-
-#### Requirement: `VisualizerCanvasRenderer` component
-
-`libs/attachment-canvas/src/components/VisualizerCanvasRenderer/VisualizerCanvasRenderer.tsx` SHALL render an iframe host and drive the visualizer handshake and data delivery via the published npm package `@epam/ai-dial-visualizer-connector` (and `@epam/ai-dial-shared` for the request enum). Behaviour:
-
-- On mount, create a `VisualizerConnector` bound to the container element, passing `domain: content.url`, `hostDomain: window.location.origin` (required by the published options type; unused at runtime in the current package), `visualizerName: content.visualizerName`, and `requestTimeout: content.requestTimeout`.
-- Await `.ready()` and then call `.send(VisualizerConnectorRequests.sendVisualizeData, { mimeType: content.mimeType, visualizerData: { layout: content.layout, ...content.data } })`, where `VisualizerConnectorRequests` is imported from `@epam/ai-dial-shared` (camelCase member; wire value `SEND_VISUALIZE_DATA`).
-- On unmount, call `connector.destroy()` exactly once for that instance.
-- Display a loading state while `.ready()` is pending. Because `.ready()` never times out (see the `custom-visualizers` capability), a visualizer that never completes the handshake leaves the body in this loading state indefinitely — this is intended. Display an error state if the `SEND_VISUALIZE_DATA` `send()` rejects (its own timeout) or if `.ready()` rejects due to `destroy()`.
-- The component SHALL keep the connector instance stable across parent re-renders that do not change `url` / `visualizerName` / `requestTimeout`, so those re-renders do not tear down the iframe.
-
-The component MUST NOT read from any app-level context (auth, theme, i18n, feature flags) — all data required for the visualizer is passed in through `VisualizerCanvasContent`.
-
-##### Scenario: connector is destroyed on unmount
-
-- **WHEN** the `VisualizerCanvasRenderer` unmounts
-- **THEN** `VisualizerConnector.destroy()` is called
-- **AND** the iframe element is removed from the DOM
-
-##### Scenario: SEND_VISUALIZE_DATA is dispatched after READY_TO_INTERACT
-
-- **WHEN** the iframe posts `${visualizerName}/READY_TO_INTERACT`
-- **THEN** the renderer calls `connector.send` with the published enum member whose wire value is `SEND_VISUALIZE_DATA` exactly once
-- **AND** the payload's `layout` equals `content.layout`
-
-##### Scenario: send failure surfaces error state
-
-- **WHEN** the `SEND_VISUALIZE_DATA` `send()` promise rejects (no `/RESPONSE` within `requestTimeout`)
-- **THEN** the renderer displays an error state
-- **AND** the canvas remains closable via the header's close button
-
-##### Scenario: incomplete handshake stays in the loading state
-
-- **WHEN** the iframe mounts but never posts `READY_TO_INTERACT`
-- **THEN** the renderer keeps showing the loading state and does not show an error
-- **AND** the canvas remains closable via the header's close button
-
-#### Requirement: `AttachmentCanvas` switch handles Visualizer variant
-
-`libs/attachment-canvas/src/components/AttachmentCanvas/AttachmentCanvas.tsx` SHALL extend its switch over `AttachmentContentType` with a `case AttachmentContentType.Visualizer` branch that renders `<VisualizerCanvasRenderer content={content} />` inside the panel body.
-
-The panel chrome (header, close button, resize handle, keyboard/ARIA behaviour) SHALL be identical to the chrome used for other content types.
-
-**Feature flag:** none. The variant is reachable only when the app builds a `VisualizerCanvasContent` from a populated registry.
-
-##### Scenario: rendering switch dispatches to the visualizer branch
-
-- **WHEN** `AttachmentCanvas` is rendered with a `VisualizerCanvasContent`
-- **THEN** the panel body contains a mounted `VisualizerCanvasRenderer`
-- **AND** the panel header renders the `fileName` as usual
-
-#### Requirement: `useOpenAttachmentCanvas` dispatches to the visualizer branch before content-type handling
-
-`apps/chat/src/hooks/attachment/useOpenAttachmentCanvas.ts`'s internal `openFileCanvas` SHALL check the attachment's `contentType` against the `CustomVisualizer[]` registry (via `useCustomVisualizers()` and a case-insensitive `findVisualizerForMime` lookup) as the FIRST case in its `switch (contentType)` block — evaluated before the existing `MIMEType.PDF`, `MIMEType.Markdown`, and `MIMEType.JSON` cases described above.
-
-When a match is found:
-
-- The hook fetches the attachment payload using the same file-content helper already used for text/JSON attachments.
-- On success, it builds a `VisualizerCanvasContent`: `url` from the registry entry, `mimeType` from the attachment's own `contentType`, `data` from the fetched payload, `layout` with `width`/`height`/`mobileHeight` from the registry entry plus `themeId` from theme context, `visualizerName` from the registry entry's `title`, and `requestTimeout` from the registry entry. It returns this for `openCanvas`.
-- On payload-fetch failure, the hook falls through to the existing switch/extension/`Unsupported` handling (unchanged behaviour).
-
-When the registry is empty or no entry matches, `openFileCanvas` behaves exactly as it did before this addition.
-
-`apps/chat/src/hooks/attachment/useAttachmentAction.ts` is NOT modified by this addition. It only runs as a fallback when `openAttachmentCanvas` returns `false` (see "Open triggers" above), and a matched visualizer MIME always causes `openAttachmentCanvas` to return `true` — so `useAttachmentAction` would never observe a visualizer-eligible attachment.
-
-**Feature flag:** none. The `CUSTOM_VISUALIZERS` env is the effective gate.
-
-**RTL impact:** none. Canvas chrome already handles direction.
-
-**i18n impact:** none new. Existing labels are reused.
-
-##### Scenario: MIME matches a visualizer registry entry from a message bubble click
-
-- **WHEN** `handleMessageAttachmentClick` (`ConversationView.tsx`) is invoked for an attachment whose `contentType` matches a `customVisualizers` entry
-- **THEN** `openAttachmentCanvas` resolves a `VisualizerCanvasContent` and calls `openCanvas` with it
-- **AND** the panel opens with the visualizer renderer, not the PDF/Markdown/JSON/Unsupported branch
-
-##### Scenario: MIME matches but payload fetch fails — falls back to existing handling
-
-- **WHEN** the registry contains a matching entry but fetching the attachment payload rejects
-- **THEN** `openFileCanvas` falls through to the existing `contentType`/extension switch for that attachment
-
-##### Scenario: Registry is empty — behaviour unchanged
-
-- **WHEN** the `customVisualizers` registry is `[]`
-- **THEN** `openFileCanvas` behaves exactly as it did before this addition
-
-##### Scenario: MIME does not match any registry entry
-
-- **WHEN** the registry contains only `contentType: 'application/x-my-viz'` and the attachment's `contentType` is `'application/pdf'`
-- **THEN** the visualizer branch does not fire; the existing `MIMEType.PDF` case handles the attachment
 
 ---
 
@@ -284,7 +154,7 @@ case AttachmentContentType.Error:
 
 #### Where errors are produced
 
-The app-level resolvers in `apps/chat/src/utils/attachment-canvas.ts` (`resolveAttachmentText`, `resolveAttachmentBlobUrl` — see "Shared content resolution helpers" below) classify a failed fetch by HTTP status and return an `ErrorCanvasContent` instead of `undefined`. Every `resolveXCanvasContent` function propagates that `ErrorCanvasContent` unchanged instead of wrapping it in its own content type. `useOpenAttachmentCanvas` treats a resolver's `ErrorCanvasContent` result the same as any other non-`null` content — it opens the canvas with it directly. `undefined`/`null` (no data source at all) still means "not previewable" and routes to `Unsupported` or `false`, unchanged.
+The shared resolvers in `libs/chat-hooks/src/files/attachment-canvas.ts` (`resolveAttachmentText`, `resolveAttachmentBlobUrl` — see "Shared content resolution helpers" below) classify a failed fetch by HTTP status and return an `ErrorCanvasContent` instead of `undefined`. Every `resolveXCanvasContent` function propagates that `ErrorCanvasContent` unchanged instead of wrapping it in its own content type. `useOpenAttachmentCanvas` treats a resolver's `ErrorCanvasContent` result the same as any other non-`null` content — it opens the canvas with it directly. `undefined`/`null` (no data source at all) still means "not previewable" and routes to `Unsupported` or `false`, unchanged.
 
 **Images are excluded from this path.** `resolveImageCanvasContent` is synchronous and never fetches, so it cannot return `ErrorCanvasContent`. Image load failures (network error, 403, CORS) surface as an inline error state in the `ImageContent` renderer via `<img onError>` (see "Image rendering" above).
 
@@ -305,21 +175,14 @@ Some attachments (e.g. an LLM-revised image prompt saved back onto the conversat
 | `PlainText` | `text: string` | `<pre>` with `whitespace-pre-wrap break-words` |
 | `Markdown` | `text: string` | `MarkdownRenderer` from `@epam/ai-dial-chat-shared`, neutral defaults |
 | `Json` | `value: unknown` | `react-json-view-lite` `JsonView`, container has `dir="ltr"` |
-| `Pdf` | `url: string; highlights?: InputHighlightData[]; selectedHighlightId?: string` | `PdfContent` (thumbnail sidebar + `DocumentPreview` from `@epam/ai-dial-react-pdf-highlighter`) |
-| `Code` | `text: string; language?: string` | `CodeContent` (`react-syntax-highlighter` PrismLight inside `dir="ltr"`) |
+| `Pdf` | `url: string; highlights?: InputHighlightData[]; selectedHighlightId?: string` | `PdfContent` (collapsible thumbnails section/panel + `DocumentPreview` from `@epam/ai-dial-react-pdf-highlighter`) |
+| `Code` | `text: string; language?: string` | `CodeContent` (`react-syntax-highlighter` `Prism` inside `dir="ltr"`) |
 | `Html` | `srcdoc?: string; url?: string` | `HtmlContent` (sandboxed `<iframe>`) |
+| `Ooxml` | `url: string; format: OoxmlFileType` | `OoxmlContent` (`@silurus/ooxml`, one dynamic import per format) |
+| `Visualizer` | see the Visualizer requirements below | `VisualizerCanvasRenderer` (registry-driven iframe) |
+| `McpApp` | see the MCP app capability | `McpAppCanvasRenderer` |
 | `Unsupported` | — | Centered "Preview not supported" message |
 | `Error` | `errorType: AttachmentErrorType; url?: string` | Centered error message, text depends on `errorType` (see "Error rendering" below) |
-
-#### Scenario: Code content type uses CodeContent renderer
-
-- **WHEN** `AttachmentCanvas` renders a `CodeCanvasContent`
-- **THEN** a `CodeContent` component is mounted in the panel body
-
-#### Scenario: Html content type uses HtmlContent renderer
-
-- **WHEN** `AttachmentCanvas` renders an `HtmlCanvasContent`
-- **THEN** an `HtmlContent` component is mounted in the panel body
 
 ---
 
@@ -331,7 +194,7 @@ Some attachments (e.g. an LLM-revised image prompt saved back onto the conversat
 
 #### Content resolution
 
-`resolveMarkdownCanvasContent` in `apps/chat/src/utils/attachment-canvas.ts` delegates to the shared `resolveAttachmentText` helper (see "Shared content resolution helpers" below) and wraps a non-`undefined` result as `{ type: AttachmentContentType.Markdown, text }`. Returns `null` when `resolveAttachmentText` resolves to `undefined`.
+`resolveMarkdownCanvasContent` in `libs/chat-hooks/src/files/attachment-canvas.ts` delegates to the shared `resolveAttachmentText` helper (see "Shared content resolution helpers" below) and wraps a non-`undefined` result as `{ type: AttachmentContentType.Markdown, text }`. Returns `null` when `resolveAttachmentText` resolves to `undefined`.
 
 Precedence (via `resolveAttachmentText`): inline base64 `attachment.data` (decoded to UTF-8 text) → fetched text from `resolveDialUrl(attachment)` → local `attachment.file.text()`.
 
@@ -342,7 +205,7 @@ Precedence (via `resolveAttachmentText`): inline base64 `attachment.data` (decod
 - Code blocks use the app's current theme (`codeBlockTheme` prop on `AttachmentCanvasContainer` → forwarded to `MarkdownRenderer`).
 - `MarkdownRenderer` uses logical Tailwind classes (`ps/pe`, `ms/me`, `border-s/e`) internally; no extra RTL handling needed at the canvas layer.
 
-#### Copy markdown button
+#### Copy as Markdown button
 
 - An `IconMarkdown` button is shown to the **left** of the download button in `rightActions` when `content.type === Markdown`.
 - After a successful click the icon switches to `IconCheck` for 2 s, then reverts. The toggle state is managed inside `AttachmentCanvas` (same pattern as `MessageActions`).
@@ -358,7 +221,7 @@ Precedence (via `resolveAttachmentText`): inline base64 `attachment.data` (decod
 
 #### Content resolution
 
-`resolveJsonCanvasContent` in `apps/chat/src/utils/attachment-canvas.ts`:
+`resolveJsonCanvasContent` in `libs/chat-hooks/src/files/attachment-canvas.ts`:
 
 1. Resolve `text` via the shared `resolveAttachmentText` helper (inline base64 `attachment.data` decoded to UTF-8 text → fetched text from `resolveDialUrl(attachment)` → local `attachment.file.text()`). If `undefined`, return `null`.
 2. Attempt `JSON.parse(text)`.
@@ -398,7 +261,7 @@ The reload is guarded by `!abortRef.current` to skip if the user has already sta
 
 ### Shared content resolution helpers
 
-`apps/chat/src/utils/attachment-canvas.ts` defines two internal helpers used by every content resolver to avoid duplicating base64-handling and fetch-error-classification logic per content type. Both are `async` and can resolve to an `ErrorCanvasContent` (see "Error rendering" above) instead of their success value when a DIAL fetch fails.
+`libs/chat-hooks/src/files/attachment-canvas.ts` defines two internal helpers used by every content resolver to avoid duplicating base64-handling and fetch-error-classification logic per content type. Both take the injected `resolvers` alongside the attachment, so the DIAL URL they fetch from is supplied by the host rather than constructed here. Both are `async` and can resolve to an `ErrorCanvasContent` (see "Error rendering" above) instead of their success value when a DIAL fetch fails.
 
 - **`resolveAttachmentBlobUrl(attachment): Promise<string | ErrorCanvasContent | undefined>`** — resolves a displayable URL for an attachment's binary content, in this precedence order:
   1. Local `attachment.file` (locally-picked, not-yet-uploaded) → `URL.createObjectURL(attachment.file)`.
@@ -418,14 +281,14 @@ Every `resolveXCanvasContent` wrapper checks its helper's result: an `ErrorCanva
 
 #### LRU fetch cache
 
-`apps/chat/src/utils/attachment-canvas.ts` maintains two module-level LRU caches (from the `lru-cache` package, v10+) keyed by DIAL download URL:
+That same module maintains two module-level LRU caches (from the `lru-cache` package, v10+) keyed by DIAL download URL:
 
 - **`blobCache`** — `LRUCache<string, Promise<Blob>>`, max 10 entries. Used by `resolvePdfCanvasContent` via `resolveAttachmentBlobUrl`. Each canvas open creates a fresh `URL.createObjectURL(blob)` from the cached `Blob` (zero network, trivial memory).
 - **`textCache`** — `LRUCache<string, Promise<string>>`, max 50 entries. Used by `resolveMarkdownCanvasContent`, `resolveJsonCanvasContent`, and `resolveTextCanvasContent` via `resolveAttachmentText`.
 
 Both caches store the `Promise` itself so that concurrent opens of the same URL share one in-flight fetch rather than issuing duplicate requests. A rejected promise is removed from the cache immediately, allowing the next open to retry the network.
 
-`clearAttachmentCache()` (exported from `attachment-canvas.ts`) clears both caches. It is called in the `pathname` `useEffect` in `apps/chat/src/app/app.tsx` on every navigation (conversation switch, catalog, new chat), bounding cached data to the current conversation session.
+`clearAttachmentCache()` (exported from `@epam/ai-dial-chat-hooks`) clears both caches. It is called in the `pathname` `useEffect` in `apps/chat/src/app/app.tsx` on every navigation (conversation switch, catalog, new chat), bounding cached data to the current conversation session.
 
 Images do **not** use these caches — `resolveImageCanvasContent` is synchronous and returns the BFF URL directly (see "Image rendering" above). The browser's own HTTP cache deduplicates the `<img src>` request made by the canvas with the identical `<img>` element already rendered in the conversation view.
 
@@ -448,19 +311,20 @@ This graceful fallback is required because some backends put already-decoded pla
 
 #### Content resolution
 
-`resolveImageCanvasContent` in `apps/chat/src/utils/attachment-canvas.ts` is **synchronous** (`ImageCanvasContent | null`) and never issues a `fetch`. Resolution priority:
+`resolveImageCanvasContent` in `libs/chat-hooks/src/files/attachment-canvas.ts` is **synchronous** (`ImageCanvasContent | null`) and never issues a `fetch`. Resolution priority:
 
-1. Local `attachment.file` → `URL.createObjectURL(file)` (locally-picked, not yet uploaded).
-2. `resolveDialUrl(attachment)` → the BFF download URL is passed to `<img src>` directly. The browser's HTTP cache deduplicates it with the `<img>` already rendered in the conversation view. Load failures are detected via `<img onError>` in the renderer (see "Rendering" below).
-3. `attachment.previewUrl` — typically a `data:image/...;base64,...` URL synthesized by `message-attachment-to-display.ts` for stage attachments that carry inline base64 content and no `url`.
-4. Inline `attachment.data` decoded via `base64ToBlobUrl(data, contentType)`.
-5. `null` if no source is available ("not previewable").
+1. Local `attachment.file` **with bytes** → `URL.createObjectURL(file)` — a locally-picked file, or an uploaded-but-unsent composer attachment whose eager upload already assigned the DIAL `url` while keeping the local copy; the in-memory bytes win, so the preview needs no network.
+2. `resolveDialUrl(attachment)` → the BFF download URL is passed to `<img src>` directly; consulted whenever the local `File` is 0-byte (the file-manager placeholder, whose real content is the DIAL url) or absent. The browser's HTTP cache deduplicates it with the `<img>` already rendered in the conversation view. Load failures are detected via `<img onError>` in the renderer (see "Rendering" below).
+3. A 0-byte local `attachment.file` → `URL.createObjectURL(file)` — a genuine empty local file with no `url`; the browser's own decode failure routes through the same `onError` path.
+4. `attachment.previewUrl` — typically a `data:image/...;base64,...` URL synthesized by `message-attachment-to-display.ts` for stage attachments that carry inline base64 content and no `url`.
+5. Inline `attachment.data` decoded via `base64ToBlobUrl(data, contentType)`.
+6. `null` if no source is available ("not previewable").
 
 Because images skip `fetch()`, `resolveImageCanvasContent` never returns `ErrorCanvasContent`. Load failures surface as an inline error state in the renderer instead (see "Rendering" below).
 
 #### Rendering
 
-Images are rendered by the `ImageContent` sub-component (`libs/attachment-canvas/src/components/AttachmentCanvas/AttachmentCanvas.tsx`). It renders `<img src={url} alt={fileName} className="max-h-full max-w-full object-contain" onError>` centered in the canvas body. When `onError` fires (network failure, HTTP 4xx/5xx, CORS), the component switches to a centered `<IconAlertTriangle>` + `loadErrorLabel` message — the same visual slot used by `UnsupportedCanvasContent`. The error state resets automatically when `url` changes (a `useEffect` keyed on `url` calls `setHasError(false)`).
+Images are rendered by the `ImageContent` sub-component, defined inside `libs/attachment-canvas/src/components/AttachmentCanvasBody/AttachmentCanvasBody.tsx` — the component that owns the content-type switch, which `AttachmentCanvas` renders inside the panel chrome. It renders `<img src={url} alt={fileName} className="max-h-full max-w-full object-contain" onError>` centered in the canvas body. When `onError` fires (network failure, HTTP 4xx/5xx, CORS), the component switches to a centered `<IconAlertTriangle>` + `loadErrorLabel` message — the same visual slot used by `UnsupportedCanvasContent`. The error state resets automatically when `url` changes (a `useEffect` keyed on `url` calls `setHasError(false)`).
 
 ---
 
@@ -472,9 +336,9 @@ Images are rendered by the `ImageContent` sub-component (`libs/attachment-canvas
 
 #### Content resolution
 
-`resolvePdfCanvasContent` in `apps/chat/src/utils/attachment-canvas.ts` is `async` and resolves `url` via the shared `resolveAttachmentBlobUrl` helper (see "Shared content resolution helpers" below). A resolved `ErrorCanvasContent` is returned as-is; a resolved string is wrapped as `{ type: AttachmentContentType.Pdf, url }`; `undefined` returns `null`.
+`resolvePdfCanvasContent` in `libs/chat-hooks/src/files/attachment-canvas.ts` is `async` and resolves `url` via the shared `resolveAttachmentBlobUrl` helper (see "Shared content resolution helpers" below). A resolved `ErrorCanvasContent` is returned as-is; a resolved string is wrapped as `{ type: AttachmentContentType.Pdf, url }`. When `resolveAttachmentBlobUrl` returns `undefined` (no local file, DIAL URL, preview URL, or inline data), `attachment.url` is set, is not a DIAL `files/` id, and is a fetchable absolute URL (`isFetchableExternalUrl`: `http:`, `https:`, or `blob:` scheme — a relative or opaque string, e.g. a bare citation/reference id, fails this check and is rejected rather than handed to the viewer as an unfetchable `url`), that raw external URL is used directly as `{ type: AttachmentContentType.Pdf, url: attachment.url }` instead of failing — the same fallback `annotationToPdfCanvasContent`/`referenceAttachmentToPdfCanvasContent` use for a citation whose source is an external PDF, since the PDF canvas viewer fetches and renders the URL itself. Otherwise `undefined` returns `null`.
 
-Precedence (via `resolveAttachmentBlobUrl`): local `attachment.file` (`URL.createObjectURL`) → `resolveDialUrl(attachment)` fetched via `fetchDialBlob` (LRU-cached; a non-OK response or network error yields `ErrorCanvasContent` instead) → `attachment.previewUrl` → inline base64 `attachment.data` decoded into a `Blob` (`type: attachment.contentType`) and turned into an object URL via `URL.createObjectURL`.
+Precedence (via `resolveAttachmentBlobUrl`): local `attachment.file` **with bytes** (`URL.createObjectURL` — a locally-picked file, or an uploaded-but-unsent composer attachment whose eager upload already assigned the DIAL `url` while keeping the local copy) → `resolveDialUrl(attachment)` fetched via `fetchDialBlob` (LRU-cached; a non-OK response or network error yields `ErrorCanvasContent` instead; consulted whenever the local `File` is 0-byte — the file-manager placeholder, whose real content is the DIAL url — or absent) → a 0-byte local `attachment.file` (`URL.createObjectURL`) → `attachment.previewUrl` → inline base64 `attachment.data` decoded into a `Blob` (`type: attachment.contentType`) and turned into an object URL via `URL.createObjectURL` → (PDF only) the raw `attachment.url` when it is a non-DIAL, fetchable (`http:`/`https:`/`blob:`) external URL.
 
 This covers stage attachments (e.g. from the DIAL Annotation API) that carry the PDF as inline base64 `data` with no `url` — `DocumentPreview` receives a `blob:` object URL and loads it the same way it would a remote URL. A DIAL-hosted PDF is fetched once at resolution time (to classify load/permission failures before rendering); `DocumentPreview`'s own `loadFileCb` then resolves that `blob:` URL from the in-memory blob store, so this does not add a second network round-trip.
 
@@ -482,18 +346,43 @@ Citation-preview PDFs (see "Citation preview" below) build their `PdfCanvasConte
 
 #### Rendering
 
-The `PdfContent` component (`libs/attachment-canvas/src/components/AttachmentCanvas/PdfContent.tsx`) wraps `DocumentPreview` and adds a thumbnail sidebar.
+The `PdfContent` component (`libs/attachment-canvas/src/components/PdfContent/PdfContent.tsx`) wraps `DocumentPreview` and adds a single floating collapsible thumbnails panel — the same FAB + overlay pattern on both desktop and mobile — closed by default.
 
-**Layout** — `flex h-full overflow-hidden`:
-- **Thumbnail sidebar** (`w-30 shrink-0 overflow-auto`) — rendered once `totalPages > 0`. Displays one `PageThumbnail` per page. Clicking a thumbnail calls `viewerApiRef.current?.navigateToPage(pageNum)` and updates `selectedPage` state.
-- **Viewer pane** (`min-w-0 flex-1 overflow-hidden`) — contains `DocumentPreview`.
+**Layout** — root is `relative flex h-full overflow-hidden`:
+- Once `totalPages > 0`, a `FabButton` (`@epam/ai-dial-ui-kit`) is absolutely positioned at `start-3 top-3` inside the relative root (a "bubble" pinned to the top-start corner, on every breakpoint) and acts as the trigger for a `Dropdown` (`@epam/ai-dial-ui-kit`) whose `renderOverlay` renders a `w-36` panel floating above the document — `placement="bottom-start"`, `matchReferenceWidth={false}`, controlled by `isThumbnailsOpen` (default `false`). The FAB icon swaps `IconMenu2` (burger, collapsed) ↔ `IconX` (expanded) — no visible title text — and its `aria-label`/`aria-expanded` reflect open/closed state via `labels.showThumbnailsLabel` / `labels.hideThumbnailsLabel` (defaults `'Show thumbnails'` / `'Hide thumbnails'`); `aria-controls` points at the thumbnails region's `id` while expanded, omitted while collapsed since the region is unmounted then, not merely hidden. Opening the panel does not resize or replace the document viewer — it stays full width underneath.
+- **Viewer pane** (`min-w-0 flex-1 overflow-hidden`) — contains `DocumentPreview`, always full width regardless of thumbnails-open state.
 
-**`selectedPage` state** — tracks which thumbnail is highlighted (selected):
-- Initialised via a lazy `useState` initializer: finds the `InputHighlightData` entry whose `id` matches `selectedHighlightId` and returns its first `BBox.page`; falls back to `1` when no match is found.
-- A `useEffect` keyed on `[selectedHighlightId, highlights]` updates `selectedPage` when the user opens a different citation in the same PDF (new `selectedHighlightId` prop on the already-mounted component).
+**Panel internal layout** — the `renderOverlay` content is a `flex flex-col` column with two children, not a single scrollable div, so the page navigator stays pinned above the scrolling thumbnail list:
+1. A `shrink-0` header row holding the page-number `Input` (see "Page navigator" below).
+2. The scrollable thumbnails region itself: `role="region"`, `id` from `useId()`, `aria-label={labels.thumbnailsLabel}`, classed `max-h-[70vh] overflow-y-auto overflow-x-hidden p-1 [scrollbar-gutter:stable]`. `PdfContent` owns this scroll container directly — `panelRef` points at this exact element and all scroll/resize tracking reads `panelRef.current` — deliberately not delegated to any ancestor established by `Dropdown` internally, since that would be a second, competing scroll container. `w-36` (144px) comfortably fits the library's fixed `120px`-wide `PageThumbnail` tile without horizontal overflow; `[scrollbar-gutter:stable]` reserves the native scrollbar's width up front so the left/right padding stays visually even whether or not the scrollbar is actually rendered.
+
+**Page navigator** — an `Input` (`@epam/ai-dial-ui-kit`, `size={ElementSize.Small}`) pinned at the top of the panel, above the scrollable thumbnail list:
+- `value` is `pageInputValue` (local string state, kept separate from `selectedPage` so the field can be freely edited/cleared before a valid page number is committed), `postfix` is `` `/ ${totalPages}` `` (static, non-editable total).
+- Typing updates `pageInputValue` only. Committing — `Enter` (`onKeyDown`) or blur (`onBlur`) — calls `commitPageInput`, which parses the value; if it is an integer within `[1, totalPages]` it calls `handleSelectPage` (same path a thumbnail click uses — updates `selectedPage` and calls `viewerApiRef.current?.navigateToPage`), otherwise it resets the field back to the current `selectedPage`.
+- A `useEffect` keyed on `[selectedPage]` re-syncs `pageInputValue` whenever `selectedPage` changes from elsewhere (thumbnail click, citation navigation), so the field always reflects the current page when not being actively edited.
+- `aria-label` comes from `labels.pageNumberLabel` (default `'Page number'`).
+
+**Thumbnail list is virtualized** — only the rows within the visible window (plus overscan) are ever mounted, with `<div>` spacers above/below to preserve correct scrollbar height:
+- `startIndex`/`endIndex` are derived synchronously each render from `scrollTop`, `itemHeight`, and `panelHeight` — `startIndex = max(0, floor(scrollTop / itemHeight) - THUMBNAIL_OVERSCAN)`, and the visible row count is `ceil(panelHeight / itemHeight) + THUMBNAIL_OVERSCAN * 2`. No `IntersectionObserver` is used — an earlier `IntersectionObserver`-based design fought with the vendor library's own internal batch-fetch effect (any array-reference change to `thumbnailPageNumbers`, including a mid-batch shrink/reorder, made the vendor abort and restart its whole batch loop), which broke thumbnail loading for pages after the first batch.
+- `itemHeight` is measured once from the first rendered row (`measureItemHeight`, via `getBoundingClientRect`) and `panelHeight` is tracked continuously via a `ResizeObserver` on `panelRef` while the panel is open. Both fall back to constants (`THUMBNAIL_ITEM_HEIGHT_FALLBACK = 172` px, `THUMBNAIL_PANEL_HEIGHT_FALLBACK = 400` px) until measured, so the first open isn't blank before measurement lands.
+- Scrolling the panel (`onScroll` on the region div) updates `scrollTop` through a `requestAnimationFrame`-throttled handler (latest value captured in a ref, committed to state at most once per frame) to avoid over-rendering during a fast scroll.
+
+**Thumbnail requesting — eager first batch, then monotonic load-on-scroll:**
+- As soon as `totalPages` resolves (document loaded), an effect requests the first `THUMBNAIL_EAGER_BATCH_SIZE` (15 — matching the vendor's own internal batch size) pages, regardless of whether the panel is open, so they're ready by the time the user opens it.
+- While the panel is open, a second effect extends `requestedThumbnailPages` to cover the current visible window (`startIndex + 1` … `endIndex + 1`), debounced by `THUMBNAIL_SCROLL_REQUEST_DEBOUNCE_MS` (150 ms) so a fast scroll settles before firing.
+- `requestedThumbnailPages` only ever grows — pages already present are never removed, and the array reference only changes when the merged `Set` actually gains a new page number — because the vendor's `thumbnailPageNumbers` effect restarts its whole batch loop on every reference change; a monotonic, debounced list keeps that restart rare and never destructive to in-flight batches.
+- `thumbnails` state (`Map<number, string>`) and `requestedThumbnailPages` persist across open/close toggles — reopening the panel does not re-request or re-render already-loaded thumbnails.
+- A third effect, independent of `isThumbnailsOpen`, keeps a window of pages around the current `selectedPage` requested — debounced the same way — so a reader scrolling the document past the eager batch, with the panel still closed, still arrives at an already-loaded (or in-flight) thumbnail once they open it, instead of the panel briefly showing blank rows while the panel-scroll effect above catches up with the resulting jump.
+
+**`selectedPage` state** — tracks which thumbnail is highlighted (selected) and drives the page-navigator input:
+- Initialised via a lazy `useState` initializer: `selectedPageNumber` when present, otherwise finds the `InputHighlightData` entry whose `id` matches `selectedHighlightId` and returns its first `BBox.page`; falls back to `1` when neither is present.
+- A `useEffect` keyed on `[selectedPageNumber, selectedHighlightId, highlights]` updates `selectedPage` when either prop changes on the already-mounted component (new citation, or an explicit page target), preferring `selectedPageNumber` when both are present.
 - `PdfContent` is keyed by `content.url` in `AttachmentCanvas` — the component stays mounted across same-PDF citation changes, so there is no blink or document reload.
-- A second `useEffect` keyed on `[selectedPage, totalPages]` calls `scrollIntoView({ block: 'center', behavior: 'smooth' })` on the selected thumbnail's wrapper `div` (tracked in `thumbnailNodeRefs`). Including `totalPages` in the deps ensures the scroll fires once the thumbnail sidebar has been rendered for the first time.
+- `DocumentPreview`'s `onCurrentPageChange` (see the props table below) also updates `selectedPage` — so scrolling the document itself, not only explicit navigation, keeps the page-navigator input and the highlighted thumbnail in sync with whatever page is actually on screen.
 - Clicking a thumbnail calls `handleSelectPage`, which sets `selectedPage` directly and calls `viewerApiRef.current?.navigateToPage(pageNum)`.
+- A `scrollToSelectedPage` callback, keyed on `[selectedPage, totalPages, itemHeight]`, computes `top` as `(selectedPage - 1) * itemHeight - clientHeight / 2 + itemHeight / 2` — purely from page index and measured row height, not by looking up the target row's DOM node (under virtualization the target row may not be mounted at all, and `Element.scrollIntoView()` is unusable here since the panel is rendered through the `Dropdown`'s portal with floating-ui's `position: fixed` placement, which isn't anchored to any ancestor's scroll offset — `scrollIntoView`'s ancestor walk falls through to scrolling the real `<html>` root instead). It sets `scrollTop` React state and the panel's real `scrollTop` DOM property directly and synchronously (not `scrollTo({ behavior: 'smooth' })`), so both the virtualized window and the visible scrollbar land on the target page reliably rather than depending on an animation completing and its `onScroll` round-trip. It runs from two places: a `setPanelRef` callback ref (fires the moment the panel's DOM node mounts — necessary because the `Dropdown` portal tears down and recreates that node on every close/reopen, and on a reopen no dependency of a plain effect necessarily changes) and a `useEffect` keyed on the callback's own identity (covers `selectedPage`/`itemHeight` changing while the panel is already open).
+
+**Initial scroll position** — when the document has neither a `selectedHighlightId` nor a `selectedPageNumber` (opened without a citation/page target), an effect keyed on `[isViewerReady, selectedHighlightId, selectedPageNumber]` calls `viewerApiRef.current?.navigateToPage(1)` once `onViewerReady` has fired, deferred by one `requestAnimationFrame` so it runs after the viewer's own initial layout pass (page container sizing, virtual scrolling setup) instead of racing it. When either prop is set, this is skipped — `selectedPageNumber` is forwarded straight to `DocumentPreview`, and a `selectedHighlightId` with no explicit page relies on the vendor's own `goToHighlight` behavior (centering the highlight in the viewport).
 
 `DocumentPreview` props:
 
@@ -504,10 +393,13 @@ The `PdfContent` component (`libs/attachment-canvas/src/components/AttachmentCan
 | `highlights` | `content.highlights ?? []` — highlight regions; empty when no citation context |
 | `selectedHighlightId` | `content.selectedHighlightId` — viewer scrolls to this highlight on load |
 | `showOccurrences` | `false` — occurrence counter suppressed |
-| `thumbnailPageNumbers` | `[1 … totalPages]` — drives thumbnail generation inside the library |
-| `onTotalPagesChange` | sets `totalPages` state, which controls sidebar visibility and `thumbnailPageNumbers` |
+| `thumbnailPageNumbers` | pending (eagerly-requested or scroll-requested, not-yet-loaded) page numbers — drives thumbnail generation inside the library |
+| `onTotalPagesChange` | sets `totalPages` state, which controls thumbnails-affordance visibility and drives the eager batch |
 | `onThumbnailsLoaded` | merges newly loaded thumbnail URLs into `thumbnails` state (`Map<number, string>`) |
 | `onViewerReady` | stores the `PdfViewerApi` reference used for programmatic page navigation |
+| `onCurrentPageChange` | updates `selectedPage` with the 1-based page the vendor reports as most visible in the viewport, including changes driven purely by the reader scrolling the document |
+
+`PdfContent`'s optional `labels` prop (`PdfContentLabels`: `thumbnailsLabel`, `showThumbnailsLabel`, `hideThumbnailsLabel`, `pageNumberLabel`) is threaded from `AttachmentCanvasLabels` (`pdfThumbnailsLabel`, `pdfShowThumbnailsLabel`, `pdfHideThumbnailsLabel`, `pdfPageNumberLabel`) through `AttachmentCanvasBodyLabels` — the app supplies these via `AttachmentCanvasI18nKeys.PdfThumbnailsLabel` / `PdfShowThumbnailsLabel` / `PdfHideThumbnailsLabel` / `PdfPageNumberLabel`, all with English defaults when omitted.
 
 No `title` prop is passed — toolbar title is hidden.
 
@@ -530,11 +422,11 @@ When a user clicks "Preview" in a `CitationDropdown`, `useCitationMarkdownCompon
 When `annotation.body.source.attachment.type === 'application/pdf'`:
 
 1. Find the `AnnotationGroup` that owns the clicked annotation (by `sourceUrl`).
-2. `annotationsToPdfHighlights(group.annotations)` — maps every annotation whose `body.selector` contains one or more `PdfBBoxSelector` entries (`type: 'pdf_bbox'`) to an `InputHighlightData`. Each annotation becomes one highlight whose `bboxes` list collects all its `pdf_bbox` selectors. The highlight `id` is `annotation.index` when present, otherwise the annotation's position in the group.
-3. `selectedHighlightId` is computed for the clicked annotation using the same ID formula, so the viewer scrolls to it on load.
+2. `annotationsToPdfHighlights(group.annotations)` — maps every annotation whose `body.selector` contains one or more recognised PDF selectors (`pdf_bbox`, or `pdf_region` in either coordinate form) to an `InputHighlightData`. Each annotation becomes one highlight whose `bboxes` list collects all its recognised selectors, converting a `pdf_region` to edges as `x1 = left`, `y1 = top`, `x2 = left + width`, `y2 = top + height`. The highlight `id` comes from `annotationHighlightId`, which identifies the annotation itself (`annotation.index` when the wire supplied one, otherwise its `cit` id plus a digest of its selectors) rather than its position in the group.
+3. `selectedHighlightId` is computed for the clicked annotation with the same helper, so the viewer scrolls to it on load — and so selecting another citation of the same document, even on the same page, changes the id and re-navigates.
 4. `fileName` is derived from the annotation's `attachment`: `attachment.title` is used when present; otherwise the last path segment of `attachment.url` is URL-decoded with `decodeURIComponent` (so `%20` → space, etc.).
 5. `openCanvas` is called directly with `PdfCanvasContent { type: Pdf, url, highlights, selectedHighlightId }` and the resolved `fileName`.
-6. Annotations whose `body.selector` carries no `pdf_bbox` entries produce no highlight and are silently skipped.
+6. Annotations whose `body.selector` carries no recognised PDF selector produce no highlight and are silently skipped.
 
 #### Non-PDF sources
 
@@ -542,7 +434,7 @@ When `annotation.body.source.attachment.type === 'application/pdf'`:
 
 #### Selector type
 
-`AnnotationBody.selector` may be a single `AnnotationSelector` or an array. Only entries with `type === 'pdf_bbox'` are mapped; all other selector types are ignored. The `PdfBBoxSelector` shape:
+`AnnotationBody.selector` may be a single `AnnotationSelector` or an array. Entries with `type === 'pdf_bbox'` or `type === 'pdf_region'` are mapped; all other selector types are ignored. The recognised shapes:
 
 ```ts
 interface PdfBBoxSelector {
@@ -550,4 +442,701 @@ interface PdfBBoxSelector {
   page: number;   // 1-based
   x1: number; y1: number; x2: number; y2: number;
 }
+
+/* pdf_region — origin/size pair form */
+{ type: 'pdf_region', page: number, bbox: { lt: [left: number, top: number], wh: [width: number, height: number] } }
+
+/* pdf_region — legacy named-coordinate form */
+{ type: 'pdf_region', page: number, bbox: { left: number, top: number, width: number, height: number } }
 ```
+
+---
+
+## Requirements
+
+### Requirement: The canvas panel opens beside the conversation and closes on navigation
+
+Activating an attachment SHALL open `AttachmentCanvas` at the right edge of the conversation layout, keyed by the `attachmentId` the caller supplies. The panel SHALL close whenever the URL `pathname` changes, and SHALL be mutually exclusive with both `ConversationSourcesPanel` and the conversation history panel — opening any one of the three closes the other two, synchronously, before any content is fetched.
+
+#### Scenario: Activating an attachment opens the panel
+
+- **WHEN** the user activates an attachment card from a message bubble, an input tray, or the sources panel
+- **THEN** `openCanvas` is called with the resolved content, file name, and attachment key, and the panel renders open at the right edge
+
+#### Scenario: Only the tile that opened the canvas reads as selected
+
+- **GIVEN** two messages hold attachments with the same content-derived `id`
+- **WHEN** one of them opens the canvas
+- **THEN** only that message's tile renders selected, because the key carries the message index and each message strips its own prefix
+
+#### Scenario: Navigating away closes the panel
+
+- **WHEN** the `pathname` changes for a conversation switch, catalog navigation, or new chat
+- **THEN** `closeCanvas()` runs and the panel is closed
+
+#### Scenario: The panels never overlap
+
+- **WHEN** the user opens the canvas while the sources panel or the history panel is open
+- **THEN** the other panel closes immediately on click, before content resolution completes
+- **AND** opening either of those panels afterwards closes the canvas
+
+#### Scenario: The chat area keeps a minimum width
+
+- **WHEN** the user drags the canvas resize handle on desktop
+- **THEN** the width is clamped between 600 px and `usePanelMaxWidth()`, leaving at least 400 px of chat area
+- **AND** on mobile the panel fills the viewport and is not resizable
+
+### Requirement: The canvas is an accessible, always-available panel
+
+`SidebarPanel` SHALL render with `role="complementary"` and the `ariaLabel` prop as its accessible name, SHALL be `aria-hidden` while closed, and SHALL expose every header control by keyboard with an `aria-label` supplied as a prop. All app-level strings SHALL come from `AttachmentCanvasI18nKeys`, with the lib carrying English defaults. The capability SHALL NOT be gated behind a feature flag.
+
+#### Scenario: The panel is a named landmark
+
+- **WHEN** the canvas is open
+- **THEN** it exposes `role="complementary"` named by `ariaLabel`, and its close, download, and copy buttons are reachable by Tab with their own labels
+
+#### Scenario: A closed panel is hidden from assistive tech
+
+- **WHEN** the canvas is closed
+- **THEN** the panel carries `aria-hidden="true"`
+
+### Requirement: Content type routing resolves a typed payload before rendering
+
+`useOpenAttachmentCanvas` SHALL resolve a `DisplayAttachment` into a typed content payload before anything is rendered, switching first on `attachment.type` and then, for files, running the reference-only PDF check, the custom-visualizer lookup, the no-type inline-data fallback, Office MIME detection, MIME routing, Office extension detection, and extension routing in that order. Extension checks for `md`/`markdown`, `json`, `pdf`, and `html`/`htm` SHALL run before the generic `isTextPreviewable` branch, which routes to `resolveCodeCanvasContent`. Anything unmatched SHALL become `UnsupportedCanvasContent`.
+
+#### Scenario: html extension routes to Html
+
+- **WHEN** `openFileCanvas` is called with an attachment whose name ends in `.html`
+- **THEN** `resolveHtmlCanvasContent` is called
+- **AND** the canvas opens with `HtmlCanvasContent`
+
+#### Scenario: ts extension routes to Code
+
+- **WHEN** `openFileCanvas` is called with an attachment whose name ends in `.ts`
+- **THEN** `resolveCodeCanvasContent` is called with `language: 'typescript'`
+- **AND** the canvas opens with `CodeCanvasContent`
+
+#### Scenario: A reference-only PDF chunk opens the referenced page
+
+- **GIVEN** an attachment with no `url` and a `referenceUrl` such as `files/{bucket}/report.pdf#page=81`
+- **WHEN** `openFileCanvas` runs
+- **THEN** `referenceAttachmentToPdfCanvasContent` returns a `PdfCanvasContent` scrolled to page 81, and no further routing runs
+
+#### Scenario: Inline data with no content type renders as text
+
+- **GIVEN** an attachment whose `contentType` is the empty string and whose `data` is present
+- **WHEN** `openFileCanvas` runs
+- **THEN** `resolveTextCanvasContent` produces the content and the attachment does not fall through to `Unsupported`
+
+### Requirement: Each content type has a dedicated renderer
+
+`AttachmentCanvasBody` — the component `AttachmentCanvas` renders inside the panel chrome — SHALL dispatch on `AttachmentContentType` to the renderer listed in the "Content renderers" table, and SHALL render `Json`, `Code`, and `Html` bodies inside a `dir="ltr"` container so code and tree layout stay left-to-right in an RTL app.
+
+#### Scenario: Code content type uses CodeContent renderer
+
+- **WHEN** `AttachmentCanvas` renders a `CodeCanvasContent`
+- **THEN** a `CodeContent` component is mounted in the panel body
+
+#### Scenario: Html content type uses HtmlContent renderer
+
+- **WHEN** `AttachmentCanvas` renders an `HtmlCanvasContent`
+- **THEN** an `HtmlContent` component is mounted in the panel body
+
+### Requirement: Load failures are distinguished from unsupported previews
+
+A failed fetch SHALL resolve to `ErrorCanvasContent` carrying `errorType: Forbidden` for HTTP `403` and `errorType: LoadFailed` otherwise, and every `resolveXCanvasContent` SHALL propagate it unchanged rather than wrapping it. `isDownloadable(content)` SHALL return `false` for a `Forbidden` error regardless of `url`, `true` for a `LoadFailed` error or an `Unsupported` payload when `url` is present, and `false` for both `VisualizerCanvasContent` and `McpAppCanvasContent` — neither is a file the user could retrieve.
+
+#### Scenario: A forbidden file offers no download
+
+- **WHEN** the fetch for an attachment returns HTTP `403`
+- **THEN** the body shows `forbiddenErrorLabel` and the header renders no download button, even though a `url` is known
+
+#### Scenario: A failed load stays retryable
+
+- **WHEN** the fetch fails with a network error or a non-`403` status and a `url` is known
+- **THEN** the body shows `loadErrorLabel` and the download button is still offered
+
+#### Scenario: Image failures surface in the renderer, not as error content
+
+- **WHEN** an image fails to load
+- **THEN** `resolveImageCanvasContent` still returns `ImageCanvasContent` and `ImageContent`'s `onError` swaps in the inline error message
+
+### Requirement: Attachment content resolvers prefer a resolvable DIAL download URL over a 0-byte local File
+
+Every attachment-canvas content resolver in `@epam/ai-dial-chat-hooks` that can resolve content from either a local `attachment.file` or a DIAL file id — `resolveImageCanvasContent`, `resolveAttachmentBlobUrl` (and the resolvers built on it, including `resolvePdfCanvasContent` and `resolveOoxmlCanvasContent`), `resolveAttachmentText` (and the resolvers built on it, including text/Markdown/code/JSON and `resolveVisualizerCanvasContent`), and `hasAttachmentTextSource` — SHALL apply this source precedence: a local `attachment.file` **with bytes** resolves first; when the local `File` is 0-byte or absent, the host-injected DIAL download URL (`resolvers.resolveDialUrl(attachment)`, i.e. a `files/{bucket}/{path}` id in `attachment.url` or `attachment.referenceUrl`) resolves before the 0-byte local `File`. The remaining fallback order (`attachment.previewUrl`, then inline base64 `attachment.data`, then any type-specific external-URL tail) SHALL be unchanged.
+
+Rationale: a file-manager-selected attachment carries a 0-byte placeholder `File` (synthesized by `dialFileToAttachment` to satisfy the required `Attachment.file` field) while its real content sits behind the DIAL url; local-`File`-first precedence hands the renderer an object URL over that empty placeholder (issue #8761). Conversely, the composer's eager-upload flow assigns the DIAL url before send while keeping the real local `File`, so a `File` with bytes must keep winning to preserve the instant, offline-capable in-memory preview.
+
+#### Scenario: File-manager image previews from its DIAL content
+
+- **GIVEN** an image attachment shaped like a file-manager selection: `attachment.file` is a 0-byte `File` typed `image/png` and `attachment.url` is `files/{bucket}/path/image.png`
+- **WHEN** `resolveImageCanvasContent` is called
+- **THEN** it returns `ImageCanvasContent` whose `url` is the resolved DIAL download URL, not an object URL over `attachment.file`
+
+#### Scenario: File-manager PDF content is fetched from the DIAL download URL
+
+- **GIVEN** an attachment whose `attachment.file` is a 0-byte placeholder `File` and whose `attachment.url` is a `files/{bucket}/{path}` id
+- **WHEN** `resolvePdfCanvasContent` (via `resolveAttachmentBlobUrl`) is called
+- **THEN** content is fetched from the resolved DIAL download URL (through the existing blob cache and error classification), not from `attachment.file`
+
+#### Scenario: An uploaded-but-unsent attachment previews from its local File without network
+
+- **GIVEN** an attachment whose `attachment.file` holds the real bytes and whose `attachment.url` is the DIAL id assigned by the composer's eager upload
+- **WHEN** `resolveImageCanvasContent` or `resolvePdfCanvasContent` (via `resolveAttachmentBlobUrl`) is called
+- **THEN** the content resolves from the local `File` (an object URL), and no DIAL download or metadata fetch is issued
+
+#### Scenario: A genuine local file still resolves locally, including zero-byte text
+
+- **GIVEN** an attachment with a local `attachment.file` and no `files/` id in `url` or `referenceUrl`
+- **WHEN** any content resolver or `hasAttachmentTextSource` is called
+- **THEN** behavior is unchanged from local resolution: blob/text content comes from `attachment.file`, and a zero-byte text `File` resolves to empty text rather than "no source"
+
+#### Scenario: hasAttachmentTextSource reports a DIAL-hosted attachment as a text source
+
+- **GIVEN** an attachment whose `attachment.url` is a `files/{bucket}/{path}` id (with or without a placeholder `File`)
+- **WHEN** `hasAttachmentTextSource` is called
+- **THEN** it returns `true`, so a fetched-and-rejected HTML payload is classified as "fetched and rejected" rather than "nothing to fetch"
+
+### Requirement: `AttachmentContentType.Visualizer` variant
+
+`libs/attachment-canvas/src/types/attachment-canvas.ts` SHALL add a new enum member `AttachmentContentType.Visualizer`.
+
+`libs/attachment-canvas/src/models/attachment-canvas.ts` SHALL add a new member to the `AttachmentCanvasContent` discriminated union:
+
+```ts
+interface VisualizerCanvasContent {
+  type: AttachmentContentType.Visualizer;
+  url: string;                              // iframe src, from the registry entry's `url`
+  mimeType: string;                         // the attachment's own MIME (NOT the entry's raw
+                                            // `contentType`, which may be a comma-separated list)
+  data: unknown;                            // opaque attachment payload consumed by the visualizer
+  layout: CustomVisualizerDataLayout;       // themeId, width, height, mobileHeight
+  visualizerName: string;                   // postMessage type prefix — MUST be the registry
+                                            // entry's `title`; the iframe app is constructed
+                                            // with the identical string or nothing is received
+  requestTimeout?: number;                  // from the registry entry; bounds send(), default
+                                            // 10000ms. Does NOT bound the handshake.
+}
+```
+
+`isDownloadable(content)` SHALL return `false` for a `VisualizerCanvasContent` value.
+
+**RTL impact:** none directly; canvas panel chrome already handles direction.
+
+**i18n impact:** none; visualizer chrome carries no lib-side user-visible strings.
+
+#### Scenario: Visualizer content is not downloadable
+
+- **WHEN** the canvas is opened with a `VisualizerCanvasContent` and `onDownload` is provided
+- **THEN** the download button in the canvas header is not rendered
+
+#### Scenario: Panel opens with visualizer content
+
+- **WHEN** `openCanvas` is called with a `VisualizerCanvasContent` and `fileName`
+- **THEN** `AttachmentCanvasContext.content` equals the passed content
+- **AND** `AttachmentCanvasContainer` re-renders with the panel open and the visualizer renderer inside
+
+### Requirement: `VisualizerCanvasRenderer` component
+
+`libs/attachment-canvas/src/components/VisualizerCanvasRenderer/VisualizerCanvasRenderer.tsx` SHALL render an iframe host and drive the visualizer handshake and data delivery via the published npm package `@epam/ai-dial-visualizer-connector` (and `@epam/ai-dial-shared` for the request enum). Behaviour:
+
+- On mount, create a `VisualizerConnector` bound to the container element, passing `domain: content.url`, `hostDomain: window.location.origin` (required by the published options type; unused at runtime in the current package), `visualizerName: content.visualizerName`, and `requestTimeout: content.requestTimeout`.
+- Await `.ready()` and then call `.send(VisualizerConnectorRequests.sendVisualizeData, { mimeType: content.mimeType, visualizerData: { layout: content.layout, ...content.data } })`, where `VisualizerConnectorRequests` is imported from `@epam/ai-dial-shared` (camelCase member; wire value `SEND_VISUALIZE_DATA`).
+- On unmount, call `connector.destroy()` exactly once for that instance.
+- Display a loading state while `.ready()` is pending. Because `.ready()` never times out (see the `custom-visualizers` capability), a visualizer that never completes the handshake leaves the body in this loading state indefinitely — this is intended. Display an error state if the `SEND_VISUALIZE_DATA` `send()` rejects (its own timeout) or if `.ready()` rejects due to `destroy()`.
+- The component SHALL keep the connector instance stable across parent re-renders that do not change `url` / `visualizerName` / `requestTimeout`, so those re-renders do not tear down the iframe.
+
+The component MUST NOT read from any app-level context (auth, theme, i18n, feature flags) — all data required for the visualizer is passed in through `VisualizerCanvasContent`.
+
+#### Scenario: connector is destroyed on unmount
+
+- **WHEN** the `VisualizerCanvasRenderer` unmounts
+- **THEN** `VisualizerConnector.destroy()` is called
+- **AND** the iframe element is removed from the DOM
+
+#### Scenario: SEND_VISUALIZE_DATA is dispatched after READY_TO_INTERACT
+
+- **WHEN** the iframe posts `${visualizerName}/READY_TO_INTERACT`
+- **THEN** the renderer calls `connector.send` with the published enum member whose wire value is `SEND_VISUALIZE_DATA` exactly once
+- **AND** the payload's `layout` equals `content.layout`
+
+#### Scenario: send failure surfaces error state
+
+- **WHEN** the `SEND_VISUALIZE_DATA` `send()` promise rejects (no `/RESPONSE` within `requestTimeout`)
+- **THEN** the renderer displays an error state
+- **AND** the canvas remains closable via the header's close button
+
+#### Scenario: incomplete handshake stays in the loading state
+
+- **WHEN** the iframe mounts but never posts `READY_TO_INTERACT`
+- **THEN** the renderer keeps showing the loading state and does not show an error
+- **AND** the canvas remains closable via the header's close button
+
+### Requirement: `AttachmentCanvas` switch handles Visualizer variant
+
+`libs/attachment-canvas/src/components/AttachmentCanvasBody/AttachmentCanvasBody.tsx` — which owns the switch over `AttachmentContentType` — SHALL carry a `case AttachmentContentType.Visualizer` branch that renders `<VisualizerCanvasRenderer content={content} />` inside the panel body.
+
+The panel chrome (header, close button, resize handle, keyboard/ARIA behaviour) SHALL be identical to the chrome used for other content types.
+
+**Feature flag:** none. The variant is reachable only when the app builds a `VisualizerCanvasContent` from a populated registry.
+
+#### Scenario: rendering switch dispatches to the visualizer branch
+
+- **WHEN** `AttachmentCanvas` is rendered with a `VisualizerCanvasContent`
+- **THEN** the panel body contains a mounted `VisualizerCanvasRenderer`
+- **AND** the panel header renders the `fileName` as usual
+
+### Requirement: `useOpenAttachmentCanvas` dispatches to the visualizer branch before content-type handling
+
+The canvas hook's internal `openFileCanvas` SHALL check the attachment's `contentType` against the injected `CustomVisualizer[]` registry (a case-insensitive `findVisualizerForMime` lookup) **before** its `switch (contentType)` block rather than as a case inside it — so the lookup also pre-empts the no-type inline-data fallback and the Office MIME check, not merely the `MIMEType.PDF`, `MIMEType.Markdown`, and `MIMEType.JSON` cases. Only the reference-only PDF check runs ahead of it.
+
+The registry reaches the hook as the `customVisualizers` option; the app supplies it from `useCustomVisualizers()`.
+
+When a match is found:
+
+- The hook delegates to its injected `resolveVisualizerContent(attachment, visualizerEntry, themeId)` resolver rather than fetching the payload itself.
+- On success, that resolver builds a `VisualizerCanvasContent`: `url` from the registry entry, `mimeType` from the attachment's own `contentType`, `data` from the fetched payload, `layout` with `width`/`height`/`mobileHeight` from the registry entry plus the `themeId` the host passed to the hook, `visualizerName` from the registry entry's `title`, and `requestTimeout` from the registry entry. The hook opens the canvas with it and returns `true`.
+- When the resolver yields `null` (payload fetch failed), the hook falls through to the remaining routing and ultimately to `Unsupported` — unchanged behaviour.
+
+When the registry is empty or no entry matches, `openFileCanvas` behaves exactly as it did before this addition.
+
+`useAttachmentAction` (`libs/chat-hooks`) is NOT modified by this addition. It only runs as a fallback when `openAttachmentCanvas` returns `false` (see "Open triggers" above), and a matched visualizer MIME always causes `openAttachmentCanvas` to return `true` — so `useAttachmentAction` would never observe a visualizer-eligible attachment.
+
+**Feature flag:** none. The `CUSTOM_VISUALIZERS` env is the effective gate.
+
+**RTL impact:** none. Canvas chrome already handles direction.
+
+**i18n impact:** none new. Existing labels are reused.
+
+#### Scenario: MIME matches a visualizer registry entry from a message bubble click
+
+- **WHEN** `handleMessageAttachmentClick` (`ConversationView.tsx`) is invoked for an attachment whose `contentType` matches a `customVisualizers` entry
+- **THEN** `openAttachmentCanvas` resolves a `VisualizerCanvasContent` and calls `openCanvas` with it
+- **AND** the panel opens with the visualizer renderer, not the PDF/Markdown/JSON/Unsupported branch
+
+#### Scenario: MIME matches but payload fetch fails — falls back to existing handling
+
+- **WHEN** the registry contains a matching entry but fetching the attachment payload rejects
+- **THEN** `openFileCanvas` falls through to the existing `contentType`/extension switch for that attachment
+
+#### Scenario: Registry is empty — behaviour unchanged
+
+- **WHEN** the `customVisualizers` registry is `[]`
+- **THEN** `openFileCanvas` behaves exactly as it did before this addition
+
+#### Scenario: MIME does not match any registry entry
+
+- **WHEN** the registry contains only `contentType: 'application/x-my-viz'` and the attachment's `contentType` is `'application/pdf'`
+- **THEN** the visualizer branch does not fire; the existing `MIMEType.PDF` case handles the attachment
+
+### Requirement: `downloadAttachmentContent` guarantees a file extension on every download
+
+`downloadAttachmentContent(content, fileName?)` in `libs/attachment-canvas/src/utils/download.ts` SHALL call `ensureDownloadFilename(fileName ?? 'attachment', contentUrl, contentMimeType)` before passing the name to any download trigger (`triggerBlobDownload` or `triggerAnchorDownload`). `contentUrl` and `contentMimeType` are extracted from `content` by the private `getContentUrlAndMimeType` helper according to the following dispatch:
+
+| Content type | URL supplied to `ensureDownloadFilename` | MIME type supplied |
+|---|---|---|
+| `Image` | `content.url` | — |
+| `Audio` | `content.url` | `content.mimeType` |
+| `Pdf` | `content.url` | `MIMEType.PDF` (`'application/pdf'`) |
+| `Ooxml` | `content.url` | MIME type for `content.format` (`docx`/`xlsx`/`pptx`) |
+| `Html` | `content.url` | `MIMEType.HTML` (`'text/html'`) |
+| `Unsupported`, `Error` | `content.url` | — |
+| `PlainText`, `Code` | — | `MIMEType.Plain` (`'text/plain'`) |
+| `Markdown` | — | `MIMEType.Markdown` (`'text/markdown'`) |
+| `Json` | — | `MIMEType.JSON` (`'application/json'`) |
+| `Visualizer`, `McpApp` | — | — (these are not downloadable) |
+
+`ensureDownloadFilename` derives the extension with three-priority logic: (1) when the supplied name already contains a `.`, it is returned unchanged; (2) when a URL is available, its last path segment's extension is appended to the name; (3) when a MIME type is available and present in `MIME_TYPE_EXT_MAP` (from `libs/chat-shared/src/constants/mime-types.ts`), that extension is appended; (4) when none of the above applies, the name is returned unchanged and the download proceeds without an extension.
+
+#### Scenario: Name already has an extension
+
+- **GIVEN** `fileName` is `'report.docx'`
+- **WHEN** `downloadAttachmentContent` is called for an `OoxmlCanvasContent`
+- **THEN** the downloaded file is named `'report.docx'` — unchanged, because the name already carries an extension
+
+#### Scenario: URL path segment provides the extension
+
+- **GIVEN** `fileName` is `'Q3 Financial Summary'` (a citation title with no extension) and `content.url` is `'files/bucket/uploads/report.pdf'`
+- **WHEN** `downloadAttachmentContent` is called for a `PdfCanvasContent`
+- **THEN** the downloaded file is named `'Q3 Financial Summary.pdf'` — the extension is taken from the URL's last path segment
+
+#### Scenario: MIME type fallback provides the extension for a blob download
+
+- **GIVEN** `fileName` is `'notes'` and the content type is `PlainText`
+- **WHEN** `downloadAttachmentContent` is called
+- **THEN** the downloaded file is named `'notes.txt'` — the extension comes from `MIME_TYPE_EXT_MAP['text/plain']`
+
+#### Scenario: MIME type fallback provides the extension for JSON, Markdown, and HTML
+
+- **GIVEN** `fileName` is `'data'` and the content type is `Json`
+- **WHEN** `downloadAttachmentContent` is called
+- **THEN** the downloaded file is named `'data.json'`
+- **AND** the same logic applies for `Markdown` → `'.md'` and `Html` (anchor download) → `'.html'`
+
+#### Scenario: No extension can be derived
+
+- **GIVEN** `fileName` is `'attachment'`, the content has no URL, and the MIME type is absent or not present in `MIME_TYPE_EXT_MAP`
+- **WHEN** `downloadAttachmentContent` is called
+- **THEN** the downloaded file is named `'attachment'` — no extension is appended and the download still completes
+
+### Requirement: PDF worker preparation is awaited, shared, and retryable
+
+`PdfContent` SHALL NOT mount its underlying `DocumentPreview` viewer until the host-supplied `configurePdfWorker` callback's returned promise (when the prop is supplied) has resolved. Concurrent PDF opens that trigger preparation while it is already in flight SHALL share the same pending preparation rather than invoking `configurePdfWorker` again. A successful preparation SHALL be memoized so later PDF opens do not re-invoke `configurePdfWorker`. A rejected preparation SHALL clear its retryable state so a later attempt invokes `configurePdfWorker` again instead of the rejection being cached permanently. When `configurePdfWorker` is omitted, `DocumentPreview` mounts immediately, preserving the existing CDN-hosted worker fallback.
+
+#### Scenario: Viewer waits for preparation to resolve
+
+- **WHEN** a PDF attachment is opened and `configurePdfWorker` is supplied
+- **THEN** `DocumentPreview` does not mount until the callback's returned promise resolves
+
+#### Scenario: Concurrent opens share one in-flight preparation
+
+- **WHEN** a second PDF attachment is opened while an earlier preparation triggered by `configurePdfWorker` is still pending
+- **THEN** `configurePdfWorker` is not invoked a second time, and both opens proceed once the single pending preparation resolves
+
+#### Scenario: A later PDF open reuses a successful preparation
+
+- **WHEN** a PDF attachment is opened after `configurePdfWorker` has already resolved successfully in the same session
+- **THEN** `configurePdfWorker` is not invoked again and the viewer mounts immediately
+
+#### Scenario: A failed preparation can be retried
+
+- **WHEN** `configurePdfWorker`'s returned promise rejects, and the user retries (or opens another PDF) afterward
+- **THEN** `configurePdfWorker` is invoked again rather than the earlier rejection being reused
+
+#### Scenario: Omitted adapter skips the preparation gate
+
+- **WHEN** `configurePdfWorker` is not supplied
+- **THEN** `DocumentPreview` mounts immediately using the existing CDN-hosted worker fallback, unchanged from current behavior
+
+### Requirement: One PDF selector reader serves both highlight geometry and page navigation
+
+`libs/quotations/src/utils/annotation.ts` SHALL expose a single internal reader that converts one `AnnotationSelector` to the highlighter's `{ page, x1, y1, x2, y2 }` box shape, or `undefined` when the selector is not a recognised PDF selector or fails validation. Both `annotationsToPdfHighlights` and `getAnnotationPdfPage` SHALL derive their result from that one reader, so the set of selector shapes that produce a highlight and the set that produce a page number are identical by construction.
+
+The reader SHALL recognise three input shapes:
+
+```ts
+/* 1. pdf_bbox — absolute edges (existing) */
+{ type: 'pdf_bbox', page: 1, x1: 58.752, y1: 383.328, x2: 550.8, y2: 412.632 }
+
+/* 2. pdf_region — origin/size pair form */
+{ type: 'pdf_region', page: 1, bbox: { lt: [58.752, 383.328], wh: [492.048, 29.304] } }
+
+/* 3. pdf_region — legacy named-coordinate form */
+{ type: 'pdf_region', page: 1, bbox: { left: 58.752, top: 383.328, width: 492.048, height: 29.304 } }
+```
+
+A `pdf_region` bbox SHALL convert to edges as `x1 = left`, `y1 = top`, `x2 = left + width`, `y2 = top + height`, where `left`/`top` come from `lt[0]`/`lt[1]` and `width`/`height` from `wh[0]`/`wh[1]` in the origin/size form. All three shapes above describe the same region and SHALL therefore produce the identical box.
+
+When both coordinate forms are present on the same `bbox`, the reader SHALL prefer `lt`/`wh` and ignore the named fields, so a producer emitting both is read one way deterministically.
+
+Validation SHALL be per selector and non-throwing: the reader SHALL reject a selector whose `page` is absent, non-integer, or `< 1`, and one whose four resulting coordinates are not all finite numbers. A zero-area box SHALL remain valid (it still carries a page). Rejecting one selector SHALL NOT discard the other selectors in the same array and SHALL NOT throw for `null`, a primitive, a missing `bbox`, a non-object `bbox`, a short or non-numeric `lt`/`wh` array, or an unrecognised `type`.
+
+`annotationsToPdfHighlights` SHALL keep its current contract with the wider set of selector shapes: `body.selector` may be a single selector or an array; one annotation still yields at most one `InputHighlightData` whose `bboxes` collects every box the reader accepted from that annotation, in selector order; the highlight `id` is derived by the shared annotation-identity helper described in the "Citation highlight ids identify the annotation, not its position in the clicked group" requirement (no longer the input position); `CITATION_HIGHLIGHT_STYLE` is unchanged; and an annotation contributing no accepted box still produces no highlight.
+
+`getAnnotationPdfPage` SHALL return the `page` of the first selector the reader accepts, and `undefined` when it accepts none.
+
+The original annotations SHALL NOT be mutated and the persisted message format SHALL NOT change — conversion happens only where PDF preview data is built, so a message saved with `pdf_region` selectors is reloaded and re-read the same way.
+
+**i18n**: none — no new user-visible strings.
+**RTL**: none — no new UI; the change is pure coordinate reading.
+**Feature flag**: none — the new shapes are accepted unconditionally.
+**Memoisation**: none beyond existing behavior; the reader is a pure function called from the existing mappers.
+**Accessibility**: unchanged — highlight selection, keyboard navigation, and the viewer's own affordances are untouched.
+
+#### Scenario: The three supplied coordinate forms produce the same highlight
+
+- **WHEN** three annotations carry, respectively, `{ type: 'pdf_bbox', page: 1, x1: 58.752, y1: 383.328, x2: 550.8, y2: 412.632 }`, `{ type: 'pdf_region', page: 1, bbox: { lt: [58.752, 383.328], wh: [492.048, 29.304] } }`, and `{ type: 'pdf_region', page: 1, bbox: { left: 58.752, top: 383.328, width: 492.048, height: 29.304 } }`
+- **THEN** `annotationsToPdfHighlights` returns one highlight per annotation, each with a single bbox equal to `{ page: 1, x1: 58.752, y1: 383.328, x2: 550.8, y2: 412.632 }`, and `getAnnotationPdfPage` returns `1` for all three
+
+#### Scenario: A scalar pdf_region selector produces a highlight and a page
+
+- **WHEN** an annotation's `body.selector` is a single `pdf_region` object with `page: 4` and a valid `lt`/`wh` bbox
+- **THEN** `annotationsToPdfHighlights` returns one highlight with one bbox on page 4 and `getAnnotationPdfPage` returns `4`
+
+#### Scenario: A mixed selector array collects every box on one highlight
+
+- **WHEN** one annotation's `body.selector` array holds a `pdf_bbox` entry on page 2, a `pdf_region` `lt`/`wh` entry on page 5, and a `text_character_range` entry
+- **THEN** the annotation yields exactly one highlight whose `bboxes` are the page-2 and page-5 boxes in that order, the `text_character_range` entry is ignored, and `getAnnotationPdfPage` returns `2`
+
+#### Scenario: A malformed region does not discard its valid siblings
+
+- **WHEN** a selector array holds `{ type: 'pdf_region', page: 1, bbox: { lt: [1], wh: [2, 3] } }`, `{ type: 'pdf_region', page: 0, bbox: { left: 0, top: 0, width: 1, height: 1 } }`, `null`, and then a valid `pdf_region` entry on page 6
+- **THEN** no error is thrown, the first three entries are skipped, the highlight carries only the page-6 box, and `getAnnotationPdfPage` returns `6`
+
+#### Scenario: A region with a non-finite coordinate is rejected
+
+- **WHEN** a `pdf_region` selector's `wh` contains `NaN`, or its `bbox` is absent or not an object
+- **THEN** the reader rejects that selector, it contributes no bbox, and it is not considered for the page
+
+#### Scenario: A zero-size region still navigates
+
+- **WHEN** a `pdf_region` selector on page 5 has `wh: [0, 0]`
+- **THEN** the box `{ page: 5, x1, y1, x2: x1, y2: y1 }` is produced and `getAnnotationPdfPage` returns `5`, matching the existing all-zero `pdf_bbox` behavior
+
+#### Scenario: A quote-only citation gets no fabricated highlight
+
+- **WHEN** an annotation has a `body.quote` and a PDF source attachment but no `body.selector`
+- **THEN** `annotationsToPdfHighlights` produces no highlight for it, `getAnnotationPdfPage` returns `undefined`, and the PDF opens unhighlighted at the viewer's default page
+
+#### Scenario: Both coordinate forms on one bbox resolve deterministically
+
+- **WHEN** a `pdf_region` bbox carries `lt`/`wh` and `left`/`top`/`width`/`height` with conflicting values
+- **THEN** the reader uses `lt`/`wh` and ignores the named fields
+
+#### Scenario: Existing pdf_bbox annotations keep their geometry and page
+
+- **WHEN** every selector on a message is `pdf_bbox`, including entries with all-zero coordinates, a missing page, or a non-integer page
+- **THEN** the highlight geometry, styling, and selected page are identical to the behavior before this change, and the highlight ids are whatever the annotation-identity helper produces — equal to `annotation.index` when the wire supplied one
+
+
+### Requirement: PDF citation preview navigates to the annotation's referenced page independent of highlight geometry
+
+When opening a PDF citation or a reference-only PDF-page chip in the attachment canvas, the panel SHALL navigate to the page specified by the triggering annotation's/reference's page number, whether or not that page's bounding box is renderable as a visible highlight.
+
+`PdfCanvasContent` (`libs/attachment-canvas/src/models/attachment-canvas.ts`) SHALL include an optional `page?: number` field — a 1-based page to navigate to on initial load, independent of `highlights`/`selectedHighlightId`.
+
+`annotationToPdfCanvasContent` (`libs/chat-hooks/src/files/attachment-canvas.ts`) SHALL set `page` from the clicked annotation's own `body.selector` (single object or array), taking the page of the first entry the PDF selector reader accepts — a `pdf_bbox` or a `pdf_region` selector with an integer `page >= 1` and finite geometry — skipping malformed entries and invalid pages; otherwise `page` is `undefined`. This selection SHALL use the exact annotation the caller passes in (the annotation the user clicked/selected within a grouped citation), never the group's `primaryAnnotation`, and SHALL NOT derive the page from `body.title` or any other display text.
+
+`referenceAttachmentToPdfCanvasContent` (`libs/chat-hooks/src/files/attachment-canvas.ts`) SHALL likewise set `page` to the parsed page fragment when a reference-only PDF URL carries one (e.g. `files/{bucket}/report.pdf#page=81`).
+
+`PdfContent` (`libs/attachment-canvas/src/components/PdfContent/PdfContent.tsx`) SHALL accept a `selectedPageNumber?: number` prop, forward it directly to the vendor `DocumentPreview`'s own `selectedPageNumber` prop, and prefer it over the highlight-bbox lookup when initialising and syncing its internal `selectedPage` state (which also drives the thumbnails panel's scroll position). `AttachmentCanvasBody` SHALL pass `content.page` as this prop when rendering `PdfCanvasContent`.
+
+The mapper SHALL find the group by exact annotation membership, not source URL alone, and include highlights only from that group's annotations for the selected PDF. It SHALL omit a selected highlight ID when no generated highlight matches. Highlight generation SHALL ignore malformed selectors, invalid pages, and non-finite coordinates, while retaining valid zero-area boxes. Download behavior and non-PDF routing SHALL remain unchanged.
+
+The wrapper SHALL NOT schedule its default-page-1 fallback when an explicit page or selected highlight is present. This prevents wrapper-originated resets; asynchronous vendor auto-zoom resets remain a diagnostic investigation, not a verified fix in this change.
+
+**i18n**: none — no new user-visible strings.
+**RTL**: none — no new UI; page navigation is an internal viewer scroll operation.
+**Feature flag**: none.
+
+#### Scenario: Citation with page 1 opens page 1
+
+- **WHEN** the user clicks Preview for a PDF citation whose annotation has a `pdf_bbox` selector with `page: 1`
+- **THEN** the canvas opens with `PdfCanvasContent.page === 1` and the viewer navigates to page 1
+
+#### Scenario: Citation with page 3 opens page 3
+
+- **WHEN** the user clicks Preview for a PDF citation whose annotation has a `pdf_bbox` selector with `page: 3`
+- **THEN** the canvas opens with `PdfCanvasContent.page === 3` and the viewer navigates to page 3
+
+#### Scenario: Citation with a pdf_region selector opens its page and highlights its region
+
+- **WHEN** the user clicks Preview for a PDF citation whose annotation has `{ type: 'pdf_region', page: 1, bbox: { lt: [58.752, 383.328], wh: [492.048, 29.304] } }`
+- **THEN** the canvas opens with `PdfCanvasContent.page === 1`, `highlights` carrying the converted box `{ page: 1, x1: 58.752, y1: 383.328, x2: 550.8, y2: 412.632 }`, and `selectedHighlightId` set to that annotation's highlight, so the viewer scrolls to the cited location
+
+#### Scenario: A previously saved pdf_region message previews correctly on reload
+
+- **GIVEN** a persisted assistant message whose `custom_content.annotations` carry `pdf_region` body selectors with their coordinates present
+- **WHEN** the conversation is reloaded and the user clicks one of its citations
+- **THEN** the preview highlights and page are the same as they would be for the equivalent `pdf_bbox` selectors, with no change to the stored message
+
+#### Scenario: Navigation succeeds with an all-zero bounding box
+
+- **WHEN** the clicked annotation's `pdf_bbox` selector has `x1: 0, y1: 0, x2: 0, y2: 0` and `page: 5`
+- **THEN** `PdfCanvasContent.page` is `5` and the viewer navigates to page 5, even though no visible highlight rectangle is rendered for that annotation
+
+#### Scenario: Valid non-zero bounding boxes still render as highlights
+
+- **WHEN** the clicked annotation's `pdf_bbox` selector has non-zero coordinates
+- **THEN** `PdfCanvasContent.highlights`/`selectedHighlightId` are populated exactly as before, and the highlight renders at its bounding box in addition to the viewer navigating to `page`
+
+#### Scenario: Two citations for the same PDF at different pages open their respective pages
+
+- **WHEN** the user previews one citation with `page: 2` and then, in the same canvas session, a second citation for the same source PDF with `page: 9`
+- **THEN** each preview's `PdfCanvasContent.page` matches its own annotation's page, and the viewer navigates to page 2 then page 9 respectively
+
+#### Scenario: A grouped citation opens the page of the currently selected annotation, not the group's primary annotation
+
+- **WHEN** a citation group contains annotations for pages 2 and 7 of the same PDF, the group's `primaryAnnotation` is the page-2 entry, and the user has switched the popup to the page-7 annotation before clicking Preview
+- **THEN** `annotationToPdfCanvasContent` is called with the page-7 annotation and returns `PdfCanvasContent.page === 7`
+
+#### Scenario: Missing or invalid page data falls back to the existing default
+
+- **WHEN** the clicked annotation has no recognised PDF selector, or every such selector's `page` is missing, non-integer, or less than 1
+- **THEN** `getAnnotationPdfPage` returns `undefined`, `PdfCanvasContent.page` is `undefined`, and the canvas falls back to the existing default behavior (page 1) without throwing
+
+#### Scenario: Reference-only PDF-page reference also navigates independent of highlight geometry
+
+- **WHEN** a reference-only attachment's `reference_url` is `files/{bucket}/report.pdf#page=81`
+- **THEN** `referenceAttachmentToPdfCanvasContent` returns `PdfCanvasContent.page === 81` in addition to its existing zero-area invisible highlight, and the viewer navigates to page 81
+
+#### Scenario: Non-PDF citations and plain PDF previews are unaffected
+
+- **WHEN** an annotation's source attachment is not `application/pdf`, or a PDF is opened directly (not through a citation) with no page data
+- **THEN** `PdfCanvasContent.page` is not set by this requirement's logic, and the existing preview/open behavior for that content type is unchanged
+
+#### Scenario: Malformed entries precede a valid page
+
+- **WHEN** body selectors contain null, a non-positive page, and then a valid `pdf_bbox` with page 7
+- **THEN** page 7 is selected without throwing
+
+#### Scenario: Separate markers share a PDF and a group includes another PDF
+
+- **WHEN** a selected annotation belongs to the second cit group, both groups cite the same PDF, and its group also cites a different PDF
+- **THEN** preview highlights come only from the selected group's matching PDF annotations, and the selected highlight exists when valid geometry is available
+
+#### Scenario: Explicit page without a highlight survives wrapper readiness
+
+- **WHEN** the viewer reports readiness for page 3 with no selected highlight
+- **THEN** the wrapper does not schedule or invoke its page-1 fallback
+
+### Requirement: Office citation preview navigates to and highlights the annotation's cited location
+
+When opening a citation whose source attachment is a DOCX, XLSX, or PPTX file, the attachment canvas SHALL open that document, navigate to the cited location, and mark the clicked annotation's highlight selected — mirroring the PDF requirement above that navigation happens whether or not the cited region is renderable as a visible highlight.
+
+`apps/chat/src/components/ConversationView/ConversationMessageItem.tsx` SHALL extend `handleCitationPreview` with one additional branch, ordered so existing behaviour is unchanged:
+
+1. `annotationToPdfCanvasContent` — unchanged, still first.
+2. **New**: `annotationToOoxmlCanvasContent`, attempted only when the PDF mapper returned `null`. When it returns non-`null`, the canvas opens with that content and the same `fileName` derivation the PDF branch already uses (`attachment.title`, falling back to the decoded last URL segment).
+3. `annotationToDisplayAttachment` + `handleAttachmentClick` — unchanged, still the final fallback, now reached only when neither mapper resolves.
+
+The clicked annotation SHALL be the one whose highlight is selected, never the group's `primaryAnnotation` — the same rule the PDF path already follows when a grouped citation's popup has been switched to another annotation.
+
+The annotation list passed to the Office mapper SHALL be the message's resolved annotation list, not a single `AnnotationGroup`, so annotations citing the same document from behind other `cit` markers are included. Same-source identity SHALL be the source attachment URL, never the display title.
+
+`handleCitationPreview` SHALL remain wrapped in `useCallback`, and its dependency list SHALL be updated to include whatever the new branch reads.
+
+Download behaviour, the citation popup's close-on-Preview behaviour, PDF citation preview, ordinary Office preview opened outside a citation, and CSV preview SHALL all remain unchanged.
+
+A citation whose Office source has no resolvable selector at all (a legacy annotation, or one a backend once stripped) SHALL still open the document with no highlight, rather than falling through to the plain-attachment path — the Office mapper returns non-`null` content whenever the format resolves and a URL resolves, independent of whether any selector produced a highlight.
+
+**i18n**: no new strings at this call site; the two new accessibility strings are declared by the `office-annotation-highlighting` capability and supplied to `AttachmentCanvas` alongside the existing `attachmentCanvas.*` labels.
+**RTL**: none at this call site — no new UI; navigation is an internal viewer scroll operation.
+**Feature flag**: none. The OOXML viewer is not gated behind `ENABLED_FEATURES` or `ENABLED_FEATURES_ROLES`, and this change follows that precedent.
+**Memoisation**: `useCallback` on the handler, `useMemo` on any derived annotation list, matching the existing `citationGroups` memoisation.
+**Telemetry**: none.
+
+#### Scenario: A DOCX citation opens with a selected highlight
+
+- **WHEN** the user clicks Preview on a citation whose source is a `.docx` file with a valid DOCX range selector
+- **THEN** the canvas opens the document, scrolls to the cited page, and that annotation's highlight is rendered selected
+
+#### Scenario: A PPTX citation opens on the cited slide
+
+- **WHEN** the user clicks Preview on a citation with a PPTX range selector for slide 4
+- **THEN** the canvas opens the deck and scrolls to slide 4
+
+#### Scenario: An XLSX citation opens on the cited sheet and cell
+
+- **WHEN** the user clicks Preview on a citation with an `excel_rc_range` selector for sheet `'Q3'`, row 14, column 3
+- **THEN** the canvas opens the workbook, switches to `'Q3'`, scrolls that cell into view, and highlights it
+
+#### Scenario: A grouped Office citation previews the selected annotation, not the primary one
+
+- **WHEN** a citation group holds annotations for pages 2 and 9 of one DOCX, the primary is the page-2 entry, and the user has switched the popup to the page-9 annotation before clicking Preview
+- **THEN** the mapper receives the page-9 annotation and the canvas navigates to page 9 with that highlight selected
+
+#### Scenario: An Office citation with no resolvable selector still opens the document
+
+- **WHEN** the citation's source is a `.pptx` file whose selector is malformed, or absent entirely
+- **THEN** the canvas opens the deck with no highlight, and the plain-attachment fallback is not used
+
+#### Scenario: PDF citations are unaffected
+
+- **WHEN** the user clicks Preview on a PDF citation
+- **THEN** `annotationToPdfCanvasContent` resolves it exactly as before and the Office mapper is never consulted
+
+#### Scenario: A CSV citation falls through to the existing path
+
+- **WHEN** the citation's source is a `.csv` file
+- **THEN** both mappers return `null` and the existing `annotationToDisplayAttachment` fallback handles it as it does today
+
+### Requirement: PDF and code content surfaces provide accessible loading, error, and retry states
+
+The `PdfContent` and `CodeContent` dynamic-import and runtime-preparation paths SHALL each provide a local loading state exposed as `role="status"` with polite live-region behavior, and a local failure state exposed as `role="alert"` distinct from the unrelated `AttachmentContentType.Error` content-fetch failure state. A failure SHALL NOT strand a permanent loading indicator and SHALL NOT propagate to replace the entire canvas or application shell. The failure state SHALL offer a keyboard-accessible, labeled retry control with an approximately 44×44 CSS-pixel touch target on mobile that re-attempts the failed dynamic import or runtime preparation — including re-issuing the underlying module fetch rather than reusing an already-rejected import.
+
+#### Scenario: PDF dynamic import failure shows a retryable error
+
+- **WHEN** the dynamic import backing the PDF preview feature rejects
+- **THEN** the canvas shows a `role="alert"` message with a labeled retry control instead of an indefinite spinner or an uncaught error reaching an ancestor error boundary
+
+#### Scenario: Code syntax-highlighting failure shows a retryable error
+
+- **WHEN** the dynamic import backing syntax highlighting rejects for a non-plaintext language
+- **THEN** the code panel shows a `role="alert"` message with a labeled retry control, without discarding the already-available plain-text content
+
+#### Scenario: Retry re-attempts the failed import
+
+- **WHEN** the user activates the retry control after a dynamic-import or preparation failure
+- **THEN** a new import/preparation attempt is issued, and a subsequent success renders the real PDF or syntax-highlighted content
+
+#### Scenario: Loading state is announced without stealing focus
+
+- **WHEN** the PDF or syntax-highlighting dynamic import is pending
+- **THEN** an accessible polite status announcement reflects the pending state without moving keyboard focus
+
+---
+
+### Requirement: Citation highlight ids identify the annotation, not its position in the clicked group
+
+`libs/quotations/src/utils/annotation.ts` SHALL derive every citation highlight id from the annotation's own identity, so that two different citations of the same document never collapse onto one id. `annotationHighlightId(annotation, fallbackIndex)` and `annotationsToPdfHighlights` SHALL both call one shared internal helper, so the id a highlight carries and the id computed for the clicked annotation are identical by construction.
+
+The id SHALL be resolved in this order:
+
+1. `String(annotation.index)` when the wire supplied an `index` — it is already unique within the message and keeps ids short and stable.
+2. Otherwise an identity-derived id built from the annotation's `target.selector.id` when its selector is `html_tag` (the `cit` id) **and** a digest of the annotation's `body.selector` entries (single object or array), covering the PDF shapes (`pdf_bbox`, `pdf_region`) and the Office shapes (`docx_text_range`, `pptx_text_range`, `excel_rc_range`, `docx_text_anchor`, `pptx_text_anchor`). Two annotations differing in either part SHALL receive different ids; two annotations agreeing in both describe the same cited region and MAY share one.
+3. Otherwise `String(fallbackIndex)` — the annotation's position in the input list, as today.
+
+The id SHALL be an opaque, deterministic string: derived only from the annotation's own fields, stable across re-renders of the same message, never persisted, and never sent over the wire. Callers SHALL NOT parse it or infer a page, an order, or an index from it.
+
+Highlight **scope** is unchanged by this requirement: `annotationToPdfCanvasContent` still passes only the clicked citation group's same-document annotations, and `annotationToOoxmlCanvasContent` still gathers same-source annotations across the message.
+
+**State ownership**: none — pure functions in `libs/quotations`; the canvas's open state stays with `useOpenAttachmentCanvas` / the canvas context.
+**Adapter contract**: none — no host or external knowledge enters `libs/quotations`.
+**i18n**: none — no user-visible strings.
+**RTL**: none — no UI surface; ids are opaque strings.
+**Feature flag**: none — the new formula applies unconditionally.
+**Memoisation**: none beyond existing behavior; the helper is pure and called from the existing mappers, which stay `useCallback`-wrapped at their `apps/chat` call site.
+**Accessibility**: unchanged.
+**Telemetry**: none.
+
+#### Scenario: Two `cit` citations of the same PDF page get different ids
+
+- **WHEN** a message carries two `html_tag` citations with distinct `cit` ids, both citing `files/bucket/report.pdf` with a `pdf_bbox` selector on page 4 — one near the top of the page, one near the bottom — and neither annotation carries an `index`
+- **THEN** `annotationToPdfCanvasContent` returns a different `selectedHighlightId` for each of them
+
+#### Scenario: The clicked annotation's id is present in the highlights it ships with
+
+- **WHEN** any citation is previewed and its annotation yields at least one accepted box
+- **THEN** `selectedHighlightId` equals the `id` of one of the returned `highlights`, and is `undefined` when the clicked annotation yielded no highlight
+
+#### Scenario: A wire-supplied index still wins
+
+- **WHEN** an annotation carries `index: 7`
+- **THEN** its highlight id is `'7'`, both from `annotationsToPdfHighlights` and from `annotationHighlightId`
+
+#### Scenario: Two Office ranges under one `cit` id stay distinct
+
+- **WHEN** two annotations share one `cit` id, cite the same DOCX, and carry different `docx_text_range` selectors, and neither carries an `index`
+- **THEN** `annotationToOoxmlCanvasContent` returns two highlights with different ids, and `selectedHighlightId` names the clicked one
+
+#### Scenario: The id is a stable function of the annotation
+
+- **WHEN** the same annotation object is mapped twice within one message
+- **THEN** both calls produce the same id, and no id is derived from anything outside that annotation's own fields
+
+### Requirement: Selecting another citation on the same PDF page re-navigates the preview
+
+Selecting a different citation of the same PDF while the canvas is already open SHALL bring the newly selected citation into view, including when both citations sit on the **same** page. Because `PdfContent` drives the viewer declaratively — the vendor re-issues `goToHighlight` only when `selectedHighlightId` changes and `setPage` only when `page` changes — the content the canvas is opened with SHALL differ from the previous content in `selectedHighlightId` whenever the reader selected a different citation. A same-page selection SHALL NOT rely on `page` changing.
+
+Re-opening the **same** citation SHALL remain a no-op for navigation: an unchanged `selectedHighlightId` with an unchanged `page` is the existing "nothing to navigate to" case, consistent with the OOXML path's one-shot-per-selection rule.
+
+**i18n**: none.
+**RTL**: none — vertical scrolling of the preview is direction-agnostic.
+**Feature flag**: none.
+**Accessibility**: unchanged — the viewer's own focus and keyboard behavior are untouched.
+
+#### Scenario: Switching between a top-of-page and a bottom-of-page citation scrolls
+
+- **WHEN** the reader previews a citation at the top of page 4 of a PDF whose page is taller than the preview viewport, and then previews a second citation at the bottom of that same page
+- **THEN** the canvas receives content whose `selectedHighlightId` differs from the first, so the viewer navigates to the second citation's bounding box instead of leaving the viewport where it was
+
+#### Scenario: Cross-page navigation keeps working
+
+- **WHEN** the reader switches between two citations on different pages of one PDF
+- **THEN** both `page` and `selectedHighlightId` differ and the viewer navigates to the newly selected citation
+
+#### Scenario: Re-previewing the same citation does not re-navigate
+
+- **WHEN** the reader previews the citation that is already selected in the open canvas
+- **THEN** `selectedHighlightId` and `page` are unchanged and the preview stays where the reader left it

@@ -6,27 +6,28 @@ Defines the BFF layer for DIAL Scheduler scheduled tasks: versioned, feature-gat
 ## Requirements
 ### Requirement: Scheduled Tasks endpoints are versioned, feature-gated, and session-authenticated
 
-The application SHALL expose six business endpoints under `apps/chat-api/src/scheduled-tasks/scheduled-tasks.controller.ts`, all tagged `@ApiTags('scheduled-tasks')` on `@Controller({ path: 'scheduled-tasks', version: '1' })`:
+The application SHALL expose seven business endpoints under `apps/chat-api/src/scheduled-tasks/scheduled-tasks.controller.ts`, all tagged `@ApiTags('scheduled-tasks')` on `@Controller({ path: 'scheduled-tasks', version: '1' })`:
 
 - `GET /api/v1/scheduled-tasks` — `operationId: listScheduledTasks`
 - `POST /api/v1/scheduled-tasks` — `operationId: createScheduledTask`
 - `GET /api/v1/scheduled-tasks/:scheduleId` — `operationId: getScheduledTask`
 - `PUT /api/v1/scheduled-tasks/:scheduleId` — `operationId: updateScheduledTask`
+- `DELETE /api/v1/scheduled-tasks/:scheduleId` — `operationId: deleteScheduledTask`
 - `POST /api/v1/scheduled-tasks/:scheduleId/pause` — `operationId: pauseScheduledTask`
 - `POST /api/v1/scheduled-tasks/:scheduleId/resume` — `operationId: resumeScheduledTask`
 
-Every route MUST be `@UseGuards(FeatureGuard)` + `@RequireFeature(FeatureKey.ScheduledTasksEnabled)`, and MUST read the session `sub`/`at` from `req.user as SessionUser` — never accept a caller-supplied user id or token. Each route MUST carry `@Throttle` and full `@ApiResponse` coverage for every status it can return (200/201 as applicable, 400, 401, 403, 404 for get/update/pause/resume, 429, 502, 503; 409 additionally for pause/resume, see below).
+Every route MUST be `@UseGuards(FeatureGuard)` + `@RequireFeature(FeatureKey.ScheduledTasksEnabled)`, and MUST read the session `sub`/`at` from `req.user as SessionUser` — never accept a caller-supplied user id or token. Each route MUST provide full `@ApiResponse` coverage for every status it can return (200/201/204 as applicable, 400, 401, 403, 404 for get/update/delete/pause/resume, 429, 502, 503; 409 additionally for delete/pause/resume, see below).
 
-Frontend impact: all six operations are exposed on the regenerated `@epam/chat-api-client` (`ScheduledTasksApi`), consumed through `apps/chat/src/server-api/scheduled-tasks.api.ts` thin wrappers and the existing `scheduledTasksApi` singleton in `apps/chat/src/server-api/api-client.ts`, using normal (non-`Raw`) generated methods since no response requires header/status inspection beyond what the client library exposes. The create form calls `createScheduledTask` on submit; the list page calls `listScheduledTasks` on mount and refetch. `getScheduledTask` and `updateScheduledTask` are available for follow-up edit/detail flows. `pauseScheduledTask`/`resumeScheduledTask` are wired to the detail-page header's Active switch.
+Frontend impact: all seven operations are exposed on the regenerated `@epam/chat-api-client` (`ScheduledTasksApi`), consumed through `apps/chat/src/server-api/scheduled-tasks.api.ts` thin wrappers and the existing `scheduledTasksApi` singleton in `apps/chat/src/server-api/api-client.ts`, using normal (non-`Raw`) generated methods since no response requires header/status inspection beyond what the client library exposes. The create form calls `createScheduledTask` on submit; the list page calls `listScheduledTasks` on mount and refetch. `getScheduledTask` and `updateScheduledTask` are available for follow-up edit/detail flows. `pauseScheduledTask`/`resumeScheduledTask` are wired to the detail-page header's Active switch. `deleteScheduledTask` is wired to the detail-page header's Delete action and its confirmation dialog.
 
 #### Scenario: Feature disabled rejects every route
 
-- **WHEN** `features.scheduledTasksEnabled` resolves to `false` for the session user and any of the six routes is called
+- **WHEN** `features.scheduledTasksEnabled` resolves to `false` for the session user and any of the seven routes is called
 - **THEN** the response is `403 Forbidden` and the DIAL Scheduler is never contacted
 
 #### Scenario: Unauthenticated request is rejected
 
-- **WHEN** a request to any of the six routes has no valid session cookie
+- **WHEN** a request to any of the seven routes has no valid session cookie
 - **THEN** the response is `401 Unauthorized`
 
 ### Requirement: List scheduled tasks
@@ -247,11 +248,11 @@ and a top-level `description` field (mapped 1:1, never merged into `properties` 
 
 ### Requirement: List scheduled task runs
 
-`GET /api/v1/scheduled-tasks/:scheduleId/runs` SHALL be added to `apps/chat-api/src/scheduled-tasks/scheduled-tasks.controller.ts` under `@Controller({ path: 'scheduled-tasks', version: '1' })`, with `operationId: listScheduledTaskRuns`. It SHALL validate `scheduleId` against the same allowlist `^[A-Za-z0-9_-]{1,128}$` via `@Matches` before use, be `@UseGuards(FeatureGuard)` + `@RequireFeature(FeatureKey.ScheduledTasksEnabled)`, read the session `sub`/`at` from `req.user as SessionUser`, carry `@Throttle`, and provide full `@ApiResponse` coverage for 200, 400, 401, 403, 404, 429, 502, and 503.
+`GET /api/v1/scheduled-tasks/:scheduleId/runs` SHALL be added to `apps/chat-api/src/scheduled-tasks/scheduled-tasks.controller.ts` under `@Controller({ path: 'scheduled-tasks', version: '1' })`, with `operationId: listScheduledTaskRuns`. It SHALL validate `scheduleId` against the same allowlist `^[A-Za-z0-9_-]{1,128}$` via `@Matches` before use, be `@UseGuards(FeatureGuard)` + `@RequireFeature(FeatureKey.ScheduledTasksEnabled)`, read the session `sub`/`at` from `req.user as SessionUser`, and provide full `@ApiResponse` coverage for 200, 400, 401, 403, 404, 429, 502, and 503.
 
 The endpoint SHALL accept `limit` (`@IsOptional() @IsInt() @Min(1) @Max(100)`, default `20`) and `offset` (`@IsOptional() @IsInt() @Min(0)`, default `0`) query parameters, validated via a `ListScheduledTaskRunsQueryDto` under the global `ValidationPipe`. It SHALL proxy `GET {DIAL_CORE_URL}/v1/deployments/applications/{SCHEDULER_APP_ID}/route/v1/schedules/{scheduleId}/runs`, forwarding `limit`/`offset`, and SHALL always additionally send explicit `order_by=created_at&order_dir=desc` query parameters upstream — the BFF never relies on upstream's own default ordering, mirroring the same "always-explicit-default" decision already made for `listScheduledTasks`. This endpoint is NOT cached, since run status transitions (`in_progress` → `success`/`error`) must be observable immediately.
 
-The upstream response is a paginated envelope (`{ count, limit, offset, results, next, previous }`); the service SHALL read runs from the `results` field, using the same envelope-unwrapping helper pattern already used by `listScheduledTasks`. Each upstream run (`{ id, status, start_time, end_time }`) SHALL be mapped to camelCase `ScheduledTaskRunDto`:
+The upstream response is a paginated envelope (`{ count, limit, offset, results, next, previous }`); the service SHALL read runs from the `results` field, using the same envelope-unwrapping helper pattern already used by `listScheduledTasks`. Each upstream run (`{ id, status, start_time, end_time, conversation_id }`) SHALL be mapped to camelCase `ScheduledTaskRunDto`:
 
 ```ts
 interface ScheduledTaskRunDto {
@@ -260,10 +261,11 @@ interface ScheduledTaskRunDto {
   startTime: string; // ISO-8601, from upstream start_time
   endTime?: string | null; // from upstream end_time; null/omitted while in_progress
   durationSeconds?: number; // derived from startTime/endTime when both are present
+  conversationId?: string; // from upstream conversation_id; absent/null when the run produced no conversation
 }
 ```
 
-with upstream `status` values mapped `success → Success`, `error → Error`, `in_progress → InProgress`, `missed → Missed`. The response DTO `ListScheduledTaskRunsResponseDto` SHALL be:
+with upstream `status` values mapped `success → Success`, `error → Error`, `in_progress → InProgress`, `missed → Missed`, and upstream `conversation_id` mapped to `conversationId` via `fromUpstreamRun`, normalizing an absent or `null` upstream value to `undefined` on the DTO (never an empty string, never a fabricated value). The response DTO `ListScheduledTaskRunsResponseDto` SHALL be:
 
 ```ts
 interface ListScheduledTaskRunsResponseDto {
@@ -286,7 +288,8 @@ Example request: `GET /api/v1/scheduled-tasks/sched_123/runs?limit=20&offset=40`
       "status": "Success",
       "startTime": "2026-07-24T09:00:00.000Z",
       "endTime": "2026-07-24T09:01:39.000Z",
-      "durationSeconds": 99
+      "durationSeconds": 99,
+      "conversationId": "conversations/6By4GofuFvWFzB2WZRdmGvG9Qa9heuo4E1DkiZPaeT7ApzUK2tUfMBNX6LZDG3beNY/.scheduler/57ef4647-eadf-4b84-ab60-43e366ced72e/dial-chathub-v2-gemini-3.5-flash__123123123123123__6f6ec619-7fd3-4908-9588-aeb950dcef8d"
     }
   ],
   "count": 242,
@@ -299,7 +302,7 @@ Example request: `GET /api/v1/scheduled-tasks/sched_123/runs?limit=20&offset=40`
 
 `GET .../runs/{runId}` single-run detail is out of scope for this endpoint.
 
-**Frontend impact:** exposed on the regenerated `@epam/chat-api-client` as `listScheduledTaskRuns`, consumed through a thin wrapper in `apps/chat/src/server-api/scheduled-tasks.api.ts`, using the normal (non-`Raw`) generated method. Consumed by `useScheduledTaskRuns` for the detail page's History panel.
+**Frontend impact:** exposed on the regenerated `@epam/chat-api-client` as `listScheduledTaskRuns`, consumed through a thin wrapper in `apps/chat/src/server-api/scheduled-tasks.api.ts`, using the normal (non-`Raw`) generated method. Consumed by `useScheduledTaskRuns` for the detail page's History panel, which now also drives per-row navigation via `ScheduledTaskRunItem.conversationId`.
 
 #### Scenario: Feature disabled rejects the route
 
@@ -355,6 +358,21 @@ Example request: `GET /api/v1/scheduled-tasks/sched_123/runs?limit=20&offset=40`
 
 - **WHEN** an upstream run has `status: "in_progress"` and `end_time: null`
 - **THEN** the mapped `ScheduledTaskRunDto.endTime` is `null`/`undefined` and `durationSeconds` is `undefined`, and mapping does not throw
+
+#### Scenario: conversation_id present maps to conversationId
+
+- **WHEN** an upstream run includes `conversation_id: "conversations/bucket/.scheduler/sched_123/run_9f2a"`
+- **THEN** the mapped `ScheduledTaskRunDto.conversationId` equals that exact string
+
+#### Scenario: Missing conversation_id does not throw
+
+- **WHEN** an upstream run omits `conversation_id` entirely
+- **THEN** the mapped `ScheduledTaskRunDto.conversationId` is `undefined`, and mapping does not throw
+
+#### Scenario: Null conversation_id normalizes to undefined
+
+- **WHEN** an upstream run includes `conversation_id: null`
+- **THEN** the mapped `ScheduledTaskRunDto.conversationId` is `undefined`, not `null` and not an empty string
 
 #### Scenario: Response is never cached
 
@@ -453,11 +471,6 @@ Example request: `GET /api/v1/scheduled-tasks/sched_123/runs?limit=20&offset=40`
 - **WHEN** the upstream pause action succeeds but the BFF's follow-up `GET` for the same schedule fails
 - **THEN** the endpoint still returns `200 OK` with `isActive: false` and still invalidates the list cache, rather than returning an error or `isActive: true`
 
-#### Scenario: Rate limit exceeded
-
-- **WHEN** a user exceeds the configured pause/resume rate limit
-- **THEN** the response is `429 Too Many Requests`
-
 #### Scenario: Upstream error maps to 502/503
 
 - **WHEN** DIAL Core returns a 5xx or is unreachable while pausing
@@ -507,15 +520,90 @@ Example request: `GET /api/v1/scheduled-tasks/sched_123/runs?limit=20&offset=40`
 - **WHEN** the upstream resume action succeeds but the BFF's follow-up `GET` for the same schedule fails
 - **THEN** the endpoint still returns `200 OK` with `isActive: true` and still invalidates the list cache, rather than returning an error or `isActive: false`
 
-#### Scenario: Rate limit exceeded
-
-- **WHEN** a user exceeds the configured pause/resume rate limit
-- **THEN** the response is `429 Too Many Requests`
-
 #### Scenario: Upstream error maps to 502/503
 
 - **WHEN** DIAL Core returns a 5xx or is unreachable while resuming
 - **THEN** the endpoint returns `502 Bad Gateway` or `503 Service Unavailable`, never a raw upstream body
+
+### Requirement: Scheduled task deleted state field
+
+`ScheduledTaskDto` SHALL include an optional `isDeleted: boolean` field, computed in `fromUpstreamSchedule` (`apps/chat-api/src/scheduled-tasks/scheduled-tasks.mapper.ts`) as `upstream.is_deleted ?? false`, where `is_deleted` is an explicit boolean field on the upstream schedule response (list, create, update, and get) per the DIAL Scheduler contract — this field MUST be read directly, never derived from `next_run_time`, `trigger`, or any other field that already carries a distinct meaning (a `null` `next_run_time` means paused/exhausted, not deleted). `isDeleted` is additive to the existing `id`/`displayName`/`trigger`/`isActive`/etc. fields and MUST NOT be required, mapping MUST NOT throw when `is_deleted` is absent from an upstream response, and mapping MUST default to `false` in that case (never `undefined`, since deletion is a definite yes/no once modeled, unlike `isActive`'s documented "no basis to decide" case).
+
+#### Scenario: Upstream is_deleted true maps to isDeleted true
+
+- **WHEN** an upstream schedule response includes `is_deleted: true`
+- **THEN** the mapped `ScheduledTaskDto.isDeleted` is `true`
+
+#### Scenario: Upstream is_deleted false maps to isDeleted false
+
+- **WHEN** an upstream schedule response includes `is_deleted: false`
+- **THEN** the mapped `ScheduledTaskDto.isDeleted` is `false`
+
+#### Scenario: Missing is_deleted defaults to false without throwing
+
+- **WHEN** an upstream schedule response omits `is_deleted` entirely
+- **THEN** the mapped `ScheduledTaskDto.isDeleted` is `false`, and mapping does not throw
+
+#### Scenario: Soft-deleted schedule remains readable with null next_run_time
+
+- **WHEN** `GET /api/v1/scheduled-tasks/:scheduleId` proxies an upstream response with `is_deleted: true` and `next_run_time: null`
+- **THEN** the endpoint returns `200 OK` with `ScheduledTaskDto.isDeleted: true` and `nextRunTime: undefined`, not a `404`
+
+### Requirement: Delete a scheduled task
+
+`DELETE /api/v1/scheduled-tasks/:scheduleId` SHALL validate `scheduleId` against the existing allowlist `^[A-Za-z0-9_-]{1,128}$` (reusing `GetScheduledTaskDto`) before use, take no request body and no query parameters, and proxy `DELETE {DIAL_CORE_URL}/v1/deployments/applications/{SCHEDULER_APP_ID}/route/v1/schedules/{scheduleId}` using the session bearer token via a dedicated `deleteScheduledTask` method on `ScheduledTasksService` (not the `performScheduleAction`/`ScheduleAction` helper used by pause/resume, since delete uses a different HTTP verb and returns no body to re-fetch). Creator isolation SHALL be delegated entirely to the upstream endpoint's own `created_by` scoping — the BFF SHALL NOT perform its own ownership check beyond what upstream already enforces via the session's access token. The BFF SHALL NOT attempt to predict or request a hard vs. soft deletion outcome; it SHALL treat both outcomes identically as a successful deletion.
+
+On a successful upstream `204 No Content`, the endpoint SHALL respond `204 No Content` with an empty body (`@HttpCode(HttpStatus.NO_CONTENT)`), SHALL NOT attempt to parse a JSON body from the upstream response, and SHALL invalidate the caller's scheduled-tasks list cache using the existing `invalidateListCache(userSub)` epoch-bump helper before responding. The response SHALL carry cache-preventing headers consistent with the controller's other mutation endpoints (no caching of a delete response). Upstream errors SHALL map through the existing `mapDialHttpStatus`/`handleDialFetchError` mechanism without exposing the upstream's bare-JSON-string error body: a `404` (unknown schedule, another user's schedule, or an already hard-deleted schedule) maps to `404 Not Found`; a `409` (already soft-deleted) maps to `409 Conflict`; a `502` (scheduler could not unregister the job; no DB change occurred, the task remains live, and retrying is safe) maps to `502 Bad Gateway`; upstream timeout or unavailability maps to `503 Service Unavailable`.
+
+#### Scenario: Valid delete request succeeds with an empty 204 body
+
+- **WHEN** an authenticated request deletes a schedule the caller owns and DIAL Scheduler responds successfully (hard or soft delete)
+- **THEN** the upstream request is `DELETE {DIAL_CORE_URL}/v1/deployments/applications/{SCHEDULER_APP_ID}/route/v1/schedules/{scheduleId}`, no request body is sent, and the endpoint responds `204 No Content` with an empty body
+
+#### Scenario: Invalid scheduleId is rejected before any upstream call
+
+- **WHEN** `scheduleId` contains characters outside `[A-Za-z0-9_-]` (e.g. a path-traversal payload)
+- **THEN** the response is `400 Bad Request` and DIAL Core is never contacted
+
+#### Scenario: Unauthenticated request is rejected
+
+- **WHEN** a delete request has no valid session cookie
+- **THEN** the response is `401 Unauthorized`
+
+#### Scenario: Feature disabled rejects the request
+
+- **WHEN** `features.scheduledTasksEnabled` resolves to `false` for the session user
+- **THEN** the response is `403 Forbidden` and DIAL Scheduler is never contacted
+
+#### Scenario: Unknown, foreign, or already hard-deleted schedule returns 404
+
+- **WHEN** DIAL Scheduler returns 404 for the given `scheduleId` (unknown id, another user's schedule, or already hard-deleted)
+- **THEN** the response is `404 Not Found` and the upstream's bare-string error body is not echoed to the client
+
+#### Scenario: Already soft-deleted schedule returns 409
+
+- **WHEN** DIAL Scheduler returns 409 because the schedule is already soft-deleted
+- **THEN** the response is `409 Conflict` and the upstream's bare-string error body is not echoed to the client
+
+#### Scenario: Scheduler unregistration failure returns 502 and does not invalidate the cache
+
+- **WHEN** DIAL Scheduler returns 502 because it could not unregister the job
+- **THEN** the response is `502 Bad Gateway`, the list cache is NOT invalidated, and no partial deletion state is created
+
+#### Scenario: Upstream timeout or unavailability returns 503
+
+- **WHEN** the upstream call times out or DIAL Core is unavailable
+- **THEN** the response is `503 Service Unavailable`
+
+#### Scenario: Successful delete invalidates the list cache
+
+- **WHEN** a delete request succeeds with `204`
+- **THEN** `invalidateListCache(userSub)` is called before the response is sent, so a subsequent `listScheduledTasks` call does not return the deleted schedule from a stale cache entry
+
+#### Scenario: Delete response is never cached
+
+- **WHEN** any delete request completes, successfully or not
+- **THEN** the response carries the same no-store cache-prevention treatment as the controller's other mutation endpoints, and no cache entry is created for the delete response itself
 
 ### Requirement: Scheduled task description field
 

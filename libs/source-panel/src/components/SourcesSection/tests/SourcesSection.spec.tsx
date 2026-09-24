@@ -1,15 +1,33 @@
 import { render, screen } from '@testing-library/react';
+import { MouseEventHandler, ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { QuotationSource } from '../../../models/quotation-source';
 import SourcesSection from '../SourcesSection';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16 },
   ElementSize: { Small: 'small' },
   mergeClasses: (...classes: (string | undefined)[]) =>
     classes.filter(Boolean).join(' '),
   GhostIconButton: ({ 'aria-label': ariaLabel }: { 'aria-label': string }) => (
     <button type="button" aria-label={ariaLabel} />
+  ),
+  Highlight: ({ text }: { text: string }) => <span>{text}</span>,
+  LinkButton: ({
+    href,
+    target,
+    label,
+    onClick,
+  }: {
+    href?: string;
+    target?: string;
+    label?: ReactNode;
+    onClick?: MouseEventHandler<HTMLAnchorElement>;
+  }) => (
+    <a href={href} target={target} onClick={onClick}>
+      {label}
+    </a>
   ),
 }));
 

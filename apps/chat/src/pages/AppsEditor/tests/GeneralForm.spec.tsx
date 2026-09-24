@@ -8,6 +8,7 @@ import {
   EditorI18nKeys,
 } from '../../../constants/translation-keys';
 import { createApplication } from '../../../server-api/applications';
+import { PRIMARY_LOCALE } from '../../../utils/locale';
 import type { GeneralFormHandle } from '../GeneralForm';
 import GeneralForm from '../GeneralForm';
 
@@ -15,9 +16,20 @@ vi.mock('../../../server-api/applications', () => ({
   createApplication: vi.fn(),
 }));
 
-vi.mock('@epam/ai-dial-kit', () => ({
-  TagInput: ({ label }: { label?: string }) => <span>{label}</span>,
+vi.mock('../../../context/auth/UserContext', () => ({
+  useUser: () => ({
+    user: { bucket: 'bucket' },
+  }),
 }));
+
+vi.mock('@epam/ai-dial-builder-form', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-builder-form')>();
+  return {
+    ...actual,
+    AvatarPickerModal: () => null,
+  };
+});
 
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
@@ -108,7 +120,7 @@ describe('GeneralForm', () => {
     vi.clearAllMocks();
   });
 
-  it('renders name, description, and icon URL fields', () => {
+  it('renders name, description, and avatar fields', () => {
     renderForm();
     expect(
       screen.getByLabelText(`${EditorI18nKeys.NameLabel} [EN]`),
@@ -116,7 +128,12 @@ describe('GeneralForm', () => {
     expect(
       screen.getByLabelText(`${EditorI18nKeys.DescriptionLabel} [EN]`),
     ).toBeTruthy();
-    expect(screen.getByLabelText(EditorI18nKeys.IconUrlLabel)).toBeTruthy();
+    expect(screen.getByText(EditorI18nKeys.AvatarLabel)).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: EditorI18nKeys.AddAvatarButtonLabel,
+      }),
+    ).toBeTruthy();
   });
 
   it('shows required error and does not call API when name is empty', async () => {
@@ -299,6 +316,8 @@ describe('GeneralForm', () => {
         description: undefined,
         iconUrl: undefined,
         topics: ['a', 'b'],
+        locales: undefined,
+        primaryLocale: undefined,
       });
     });
 
@@ -326,7 +345,44 @@ describe('GeneralForm', () => {
         display_version: '1.0.0',
         iconUrl: undefined,
         topics: undefined,
+        locales: undefined,
+        primaryLocale: undefined,
       });
+    });
+
+    it('includes locales and primaryLocale when additional locales are configured', () => {
+      const ref = createRef<GeneralFormHandle>();
+
+      renderForm(
+        {
+          appId: 'users/u/apps/existing',
+          initialValues: {
+            name: 'My App',
+            otherLocales: [
+              {
+                id: 'row-1',
+                language: 'de',
+                name: 'Meine App',
+                description: 'Meine Beschreibung',
+              },
+            ],
+          },
+        },
+        ref,
+      );
+
+      expect(ref.current?.getValues()).toEqual(
+        expect.objectContaining({
+          locales: [
+            {
+              language: 'de',
+              name: 'Meine App',
+              description: 'Meine Beschreibung',
+            },
+          ],
+          primaryLocale: PRIMARY_LOCALE,
+        }),
+      );
     });
   });
 

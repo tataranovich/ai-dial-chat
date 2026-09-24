@@ -27,17 +27,21 @@ const makeSingleDownloadSpy = (
   service: UserConfigService,
   options: { ok: boolean; body?: string },
 ) =>
-  vi.spyOn(service['dialClient'].client, 'downloadFile').mockResolvedValue({
-    response: {
-      ok: options.ok,
-      text: async () => options.body ?? '',
-    },
-  } as never);
+  vi
+    .spyOn((service['dialClient'] as DialClientService).client, 'downloadFile')
+    .mockResolvedValue({
+      response: {
+        ok: options.ok,
+        text: async () => options.body ?? '',
+      },
+    } as never);
 
 const makeUploadSpy = (service: UserConfigService) =>
-  vi.spyOn(service['dialClient'].client, 'uploadFile').mockResolvedValue({
-    response: { status: 200, text: async () => '' },
-  } as never);
+  vi
+    .spyOn((service['dialClient'] as DialClientService).client, 'uploadFile')
+    .mockResolvedValue({
+      response: { status: 200, text: async () => '' },
+    } as never);
 
 const getUploadedConfigAt = async (
   uploadSpy: ReturnType<typeof vi.spyOn>,
@@ -52,6 +56,8 @@ const getUploadedConfigAt = async (
 
 const v3Config = (overrides?: Partial<UserConfig>): UserConfig => ({
   version: 3,
+  prompts: { installed: [] },
+  skills: { installed: [] },
   conversations: { pinnedIds: [] },
   toolsets: { installed: [] },
   deployments: { installed: [], selectedId: null },
@@ -77,6 +83,7 @@ describe('UserConfigController (integration)', () => {
     updateInstalledToolset: ReturnType<typeof vi.fn>;
     updateInstalledDeployment: ReturnType<typeof vi.fn>;
     updateInstalledPrompt: ReturnType<typeof vi.fn>;
+    updateInstalledSkill: ReturnType<typeof vi.fn>;
     updateSelectedDeployment: ReturnType<typeof vi.fn>;
   };
 
@@ -87,6 +94,7 @@ describe('UserConfigController (integration)', () => {
       updateInstalledToolset: vi.fn(),
       updateInstalledDeployment: vi.fn(),
       updateInstalledPrompt: vi.fn(),
+      updateInstalledSkill: vi.fn(),
       updateSelectedDeployment: vi.fn(),
     };
 
@@ -319,16 +327,19 @@ describe('UserConfigController (integration)', () => {
   });
 
   describe('PATCH /user-config/prompts', () => {
-    it('returns 204 and forwards a nested prompt path containing spaces', async () => {
+    it('returns 204 and forwards a full prompt resource id containing spaces', async () => {
       service.updateInstalledPrompt.mockResolvedValue(undefined);
 
       await request(app.getHttpServer())
         .patch('/user-config/prompts')
-        .send({ id: 'Work/AI/tone of voice', isInstalled: true })
+        .send({
+          id: 'prompts/test-bucket/Work/AI/tone of voice',
+          isInstalled: true,
+        })
         .expect(204);
 
       expect(service.updateInstalledPrompt).toHaveBeenCalledWith(
-        'Work/AI/tone of voice',
+        'prompts/test-bucket/Work/AI/tone of voice',
         true,
         TEST_USER.at,
         TEST_USER.bucket,
@@ -340,11 +351,11 @@ describe('UserConfigController (integration)', () => {
 
       await request(app.getHttpServer())
         .patch('/user-config/prompts')
-        .send({ id: 'summarize', isInstalled: false })
+        .send({ id: 'prompts/test-bucket/summarize', isInstalled: false })
         .expect(204);
 
       expect(service.updateInstalledPrompt).toHaveBeenCalledWith(
-        'summarize',
+        'prompts/test-bucket/summarize',
         false,
         TEST_USER.at,
         TEST_USER.bucket,
@@ -354,7 +365,34 @@ describe('UserConfigController (integration)', () => {
     it('returns 400 for a traversal path', async () => {
       await request(app.getHttpServer())
         .patch('/user-config/prompts')
-        .send({ id: '../other-bucket/secret', isInstalled: true })
+        .send({ id: 'prompts/test-bucket/../secret', isInstalled: true })
+        .expect(400);
+
+      expect(service.updateInstalledPrompt).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a traversal segment used as the bucket itself', async () => {
+      await request(app.getHttpServer())
+        .patch('/user-config/prompts')
+        .send({ id: 'prompts/../secret', isInstalled: true })
+        .expect(400);
+
+      expect(service.updateInstalledPrompt).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a bucket-relative prompt path with no prefix', async () => {
+      await request(app.getHttpServer())
+        .patch('/user-config/prompts')
+        .send({ id: 'summarize', isInstalled: true })
+        .expect(400);
+
+      expect(service.updateInstalledPrompt).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a non-prompt resource id', async () => {
+      await request(app.getHttpServer())
+        .patch('/user-config/prompts')
+        .send({ id: 'skills/test-bucket/summarize', isInstalled: true })
         .expect(400);
 
       expect(service.updateInstalledPrompt).not.toHaveBeenCalled();
@@ -370,7 +408,84 @@ describe('UserConfigController (integration)', () => {
     it('returns 400 when isInstalled is not a boolean', async () => {
       await request(app.getHttpServer())
         .patch('/user-config/prompts')
-        .send({ id: 'summarize', isInstalled: 'yes' })
+        .send({ id: 'prompts/test-bucket/summarize', isInstalled: 'yes' })
+        .expect(400);
+    });
+  });
+
+  describe('PATCH /user-config/skills', () => {
+    const SKILL_URL = 'skills/my-bucket/analysis/revenue skill';
+
+    it('returns 204 and forwards a nested skill resource URL containing spaces', async () => {
+      service.updateInstalledSkill.mockResolvedValue(undefined);
+
+      await request(app.getHttpServer())
+        .patch('/user-config/skills')
+        .send({ id: SKILL_URL, isInstalled: true })
+        .expect(204);
+
+      expect(service.updateInstalledSkill).toHaveBeenCalledWith(
+        SKILL_URL,
+        true,
+        TEST_USER.at,
+        TEST_USER.bucket,
+      );
+    });
+
+    it('returns 204 for an unfavorite request', async () => {
+      service.updateInstalledSkill.mockResolvedValue(undefined);
+
+      await request(app.getHttpServer())
+        .patch('/user-config/skills')
+        .send({ id: 'skills/my-bucket/revenue-skill', isInstalled: false })
+        .expect(204);
+
+      expect(service.updateInstalledSkill).toHaveBeenCalledWith(
+        'skills/my-bucket/revenue-skill',
+        false,
+        TEST_USER.at,
+        TEST_USER.bucket,
+      );
+    });
+
+    it('returns 400 for a traversal segment', async () => {
+      await request(app.getHttpServer())
+        .patch('/user-config/skills')
+        .send({ id: 'skills/my-bucket/../secret', isInstalled: true })
+        .expect(400);
+
+      expect(service.updateInstalledSkill).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a non-skill resource URL', async () => {
+      await request(app.getHttpServer())
+        .patch('/user-config/skills')
+        .send({ id: 'files/my-bucket/report.pdf', isInstalled: true })
+        .expect(400);
+
+      expect(service.updateInstalledSkill).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a bucket-relative path with no bucket segment', async () => {
+      await request(app.getHttpServer())
+        .patch('/user-config/skills')
+        .send({ id: 'skills/my-bucket', isInstalled: true })
+        .expect(400);
+
+      expect(service.updateInstalledSkill).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when id is missing', async () => {
+      await request(app.getHttpServer())
+        .patch('/user-config/skills')
+        .send({ isInstalled: true })
+        .expect(400);
+    });
+
+    it('returns 400 when isInstalled is not a boolean', async () => {
+      await request(app.getHttpServer())
+        .patch('/user-config/skills')
+        .send({ id: 'skills/my-bucket/revenue-skill', isInstalled: 'yes' })
         .expect(400);
     });
   });

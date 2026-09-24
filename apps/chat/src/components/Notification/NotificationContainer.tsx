@@ -1,5 +1,6 @@
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   GhostIconButton,
   Notification,
 } from '@epam/ai-dial-ui-kit';
@@ -59,7 +60,7 @@ const RequestIdRow: FC<RequestIdRowProps> = ({ requestId }) => {
   }
 
   return (
-    <div className="mt-1 flex min-w-0 items-center gap-1 text-xs">
+    <div className="dial-tiny-text mt-1 flex min-w-0 items-center gap-1">
       <span className="text-start">
         {t(NotificationI18nKeys.RequestIdLabel)}:
       </span>
@@ -67,7 +68,13 @@ const RequestIdRow: FC<RequestIdRowProps> = ({ requestId }) => {
         {requestId}
       </span>
       <GhostIconButton
-        icon={<IconCopy size={DIAL_ICON_SIZE.SM} aria-hidden />}
+        icon={
+          <IconCopy
+            size={DIAL_ICON_SIZE.SM}
+            aria-hidden
+            stroke={DIAL_KIT_ICON_STROKE}
+          />
+        }
         aria-label={t(NotificationI18nKeys.RequestIdCopyAriaLabel)}
         onClick={() => void handleCopy()}
       />
@@ -95,15 +102,21 @@ const NotificationEntry: FC<NotificationEntryProps> = memo(
       return () => clearTimeout(timer);
     }, [item.id, item.requestId, onDismiss]);
 
-    const composedMessage = useMemo(() => {
-      if (!item.requestId) return item.message;
-      return (
+    /*
+     * The kit caps a toast's width at 600px but lets it grow to any height, so
+     * a message listing many names used to cover the chat behind it. Scroll the
+     * message instead of letting the toast grow; the Request ID row stays
+     * outside so it cannot be scrolled out of reach.
+     */
+    const composedMessage = useMemo(
+      () => (
         <>
-          {item.message}
-          <RequestIdRow requestId={item.requestId} />
+          <div className="max-h-[30vh] overflow-y-auto">{item.message}</div>
+          {item.requestId && <RequestIdRow requestId={item.requestId} />}
         </>
-      );
-    }, [item.message, item.requestId]);
+      ),
+      [item.message, item.requestId],
+    );
 
     return (
       <Notification
@@ -122,8 +135,13 @@ const NotificationContainer: FC = () => {
 
   if (!notifications.length) return null;
 
+  /*
+   * `left-1/2 -translate-x-1/2` centers the stack and is direction-agnostic.
+   * The stack scrolls once enough toasts pile up to reach the bottom of the
+   * viewport, so the last one is never pushed off-screen.
+   */
   return createPortal(
-    <div className="fixed left-1/2 top-6 z-[70] flex -translate-x-1/2 flex-col gap-2">
+    <div className="fixed left-1/2 top-6 z-[70] flex max-h-[calc(100dvh-3rem)] -translate-x-1/2 flex-col gap-2 overflow-y-auto">
       {notifications.map((item) => (
         <NotificationEntry
           key={item.id}

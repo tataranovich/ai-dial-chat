@@ -1,12 +1,16 @@
-import { useCallback } from 'react';
 import {
+  buildExternalServiceScopeId,
+  navigateToolsetOAuthPopup,
   OAuthResourceKind,
+  openToolsetOAuthPopup,
   ToolsetAuthTypes,
   ToolsetCredentialsLevel,
   ToolsetOAuthInitiationResultType,
   ToolsetOAuthResultType,
+  waitForToolsetOAuthResult,
   WithLogin,
-} from '../../constants/toolsets';
+} from '@epam/ai-dial-chat-hooks';
+import { useCallback } from 'react';
 import {
   ExternalServiceAuthType,
   ExternalServiceCredentialsLevel,
@@ -14,12 +18,12 @@ import {
   signInExternalService,
   signOutExternalService,
 } from '../../server-api/external-services';
-import { buildExternalServiceScopeId } from '../../utils/external-services';
+import { getOfflineCredentials } from '../../server-api/offline-credentials';
+import { ROUTES } from '../../types/routes';
 import {
-  navigateToolsetOAuthPopup,
-  openToolsetOAuthPopup,
-  waitForToolsetOAuthResult,
-} from '../../utils/toolsets';
+  OfflineCredentialsLoginOutcomeType,
+  useOfflineCredentialsLogin,
+} from '../offlineCredentials/useOfflineCredentialsLogin';
 
 /** OAuth client settings needed to build the authorize URL — a subset of an external service's `auth_settings`. */
 export interface ExternalServiceOAuthSettings {
@@ -35,6 +39,8 @@ export enum ExternalServiceLoginOutcomeType {
   Failure = 'failure',
   PopupBlocked = 'popup-blocked',
   Cancelled = 'cancelled',
+  AdminConsentRequired = 'admin-consent-required',
+  OfflineUnavailable = 'offline-unavailable',
 }
 
 export type ExternalServiceLoginOutcome = {
@@ -53,7 +59,14 @@ export interface ExternalServiceLoginParams {
   /** Required for `ExternalServiceAuthType.OAuth`. */
   oauthSettings?: ExternalServiceOAuthSettings;
   /**
-   * Always logs out the target level first regardless of any cached status —
+   * Whether the user agreed the application may use the credential while they
+   * are away. DIAL Core gates every on-behalf-of mint on it, so an application
+   * that works in the background cannot use a credential signed in without it.
+   * Absent means not granted — this is never defaulted on the user's behalf.
+   */
+  offlineUsageConsent?: boolean;
+  /**
+   * For API-key/OAuth credentials, logs out the target level first regardless of any cached status —
    * a Core-pushed `external-service/signin` event is proof credentials may
    * be stale even if a cached read still reports signed in. The signin
    * dialog always passes `true`, mirroring `useToolsetLogin`'s `forceStale`.
@@ -79,18 +92,83 @@ const toToolsetCredentialsLevel = (
  * External-service counterpart to `useToolsetLogin`: shares the exact same
  * OAuth popup/BroadcastChannel handshake and stale-credential-clearing rule,
  * driving the `external-services` BFF endpoints instead of the toolset ones.
+ * DIAL-native services use platform offline credentials and separate admin consent.
  */
 export const useExternalServiceLogin = (): {
   login: (
     params: ExternalServiceLoginParams,
   ) => Promise<ExternalServiceLoginOutcome>;
 } => {
+  const { login: loginOfflineCredentials } = useOfflineCredentialsLogin();
+
+  const loginWithDialNative = useCallback(
+    async ({
+      appId,
+      serviceId,
+    }: ExternalServiceLoginParams): Promise<ExternalServiceLoginOutcome> => {
+      /* Reserve the popup during the click, before fetching consent and OAuth settings. */
+      const popup = openToolsetOAuthPopup();
+      if (!popup) return { type: ExternalServiceLoginOutcomeType.PopupBlocked };
+
+      try {
+        const service = await getExternalService(appId, serviceId);
+        if (service.appLevelAuthStatus !== 'SIGNED_IN') {
+          popup.close();
+          return {
+            type:
+              service.appLevelAuthStatus === 'SIGNED_OUT'
+                ? ExternalServiceLoginOutcomeType.AdminConsentRequired
+                : ExternalServiceLoginOutcomeType.Failure,
+          };
+        }
+
+        const status = await getOfflineCredentials();
+        if (status.connected) {
+          popup.close();
+          return { type: ExternalServiceLoginOutcomeType.Success };
+        }
+        if (!status.available || !status.connect) {
+          popup.close();
+          return { type: ExternalServiceLoginOutcomeType.OfflineUnavailable };
+        }
+
+        const outcome = await loginOfflineCredentials(
+          status.connect,
+          getOfflineCredentials,
+          popup,
+        );
+        if (outcome.type === OfflineCredentialsLoginOutcomeType.Success) {
+          const refreshed = await getExternalService(appId, serviceId);
+          return {
+            type:
+              refreshed.appLevelAuthStatus === 'SIGNED_IN'
+                ? ExternalServiceLoginOutcomeType.Success
+                : refreshed.appLevelAuthStatus === 'SIGNED_OUT'
+                  ? ExternalServiceLoginOutcomeType.AdminConsentRequired
+                  : ExternalServiceLoginOutcomeType.Failure,
+          };
+        }
+        if (outcome.type === OfflineCredentialsLoginOutcomeType.Cancelled) {
+          return { type: ExternalServiceLoginOutcomeType.Cancelled };
+        }
+        return { type: ExternalServiceLoginOutcomeType.Failure };
+      } catch {
+        popup.close();
+        return { type: ExternalServiceLoginOutcomeType.Failure };
+      }
+    },
+    [loginOfflineCredentials],
+  );
+
   const logoutLevel = useCallback(
     async (
       appId: string,
       serviceId: string,
       credentialsLevel: ExternalServiceCredentialsLevel,
-      authenticationType: ExternalServiceAuthType,
+      authenticationType: Exclude<
+        ExternalServiceAuthType,
+        ExternalServiceAuthType.DialNative
+      >,
     ): Promise<void> => {
       try {
         await signOutExternalService(appId, serviceId, {
@@ -108,8 +186,14 @@ export const useExternalServiceLogin = (): {
     async (
       params: ExternalServiceLoginParams,
     ): Promise<ExternalServiceLoginOutcome> => {
-      const { appId, serviceId, credentialsLevel, oauthSettings, forceStale } =
-        params;
+      const {
+        appId,
+        serviceId,
+        credentialsLevel,
+        oauthSettings,
+        forceStale,
+        offlineUsageConsent,
+      } = params;
       /*
        * The shared OAuth popup/BroadcastChannel utilities (`utils/toolsets.ts`)
        * correlate a flow by a single opaque string id — this composite id is
@@ -152,8 +236,10 @@ export const useExternalServiceLogin = (): {
         popup,
         authFormData,
         correlationId,
+        ROUTES.ToolsetSignIn,
         toolsetLevel,
         OAuthResourceKind.ExternalService,
+        offlineUsageConsent,
       );
 
       if (initiation.type !== ToolsetOAuthInitiationResultType.Started) {
@@ -163,7 +249,11 @@ export const useExternalServiceLogin = (): {
       const result = await waitForToolsetOAuthResult(
         initiation.popup,
         initiation.flowId,
-        { toolsetId: correlationId, credentialsLevel: toolsetLevel },
+        {
+          toolsetId: correlationId,
+          credentialsLevel: toolsetLevel,
+          callbackPath: ROUTES.ToolsetSignIn,
+        },
       );
 
       if (result.type === ToolsetOAuthResultType.Success) {
@@ -206,7 +296,12 @@ export const useExternalServiceLogin = (): {
         authenticationType,
         apiKey,
         forceStale,
+        offlineUsageConsent,
       } = params;
+
+      if (authenticationType === ExternalServiceAuthType.DialNative) {
+        return { type: ExternalServiceLoginOutcomeType.Failure };
+      }
 
       try {
         if (forceStale) {
@@ -221,6 +316,7 @@ export const useExternalServiceLogin = (): {
           credentialsLevel,
           authenticationType,
           apiKey: apiKey?.trim(),
+          offlineUsageConsent,
         });
         return { type: ExternalServiceLoginOutcomeType.Success };
       } catch {
@@ -234,10 +330,12 @@ export const useExternalServiceLogin = (): {
     (
       params: ExternalServiceLoginParams,
     ): Promise<ExternalServiceLoginOutcome> =>
-      params.authenticationType === ExternalServiceAuthType.OAuth
-        ? loginWithOAuth(params)
-        : loginWithApiKey(params),
-    [loginWithOAuth, loginWithApiKey],
+      params.authenticationType === ExternalServiceAuthType.DialNative
+        ? loginWithDialNative(params)
+        : params.authenticationType === ExternalServiceAuthType.OAuth
+          ? loginWithOAuth(params)
+          : loginWithApiKey(params),
+    [loginWithDialNative, loginWithOAuth, loginWithApiKey],
   );
 
   return { login };

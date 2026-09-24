@@ -1,36 +1,42 @@
 import type { ScheduledTaskDto } from '@epam/ai-dial-chat-api-client';
 import {
+  getApiErrorDetails,
+  getApiErrorStatus,
+} from '@epam/ai-dial-chat-hooks';
+import {
   ScheduledTaskDetailView,
   type ScheduledTaskRunItem,
 } from '@epam/ai-dial-scheduled-tasks';
-import { NotificationVariant } from '@epam/ai-dial-ui-kit';
 import {
   memo,
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type FC,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router';
 import RouteFallback from '../../components/RouteFallback/RouteFallback';
-import { getScheduledTaskEditRoute } from '../../constants/routes';
+import ScheduledTaskDeleteModal from '../../components/ScheduledTaskDeleteModal/ScheduledTaskDeleteModal';
+import {
+  getConversationRoute,
+  getScheduledTaskEditRoute,
+} from '../../constants/routes';
 import {
   ButtonsI18nKeys,
+  ConversationPanelI18nKeys,
   ScheduledTasksI18nKeys,
 } from '../../constants/translation-keys';
 import { useAppConfig, useFeatureFlag } from '../../context/AppConfigContext';
+import { useConversations } from '../../context/ConversationsContext';
 import { useDeployments } from '../../context/DeploymentsContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useLanguage } from '../../hooks/language/useLanguage';
 import { useScheduledTaskRuns } from '../../hooks/scheduled-tasks/useScheduledTaskRuns';
+import { useStaleGuard } from '../../hooks/useStaleGuard';
 import {
-  getApiErrorDetails,
-  getApiErrorStatus,
-} from '../../server-api/api-error';
-import {
+  deleteScheduledTask,
   getScheduledTask,
   pauseScheduledTask,
   resumeScheduledTask,
@@ -38,19 +44,23 @@ import {
 import { ROUTES } from '../../types/routes';
 import { UserConfigStatus } from '../../types/user-config-status';
 import { resolveLocalizedText } from '../../utils/locale';
-import { buildScheduleLabel } from '../../utils/map-scheduled-task-dto';
+import {
+  buildScheduleLabel,
+  getDeleteErrorMessageKey,
+} from '../../utils/map-scheduled-task-dto';
 import { mapScheduledTaskRunDtosToItems } from '../../utils/map-scheduled-task-run-dto';
 import NotFoundPage from '../NotFound/NotFound';
 
 const ScheduledTaskDetailPage: FC = () => {
   const { t } = useTranslation();
-  const { showNotification } = useNotification();
+  const { showSuccessNotification, showErrorNotification } = useNotification();
   const { status: appConfigStatus } = useAppConfig();
   const isEnabled = useFeatureFlag('scheduledTasksEnabled');
   const navigate = useNavigate();
   const { scheduleId = '' } = useParams<{ scheduleId: string }>();
   const { items: deploymentItems } = useDeployments();
   const { language } = useLanguage();
+  const { conversations } = useConversations();
 
   const [task, setTask] = useState<ScheduledTaskDto | null>(null);
   const [isTaskLoading, setIsTaskLoading] = useState(true);
@@ -59,30 +69,22 @@ const ScheduledTaskDetailPage: FC = () => {
   const [taskFetchToken, setTaskFetchToken] = useState(0);
   const [isActiveUpdating, setIsActiveUpdating] = useState(false);
   const [activeStatusAnnouncement, setActiveStatusAnnouncement] = useState('');
-  const activeChangeRequestRef = useRef(0);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   /*
-   * Mirrors the latest scheduleId outside of any closure, so an in-flight
-   * pause/resume request started before navigation can detect — on
-   * resolution — that the user has since moved to a different schedule
-   * (its handleActiveChange closure was created with the old scheduleId).
+   * Supersession guard for pause/resume: a check goes stale when the page
+   * unmounts, a newer toggle begins, or the user navigates to a different
+   * schedule (this page component stays mounted across scheduleId changes).
    */
-  const currentScheduleIdRef = useRef(scheduleId);
-  useEffect(() => {
-    currentScheduleIdRef.current = scheduleId;
-  }, [scheduleId]);
-  const isMountedRef = useRef(true);
-  useEffect(
-    () => () => {
-      isMountedRef.current = false;
-    },
-    [],
-  );
+  const beginActiveChangeGuard = useStaleGuard(scheduleId);
 
   const {
     items: runDtos,
     isLoading: runsIsLoading,
     isLoadingMore: runsIsLoadingMore,
     error: runsError,
+    loadMoreError: runsLoadMoreError,
+    retryLoadMore: retryRunsLoadMore,
     hasMore: runsHasMore,
     loadMore: onRunsLoadMore,
     refetch: refetchRuns,
@@ -93,6 +95,14 @@ const ScheduledTaskDetailPage: FC = () => {
       setIsTaskLoading(false);
       return;
     }
+
+    /*
+     * A scheduleId change retires any in-flight pause/resume request: its
+     * stale guard resolves as stale, which skips the `finally` reset of
+     * `isActiveUpdating` — reset it here so the Active switch never stays
+     * disabled into the next task's view.
+     */
+    setIsActiveUpdating(false);
 
     const cancelled = { value: false };
 
@@ -132,8 +142,16 @@ const ScheduledTaskDetailPage: FC = () => {
   }, [isEnabled, scheduleId, taskFetchToken]);
 
   const runItems: ScheduledTaskRunItem[] = useMemo(
-    () => mapScheduledTaskRunDtosToItems(runDtos, t),
-    [runDtos, t],
+    () => mapScheduledTaskRunDtosToItems(runDtos, t, conversations),
+    [runDtos, t, conversations],
+  );
+
+  const handleRunClick = useCallback(
+    (run: ScheduledTaskRunItem) => {
+      if (!run.conversationId) return;
+      navigate(getConversationRoute(run.conversationId));
+    },
+    [navigate],
   );
 
   const taskModel = task?.model;
@@ -146,8 +164,8 @@ const ScheduledTaskDetailPage: FC = () => {
   }, [taskModel, deploymentItems, language]);
 
   const repeatsLabel = useMemo(
-    () => (task ? buildScheduleLabel(task, t) : undefined),
-    [task, t],
+    () => (task ? buildScheduleLabel(task, t, language) : undefined),
+    [task, t, language],
   );
 
   const cronWindow = task?.trigger.cron;
@@ -181,6 +199,8 @@ const ScheduledTaskDetailPage: FC = () => {
     () => ({
       backAriaLabel: t(ScheduledTasksI18nKeys.CreateBackButtonLabel),
       editButtonLabel: t(ScheduledTasksI18nKeys.CardEditActionLabel),
+      deleteButtonLabel: t(ButtonsI18nKeys.Delete),
+      deletedStateLabel: t(ScheduledTasksI18nKeys.DetailDeletedStateLabel),
       errorLabel: t(ScheduledTasksI18nKeys.DetailErrorLabel),
       detailsTitle: t(ScheduledTasksI18nKeys.CreateDetailsSectionTitle),
       descriptionLabel: t(ScheduledTasksI18nKeys.CreateDescriptionLabel),
@@ -208,6 +228,7 @@ const ScheduledTaskDetailPage: FC = () => {
       },
       activeStatusLabel: t(ScheduledTasksI18nKeys.DetailActiveStatusLabel),
       activeStatusAnnouncement,
+      unreadIndicatorLabel: t(ConversationPanelI18nKeys.UnreadIndicatorLabel),
     }),
     [t, activeStatusAnnouncement],
   );
@@ -242,12 +263,7 @@ const ScheduledTaskDetailPage: FC = () => {
 
   const handleActiveChange = useCallback(
     async (nextActive: boolean) => {
-      const requestScheduleId = scheduleId;
-      const token = ++activeChangeRequestRef.current;
-      const isStale = () =>
-        !isMountedRef.current ||
-        activeChangeRequestRef.current !== token ||
-        requestScheduleId !== currentScheduleIdRef.current;
+      const isStale = beginActiveChangeGuard();
 
       setTask((current) =>
         current ? { ...current, isActive: nextActive } : current,
@@ -256,8 +272,8 @@ const ScheduledTaskDetailPage: FC = () => {
 
       try {
         const updated = nextActive
-          ? await resumeScheduledTask(requestScheduleId)
-          : await pauseScheduledTask(requestScheduleId);
+          ? await resumeScheduledTask(scheduleId)
+          : await pauseScheduledTask(scheduleId);
         if (isStale()) return;
 
         setTask(updated);
@@ -268,8 +284,7 @@ const ScheduledTaskDetailPage: FC = () => {
               : ScheduledTasksI18nKeys.DetailPauseSuccess,
           ),
         );
-        showNotification({
-          variant: NotificationVariant.Success,
+        showSuccessNotification({
           message: t(
             nextActive
               ? ScheduledTasksI18nKeys.DetailResumeSuccess
@@ -283,8 +298,7 @@ const ScheduledTaskDetailPage: FC = () => {
           current ? { ...current, isActive: !nextActive } : current,
         );
         const { traceId } = await getApiErrorDetails(err);
-        showNotification({
-          variant: NotificationVariant.Error,
+        showErrorNotification({
           message: t(ScheduledTasksI18nKeys.DetailActiveStatusUpdateError),
           requestId: traceId,
         });
@@ -294,8 +308,52 @@ const ScheduledTaskDetailPage: FC = () => {
         }
       }
     },
-    [scheduleId, t, showNotification],
+    [
+      scheduleId,
+      t,
+      showSuccessNotification,
+      showErrorNotification,
+      beginActiveChangeGuard,
+    ],
   );
+
+  const handleDeleteClick = useCallback(() => {
+    setIsDeleteDialogOpen(true);
+  }, []);
+
+  const handleDeleteDialogClose = useCallback(() => {
+    if (isDeleting) return;
+    setIsDeleteDialogOpen(false);
+  }, [isDeleting]);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (isDeleting) return;
+
+    setIsDeleting(true);
+    try {
+      await deleteScheduledTask(scheduleId);
+      setIsDeleteDialogOpen(false);
+      showSuccessNotification({
+        message: t(ScheduledTasksI18nKeys.DetailDeleteSuccess),
+      });
+      navigate(ROUTES.ScheduledTasks);
+    } catch (err) {
+      const { status, traceId } = await getApiErrorDetails(err);
+      const messageKey = getDeleteErrorMessageKey(status);
+      showErrorNotification({
+        message: t(messageKey),
+        requestId: traceId,
+      });
+      setIsDeleting(false);
+    }
+  }, [
+    scheduleId,
+    t,
+    showSuccessNotification,
+    showErrorNotification,
+    navigate,
+    isDeleting,
+  ]);
 
   if (appConfigStatus !== UserConfigStatus.Ready) {
     return <RouteFallback />;
@@ -309,33 +367,50 @@ const ScheduledTaskDetailPage: FC = () => {
     return <NotFoundPage />;
   }
 
+  const isTaskDeleted = task?.isDeleted === true;
+
   return (
-    <ScheduledTaskDetailView
-      labels={labels}
-      onBack={handleBack}
-      onEdit={task ? handleEdit : undefined}
-      isActive={task?.isActive}
-      isActiveUpdating={isActiveUpdating}
-      isActiveDisabled={isActiveDisabled}
-      onActiveChange={handleActiveChange}
-      displayName={task?.displayName ?? ''}
-      isLoading={isTaskLoading}
-      error={taskError}
-      onRetry={handleRetry}
-      description={task?.description}
-      modelLabel={modelLabel}
-      repeatsLabel={repeatsLabel}
-      activeWindowLabel={activeWindowLabel}
-      nextRunLabel={nextRunLabel}
-      instructionsMarkdown={task?.prompt}
-      runs={runItems}
-      runsIsLoading={runsIsLoading}
-      runsIsLoadingMore={runsIsLoadingMore}
-      runsError={runsError}
-      onRunsRetry={refetchRuns}
-      runsHasMore={runsHasMore}
-      onRunsLoadMore={onRunsLoadMore}
-    />
+    <>
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={handleBack}
+        onEdit={task && !isTaskDeleted ? handleEdit : undefined}
+        onDelete={task && !isTaskDeleted ? handleDeleteClick : undefined}
+        isDeleting={isDeleting}
+        isDeleted={isTaskDeleted}
+        isActive={isTaskDeleted ? undefined : task?.isActive}
+        isActiveUpdating={isActiveUpdating}
+        isActiveDisabled={isActiveDisabled}
+        onActiveChange={isTaskDeleted ? undefined : handleActiveChange}
+        displayName={task?.displayName ?? ''}
+        isLoading={isTaskLoading}
+        error={taskError}
+        onRetry={handleRetry}
+        description={task?.description}
+        modelLabel={modelLabel}
+        repeatsLabel={repeatsLabel}
+        activeWindowLabel={activeWindowLabel}
+        nextRunLabel={nextRunLabel}
+        instructionsMarkdown={task?.prompt}
+        runs={runItems}
+        runsIsLoading={runsIsLoading}
+        runsIsLoadingMore={runsIsLoadingMore}
+        runsError={runsError}
+        onRunsRetry={refetchRuns}
+        runsLoadMoreError={runsLoadMoreError}
+        onRunsRetryLoadMore={retryRunsLoadMore}
+        runsHasMore={runsHasMore}
+        onRunsLoadMore={onRunsLoadMore}
+        onRunClick={handleRunClick}
+      />
+      <ScheduledTaskDeleteModal
+        open={isDeleteDialogOpen}
+        taskName={task?.displayName ?? ''}
+        isDeleting={isDeleting}
+        onConfirm={handleDeleteConfirm}
+        onClose={handleDeleteDialogClose}
+      />
+    </>
   );
 };
 

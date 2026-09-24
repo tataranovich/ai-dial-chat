@@ -1,6 +1,7 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
   GhostIconButton,
   Input,
@@ -10,6 +11,7 @@ import {
 import { IconFolderPlus, IconPencil, IconTrashX } from '@tabler/icons-react';
 import type { FC } from 'react';
 import { useCallback, useMemo, useState } from 'react';
+import { PROMPT_EDITOR_CLASS } from '../../constants/public-class-names';
 import type { PromptFolderFieldProps } from '../../models/prompt-folder-field-props';
 import { FolderFormMode } from '../../types/folder-form-mode';
 
@@ -33,6 +35,7 @@ export const PromptFolderField: FC<PromptFolderFieldProps> = ({
   error,
   nameError,
   actions,
+  disabled = false,
   labels,
   helperTextClassName = 'dial-small-text',
   onChange,
@@ -152,7 +155,12 @@ export const PromptFolderField: FC<PromptFolderFieldProps> = ({
   const nameFieldError = validationError ?? nameError;
 
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      className={mergeClasses(
+        'flex flex-col gap-2',
+        PROMPT_EDITOR_CLASS.folderField,
+      )}
+    >
       <div className="flex items-end gap-2">
         <Select
           id="prompt-folder"
@@ -161,25 +169,44 @@ export const PromptFolderField: FC<PromptFolderFieldProps> = ({
           value={isRootSelected ? ROOT_OPTION_VALUE : value}
           labelProps={{ label: labels?.folderLabel ?? 'Folder' }}
           invalid={error != null}
+          disabled={disabled}
           error={error}
           emptyStateTitle={emptyStateLabel}
           onChange={handleSelect}
         />
-        {actions != null && (
+        {actions != null && !disabled && (
           <>
             <GhostIconButton
-              icon={<IconFolderPlus size={DIAL_ICON_SIZE.SM} aria-hidden />}
+              icon={
+                <IconFolderPlus
+                  size={DIAL_ICON_SIZE.SM}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               aria-label={labels?.folderCreateLabel ?? 'Create folder'}
               onClick={openCreate}
             />
             <GhostIconButton
-              icon={<IconPencil size={DIAL_ICON_SIZE.SM} aria-hidden />}
+              icon={
+                <IconPencil
+                  size={DIAL_ICON_SIZE.SM}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               aria-label={labels?.folderRenameLabel ?? 'Rename folder'}
               disabled={isRootSelected}
               onClick={openRename}
             />
             <GhostIconButton
-              icon={<IconTrashX size={DIAL_ICON_SIZE.SM} aria-hidden />}
+              icon={
+                <IconTrashX
+                  size={DIAL_ICON_SIZE.SM}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               aria-label={labels?.folderDeleteLabel ?? 'Delete folder'}
               disabled={isRootSelected}
               onClick={openDelete}

@@ -10,6 +10,16 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ConversationSourcesPanelContainer from '../ConversationSourcesPanel';
 
+const mockNavigate = vi.fn();
+vi.mock('react-router', () => ({
+  useNavigate: () => mockNavigate,
+}));
+
+let mockConversations: { id: string; isUnread?: boolean }[] = [];
+vi.mock('../../../context/ConversationsContext', () => ({
+  useConversations: () => ({ conversations: mockConversations }),
+}));
+
 const mockDownloadAttachment = vi.fn();
 const mockHandleAttachmentClick = vi.fn();
 const mockHandleClose = vi.fn();
@@ -22,9 +32,7 @@ let mockGenerated: DisplayAttachment[] = [];
 
 const activeScheduledTaskMock = vi.hoisted(() => ({
   status: 'not-a-task-conversation' as
-    | 'resolving'
-    | 'not-a-task-conversation'
-    | 'task-conversation',
+    'resolving' | 'not-a-task-conversation' | 'task-conversation',
   scheduleId: undefined as string | undefined,
   runId: undefined as string | undefined,
   conversationUpdatedAt: undefined as number | undefined,
@@ -99,52 +107,87 @@ vi.mock('../../../context/DeploymentsContext', () => ({
   }),
 }));
 
-vi.mock(
-  '../../../hooks/attachment/useAttachmentAction',
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import('../../../hooks/attachment/useAttachmentAction')
-      >();
-    return {
-      ...actual,
-      downloadAttachment: (attachment: DisplayAttachment) =>
-        mockDownloadAttachment(attachment),
-      useAttachmentAction: () => ({
-        handleAttachmentClick: mockHandleAttachmentClick,
-      }),
-    };
-  },
-);
+vi.mock('@epam/ai-dial-attachment-canvas', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-attachment-canvas')>();
+  return {
+    ...actual,
+    useOpenAttachmentCanvas: () => ({
+      openAttachmentCanvas: vi.fn().mockResolvedValue(false),
+    }),
+  };
+});
 
-vi.mock('../../../hooks/attachment/useOpenAttachmentCanvas', () => ({
-  useOpenAttachmentCanvas: () => ({
-    openAttachmentCanvas: vi.fn().mockResolvedValue(false),
-  }),
+vi.mock('../../../hooks/attachment/useAttachmentCanvasResolvers', () => ({
+  useAttachmentCanvasResolvers: () => ({ resolvers: {}, options: {} }),
 }));
 
 vi.mock('../../../hooks/breakpoint/useBreakpoint', () => ({
   useIsMobile: () => false,
 }));
 
-vi.mock('../../../hooks/conversation-sources/useConversationSources', () => ({
-  useConversationSources: () => ({
-    uploaded: mockUploaded,
-    generated: mockGenerated,
-    sources: [],
-  }),
-}));
+vi.mock('@epam/ai-dial-chat-hooks/attachments', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('@epam/ai-dial-chat-hooks/attachments')
+    >();
+  return {
+    ...actual,
+    downloadAttachment: (attachment: DisplayAttachment) =>
+      mockDownloadAttachment(attachment),
+    useAttachmentAction: () => ({
+      handleAttachmentClick: mockHandleAttachmentClick,
+    }),
+  };
+});
 
-vi.mock('../../../hooks/use-viewport-width', () => ({
-  default: () => 1200,
-}));
+vi.mock(
+  '@epam/ai-dial-chat-hooks/conversation-sources',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('@epam/ai-dial-chat-hooks/conversation-sources')
+      >();
+    return {
+      ...actual,
+      useConversationSources: () => ({
+        uploaded: mockUploaded,
+        generated: mockGenerated,
+        sources: [],
+      }),
+    };
+  },
+);
+
+vi.mock('@epam/ai-dial-chat-hooks/file-manager', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('@epam/ai-dial-chat-hooks/file-manager')
+    >();
+  return {
+    ...actual,
+    isDialFileId: (url: string) => url.startsWith('files/'),
+  };
+});
+
+vi.mock('@epam/ai-dial-chat-hooks/viewport-layout', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('@epam/ai-dial-chat-hooks/viewport-layout')
+    >();
+  return {
+    ...actual,
+    usePanelMaxWidth: () => 800,
+  };
+});
 
 vi.mock('../../../hooks/useLocalStorage', () => ({
   default: () => [360, vi.fn()],
 }));
 
 vi.mock('../../../utils/dial-file', () => ({
-  isDialFileId: (url: string) => url.startsWith('files/'),
+  resolveDialFileDownloadUrl: (fileId: string) =>
+    `/api/v1/files/download?path=${fileId}`,
 }));
 
 const makeAttachment = (
@@ -181,6 +224,7 @@ describe('ConversationSourcesPanelContainer — download all', () => {
     vi.useFakeTimers();
     mockUploaded = [];
     mockGenerated = [];
+    mockConversations = [];
     resetActiveScheduledTaskMock();
   });
 
@@ -224,6 +268,7 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     vi.clearAllMocks();
     mockUploaded = [];
     mockGenerated = [];
+    mockConversations = [];
     resetActiveScheduledTaskMock();
   });
 
@@ -316,9 +361,13 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     expect(historyButton.getAttribute('aria-expanded')).toBe('true');
     expect(detailsButton.getAttribute('aria-expanded')).toBe('false');
 
-    const historyControlsId = historyButton.getAttribute('aria-controls');
-    expect(historyControlsId).toBeTruthy();
-    expect(document.getElementById(historyControlsId as string)).toBeTruthy();
+    expect(historyButton.getAttribute('aria-controls')).toBeTruthy();
+    expect(
+      screen.getByRole('region', {
+        name: 'scheduledTasks.detail.historyTitle',
+        hidden: true,
+      }),
+    ).toBeTruthy();
   });
 
   it('does not render search or download-all when only task sections are present', () => {
@@ -540,5 +589,91 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     render(<ConversationSourcesPanelContainer />);
 
     expect(screen.queryByText('Do the thing')).toBeNull();
+  });
+
+  it('navigates to the conversation route when a History run with a conversationId is activated', async () => {
+    activeScheduledTaskMock.status = 'task-conversation';
+    activeScheduledTaskMock.scheduleId = 'schedule-1';
+    activeScheduledTaskMock.runId = 'run-1';
+    activeScheduledTaskMock.taskState = 'success';
+    activeScheduledTaskMock.task = {
+      id: 'schedule-1',
+      displayName: 'Weekly digest',
+    } as ScheduledTaskDto;
+    activeScheduledTaskMock.historyItems = [
+      {
+        id: 'run-2',
+        status: 'Success',
+        startTime: '2026-07-24T09:01:00.000Z',
+        conversationId: 'conversations/bucket/.scheduler/schedule-1/run-2',
+      } as ScheduledTaskRunDto,
+    ];
+
+    render(<ConversationSourcesPanelContainer />);
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /historyDateAt/ }),
+    );
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/conversations/bucket/.scheduler/schedule-1/run-2',
+    );
+  });
+
+  it('does not navigate when a History run has no conversationId', async () => {
+    activeScheduledTaskMock.status = 'task-conversation';
+    activeScheduledTaskMock.scheduleId = 'schedule-1';
+    activeScheduledTaskMock.runId = 'run-1';
+    activeScheduledTaskMock.taskState = 'success';
+    activeScheduledTaskMock.task = {
+      id: 'schedule-1',
+      displayName: 'Weekly digest',
+    } as ScheduledTaskDto;
+    activeScheduledTaskMock.historyItems = [
+      {
+        id: 'run-2',
+        status: 'Success',
+        startTime: '2026-07-24T09:01:00.000Z',
+      } as ScheduledTaskRunDto,
+    ];
+
+    render(<ConversationSourcesPanelContainer />);
+
+    const row = screen.getByRole('listitem');
+    expect(row.getAttribute('role')).toBeNull();
+
+    await userEvent.click(row);
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('shows the unread indicator on a History run whose matched conversation is unread', () => {
+    activeScheduledTaskMock.status = 'task-conversation';
+    activeScheduledTaskMock.scheduleId = 'schedule-1';
+    activeScheduledTaskMock.runId = 'run-1';
+    activeScheduledTaskMock.taskState = 'success';
+    activeScheduledTaskMock.task = {
+      id: 'schedule-1',
+      displayName: 'Weekly digest',
+    } as ScheduledTaskDto;
+    activeScheduledTaskMock.historyItems = [
+      {
+        id: 'run-2',
+        status: 'Success',
+        startTime: '2026-07-24T09:01:00.000Z',
+        conversationId: 'conversations/bucket/.scheduler/schedule-1/run-2',
+      } as ScheduledTaskRunDto,
+    ];
+    mockConversations = [
+      { id: 'bucket/.scheduler/schedule-1/run-2', isUnread: true },
+    ];
+
+    render(<ConversationSourcesPanelContainer />);
+
+    expect(
+      screen.getByRole('button', {
+        name: /conversationPanel\.unreadIndicatorLabel$/,
+      }),
+    ).toBeTruthy();
   });
 });

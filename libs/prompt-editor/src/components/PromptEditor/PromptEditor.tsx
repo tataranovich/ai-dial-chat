@@ -1,36 +1,60 @@
-import { mergeClasses } from '@epam/ai-dial-chat-shared';
+import { EditorLayout } from '@epam/ai-dial-builder-form';
 import {
-  ElementSize,
+  buildCssVars,
+  MARKDOWN_EDITOR_MAX_HEIGHT_CLASS_NAME,
+  MARKDOWN_EDITOR_PREVIEW_LIST_CLASS_NAME,
+  mergeClasses,
+  useAvailableHeightCap,
+} from '@epam/ai-dial-chat-shared';
+import {
   Input,
+  Label,
   NeutralButton,
   PrimaryButton,
   Spinner,
   Textarea,
 } from '@epam/ai-dial-ui-kit';
-import type { FC } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { LazyMarkdownEditor } from '@epam/ai-dial-ui-kit/editors';
+/*
+ * Only needed once `LazyMarkdownEditor` actually renders (below). Importing
+ * it here, rather than eagerly from the host app's entry point, keeps this
+ * vendor CSS out of the initial page load — it loads only when this module
+ * does, i.e. when the (already route-lazy) prompt editor page mounts.
+ */
+import '@uiw/react-markdown-preview/markdown.css';
+import '@uiw/react-md-editor/markdown-editor.css';
+import {
+  lazy,
+  Suspense,
+  type FC,
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+} from 'react';
+import { PROMPT_EDITOR_CLASS } from '../../constants/public-class-names';
 import type {
   PromptEditorProps,
   PromptEditorValues,
 } from '../../models/prompt-editor-props';
-import { PromptFolderField } from '../PromptFolderField/PromptFolderField';
+import styles from './PromptEditor.module.scss';
+
+const MarkdownEditor = lazy(async () => {
+  const module = await LazyMarkdownEditor();
+  return { default: module.MarkdownEditor };
+});
 
 const EMPTY_VALUES: PromptEditorValues = {
   name: '',
   description: '',
   content: '',
-  folderId: '',
 };
 
 const DEFAULT_DESCRIPTION_MAX_LENGTH = 2000;
 const DEFAULT_CONTENT_MAX_LENGTH = 50000;
 const DEFAULT_ANNOUNCE_THRESHOLD = 10;
 
-/**
- * Returns how many characters are left before `maxLength`, or `null` while the
- * value is still further away than `threshold` — announcing on every keystroke
- * would be unusable noise.
- */
+/** Returns the remaining character count when it is close enough to announce. */
 const getRemainingCharacters = (
   value: string,
   maxLength: number,
@@ -40,11 +64,10 @@ const getRemainingCharacters = (
   return remaining <= threshold ? Math.max(remaining, 0) : null;
 };
 
-/** Form for authoring or editing a reusable prompt, including its folder. */
+/** Form for authoring or editing a reusable prompt. */
 export const PromptEditor: FC<PromptEditorProps> = ({
   isEditMode = false,
   initialValues,
-  folders,
   isLoading = false,
   hasLoadError = false,
   isSaving = false,
@@ -54,26 +77,27 @@ export const PromptEditor: FC<PromptEditorProps> = ({
   counterAnnounceThreshold = DEFAULT_ANNOUNCE_THRESHOLD,
   onSubmit,
   onCancel,
+  onBack = onCancel,
   onRetry,
-  folderActions,
-  folderNameError,
   labels,
-  styles,
+  markdownEditorTheme,
+  styles: editorStyles,
 }) => {
-  const {
-    titleClassName = 'dial-h1-text',
-    helperTextClassName = 'dial-small-text',
-  } = styles?.typography ?? {};
+  const { colors, typography } = editorStyles ?? {};
+  const contentLabelClassName =
+    typography?.contentLabelClassName ?? 'dial-tiny-semi-text';
+  const helperTextClassName =
+    typography?.helperTextClassName ?? 'dial-small-text';
 
   const [values, setValues] = useState<PromptEditorValues>({
     ...EMPTY_VALUES,
     ...initialValues,
   });
+  const contentLabelId = useId();
+  const contentEditorId = useId();
+  const contentEditorCapRef = useAvailableHeightCap<HTMLDivElement>();
 
-  /*
-   * Hosts that load an existing prompt hand over `initialValues` only once the
-   * fetch settles, so the fields are re-seeded whenever that object changes.
-   */
+  /* Hosts that load asynchronously re-seed the form through `initialValues`. */
   useEffect(() => {
     setValues({ ...EMPTY_VALUES, ...initialValues });
   }, [initialValues]);
@@ -93,49 +117,76 @@ export const PromptEditor: FC<PromptEditorProps> = ({
     onSubmit(values);
   }, [isSaving, onSubmit, values]);
 
-  const cancelLabel = labels?.cancelLabel ?? 'Cancel';
+  const title = isEditMode
+    ? (labels?.editTitle ?? 'Edit prompt')
+    : (labels?.createTitle ?? 'Create prompt');
+
+  const cssVars = buildCssVars({
+    '--pe-content-error': colors?.contentErrorText,
+  });
+
+  const actions = (
+    <>
+      <NeutralButton
+        label={labels?.cancelLabel ?? 'Cancel'}
+        onClick={onCancel}
+        disabled={isSaving}
+      />
+      <PrimaryButton
+        label={labels?.saveLabel ?? 'Save'}
+        iconBefore={isSaving ? <Spinner size={16} ariaLabel="" /> : undefined}
+        onClick={handleSubmit}
+        disabled={isSaving}
+      />
+    </>
+  );
 
   if (isLoading) {
     return (
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
-        <h1 className={mergeClasses('mb-6', titleClassName)}>
-          {isEditMode
-            ? (labels?.editTitle ?? 'Edit prompt')
-            : (labels?.createTitle ?? 'Create prompt')}
-        </h1>
-        <div
-          role="status"
-          aria-label={labels?.loadingAriaLabel ?? 'Loading prompt'}
-          className="flex items-center gap-2"
-        >
-          <Spinner />
-        </div>
-      </main>
+      <EditorLayout
+        title={title}
+        onBack={onBack}
+        backAriaLabel={labels?.backButtonAriaLabel ?? 'Back to prompts'}
+        actions={actions}
+        isSaving={isSaving}
+        labels={{ savingStatusLabel: labels?.savingStatusLabel }}
+        leftContent={
+          <div
+            role="status"
+            aria-label={labels?.loadingAriaLabel ?? 'Loading prompt'}
+            className="flex flex-1 items-center justify-center p-8"
+          >
+            <Spinner />
+          </div>
+        }
+      />
     );
   }
 
   if (hasLoadError) {
     return (
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
-        <h1 className={mergeClasses('mb-6', titleClassName)}>
-          {labels?.editTitle ?? 'Edit prompt'}
-        </h1>
-        <div role="alert" className="flex flex-col items-start gap-3">
-          <p className={mergeClasses('m-0', helperTextClassName)}>
-            {labels?.loadErrorMessage ??
-              "Couldn't load this prompt. Please try again."}
-          </p>
-          <div className="flex gap-2">
+      <EditorLayout
+        title={title}
+        onBack={onBack}
+        backAriaLabel={labels?.backButtonAriaLabel ?? 'Back to prompts'}
+        actions={actions}
+        isSaving={false}
+        labels={{ savingStatusLabel: labels?.savingStatusLabel }}
+        leftContent={
+          <div role="alert" className="flex flex-col items-start gap-3 p-8">
+            <p className={mergeClasses('m-0', helperTextClassName)}>
+              {labels?.loadErrorMessage ??
+                "Couldn't load this prompt. Please try again."}
+            </p>
             {onRetry != null && (
               <NeutralButton
                 label={labels?.retryLabel ?? 'Retry'}
                 onClick={onRetry}
               />
             )}
-            <NeutralButton label={cancelLabel} onClick={onCancel} />
           </div>
-        </div>
-      </main>
+        }
+      />
     );
   }
 
@@ -153,98 +204,107 @@ export const PromptEditor: FC<PromptEditorProps> = ({
     labels?.charactersRemaining?.(count) ?? `${count} characters remaining`;
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
-      <h1 className={mergeClasses('mb-6', titleClassName)}>
-        {isEditMode
-          ? (labels?.editTitle ?? 'Edit prompt')
-          : (labels?.createTitle ?? 'Create prompt')}
-      </h1>
-
-      <form
-        className="flex max-w-[720px] flex-col gap-5"
-        onSubmit={(event) => {
-          event.preventDefault();
-          handleSubmit();
-        }}
-      >
-        <Input
-          id="prompt-name"
-          value={values.name}
-          labelProps={{ label: labels?.nameLabel ?? 'Name', required: true }}
-          placeholder={labels?.namePlaceholder ?? 'Prompt name'}
-          invalid={errors?.name != null}
-          error={errors?.name}
-          onChange={(value) => setField('name', value ?? '')}
-        />
-
-        <Textarea
-          id="prompt-description"
-          value={values.description}
-          labelProps={{ label: labels?.descriptionLabel ?? 'Description' }}
-          placeholder={
-            labels?.descriptionPlaceholder ?? 'What this prompt is for'
-          }
-          invalid={errors?.description != null}
-          error={errors?.description}
-          onChange={(value) => setField('description', value)}
-        />
-
-        <Textarea
-          id="prompt-content"
-          value={values.content}
-          resize
-          labelProps={{
-            label: labels?.contentLabel ?? 'Prompt',
-            required: true,
-          }}
-          placeholder={labels?.contentPlaceholder ?? 'Write the prompt text'}
-          invalid={errors?.content != null}
-          error={errors?.content}
-          onChange={(value) => setField('content', value)}
-        />
-
-        <PromptFolderField
-          value={values.folderId}
-          folders={folders}
-          error={errors?.folder}
-          nameError={folderNameError}
-          actions={folderActions}
-          labels={labels}
-          helperTextClassName={helperTextClassName}
-          onChange={(folderId) => setField('folderId', folderId)}
-        />
-
-        {/*
-         * Only announced within the last few characters of a limit — a live
-         * region that fires on every keystroke is unusable noise.
-         */}
-        <span role="status" aria-live="polite" className="sr-only">
-          {descriptionRemaining != null &&
-            buildCounterMessage(descriptionRemaining)}
-          {contentRemaining != null && buildCounterMessage(contentRemaining)}
-        </span>
-
-        <div className="flex gap-2">
-          <PrimaryButton
-            type="submit"
-            size={ElementSize.Standard}
-            label={labels?.saveLabel ?? 'Save'}
-            disabled={isSaving}
-          />
-          <NeutralButton
-            type="button"
-            size={ElementSize.Standard}
-            label={cancelLabel}
-            disabled={isSaving}
-            onClick={onCancel}
-          />
-          {isSaving && (
-            <span role="status" className="sr-only">
-              {labels?.savingStatusLabel ?? 'Saving'}
-            </span>
+    <EditorLayout
+      title={title}
+      onBack={onBack}
+      backAriaLabel={labels?.backButtonAriaLabel ?? 'Back to prompts'}
+      actions={actions}
+      isSaving={isSaving}
+      labels={{ savingStatusLabel: labels?.savingStatusLabel }}
+      leftContent={
+        <div
+          className={mergeClasses(
+            'mx-auto flex w-full max-w-[1180px] flex-1 flex-col gap-5 px-4 py-6 desktop:px-8',
+            PROMPT_EDITOR_CLASS.form,
           )}
+          style={cssVars}
+        >
+          <Input
+            id="prompt-name"
+            value={values.name}
+            labelProps={{ label: labels?.nameLabel ?? 'Name', required: true }}
+            placeholder={labels?.namePlaceholder ?? 'Prompt name'}
+            invalid={errors?.name != null}
+            error={errors?.name}
+            onChange={(value) => setField('name', value ?? '')}
+          />
+
+          <Textarea
+            id="prompt-description"
+            value={values.description}
+            labelProps={{ label: labels?.descriptionLabel ?? 'Description' }}
+            placeholder={
+              labels?.descriptionPlaceholder ?? 'What this prompt is for'
+            }
+            invalid={errors?.description != null}
+            error={errors?.description}
+            onChange={(value) => setField('description', value)}
+          />
+
+          <div
+            role="group"
+            aria-labelledby={contentLabelId}
+            className="flex flex-1 flex-col gap-2"
+          >
+            {/*
+             * htmlFor is what names the editor's textarea; without it the
+             * label is only visible text sitting above an unnamed control.
+             */}
+            <Label
+              id={contentLabelId}
+              htmlFor={contentEditorId}
+              label={labels?.contentLabel ?? 'Instructions'}
+              required
+              className={contentLabelClassName}
+            />
+            <div
+              ref={contentEditorCapRef}
+              className={mergeClasses(
+                MARKDOWN_EDITOR_MAX_HEIGHT_CLASS_NAME,
+                MARKDOWN_EDITOR_PREVIEW_LIST_CLASS_NAME,
+              )}
+            >
+              <Suspense
+                fallback={
+                  <Spinner
+                    ariaLabel={
+                      labels?.contentLoadingAriaLabel ?? 'Loading prompt editor'
+                    }
+                  />
+                }
+              >
+                <MarkdownEditor
+                  id={contentEditorId}
+                  value={values.content}
+                  onChange={(value) => setField('content', value)}
+                  height={480}
+                  placeholder={
+                    labels?.contentPlaceholder ??
+                    'Write the prompt instructions'
+                  }
+                  theme={markdownEditorTheme}
+                />
+              </Suspense>
+            </div>
+            {errors?.content != null && (
+              <p
+                className={mergeClasses(
+                  helperTextClassName,
+                  styles.contentError,
+                )}
+              >
+                {errors.content}
+              </p>
+            )}
+          </div>
+
+          <span role="status" aria-live="polite" className="sr-only">
+            {descriptionRemaining != null &&
+              buildCounterMessage(descriptionRemaining)}
+            {contentRemaining != null && buildCounterMessage(contentRemaining)}
+          </span>
         </div>
-      </form>
-    </main>
+      }
+    />
   );
 };

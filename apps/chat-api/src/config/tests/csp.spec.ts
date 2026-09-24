@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildFrameAncestorsDirective,
   buildFrameSrcDirective,
+  buildPermissionsPolicyHeader,
   createHelmetOptions,
+  extractOrigin,
+  isOriginAllowedForIframe,
 } from '../csp';
 
 @Controller('ping')
@@ -19,12 +22,23 @@ class PingController {
 
 const createTestApp = async (
   allowedIframeOrigins: string[],
+  secureTransport = true,
+  cspOptions?: Parameters<typeof createHelmetOptions>[2],
 ): Promise<INestApplication> => {
   @Module({ controllers: [PingController] })
   class CspTestModule {}
 
   const app = await NestFactory.create(CspTestModule, { logger: false });
-  app.use(helmet(createHelmetOptions(allowedIframeOrigins)));
+  /* The app declarations use Helmet's CJS types; Vitest resolves its ESM types. */
+  app.use(
+    helmet(
+      createHelmetOptions(
+        allowedIframeOrigins,
+        secureTransport,
+        cspOptions,
+      ) as Parameters<typeof helmet>[0],
+    ),
+  );
   await app.init();
   await app.listen(0, '127.0.0.1');
   return app;
@@ -55,6 +69,31 @@ describe('buildFrameAncestorsDirective', () => {
   });
 });
 
+describe('buildPermissionsPolicyHeader', () => {
+  it('delegates to self only when the allowlist is empty', () => {
+    expect(buildPermissionsPolicyHeader([])).toBe(
+      'local-network-access=(self)',
+    );
+  });
+
+  it('delegates to self plus a single allowlisted origin', () => {
+    expect(
+      buildPermissionsPolicyHeader(['https://quickapps.example.com']),
+    ).toBe('local-network-access=(self https://quickapps.example.com)');
+  });
+
+  it('delegates to self plus every allowlisted origin', () => {
+    expect(
+      buildPermissionsPolicyHeader([
+        'https://quickapps.example.com',
+        'https://skills.example.com',
+      ]),
+    ).toBe(
+      'local-network-access=(self https://quickapps.example.com https://skills.example.com)',
+    );
+  });
+});
+
 describe('Helmet security headers', () => {
   let app: INestApplication | undefined;
 
@@ -71,6 +110,47 @@ describe('Helmet security headers', () => {
 
     expect(response.headers['cross-origin-opener-policy']).toBe(
       'same-origin-allow-popups',
+    );
+  });
+
+  it('allows OOXML WebAssembly parsers without enabling JavaScript eval', async () => {
+    app = await createTestApp([], true, { allowWasm: true });
+    const response = await request(app.getHttpServer())
+      .get('/ping')
+      .expect(200);
+
+    expect(response.headers['content-security-policy']).toContain(
+      "script-src 'self' 'wasm-unsafe-eval'",
+    );
+    expect(response.headers['content-security-policy']).not.toContain(
+      "'unsafe-eval'",
+    );
+  });
+
+  it('does not allow inline code or WebAssembly on generic responses', async () => {
+    app = await createTestApp([]);
+    const response = await request(app.getHttpServer())
+      .get('/ping')
+      .expect(200);
+    const policy = response.headers['content-security-policy'];
+    expect(policy).not.toMatch(
+      /'unsafe-inline'|'unsafe-eval'|'wasm-unsafe-eval'/,
+    );
+    expect(policy).toContain("script-src-attr 'none'");
+    expect(policy).toContain("style-src-attr 'none'");
+    expect(policy).toContain("object-src 'none'");
+    expect(policy).toContain("base-uri 'self'");
+  });
+
+  it('allows the approved style nonce without authorizing inline scripts', async () => {
+    app = await createTestApp([], true, { nonce: 'approved-nonce' });
+    const response = await request(app.getHttpServer())
+      .get('/ping')
+      .expect(200);
+    const directives = response.headers['content-security-policy'].split(';');
+    expect(directives).toContain("script-src 'self'");
+    expect(directives).toContain(
+      "style-src 'self' https://fonts.googleapis.com 'nonce-approved-nonce'",
     );
   });
 
@@ -96,5 +176,130 @@ describe('Helmet security headers', () => {
       'frame-ancestors https://partner.example.com',
     );
     expect(response.headers['x-frame-options']).toBeUndefined();
+  });
+
+  it('enforces HTTPS transport by default', async () => {
+    app = await createTestApp([]);
+    const response = await request(app.getHttpServer())
+      .get('/ping')
+      .expect(200);
+
+    expect(response.headers['content-security-policy']).toContain(
+      'upgrade-insecure-requests',
+    );
+    expect(response.headers['strict-transport-security']).toBe(
+      'max-age=31536000; includeSubDomains; preload',
+    );
+  });
+
+  it('sends a referrer policy that keeps the origin visible cross-site', async () => {
+    app = await createTestApp([]);
+    const response = await request(app.getHttpServer())
+      .get('/ping')
+      .expect(200);
+
+    expect(response.headers['referrer-policy']).toBe(
+      'strict-origin-when-cross-origin',
+    );
+  });
+
+  it('allows local HTTP transport when secure transport is disabled', async () => {
+    app = await createTestApp([], false);
+    const response = await request(app.getHttpServer())
+      .get('/ping')
+      .expect(200);
+
+    expect(response.headers['content-security-policy']).not.toContain(
+      'upgrade-insecure-requests',
+    );
+    expect(response.headers['strict-transport-security']).toBeUndefined();
+  });
+});
+
+describe('extractOrigin', () => {
+  it('returns the origin of an absolute URL, dropping path and query', () => {
+    expect(extractOrigin('https://viz.example.com/app?x=1')).toBe(
+      'https://viz.example.com',
+    );
+  });
+
+  it('keeps an explicit non-default port', () => {
+    expect(extractOrigin('http://localhost:4207/app')).toBe(
+      'http://localhost:4207',
+    );
+  });
+
+  it('returns undefined for an unparseable value', () => {
+    expect(extractOrigin('not-a-url')).toBeUndefined();
+  });
+});
+
+describe('isOriginAllowedForIframe', () => {
+  it('matches an exact origin entry', () => {
+    expect(
+      isOriginAllowedForIframe('https://viz.example.com/app', [
+        'https://viz.example.com',
+      ]),
+    ).toBe(true);
+  });
+
+  it('does not match a different scheme, host, or port', () => {
+    const url = 'https://viz.example.com/app';
+    expect(isOriginAllowedForIframe(url, ['http://viz.example.com'])).toBe(
+      false,
+    );
+    expect(isOriginAllowedForIframe(url, ['https://other.example.com'])).toBe(
+      false,
+    );
+    expect(
+      isOriginAllowedForIframe(url, ['https://viz.example.com:8443']),
+    ).toBe(false);
+  });
+
+  it('matches a subdomain through a leading-wildcard-label entry', () => {
+    expect(
+      isOriginAllowedForIframe('https://viz.example.com', [
+        'https://*.example.com',
+      ]),
+    ).toBe(true);
+  });
+
+  it('does not match the apex through a wildcard entry, as CSP does not', () => {
+    expect(
+      isOriginAllowedForIframe('https://example.com', [
+        'https://*.example.com',
+      ]),
+    ).toBe(false);
+  });
+
+  it('does not match a wildcard entry across schemes or ports', () => {
+    expect(
+      isOriginAllowedForIframe('http://viz.example.com', [
+        'https://*.example.com',
+      ]),
+    ).toBe(false);
+    expect(
+      isOriginAllowedForIframe('https://viz.example.com:8443', [
+        'https://*.example.com',
+      ]),
+    ).toBe(false);
+  });
+
+  it('returns false for an empty allowlist, blank entries, and an unparseable URL', () => {
+    expect(isOriginAllowedForIframe('https://viz.example.com', [])).toBe(false);
+    expect(isOriginAllowedForIframe('https://viz.example.com', ['  '])).toBe(
+      false,
+    );
+    expect(
+      isOriginAllowedForIframe('not-a-url', ['https://viz.example.com']),
+    ).toBe(false);
+  });
+
+  it('tolerates surrounding whitespace on an allowlist entry', () => {
+    expect(
+      isOriginAllowedForIframe('https://viz.example.com', [
+        ' https://viz.example.com ',
+      ]),
+    ).toBe(true);
   });
 });

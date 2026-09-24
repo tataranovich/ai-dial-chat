@@ -2,7 +2,11 @@ import { type FC, memo } from 'react';
 import type { Components } from 'react-markdown';
 import { CodeBlockTheme } from '../../types/code-editor';
 import { DEFAULT_MARKDOWN_CLASS_NAMES } from './markdown-class-names';
-import { MarkdownRenderer } from './MarkdownRenderer';
+import {
+  MarkdownRenderer,
+  type MarkdownRendererClassNames,
+} from './MarkdownRenderer';
+import type { MarkdownTableActionLabels } from './Table/MarkdownTable';
 
 /** Props for the {@link MDMessageViewer} markdown renderer. */
 interface MDMessageViewerProps {
@@ -21,12 +25,30 @@ interface MDMessageViewerProps {
    * into specific markdown elements without modifying the viewer directly.
    */
   components?: Components;
+  /**
+   * Rewrites `href` and `src` values before they are rendered. Forwarded to
+   * {@link MarkdownRenderer}. Defaults to no extra rewrite.
+   */
+  urlTransform?: (url: string) => string;
   /** Accessible label for the copy button in code blocks. Forwarded to {@link MarkdownRenderer}. */
   codeBlockCopyLabel?: string;
   /** Accessible label for the copy button after copying. Forwarded to {@link MarkdownRenderer}. */
   codeBlockCopiedLabel?: string;
   /** Syntax highlight color theme for code blocks. Forwarded to {@link MarkdownRenderer}. */
   codeBlockTheme?: CodeBlockTheme;
+  /** Localized labels for Markdown table actions. Forwarded to {@link MarkdownRenderer}. */
+  tableActionLabels?: MarkdownTableActionLabels;
+  /** Filename used when downloading a Markdown table as CSV. Forwarded to {@link MarkdownRenderer}. */
+  tableDownloadFilename?: string;
+  tableOnOpenInCanvas?: (markdown: string) => void;
+  /** Accessible label for a table's scrollable region. Forwarded to {@link MarkdownRenderer}. */
+  tableScrollRegionAriaLabel?: string;
+  /**
+   * Per-element typography classes. Defaults to {@link DEFAULT_MARKDOWN_CLASS_NAMES};
+   * pass {@link COMPACT_MARKDOWN_CLASS_NAMES} for the smaller body scale. Give a
+   * stable reference: this component is memoised.
+   */
+  classNames?: MarkdownRendererClassNames;
 }
 
 /** Renders assistant message content as formatted markdown. */
@@ -36,19 +58,30 @@ export const MDMessageViewer: FC<MDMessageViewerProps> = memo(
     isStreaming,
     thinkingLabel,
     components,
+    urlTransform,
     codeBlockCopyLabel,
     codeBlockCopiedLabel,
     codeBlockTheme,
+    tableActionLabels,
+    tableDownloadFilename,
+    tableOnOpenInCanvas,
+    tableScrollRegionAriaLabel,
+    classNames = DEFAULT_MARKDOWN_CLASS_NAMES,
   }) => (
     <MarkdownRenderer
       content={content}
       isStreaming={isStreaming}
       thinkingLabel={thinkingLabel}
       components={components}
+      urlTransform={urlTransform}
       codeBlockCopyLabel={codeBlockCopyLabel}
       codeBlockCopiedLabel={codeBlockCopiedLabel}
       codeBlockTheme={codeBlockTheme}
-      classNames={DEFAULT_MARKDOWN_CLASS_NAMES}
+      tableActionLabels={tableActionLabels}
+      tableDownloadFilename={tableDownloadFilename}
+      tableOnOpenInCanvas={tableOnOpenInCanvas}
+      tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
+      classNames={classNames}
     />
   ),
 );

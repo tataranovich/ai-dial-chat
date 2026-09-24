@@ -1,11 +1,15 @@
 import {
   ListDeploymentsInterfaceTypeEnum,
   type ApplicationSchemaSummaryDto,
+  type DeploymentDetailsDto,
   type DeploymentItemDto,
   type DialToolsetDto,
 } from '@epam/ai-dial-chat-api-client';
+import {
+  findDeploymentByIdOrReference,
+  getApiErrorDetails,
+} from '@epam/ai-dial-chat-hooks';
 import type { DeploymentConfigurationSchema } from '@epam/ai-dial-chat-shared';
-import { NotificationVariant } from '@epam/ai-dial-ui-kit';
 import {
   createContext,
   ReactNode,
@@ -18,15 +22,18 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DeploymentSelectorI18nKeys } from '../constants/translation-keys';
+import { useDefaultAgentPreference } from '../hooks/default-agent/useDefaultAgentPreference';
 import { useLanguage } from '../hooks/language/useLanguage';
-import { getApiErrorDetails } from '../server-api/api-error';
 import { getApplicationSchemas } from '../server-api/application-schemas';
-import { getDeploymentConfiguration } from '../server-api/deployments';
+import {
+  getDeploymentConfiguration,
+  getDeploymentDetails,
+} from '../server-api/deployments';
 import { getDeployments } from '../server-api/deployments.api';
 import { listToolsets } from '../server-api/toolsets';
-import { findDeploymentByIdOrReference } from '../utils/deployment-id';
+import { DefaultAgentMode } from '../types/default-agent';
 import { resolveLocalizedText } from '../utils/locale';
-import { useAppConfig } from './AppConfigContext';
+import { useAppConfig, useFeatureFlag } from './AppConfigContext';
 import { useUser } from './auth/UserContext';
 import { useNotification } from './NotificationContext';
 import { useUserConfig } from './UserConfigContext';
@@ -55,6 +62,10 @@ export interface DeploymentsContextType {
   restoreDefaultSelection: () => void;
   /** JSON Schema configuration for the currently selected deployment, or null if none selected or unsupported. */
   selectedDeploymentConfiguration: DeploymentConfigurationSchema | null;
+  /** Full per-entity details (model/application/toolset) for the currently selected deployment, or null if none selected or the fetch failed. */
+  selectedDeploymentDetails: DeploymentDetailsDto | null;
+  /** True while selectedDeploymentDetails is being fetched for the current selection. */
+  isDeploymentDetailsLoading: boolean;
   /** True while deployments are being fetched. */
   isLoading: boolean;
   /** Non-null if the deployments fetch failed. */
@@ -96,8 +107,9 @@ export const DeploymentsContext = createContext<
 const sortDeployments = (
   deployments: DeploymentItemDto[],
   activeLocale: string,
+  pinnedId?: string | null,
 ): DeploymentItemDto[] => {
-  return [...deployments].sort((a, b) => {
+  const sorted = [...deployments].sort((a, b) => {
     const nameCompare = (
       resolveLocalizedText(a.displayName, activeLocale) || a.id
     ).localeCompare(
@@ -110,6 +122,13 @@ const sortDeployments = (
     }
     return a.id.localeCompare(b.id, undefined, { sensitivity: 'accent' });
   });
+  if (pinnedId != null) {
+    const idx = sorted.findIndex((d) => d.id === pinnedId);
+    if (idx > 0) {
+      sorted.unshift(sorted.splice(idx, 1)[0]);
+    }
+  }
+  return sorted;
 };
 
 const sortToolsets = (
@@ -131,23 +150,66 @@ const sortToolsets = (
   });
 };
 
+const isDefaultAgentSentinel = (value: string): boolean =>
+  value === DefaultAgentMode.DefaultAgent ||
+  value === DefaultAgentMode.LastUsedAgent;
+
+const isDeploymentPresent = (
+  deployments: DeploymentItemDto[],
+  id: string | null,
+): boolean => id != null && deployments.some((d) => d.id === id);
+
+/*
+ * `pinnedDefaultId` is the operator default only when `defaultDeploymentPinned`
+ * is on; `configuredDefaultId` is that default regardless of pinning. They are
+ * separate parameters because the two new preference steps need opposite
+ * things: a user who explicitly asks for "Default agent" should get it whether
+ * or not the operator pinned it, while the pre-existing step 4 must stay gated
+ * on the pin.
+ *
+ * `defaultAgent` is the *stored* preference, `null` while the user has never
+ * picked one. The distinction is load-bearing: an explicitly chosen
+ * `DefaultAgentMode.LastUsedAgent` gets a step of its own above the pin, while
+ * a `null` preference keeps falling through to the pin, which is the
+ * precedence `DEFAULT_DEPLOYMENT_PINNED` documents. Without that step the
+ * option would be inert — the control that writes it is offered only where an
+ * agent is pinned, so the pin would always win (Issue #8889).
+ */
 const resolveInitialSelection = (
   deployments: DeploymentItemDto[],
   inMemoryId: string | null,
   userConfigId: string | null,
-  operatorDefaultId: string | null,
+  pinnedDefaultId: string | null,
+  defaultAgent: string | null,
+  configuredDefaultId: string | null,
 ): string | null => {
-  if (inMemoryId != null && deployments.some((d) => d.id === inMemoryId)) {
+  if (isDeploymentPresent(deployments, inMemoryId)) {
     return inMemoryId;
   }
-  if (userConfigId != null && deployments.some((d) => d.id === userConfigId)) {
-    return userConfigId;
+  if (
+    defaultAgent != null &&
+    !isDefaultAgentSentinel(defaultAgent) &&
+    isDeploymentPresent(deployments, defaultAgent)
+  ) {
+    return defaultAgent;
   }
   if (
-    operatorDefaultId != null &&
-    deployments.some((d) => d.id === operatorDefaultId)
+    defaultAgent === DefaultAgentMode.DefaultAgent &&
+    isDeploymentPresent(deployments, configuredDefaultId)
   ) {
-    return operatorDefaultId;
+    return configuredDefaultId;
+  }
+  if (
+    defaultAgent === DefaultAgentMode.LastUsedAgent &&
+    isDeploymentPresent(deployments, userConfigId)
+  ) {
+    return userConfigId;
+  }
+  if (isDeploymentPresent(deployments, pinnedDefaultId)) {
+    return pinnedDefaultId;
+  }
+  if (isDeploymentPresent(deployments, userConfigId)) {
+    return userConfigId;
   }
   return deployments[0]?.id ?? null;
 };
@@ -155,7 +217,7 @@ const resolveInitialSelection = (
 export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
   const { t } = useTranslation();
   const { language } = useLanguage();
-  const { showNotification } = useNotification();
+  const { showErrorNotification } = useNotification();
   const { selectedDeploymentId: userConfigSelectedId, setSelectedDeployment } =
     useUserConfig();
   const { config: appConfig } = useAppConfig();
@@ -170,6 +232,10 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
   );
   const [selectedDeploymentConfiguration, setSelectedDeploymentConfiguration] =
     useState<DeploymentConfigurationSchema | null>(null);
+  const [selectedDeploymentDetails, setSelectedDeploymentDetails] =
+    useState<DeploymentDetailsDto | null>(null);
+  const [isDeploymentDetailsLoading, setIsDeploymentDetailsLoading] =
+    useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -202,10 +268,37 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
    * re-fetch — read through a ref for the same reason as the refs above.
    */
   const languageRef = useRef(language);
+  const isDefaultDeploymentPinned = useFeatureFlag('defaultDeploymentPinned');
+  const isDefaultDeploymentPinnedRef = useRef(isDefaultDeploymentPinned);
+  const selectionExplicitlySetRef = useRef(false);
+  /*
+   * The "Default agent for new chats" preference is read through a ref for the same reason
+   * as the refs above, and one more: `restoreDefaultSelection` must keep a
+   * stable identity (see the comment on `itemsRef` below). Adding the
+   * preference to that callback's dependency array would re-fire
+   * ConversationRoute's mount effect every time the user changes it.
+   *
+   * It is the *stored* value that resolution needs, not the display value the
+   * Preferences control shows — see `resolveInitialSelection`.
+   */
+  const { storedPreference: defaultAgent } = useDefaultAgentPreference();
+  const defaultAgentRef = useRef(defaultAgent);
+
+  useEffect(() => {
+    defaultAgentRef.current = defaultAgent;
+  }, [defaultAgent]);
 
   useEffect(() => {
     languageRef.current = language;
-    setRawDeployments((prev) => sortDeployments(prev, language));
+    setRawDeployments((prev) =>
+      sortDeployments(
+        prev,
+        language,
+        isDefaultDeploymentPinnedRef.current
+          ? defaultDeploymentIdRef.current
+          : null,
+      ),
+    );
     setToolsets((prev) => sortToolsets(prev, language));
   }, [language]);
 
@@ -214,8 +307,16 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
   }, [userConfigSelectedId]);
 
   useEffect(() => {
+    isDefaultDeploymentPinnedRef.current = isDefaultDeploymentPinned;
     defaultDeploymentIdRef.current = appConfig.defaultDeploymentId;
-  }, [appConfig.defaultDeploymentId]);
+    setRawDeployments((prev) =>
+      sortDeployments(
+        prev,
+        languageRef.current,
+        isDefaultDeploymentPinned ? appConfig.defaultDeploymentId : null,
+      ),
+    );
+  }, [appConfig.defaultDeploymentId, isDefaultDeploymentPinned]);
 
   const loadDeployments = useCallback(
     async (signal: { isCancelled: boolean }) => {
@@ -265,9 +366,13 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
       }
 
       if (deploymentsRequestIdRef.current === deploymentsRequestId) {
+        const effectivePinnedId = isDefaultDeploymentPinnedRef.current
+          ? defaultDeploymentIdRef.current
+          : null;
         const deployments = sortDeployments(
           deploymentsResult.value.deployments ?? [],
           languageRef.current,
+          effectivePinnedId,
         );
         setRawDeployments(deployments);
         setSelectedItemIdState((prev) =>
@@ -275,6 +380,8 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
             deployments,
             prev,
             userConfigSelectedIdRef.current,
+            effectivePinnedId,
+            defaultAgentRef.current,
             defaultDeploymentIdRef.current,
           ),
         );
@@ -299,25 +406,34 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
   }, [loadDeployments, userSub]);
 
   /*
-   * Handles the case where userConfigSelectedId/defaultDeploymentId only
-   * become known *after* the initial load already resolved with no
-   * selection (e.g. user config loads slower than deployments) — recomputes
-   * the selection against the already-loaded list without refetching.
+   * Re-resolves an automatically chosen selection when user/app config becomes
+   * available after the catalog. Explicit user and conversation selections are
+   * preserved, while a provisional fallback can still be replaced by the
+   * configured priority.
+   *
+   * Unlike `restoreDefaultSelection`, this is a dependency-driven effect rather
+   * than a stable callback, so it reads live values and lists them as deps —
+   * including the "Default agent for new chats" preference, so changing it while no explicit
+   * selection has been made re-resolves immediately.
    */
   useEffect(() => {
-    if (selectedItemId != null || rawDeployments.length === 0) return;
+    if (selectionExplicitlySetRef.current || rawDeployments.length === 0)
+      return;
     const resolved = resolveInitialSelection(
       rawDeployments,
       null,
       userConfigSelectedId,
+      isDefaultDeploymentPinned ? appConfig.defaultDeploymentId : null,
+      defaultAgent,
       appConfig.defaultDeploymentId,
     );
     if (resolved != null) setSelectedItemIdState(resolved);
   }, [
     userConfigSelectedId,
     appConfig.defaultDeploymentId,
+    isDefaultDeploymentPinned,
+    defaultAgent,
     rawDeployments,
-    selectedItemId,
   ]);
 
   const refetchToolsets = useCallback(async () => {
@@ -329,13 +445,12 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
     } catch (error) {
       if (toolsetsRequestIdRef.current !== requestId) return;
       const { traceId } = await getApiErrorDetails(error);
-      showNotification({
-        variant: NotificationVariant.Error,
+      showErrorNotification({
         message: t(DeploymentSelectorI18nKeys.RefetchToolsetsFailed),
         requestId: traceId,
       });
     }
-  }, [showNotification, t]);
+  }, [showErrorNotification, t]);
 
   const refetchDeployments = useCallback(
     async (refresh = true) => {
@@ -350,19 +465,24 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
         );
         if (deploymentsRequestIdRef.current !== requestId) return;
         setRawDeployments(
-          sortDeployments(deployments ?? [], languageRef.current),
+          sortDeployments(
+            deployments ?? [],
+            languageRef.current,
+            isDefaultDeploymentPinnedRef.current
+              ? defaultDeploymentIdRef.current
+              : null,
+          ),
         );
       } catch (error) {
         if (deploymentsRequestIdRef.current !== requestId) return;
         const { traceId } = await getApiErrorDetails(error);
-        showNotification({
-          variant: NotificationVariant.Error,
+        showErrorNotification({
           message: t(DeploymentSelectorI18nKeys.RefetchDeploymentsFailed),
           requestId: traceId,
         });
       }
     },
-    [showNotification, t],
+    [showErrorNotification, t],
   );
 
   const mergeSharedItem = useCallback(
@@ -380,6 +500,9 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
         sortDeployments(
           [...prev.filter((d) => d.id !== item.id), item],
           languageRef.current,
+          isDefaultDeploymentPinnedRef.current
+            ? defaultDeploymentIdRef.current
+            : null,
         ),
       );
     },
@@ -404,6 +527,18 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
     });
   }, [rawDeployments, schemas]);
 
+  /*
+   * `restoreDefaultSelection` is a one-shot action fired when the new-chat
+   * route mounts, not a reaction to the catalog changing. Reading `items`
+   * through a ref keeps that callback's identity stable, so a deployments
+   * refetch — which rebuilds `items` — cannot re-fire the caller's effect and
+   * silently discard the selection the user just made.
+   */
+  const itemsRef = useRef(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
   const resolvedSelectedDeploymentId = useMemo(
     () =>
       selectedItemId == null
@@ -416,27 +551,34 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     if (!resolvedSelectedDeploymentId) {
       setSelectedDeploymentConfiguration(null);
+      setSelectedDeploymentDetails(null);
+      setIsDeploymentDetailsLoading(false);
       return;
     }
 
     const signal = { isCancelled: false };
+    setIsDeploymentDetailsLoading(true);
 
-    const loadConfiguration = async () => {
-      try {
-        const configuration = await getDeploymentConfiguration(
-          resolvedSelectedDeploymentId,
-        );
-        if (!signal.isCancelled) {
-          setSelectedDeploymentConfiguration(configuration);
-        }
-      } catch {
-        if (!signal.isCancelled) {
-          setSelectedDeploymentConfiguration(null);
-        }
-      }
+    const loadConfigurationAndDetails = async () => {
+      const [configurationResult, detailsResult] = await Promise.allSettled([
+        getDeploymentConfiguration(resolvedSelectedDeploymentId),
+        getDeploymentDetails(resolvedSelectedDeploymentId),
+      ]);
+
+      if (signal.isCancelled) return;
+
+      setSelectedDeploymentConfiguration(
+        configurationResult.status === 'fulfilled'
+          ? configurationResult.value
+          : null,
+      );
+      setSelectedDeploymentDetails(
+        detailsResult.status === 'fulfilled' ? detailsResult.value : null,
+      );
+      setIsDeploymentDetailsLoading(false);
     };
 
-    loadConfiguration();
+    loadConfigurationAndDetails();
 
     return () => {
       signal.isCancelled = true;
@@ -445,6 +587,7 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
 
   const setSelectedItemId = useCallback(
     (id: string | null) => {
+      selectionExplicitlySetRef.current = true;
       setSelectedItemIdState(id);
       void setSelectedDeployment(id).catch((err) => {
         console.warn(
@@ -457,18 +600,25 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const restoreSelectedItemId = useCallback((id: string) => {
+    selectionExplicitlySetRef.current = true;
     setSelectedItemIdState(id);
   }, []);
 
   const restoreDefaultSelection = useCallback(() => {
+    selectionExplicitlySetRef.current = false;
+    const effectiveDefaultDeploymentId = isDefaultDeploymentPinnedRef.current
+      ? defaultDeploymentIdRef.current
+      : null;
     const resolved = resolveInitialSelection(
-      items,
+      itemsRef.current,
       null,
-      userConfigSelectedId,
-      appConfig.defaultDeploymentId,
+      userConfigSelectedIdRef.current,
+      effectiveDefaultDeploymentId,
+      defaultAgentRef.current,
+      defaultDeploymentIdRef.current,
     );
     if (resolved != null) setSelectedItemIdState(resolved);
-  }, [items, userConfigSelectedId, appConfig.defaultDeploymentId]);
+  }, []);
 
   const contextValue = useMemo(
     () => ({
@@ -478,6 +628,8 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
       restoreSelectedItemId,
       restoreDefaultSelection,
       selectedDeploymentConfiguration,
+      selectedDeploymentDetails,
+      isDeploymentDetailsLoading,
       isLoading,
       error,
       schemas,
@@ -493,6 +645,8 @@ export const DeploymentsProvider = ({ children }: { children: ReactNode }) => {
       restoreSelectedItemId,
       restoreDefaultSelection,
       selectedDeploymentConfiguration,
+      selectedDeploymentDetails,
+      isDeploymentDetailsLoading,
       isLoading,
       error,
       schemas,

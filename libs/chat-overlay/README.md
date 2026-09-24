@@ -74,6 +74,8 @@ const overlay = new ChatOverlay('#chat-root', {
       entra: OverlayAuthUiMode.External,
       keycloak: OverlayAuthUiMode.SameWindow,
     },
+    /* Optional: start this provider's login with no user interaction. */
+    autoSignInProvider: 'keycloak',
   },
 });
 
@@ -81,6 +83,19 @@ const overlay = new ChatOverlay('#chat-root', {
  * supports iframe login for its specific configuration before enabling it.
  */
 ```
+
+`autoSignInProvider` names the provider whose login the embedded app starts on
+its own while the session is unauthenticated — the successor to the legacy
+`signInOptions.autoSignIn` + `signInProvider` pair. Its presence enables the
+behavior; there is no separate boolean.
+
+The provider must also be mapped to `OverlayAuthUiMode.SameWindow`, because
+only that mode navigates the iframe itself: the `External` path calls
+`window.open`, which a browser blocks without a user gesture. The app also
+skips the automatic start when the backend does not register the id, and when
+it already started one for the same URL in the last 60 seconds — a guard
+against an identity provider that returns the user still unauthenticated. Every
+skip logs one console warning and leaves the normal login gate in place.
 
 Notes:
 
@@ -95,6 +110,38 @@ await overlay.setOverlayOptions({
   enabledFeatures: [OverlayFeature.Header, OverlayFeature.ConversationsSharing],
 });
 ```
+
+#### Message shape and agent stages
+
+`getMessages()` and `sendMessage()` return `OverlayChatMessage` — a narrow
+projection of the app's own message, not the chat's internal entity:
+
+```ts
+import {
+  type OverlayChatMessage,
+  OverlayStageStatus,
+} from '@epam/ai-dial-chat-overlay';
+
+const { messages } = await overlay.getMessages();
+
+const last: OverlayChatMessage | undefined = messages.at(-1);
+const ranCanvasTool = last?.stages?.some(
+  (stage) =>
+    stage.name === 'Render canvas' &&
+    stage.status === OverlayStageStatus.Completed,
+);
+```
+
+`stages` carries the agent execution stages (tool calls, retrieval steps,
+reasoning steps) of a message that has any, and is absent otherwise — a host
+reads it to react to what an agent actually did, for example refreshing its own
+view after a specific tool has run. Each stage carries `index`, `name`,
+`status` (`null` while still running, otherwise an `OverlayStageStatus`), and
+the optional `content` and `tag`. Stage attachments are not projected.
+
+Stages are read on demand, not pushed: subscribe to
+`OverlayEventType.GptEndGenerating` and call `getMessages()` from the handler
+to inspect the finished response.
 
 #### Conversation-list methods
 
@@ -164,19 +211,19 @@ manager.destroy();
 
 ## Options (`ChatOverlayOptions`)
 
-| Option                  | Type                                                       | Description                                                                            |
-| ----------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `domain`                | `string`                                                   | Full URL of the chat app instance to embed (origin + optional path).                   |
-| `requestTimeout`        | `number?`                                                  | Milliseconds to wait for a request's response before rejecting. Defaults to `10000`.   |
-| `loaderStyles`          | `Record<string, string>?`                                  | Inline CSS properties applied to the loader element while visible.                     |
-| `loaderClass`           | `string?`                                                  | CSS class applied to the loader element.                                               |
-| `loaderInnerHTML`       | `string?`                                                  | Custom HTML rendered inside the loader, replacing the default spinner.                 |
-| `loaderHideEvent`       | `OverlayEventType?`                                        | Event whose receipt hides the loader. Defaults to `OverlayEventType.Ready`.            |
-| `enabledFeatures`       | `OverlayFeature[]?`                                        | Embed-time features to enable, e.g. `OverlayFeature.VoiceInput` for microphone access. |
-| `theme`                 | `string?`                                                  | Theme name applied to the embedded app.                                                |
-| `modelId`               | `string?`                                                  | Deployment/model id to select in the embedded app.                                     |
-| `overlayConversationId` | `string?`                                                  | Conversation id the embedded app should load and display.                              |
-| `auth`                  | `{ providerUiModes?: Record<string, OverlayAuthUiMode> }?` | Per-provider login UI modes; unconfigured providers default to external login.         |
+| Option                  | Type                                                                                    | Description                                                                                                                                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `domain`                | `string`                                                                                | Full URL of the chat app instance to embed (origin + optional path).                                                                                                                                                    |
+| `requestTimeout`        | `number?`                                                                               | Milliseconds to wait for a request's response before rejecting. Defaults to `10000`.                                                                                                                                    |
+| `loaderStyles`          | `Record<string, string>?`                                                               | Inline CSS properties applied to the loader element, overriding the injected defaults — except `display`, which is cleared when the loader hides (see [Styling](#styling)).                                             |
+| `loaderClass`           | `string?`                                                                               | CSS class added to the loader element alongside `dial-overlay-loader`.                                                                                                                                                  |
+| `loaderInnerHTML`       | `string?`                                                                               | Custom HTML rendered inside the loader, replacing the default spinner.                                                                                                                                                  |
+| `loaderHideEvent`       | `OverlayEventType?`                                                                     | Event whose receipt hides the loader. Defaults to `OverlayEventType.Ready`.                                                                                                                                             |
+| `enabledFeatures`       | `OverlayFeature[]?`                                                                     | Embed-time features to enable, e.g. `OverlayFeature.VoiceInput` for microphone access.                                                                                                                                  |
+| `theme`                 | `string?`                                                                               | Theme name applied to the embedded app.                                                                                                                                                                                 |
+| `modelId`               | `string?`                                                                               | Deployment/model id to select in the embedded app.                                                                                                                                                                      |
+| `overlayConversationId` | `string?`                                                                               | Conversation id the embedded app should load and display.                                                                                                                                                               |
+| `auth`                  | `{ providerUiModes?: Record<string, OverlayAuthUiMode>; autoSignInProvider?: string }?` | Per-provider login UI modes; unconfigured providers default to external login. `autoSignInProvider` starts that provider's login without user interaction, and requires the same provider to be mapped to `SameWindow`. |
 
 `ChatOverlayManagerOptions` extends `ChatOverlayOptions` with `overlayId` (required), `position` (`OverlayPosition`, default `RightBottom`), `width`/`height` (default `380`/`600`), `zIndex` (default `999999`), `allowFullscreen`, and `toggleButtonAriaLabel`/`closeButtonAriaLabel`/`fullscreenButtonAriaLabel`.
 
@@ -192,6 +239,52 @@ manager.destroy();
 | `GptEndGenerating`           | When a generation completes normally (not on user-initiated stop).     |
 | `StopGenerating`             | When the user (or host) stops an in-flight generation.                 |
 | `ConversationsUpdated`       | Whenever the app's conversation list changes.                          |
+
+## Styling
+
+The overlay ships no CSS file — the first `ChatOverlay` constructed appends a
+`<style id="dial-overlay-styles">` element to `document.head`, once per document,
+and elements carry classes instead of inline styles:
+
+| Class                         | Applied to                                                              |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `dial-overlay-root`           | The host root element, only when its computed `position` is `static`.   |
+| `dial-overlay-iframe`         | The embedded chat iframe.                                               |
+| `dial-overlay-loader`         | The loader element.                                                     |
+| `dial-overlay-loader--hidden` | The loader once `loaderHideEvent` arrives (`display: none !important`). |
+
+Host CSS of equal or higher specificity can restyle any of these, and
+`loaderStyles` is an inline-style escape hatch that wins over both — with one
+exception. Visibility is not styling: `dial-overlay-loader--hidden` declares
+`display: none !important`, and `hideLoader()` also clears any inline `display`
+the host set through `loaderStyles`, so the loader always disappears when
+`loaderHideEvent` arrives. Set every other property freely; do not use `display`
+to drive loader visibility — configure `loaderHideEvent` instead.
+
+The colors are fixed by design (this lib ships no CSS file and does not
+participate in the `--cs-*` / `buildCssVars` theming channel), but each one is
+read through a custom property with a literal fallback. Set these on any
+ancestor of the overlay root to retheme without an `!important` override:
+
+| Custom property                       | Default   | Applies to                                               |
+| ------------------------------------- | --------- | -------------------------------------------------------- |
+| `--dial-overlay-loader-background`    | `#ffffff` | Loader backdrop.                                         |
+| `--dial-overlay-loader-color`         | `#2764d9` | Loader foreground — the spinner's `currentColor` stroke. |
+| `--dial-overlay-btn-background`       | `#2764d9` | `ChatOverlayManager` chrome buttons.                     |
+| `--dial-overlay-btn-color`            | `#ffffff` | Chrome button icon.                                      |
+| `--dial-overlay-btn-background-hover` | `#1d4fb8` | Chrome button on `:hover` / `:focus-visible`.            |
+| `--dial-overlay-btn-outline`          | `#1d4fb8` | Chrome button focus outline.                             |
+
+```css
+:root {
+  --dial-overlay-loader-background: #131319;
+  --dial-overlay-loader-color: #5c8dea;
+}
+```
+
+`ChatOverlayManager` injects its own
+`<style id="dial-overlay-manager-styles">` element for the `dial-overlay-btn`
+chrome buttons.
 
 ## Deployment prerequisites
 

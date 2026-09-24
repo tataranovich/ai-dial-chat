@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { QUOTATIONS_CLASS } from '../../../constants/public-class-names';
 import type { AnnotationGroup } from '../../../utils/group-annotations-by-source';
 import { CitationCard } from '../CitationCard';
 
@@ -9,6 +10,7 @@ const makeGroup = (
   attachmentType = 'application/pdf',
   title?: string,
 ): AnnotationGroup => ({
+  groupKey: 'https://files.example.com/report.pdf',
   sourceUrl: 'https://files.example.com/report.pdf',
   sourceName: 'report.pdf',
   annotations: Array.from({ length: count }, (_, i) => ({
@@ -152,9 +154,21 @@ describe('CitationCard', () => {
       'ReallyLongUnbrokenTitleTokenThatWouldOtherwiseOverflowTheFixedWidthCard',
     );
 
-    const { container } = render(<CitationCard {...defaultProps({ group })} />);
+    render(<CitationCard {...defaultProps({ group })} />);
 
-    const title = container.querySelectorAll('p')[0];
+    const title = screen.getByText(
+      'ReallyLongUnbrokenTitleTokenThatWouldOtherwiseOverflowTheFixedWidthCard',
+    );
     expect(title.className).toContain('break-words');
+  });
+});
+
+describe('CitationCard — public class names', () => {
+  it('stamps the card root', () => {
+    render(<CitationCard {...defaultProps()} />);
+
+    expect(screen.getByRole('dialog').classList).toContain(
+      QUOTATIONS_CLASS.citationCard,
+    );
   });
 });

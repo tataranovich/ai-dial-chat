@@ -1,12 +1,13 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
-  DIAL_ICON_SIZE,
   CloseButton,
-  GhostIconButton,
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
+  GhostIconButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconArrowLeft } from '@tabler/icons-react';
-import type { CSSProperties, FC, ReactNode } from 'react';
+import { type CSSProperties, type FC, type ReactNode, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useBottomSheet } from '../../hooks/useBottomSheet';
 import styles from './BottomSheetShell.module.scss';
@@ -19,7 +20,7 @@ export interface BottomSheetShellColors {
   sheetBg?: string;
   /** Sheet title text color. Defaults to `--text-primary`. */
   sheetText?: string;
-  /** Divider line color below the header. Defaults to `--bg-layer-4`. */
+  /** Divider line color below the header. Defaults to `--stroke-tertiary`. */
   divider?: string;
 }
 
@@ -41,7 +42,7 @@ export interface BottomSheetShellProps {
   'aria-label'?: string;
   /** Inline CSS custom properties forwarded to the sheet root for theming. */
   style?: CSSProperties;
-  /** CSS class applied to the sheet title. Defaults to `'dial-body-semi-bold-text'`. */
+  /** CSS class applied to the sheet title. Defaults to `'dial-body-semi-text'`. */
   titleClassName?: string;
   /** Extra classes appended to the sheet container (e.g. a max-height constraint). */
   className?: string;
@@ -51,7 +52,7 @@ export interface BottomSheetShellProps {
   children: ReactNode;
 }
 
-/** Generic mobile bottom-sheet shell: backdrop, bottom-anchored panel, optional header, Escape-to-close, and body-scroll lock. */
+/** Generic mobile bottom-sheet shell: backdrop, bottom-anchored panel, optional header, Escape-to-close, body-scroll lock, and dialog focus management (initial focus, Tab trapping, focus restoration). */
 export const BottomSheetShell: FC<BottomSheetShellProps> = ({
   isOpen,
   title,
@@ -66,7 +67,14 @@ export const BottomSheetShell: FC<BottomSheetShellProps> = ({
   colors,
   children,
 }) => {
-  useBottomSheet(isOpen, onClose);
+  /*
+   * Focus management (initial focus into the sheet, Tab trapping, and
+   * restoration to the trigger on close) lives in the hook and keys off this
+   * ref; `tabIndex={-1}` below makes the dialog itself the focus fallback
+   * when a sheet hosts no focusable content.
+   */
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  useBottomSheet(isOpen, onClose, sheetRef);
 
   if (!isOpen || typeof document === 'undefined') return null;
 
@@ -89,9 +97,11 @@ export const BottomSheetShell: FC<BottomSheetShellProps> = ({
 
       {/* Sheet */}
       <div
+        ref={sheetRef}
         role="dialog"
         aria-modal
         aria-label={title ?? ariaLabel}
+        tabIndex={-1}
         style={{ ...cssVars, ...style }}
         className={mergeClasses(
           styles.sheet,
@@ -109,7 +119,7 @@ export const BottomSheetShell: FC<BottomSheetShellProps> = ({
                     icon={
                       <IconArrowLeft
                         size={DIAL_ICON_SIZE.LG}
-                        stroke={1.5}
+                        stroke={DIAL_KIT_ICON_STROKE}
                         className="rtl:scale-x-[-1]"
                       />
                     }

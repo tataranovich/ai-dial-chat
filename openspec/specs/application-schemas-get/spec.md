@@ -1,6 +1,8 @@
 # Capability: application-schemas-get
 
-Fetch a single DIAL Core application type schema by its `$id`.
+## Purpose
+
+Endpoint that fetches a single DIAL Core application type schema by its `$id`, with per-user caching.
 
 ---
 
@@ -20,13 +22,13 @@ Fetch a single DIAL Core application type schema by its `$id`.
 | `id` | Path | `string` | Yes | The schema `$id` (URL-encoded). Must be non-empty. |
 
 Path param DTO (`GetApplicationSchemaDto`):
-- `id`: `@IsString()` + `@IsNotEmpty()` + `@Matches(/^[^\s]+$/)` (no whitespace; prevents trivially invalid ids from reaching upstream)
+- `id`: `@IsString()` + `@IsNotEmpty()` + `@Matches(/^\S+$/)` (no whitespace; prevents trivially invalid ids from reaching upstream)
 
 ## Response — 200 OK
 
 The full JSON Schema document for the application type, returned as-is from upstream.
 
-Response DTO: `ApplicationSchemaDto` (alias for `Record<string, unknown>`)
+There is no named response DTO: the service returns `Record<string, unknown>` and the endpoint documents it in Swagger as an inline free-form object (`{ type: 'object', additionalProperties: true }`), because the payload is whatever JSON Schema document DIAL Core holds for that application type.
 
 ```json
 {
@@ -48,104 +50,112 @@ The response passes through the upstream payload verbatim (all top-level keys pr
 | 401 | No valid session cookie / upstream returns 401 |
 | 403 | Caller lacks permission to access this schema |
 | 404 | Schema not found for the given `id` |
-| 429 | Rate limit exceeded (60 req/60 s per user) |
-| 502 | DIAL Core returned a non-OK, non-4xx status |
+| 429 | DIAL Core rate limit exceeded |
+| 502 | DIAL Core returned a 5xx, or any status the shared mapper has no more specific exception for |
 | 503 | DIAL Core is unreachable or timed out |
 
-## Rate Limiting
-
-`@Throttle({ default: { limit: 60, ttl: 60000 } })` — same as `GET /api/v1/applications`.
+Status translation is delegated to the shared `mapDialHttpStatus` / `handleDialFetchError` helpers, so this endpoint maps a given upstream status exactly the way every other `chat-api` domain does.
 
 ## Caching
 
 - Cache key: `application-schemas:item:<userSub>:<schemaId>`
 - TTL: 60 seconds
 - Scope: per authenticated user, per schema id
-- On cache hit: upstream SDK is not called; cached `ApplicationSchemaDto` is returned directly.
+- Read-through and write are performed inline in the service (not via the shared `withCachedDialRequest` helper the list endpoint uses), with transport errors mapped by `handleDialFetchError` in the surrounding `try`/`catch`.
+- On cache hit: upstream SDK is not called; the cached schema object is returned directly.
 
 ## Generated Client
 
 After OpenAPI regeneration, `ApplicationsApi` (or `ApplicationSchemasApi`) exposes:
 
 ```ts
-applicationsApi.getApplicationSchema({ id: string }): Promise<ApplicationSchemaDto>
+applicationsApi.getApplicationSchema({ id: string }): Promise<object>
 ```
 
 Frontend server-api wrapper: `apps/chat/src/server-api/application-schemas.ts`
 
 ```ts
-export const getApplicationSchema = (id: string): Promise<ApplicationSchemaDto> =>
+export const getApplicationSchema = (
+  id: string,
+): Promise<Record<string, unknown>> =>
   applicationsApi.getApplicationSchema({ id });
 ```
 
 ---
 
-## Scenarios
+## Requirements
 
-### S1 — Authenticated user fetches schema by id
+### Requirement: Authenticated schema lookup by `$id`
 
-**Given** an authenticated session user  
-**When** `GET /api/v1/application-schemas/https%3A%2F%2Fexample.com%2Fschemas%2Fquick-app` is called  
-**Then** the service calls `client.getCustomApplicationSchema({ params: { query: { id: '...' } }, headers })` with a `Bearer <accessToken>` Authorization header  
-**And** the response is `200` with the JSON schema object
+`GET /api/v1/application-schemas/:id` SHALL require a valid session and SHALL fetch the schema from DIAL Core via `client.getCustomApplicationSchema`, passing the decoded id as the SDK call's `id` **query** parameter and forwarding the session user's access token as a `Bearer` Authorization header. The upstream payload SHALL be returned verbatim, with every top-level key preserved and no normalisation applied.
 
-### S2 — Cache hit skips upstream call
+#### Scenario: Authenticated user fetches a schema by id
 
-**Given** the result for `application-schemas:item:<userSub>:<schemaId>` is already cached  
-**When** `GET /api/v1/application-schemas/:id` is called  
-**Then** `client.getCustomApplicationSchema` is NOT called  
-**And** the cached schema is returned with `200`
+- **GIVEN** an authenticated session user
+- **WHEN** `GET /api/v1/application-schemas/https%3A%2F%2Fexample.com%2Fschemas%2Fquick-app` is called
+- **THEN** the service calls `client.getCustomApplicationSchema` with `query: { id }` carrying the decoded id, and responds `200` with the JSON schema object unchanged
 
-### S3 — Cache miss populates cache
+#### Scenario: The access token reaches upstream
 
-**Given** no cached entry for the user + schema id pair  
-**When** the SDK returns successfully  
-**Then** the result is stored in cache with a 60 second TTL
+- **GIVEN** a session user whose access token is `tok-xyz`
+- **WHEN** the service calls the SDK for a schema
+- **THEN** the SDK request carries `Authorization: Bearer tok-xyz`
 
-### S4 — Empty id returns 400
+### Requirement: The `id` path parameter is validated before any upstream call
 
-**Given** the client calls `GET /api/v1/application-schemas/` (empty segment) or sends id as whitespace  
-**Then** `ValidationPipe` rejects the request  
-**And** the endpoint returns `400 Bad Request`
+`GetApplicationSchemaDto.id` SHALL be validated with `@IsString()`, `@IsNotEmpty()`, and `@Matches(/^\S+$/)`, so an empty or whitespace-only id is rejected by the global `ValidationPipe` rather than forwarded to DIAL Core.
 
-### S5 — Authorization header is forwarded to upstream
+#### Scenario: An empty id is rejected
 
-**Given** a session user with access token `tok-xyz`  
-**When** the service calls the SDK for a schema  
-**Then** the SDK request includes `Authorization: Bearer tok-xyz`
+- **WHEN** the endpoint is called with an empty or whitespace-only `id` segment
+- **THEN** the request is rejected with `400 Bad Request` and no upstream call is made
 
-### S6 — Upstream 401 maps to 401
+### Requirement: Results are cached per user and per schema id
 
-**Given** DIAL Core returns 401  
-**Then** the endpoint returns `401 Unauthorized`
+The resolved schema SHALL be cached under `application-schemas:item:<userSub>:<schemaId>` with a 60 second TTL. A cache hit SHALL be served without calling the SDK, and cache entries SHALL NOT be shared between users.
 
-### S7 — Upstream 403 maps to 403
+#### Scenario: A cache hit skips the upstream call
 
-**Given** DIAL Core returns 403  
-**Then** the endpoint returns `403 Forbidden`
+- **GIVEN** `application-schemas:item:<userSub>:<schemaId>` is already cached
+- **WHEN** the endpoint is called again
+- **THEN** `client.getCustomApplicationSchema` is not called and the cached schema is returned with `200`
 
-### S8 — Upstream 404 maps to 404
+#### Scenario: A failed lookup is not cached
 
-**Given** DIAL Core returns 404 (schema not found for the given id)  
-**Then** the endpoint returns `404 Not Found`
+- **WHEN** the upstream call fails and the endpoint surfaces a mapped error
+- **THEN** nothing is written to `application-schemas:item:<userSub>:<schemaId>`, so the next request retries upstream
 
-### S9 — Upstream 5xx maps to 502
+#### Scenario: A cache miss populates the cache
 
-**Given** DIAL Core returns 500 or 503  
-**Then** the endpoint returns `502 Bad Gateway`
+- **GIVEN** no cached entry exists for the user and schema id
+- **WHEN** the SDK returns successfully
+- **THEN** the result is stored with a 60 second TTL
 
-### S10 — Network error maps to 503
+#### Scenario: Two users do not share an entry
 
-**Given** the SDK throws a network/fetch error  
-**Then** the endpoint returns `503 Service Unavailable`
+- **WHEN** user A and user B fetch the same schema id
+- **THEN** each is served from its own key, `application-schemas:item:<subA>:<id>` and `application-schemas:item:<subB>:<id>`
 
-### S11 — Different users have independent cache entries
+### Requirement: Upstream failures map to typed HTTP exceptions
 
-**Given** user A and user B both fetch the same schema id  
-**Then** each gets their own cache key (`application-schemas:item:<subA>:<id>`, `application-schemas:item:<subB>:<id>`)
+Upstream non-OK statuses SHALL be translated by the shared `mapDialHttpStatus` helper, so `401`, `403`, and `404` surface unchanged and a `5xx` becomes `502 Bad Gateway`; a network or timeout failure SHALL be translated by `handleDialFetchError` into `503 Service Unavailable`.
 
-### S12 — Generated client method exists after OpenAPI generation
+#### Scenario: Client-error statuses pass through
 
-**Given** the Swagger annotations are in place  
-**When** `npm run openapi` runs  
-**Then** `libs/chat-api-client` contains a `getApplicationSchema({ id })` method with return type `ApplicationSchemaDto` / `Record<string, unknown>`
+- **WHEN** DIAL Core returns `401`, `403`, or `404`
+- **THEN** the endpoint returns the same status
+
+#### Scenario: Server errors and outages are distinguished
+
+- **WHEN** DIAL Core returns `500` or `503`
+- **THEN** the endpoint returns `502 Bad Gateway`
+- **AND** when the SDK throws a network or timeout error, the endpoint returns `503 Service Unavailable`
+
+### Requirement: The endpoint is reachable through the generated client
+
+Swagger annotations SHALL declare `operationId: getApplicationSchema` so that regeneration produces a typed SDK method, wrapped for the frontend in `apps/chat/src/server-api/application-schemas.ts`.
+
+#### Scenario: Regeneration produces the typed method
+
+- **WHEN** `npm run openapi` runs against the annotated controller
+- **THEN** `libs/chat-api-client` exposes `getApplicationSchema({ id })` returning `ApplicationSchemaDto`

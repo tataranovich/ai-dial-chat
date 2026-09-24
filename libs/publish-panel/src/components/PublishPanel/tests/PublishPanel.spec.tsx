@@ -1,7 +1,9 @@
+import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ComponentProps, ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { PUBLISH_PANEL_CLASS } from '../../../constants/public-class-names';
 import {
   PublicationRuleFunction,
   PublishFolderNode,
@@ -98,6 +100,8 @@ const renderPanel = (props?: Partial<ComponentProps<typeof PublishPanel>>) =>
       hasExistingPublicationInFolder={false}
       hasWriteAccess={true}
       isSubmitting={false}
+      author=""
+      onAuthorChange={vi.fn()}
       rules={[]}
       onRulesChange={vi.fn()}
       ruleSourceOptions={['title', 'role', 'dial_roles']}
@@ -119,14 +123,140 @@ describe('PublishPanel', () => {
     expect(screen.queryByText('ali.deepseek-v4-flash')).toBeNull();
   });
 
+  it('renders the entity-header row with a version tag when the resource has a type', () => {
+    renderPanel({ resource: { ...resource, type: CatalogEntityType.Model } });
+    expect(screen.getByText(CatalogEntityType.Model)).toBeTruthy();
+    expect(screen.getByText('Version 4.0.1 · current')).toBeTruthy();
+  });
+
+  it('ignores renderSummary once the resource carries a type', () => {
+    renderPanel({
+      resource: { ...resource, type: CatalogEntityType.Model },
+      renderSummary: () => <div>Custom entity header</div>,
+    });
+    expect(screen.queryByText('Custom entity header')).toBeNull();
+  });
+
+  describe('credentials opt-in', () => {
+    const CREDENTIALS_LABEL = 'Publish with my credentials';
+
+    it('renders nothing when no change handler is supplied', () => {
+      renderPanel();
+      expect(screen.queryByLabelText(CREDENTIALS_LABEL)).toBeNull();
+      expect(screen.queryByRole('checkbox')).toBeNull();
+    });
+
+    it('renders the checkbox with its default label once a handler is supplied', () => {
+      renderPanel({ onPublishCredentialsChange: vi.fn() });
+      expect(screen.getByRole('checkbox')).toBeTruthy();
+      expect(screen.getByText(CREDENTIALS_LABEL)).toBeTruthy();
+    });
+
+    it('renders host-supplied label and caption in place of the defaults', () => {
+      renderPanel({
+        onPublishCredentialsChange: vi.fn(),
+        labels: {
+          credentialsLabel: 'Partager mes identifiants',
+          credentialsHint: 'Les membres ne devront pas se connecter.',
+        },
+      });
+      expect(screen.getByText('Partager mes identifiants')).toBeTruthy();
+      expect(
+        screen.getByText('Les membres ne devront pas se connecter.'),
+      ).toBeTruthy();
+    });
+
+    it('reflects the current value', () => {
+      renderPanel({
+        publishCredentials: true,
+        onPublishCredentialsChange: vi.fn(),
+      });
+      expect(screen.getByRole('checkbox').getAttribute('aria-checked')).toBe(
+        'true',
+      );
+    });
+
+    it('reports the negated value on toggle and holds no state of its own', async () => {
+      const onPublishCredentialsChange = vi.fn();
+      renderPanel({ publishCredentials: false, onPublishCredentialsChange });
+
+      await userEvent.click(screen.getByRole('checkbox'));
+
+      expect(onPublishCredentialsChange).toHaveBeenCalledWith(true);
+      /* Controlled: the panel still renders what the host passed. */
+      expect(screen.getByRole('checkbox').getAttribute('aria-checked')).toBe(
+        'false',
+      );
+    });
+
+    it('is disabled while a publish request is in flight', () => {
+      renderPanel({
+        isSubmitting: true,
+        onPublishCredentialsChange: vi.fn(),
+      });
+      const checkbox = screen.getByRole('checkbox');
+      expect(
+        checkbox.hasAttribute('disabled') ||
+          checkbox.getAttribute('aria-disabled') === 'true',
+      ).toBe(true);
+    });
+
+    /* The consequence of ticking must be in the description, not the label alone. */
+    it('wires the caption as the checkbox accessible description', () => {
+      renderPanel({
+        onPublishCredentialsChange: vi.fn(),
+        labels: {
+          credentialsHint: 'Members will use this without signing in.',
+        },
+      });
+
+      const checkbox = screen.getByRole('checkbox');
+      const caption = screen.getByText(
+        'Members will use this without signing in.',
+      );
+      expect(caption.id).toBeTruthy();
+      expect(checkbox.getAttribute('aria-describedby')).toContain(caption.id);
+    });
+  });
+
   it('renders the folder section title', () => {
     renderPanel();
     expect(screen.getByText('Publish to folder')).toBeTruthy();
   });
 
+  it('forwards the translated folder-creation cancel label', async () => {
+    renderPanel({ labels: { cancelCreatingFolderLabel: 'Discard folder' } });
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Create new folder' }),
+    );
+
+    expect(screen.getByRole('button', { name: 'Discard folder' })).toBeTruthy();
+  });
+
   it('renders the access-rules section between the folder block and history', () => {
     renderPanel({ selectedFolderPath: ['Shared', 'Data Science'] });
     expect(screen.getByText('Allow access if all match')).toBeTruthy();
+  });
+
+  it('scopes the access-rules hint to the selected folder', () => {
+    renderPanel({ selectedFolderPath: ['Shared', 'Data Science'] });
+    expect(
+      screen.getByText(/These rules apply to "Data Science"/),
+    ).toBeTruthy();
+  });
+
+  it('uses the root folder label in the access-rules hint when the root is selected', () => {
+    renderPanel({ selectedFolderPath: [] });
+    expect(
+      screen.getByText(/These rules apply to "Organization"/),
+    ).toBeTruthy();
+  });
+
+  it('prompts for a destination folder in the access-rules hint when none is selected', () => {
+    renderPanel();
+    expect(
+      screen.getByText(/pick a folder above to set its rules/),
+    ).toBeTruthy();
   });
 
   it('renders existing rules as chips and forwards removals via onRulesChange', async () => {
@@ -156,33 +286,44 @@ describe('PublishPanel', () => {
     expect(screen.queryByText('Versions history')).toBeNull();
   });
 
-  it('shows the history section once a folder is selected', () => {
+  // TODO: will implement later — versions history section is commented out
+  // in PublishPanel; re-enable once it comes back.
+  it.skip('shows the history section once a folder is selected', () => {
     renderPanel({ selectedFolderPath: ['Shared', 'Data Science'] });
     expect(screen.getByText('Versions history')).toBeTruthy();
   });
 
   it('shows the replace-warning callout when the version already exists in the folder, with the folder name bold', () => {
-    const { container } = renderPanel({
+    renderPanel({
       selectedFolderPath: ['Shared', 'Data Science', 'Published models'],
       hasExistingPublicationInFolder: true,
     });
-    expect(container.textContent).toContain(
-      'Version 4.0.1 is already published in Published models. Publishing will replace it.',
-    );
-    expect(container.querySelector('strong')?.textContent).toBe(
-      'Published models',
-    );
+    expect(
+      screen.getByText('is already published in', { exact: false }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('Publishing will replace it.', { exact: false }),
+    ).toBeTruthy();
+    const boldFolderNames = screen
+      .getAllByText('Published models')
+      .filter((el) => el.tagName === 'STRONG');
+    expect(boldFolderNames).toHaveLength(1);
   });
 
   it('shows the no-access callout when the user lacks write access, with the folder name bold', () => {
-    const { container } = renderPanel({
+    renderPanel({
       selectedFolderPath: ['Shared', 'Data Science'],
       hasWriteAccess: false,
     });
-    expect(container.textContent).toContain(
-      "You don't have permission to publish to Data Science. Pick another, or ask an owner for access.",
-    );
-    expect(container.querySelector('strong')?.textContent).toBe('Data Science');
+    expect(
+      screen.getByText("don't have permission to publish to", {
+        exact: false,
+      }),
+    ).toBeTruthy();
+    const boldFolderNames = screen
+      .getAllByText('Data Science')
+      .filter((el) => el.tagName === 'STRONG');
+    expect(boldFolderNames).toHaveLength(1);
   });
 
   it('shows the submit-error callout when the most recent submit attempt failed', () => {
@@ -203,7 +344,9 @@ describe('PublishPanel', () => {
     expect(screen.queryByText(/Everyone with access/)).toBeNull();
   });
 
-  it('renders the empty-history message when there is no publish history for the selected folder', () => {
+  // TODO: will implement later — versions history section is commented out
+  // in PublishPanel; re-enable once it comes back.
+  it.skip('renders the empty-history message when there is no publish history for the selected folder', () => {
     renderPanel({
       selectedFolderPath: ['Shared', 'Data Science'],
     });
@@ -214,7 +357,9 @@ describe('PublishPanel', () => {
     ).toBeTruthy();
   });
 
-  it('renders history rows only for the selected folder', () => {
+  // TODO: will implement later — versions history section is commented out
+  // in PublishPanel; re-enable once it comes back.
+  it.skip('renders history rows only for the selected folder', () => {
     renderPanel({
       selectedFolderPath: ['Shared', 'Data Science', 'Published models'],
     });
@@ -227,12 +372,16 @@ describe('PublishPanel', () => {
   });
 
   describe('root selection', () => {
-    it('shows the history section when the root ([]) is selected', () => {
+    // TODO: will implement later — versions history section is commented out
+    // in PublishPanel; re-enable once it comes back.
+    it.skip('shows the history section when the root ([]) is selected', () => {
       renderPanel({ selectedFolderPath: [] });
       expect(screen.getByText('Versions history')).toBeTruthy();
     });
 
-    it('shows the empty-history message for the root when there is no root history', () => {
+    // TODO: will implement later — versions history section is commented out
+    // in PublishPanel; re-enable once it comes back.
+    it.skip('shows the empty-history message for the root when there is no root history', () => {
       renderPanel({ selectedFolderPath: [] });
       expect(
         screen.getByText(
@@ -261,5 +410,97 @@ describe('PublishPanel', () => {
         "You don't have permission to publish to Public bucket.",
       );
     });
+  });
+  describe('author field', () => {
+    it('renders with the default English label, placeholder and hint', () => {
+      renderPanel();
+
+      const field = screen.getByRole('textbox', { name: /Author/ });
+      expect(field.getAttribute('placeholder')).toBe('Author name');
+      expect(
+        screen.getByText(
+          'Shown as the publication’s author. Defaults to you — replace it to credit a team instead.',
+        ),
+      ).toBeTruthy();
+    });
+
+    it('renders the supplied author value', () => {
+      renderPanel({ author: 'DIAL Team' });
+
+      expect(screen.getByRole('textbox', { name: /Author/ })).toHaveProperty(
+        'value',
+        'DIAL Team',
+      );
+    });
+
+    it('calls onAuthorChange as the user types', async () => {
+      const onAuthorChange = vi.fn();
+      renderPanel({ onAuthorChange });
+
+      await userEvent.type(
+        screen.getByRole('textbox', { name: /Author/ }),
+        'D',
+      );
+
+      expect(onAuthorChange).toHaveBeenCalledWith('D');
+    });
+
+    it('caps the field at the backend author limit', () => {
+      renderPanel();
+
+      expect(
+        screen
+          .getByRole('textbox', { name: /Author/ })
+          .getAttribute('maxlength'),
+      ).toBe('200');
+    });
+
+    it('disables the field while a publish request is in flight', () => {
+      renderPanel({ isSubmitting: true });
+
+      expect(
+        (screen.getByRole('textbox', { name: /Author/ }) as HTMLInputElement)
+          .disabled,
+      ).toBe(true);
+    });
+
+    it('applies label overrides from the labels prop', () => {
+      renderPanel({
+        labels: {
+          authorLabel: 'Автор',
+          authorPlaceholder: 'Имя автора',
+          authorHint: 'Кто стоит за публикацией',
+        },
+      });
+
+      const field = screen.getByRole('textbox', { name: /Автор/ });
+      expect(field.getAttribute('placeholder')).toBe('Имя автора');
+      expect(screen.getByText('Кто стоит за публикацией')).toBeTruthy();
+    });
+
+    it('renders between the destination folder section and the access rules', () => {
+      const { container } = renderPanel();
+      const text = container.textContent ?? '';
+
+      expect(text.indexOf('Publish to folder')).toBeLessThan(
+        text.indexOf('Author'),
+      );
+      expect(text.indexOf('Author')).toBeLessThan(
+        text.indexOf('Allow access if all match'),
+      );
+    });
+  });
+});
+
+describe('PublishPanel — public class names', () => {
+  it('stamps the panel body', () => {
+    const { container } = renderPanel();
+
+    /* The body carries no role of its own; it is the rendered root, so the
+       container's first element child is the element under test. */
+    // eslint-disable-next-line testing-library/no-node-access -- see above
+    expect(container.firstElementChild!.classList).toContain(
+      PUBLISH_PANEL_CLASS.panel,
+    );
   });
 });

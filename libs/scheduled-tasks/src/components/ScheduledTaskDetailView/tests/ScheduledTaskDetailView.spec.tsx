@@ -1,13 +1,25 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import type { ScheduledTaskDetailViewLabels } from '../../../models/scheduled-task-detail-view-props';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  ScheduledTaskDetailViewLabels,
+  ScheduledTaskDetailViewProps,
+} from '../../../models/scheduled-task-detail-view-props';
 import type { ScheduledTaskRunItem } from '../../../models/scheduled-task-run-item';
 import { ScheduledTaskRunStatus } from '../../../types/scheduled-task-run-status';
 import { ScheduledTaskDetailView } from '../ScheduledTaskDetailView';
+
+/*
+ * Hoisted so the chat-shared mock (which vi hoists above every const here)
+ * can read it. Defaults to the desktop branch; the mobile/tab describe flips
+ * it per test.
+ */
+const { useIsMobileMock } = vi.hoisted(() => ({
+  useIsMobileMock: vi.fn((): boolean => false),
+}));
 
 vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
   const actual =
@@ -15,27 +27,33 @@ vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
   return {
     ...actual,
     MDMessageViewer: ({ content }: { content: string }) => <div>{content}</div>,
+    useIsMobile: (): boolean => useIsMobileMock(),
   };
 });
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
-  ButtonVariant: { Primary: 'primary', Neutral: 'neutral' },
-  DialSwitch: ({
-    switchId,
+  ButtonVariant: { Primary: 'primary', Neutral: 'neutral', Danger: 'danger' },
+  Switch: ({
+    id,
     isOn,
     disabled,
     onChange,
+    'aria-label': ariaLabel,
   }: {
-    switchId: string;
+    id?: string;
     isOn?: boolean;
     disabled?: boolean;
     onChange?: (value: boolean) => void;
+    'aria-label'?: string;
   }) => (
     <input
       type="checkbox"
       role="switch"
-      id={switchId}
+      id={id}
+      aria-label={ariaLabel}
+      aria-checked={!!isOn}
       checked={!!isOn}
       disabled={disabled}
       onChange={(e) => onChange?.(e.target.checked)}
@@ -48,45 +66,95 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   SkeletonVariant: { Default: 'default', Rectangular: 'rectangular' },
   GhostButton: ({
     label,
+    iconBefore,
     onClick,
     disabled,
   }: {
     label: string;
+    iconBefore?: ReactNode;
     onClick?: () => void;
     disabled?: boolean;
   }) => (
     <button onClick={onClick} disabled={disabled}>
+      {iconBefore}
       {label}
     </button>
   ),
   GhostIconButton: ({
+    icon,
     onClick,
     'aria-label': ariaLabel,
   }: {
     onClick: () => void;
     icon?: ReactNode;
     'aria-label'?: string;
-  }) => <button onClick={onClick} aria-label={ariaLabel} />,
+  }) => (
+    <button onClick={onClick} aria-label={ariaLabel}>
+      {icon}
+    </button>
+  ),
   NeutralButton: ({
     label,
+    iconBefore,
     onClick,
+    disabled,
   }: {
     label: string;
+    iconBefore?: ReactNode;
     onClick?: () => void;
-  }) => <button onClick={onClick}>{label}</button>,
+    disabled?: boolean;
+  }) => (
+    <button onClick={onClick} disabled={disabled}>
+      {iconBefore}
+      {label}
+    </button>
+  ),
+  Tabs: ({
+    tabs,
+    activeTabId,
+    onTabChange,
+    ariaLabel,
+  }: {
+    tabs: { id: string; label: string; count?: number }[];
+    activeTabId: string;
+    onTabChange: (tabId: string) => void;
+    ariaLabel?: string;
+  }) => (
+    <div role="tablist" aria-label={ariaLabel}>
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          role="tab"
+          aria-selected={tab.id === activeTabId}
+          onClick={() => onTabChange(tab.id)}
+        >
+          {tab.label}
+          {tab.count != null ? ` (${tab.count})` : ''}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock('@tabler/icons-react', () => ({
-  IconArrowLeft: () => <svg />,
+  IconArrowNarrowLeft: ({ className }: { className?: string }) => (
+    <svg data-icon="back" className={className} />
+  ),
   IconCircleCheck: () => <svg data-icon="success" />,
   IconCircleX: () => <svg data-icon="error" />,
   IconAlertTriangle: () => <svg data-icon="missed" />,
+  IconClipboardX: () => <svg data-icon="empty" />,
   IconPencilMinus: () => <svg data-icon="edit" />,
+  IconTrashX: ({ className }: { className?: string }) => (
+    <svg data-icon="delete" className={className} />
+  ),
 }));
 
 const labels: ScheduledTaskDetailViewLabels = {
   backAriaLabel: 'Back',
   editButtonLabel: 'Edit',
+  deleteButtonLabel: 'Delete',
+  deletedStateLabel: 'Deleted',
   errorLabel: 'Failed to load the scheduled task',
   detailsTitle: 'Details',
   descriptionLabel: 'Description',
@@ -144,7 +212,15 @@ describe('ScheduledTaskDetailView', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Daily summary' })).toBeTruthy();
+    /*
+     * The title renders twice — inline in the header (desktop) and in the
+     * standalone row below it (mobile/tablet) — with Tailwind visibility
+     * classes picking the visible copy; jsdom applies no CSS, so both copies
+     * are present in the test DOM.
+     */
+    expect(
+      screen.getAllByRole('heading', { name: 'Daily summary' }),
+    ).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy();
   });
 
@@ -360,6 +436,7 @@ describe('ScheduledTaskDetailView', () => {
     );
 
     expect(
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- skeleton rows/bars are plain aria-hidden elements with no accessible role/text
       container.querySelectorAll('li[aria-hidden="true"] [data-skeleton]'),
     ).toHaveLength(12); // 2 skeleton bars per row × 6 rows
   });
@@ -429,6 +506,7 @@ describe('ScheduledTaskDetailView', () => {
     );
 
     expect(
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- skeleton rows/bars are plain aria-hidden elements with no accessible role/text
       container.querySelectorAll('li[aria-hidden="true"] [data-skeleton]'),
     ).toHaveLength(12);
     expect(
@@ -686,7 +764,206 @@ describe('ScheduledTaskDetailView', () => {
     });
   });
 
-  it('invokes onRunClick with the run id when a row is clicked, when supplied', async () => {
+  describe('Delete action', () => {
+    it('does not render when onDelete is omitted', () => {
+      render(
+        <ScheduledTaskDetailView
+          labels={labels}
+          onBack={vi.fn()}
+          displayName="Daily summary"
+          runs={[]}
+        />,
+      );
+
+      expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    });
+
+    it('renders when onDelete is supplied', () => {
+      render(
+        <ScheduledTaskDetailView
+          labels={labels}
+          onBack={vi.fn()}
+          onDelete={vi.fn()}
+          displayName="Daily summary"
+          runs={[]}
+        />,
+      );
+
+      expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
+    });
+
+    it('calls onDelete exactly once when activated, with no dialog or network side effects', async () => {
+      const onDelete = vi.fn();
+      render(
+        <ScheduledTaskDetailView
+          labels={labels}
+          onBack={vi.fn()}
+          onDelete={onDelete}
+          displayName="Daily summary"
+          runs={[]}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+      expect(onDelete).toHaveBeenCalledOnce();
+    });
+
+    it('renders between the Active switch and the Edit button in DOM order', () => {
+      render(
+        <ScheduledTaskDetailView
+          labels={labels}
+          onBack={vi.fn()}
+          onDelete={vi.fn()}
+          onEdit={vi.fn()}
+          isActive={true}
+          displayName="Daily summary"
+          runs={[]}
+        />,
+      );
+
+      const switchEl = screen.getByRole('switch');
+      const deleteButton = screen.getByRole('button', { name: 'Delete' });
+      const editButton = screen.getByRole('button', { name: 'Edit' });
+      expect(
+        switchEl.compareDocumentPosition(deleteButton) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        deleteButton.compareDocumentPosition(editButton) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('renders Active, Delete, and Edit disabled — but not removed — while isDeleting is true', () => {
+      render(
+        <ScheduledTaskDetailView
+          labels={labels}
+          onBack={vi.fn()}
+          onDelete={vi.fn()}
+          onEdit={vi.fn()}
+          isActive={true}
+          isDeleting
+          displayName="Daily summary"
+          runs={[]}
+        />,
+      );
+
+      expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
+      expect(screen.getByRole('button', { name: 'Delete' })).toHaveProperty(
+        'disabled',
+        true,
+      );
+      expect(screen.getByRole('button', { name: 'Edit' })).toHaveProperty(
+        'disabled',
+        true,
+      );
+    });
+  });
+
+  describe('RTL', () => {
+    it('keeps the header action order Active → Delete → Edit unmirrored, and mirrors only the back icon, under a dir="rtl" ancestor', () => {
+      const { container } = render(
+        <div dir="rtl">
+          <ScheduledTaskDetailView
+            labels={labels}
+            onBack={vi.fn()}
+            onDelete={vi.fn()}
+            onEdit={vi.fn()}
+            isActive={true}
+            displayName="Daily summary"
+            runs={[]}
+          />
+        </div>,
+      );
+
+      const switchEl = screen.getByRole('switch');
+      const deleteButton = screen.getByRole('button', { name: 'Delete' });
+      const editButton = screen.getByRole('button', { name: 'Edit' });
+      expect(
+        switchEl.compareDocumentPosition(deleteButton) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        deleteButton.compareDocumentPosition(editButton) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- decorative icons inside already-labeled buttons carry no accessible role of their own
+      const backIcon = container.querySelector('[data-icon="back"]');
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- decorative icons inside already-labeled buttons carry no accessible role of their own
+      const deleteIcon = container.querySelector('[data-icon="delete"]');
+      expect(backIcon).toBeTruthy();
+      expect(deleteIcon).toBeTruthy();
+      expect(backIcon?.getAttribute('class')).toContain('rtl:scale-x-[-1]');
+      expect(deleteIcon?.getAttribute('class') ?? '').not.toContain(
+        'rtl:scale-x-[-1]',
+      );
+    });
+  });
+
+  describe('Deleted state', () => {
+    it('suppresses Edit, Delete, and Active regardless of callback presence, and shows the deleted-state indicator', () => {
+      render(
+        <ScheduledTaskDetailView
+          labels={labels}
+          onBack={vi.fn()}
+          onDelete={vi.fn()}
+          onEdit={vi.fn()}
+          isActive={true}
+          onActiveChange={vi.fn()}
+          isDeleted
+          displayName="Daily summary"
+          runs={[]}
+        />,
+      );
+
+      expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+      expect(screen.queryByRole('switch')).toBeNull();
+      // Both title copies (header + standalone mobile/tablet row) carry the
+      // chip — see the "renders the back control and title" test.
+      expect(screen.getAllByText('Deleted')).toHaveLength(2);
+    });
+
+    it('still renders History when the task is deleted', () => {
+      render(
+        <ScheduledTaskDetailView
+          labels={labels}
+          onBack={vi.fn()}
+          isDeleted
+          displayName="Daily summary"
+          runs={[buildRun()]}
+        />,
+      );
+
+      expect(
+        screen.getByLabelText('Succeeded today at 9:01 AM (99s)'),
+      ).toBeTruthy();
+    });
+  });
+
+  it('invokes onRunClick with the run when a row with a conversationId is clicked', async () => {
+    const onRunClick = vi.fn();
+    const run = buildRun({ conversationId: 'conversations/c1' });
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="Daily summary"
+        runs={[run]}
+        onRunClick={onRunClick}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Succeeded today at 9:01 AM (99s)' }),
+    );
+
+    expect(onRunClick).toHaveBeenCalledWith(run);
+  });
+
+  it('does not invoke onRunClick for a row whose run has no conversationId', async () => {
     const onRunClick = vi.fn();
     render(
       <ScheduledTaskDetailView
@@ -698,10 +975,135 @@ describe('ScheduledTaskDetailView', () => {
       />,
     );
 
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Succeeded today at 9:01 AM (99s)' }),
+    expect(
+      screen.queryByRole('button', {
+        name: 'Succeeded today at 9:01 AM (99s)',
+      }),
+    ).toBeNull();
+    expect(onRunClick).not.toHaveBeenCalled();
+  });
+
+  it('folds the unread label into the run row accessible name when isUnread is true', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="Daily summary"
+        runs={[buildRun({ isUnread: true })]}
+      />,
     );
 
-    expect(onRunClick).toHaveBeenCalledWith('run_1');
+    expect(screen.getByRole('listitem', { name: /Unread$/ })).toBeTruthy();
+  });
+
+  describe('ScheduledTaskDetailView — mobile/tablet tab layout', () => {
+    const buildView = (props?: Partial<ScheduledTaskDetailViewProps>) => (
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="Daily summary"
+        description="Summarize the news"
+        modelLabel="GPT-4o"
+        repeatsLabel="Every Monday 12:00"
+        runs={[buildRun()]}
+        {...props}
+      />
+    );
+    const renderView = (props?: Partial<ScheduledTaskDetailViewProps>) =>
+      render(buildView(props));
+
+    beforeEach(() => {
+      useIsMobileMock.mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      useIsMobileMock.mockReturnValue(false);
+    });
+
+    it('renders the tab row in order with Details active by default', () => {
+      renderView();
+
+      const tablist = screen.getByRole('tablist', {
+        name: 'Scheduled task sections',
+      });
+      const tabs = within(tablist).getAllByRole('tab');
+      expect(tabs.map((tab) => tab.textContent)).toEqual([
+        'Details',
+        'Configuration',
+        'History',
+      ]);
+      expect(screen.getByRole('tabpanel', { name: 'Details' })).toBeTruthy();
+      expect(screen.getByText('GPT-4o')).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'History' })).toBeNull();
+    });
+
+    it('activating a tab swaps the visible panel and its content', async () => {
+      renderView({ runsHasMore: true, onRunsLoadMore: vi.fn() });
+
+      await userEvent.click(screen.getByRole('tab', { name: 'History' }));
+
+      expect(screen.getByRole('tabpanel', { name: 'History' })).toBeTruthy();
+      expect(
+        screen.getByRole('listitem', {
+          name: 'Succeeded today at 9:01 AM (99s)',
+        }),
+      ).toBeTruthy();
+      expect(screen.queryByText('GPT-4o')).toBeNull();
+    });
+
+    it('renders the History Show more footer inline in the flow panel', async () => {
+      renderView({ runsHasMore: true, onRunsLoadMore: vi.fn() });
+
+      await userEvent.click(screen.getByRole('tab', { name: 'History' }));
+
+      const showMore = screen.getByRole('button', { name: 'Show more' });
+      expect(showMore).toBeTruthy();
+      // The flow variant must not pin the footer inside a self-scrolling
+      // card — a CSS-level check, so direct node access is appropriate here.
+      // eslint-disable-next-line testing-library/no-node-access
+      expect(showMore.closest('li')?.className).not.toContain('sticky');
+    });
+
+    it('renders no tab row and all three sections at the desktop breakpoint', () => {
+      useIsMobileMock.mockReturnValue(false);
+      renderView();
+
+      expect(screen.queryByRole('tablist')).toBeNull();
+      expect(screen.getByRole('heading', { name: 'Details' })).toBeTruthy();
+      expect(
+        screen.getByRole('heading', { name: 'Configuration' }),
+      ).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'History' })).toBeTruthy();
+      expect(screen.getByText('GPT-4o')).toBeTruthy();
+    });
+
+    it('renders no count badges on the tabs', () => {
+      renderView();
+
+      screen.getAllByRole('tab').forEach((tab) => {
+        expect(tab.textContent).not.toMatch(/\(\d+\)/);
+      });
+    });
+
+    it('keeps the selected tab when the viewport crosses the breakpoint and back', async () => {
+      const view = renderView();
+
+      await userEvent.click(screen.getByRole('tab', { name: 'History' }));
+      expect(screen.getByRole('tabpanel', { name: 'History' })).toBeTruthy();
+
+      useIsMobileMock.mockReturnValue(false);
+      view.rerender(buildView());
+      expect(screen.queryByRole('tablist')).toBeNull();
+      expect(screen.getByRole('heading', { name: 'History' })).toBeTruthy();
+
+      useIsMobileMock.mockReturnValue(true);
+      view.rerender(buildView());
+      expect(screen.getByRole('tabpanel', { name: 'History' })).toBeTruthy();
+      expect(
+        screen.getByRole('listitem', {
+          name: 'Succeeded today at 9:01 AM (99s)',
+        }),
+      ).toBeTruthy();
+    });
   });
 });

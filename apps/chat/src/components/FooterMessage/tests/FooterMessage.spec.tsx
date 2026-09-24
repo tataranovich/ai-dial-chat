@@ -1,5 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  useAppConfig as mockUseAppConfig,
+  useFeatureFlag as mockUseFeatureFlag,
+} from '../../../context/tests/app-config-context-mock';
+import { useUiFeature } from '../../../hooks/useUiFeature';
 import { UserConfigStatus } from '../../../types/user-config-status';
 import FooterMessage from '../FooterMessage';
 
@@ -9,19 +14,27 @@ const { mockState } = vi.hoisted(() => ({
     footerHtmlMessage: '',
     appVersion: '',
     isFooterEnabled: true,
+    isVersionHidden: false,
   },
 }));
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({
-    status: mockState.status,
-    config: {
-      footerHtmlMessage: mockState.footerHtmlMessage,
-      appVersion: mockState.appVersion,
-    },
-  }),
-  useFeatureFlag: () => mockState.isFooterEnabled,
+vi.mock(
+  '../../../context/AppConfigContext',
+  async () => import('../../../context/tests/app-config-context-mock'),
+);
+mockUseAppConfig.mockImplementation(() => ({
+  status: mockState.status,
+  config: {
+    footerHtmlMessage: mockState.footerHtmlMessage,
+    appVersion: mockState.appVersion,
+  },
 }));
+mockUseFeatureFlag.mockImplementation(() => mockState.isFooterEnabled);
+
+vi.mock('../../../hooks/useUiFeature', () => ({
+  useUiFeature: vi.fn(),
+}));
+vi.mocked(useUiFeature).mockImplementation(() => mockState.isVersionHidden);
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -41,6 +54,7 @@ describe('FooterMessage', () => {
     mockState.footerHtmlMessage = '';
     mockState.appVersion = '';
     mockState.isFooterEnabled = true;
+    mockState.isVersionHidden = false;
   });
 
   it('renders null when footer feature flag is off', () => {
@@ -123,6 +137,25 @@ describe('FooterMessage', () => {
       expect(screen.getByText('v0.45.0')).toBeTruthy();
     });
 
+    it('hides the version when the hide-footer-version feature is enabled', () => {
+      mockState.isVersionHidden = true;
+      mockState.appVersion = '0.45.0';
+      renderFooter();
+
+      expect(screen.queryByText('v0.45.0')).toBeNull();
+      expect(screen.queryByRole('region')).toBeNull();
+    });
+
+    it('keeps the footer message when only the version is hidden', () => {
+      mockState.isVersionHidden = true;
+      mockState.footerHtmlMessage = 'Operator copy';
+      mockState.appVersion = '0.45.0';
+      renderFooter();
+
+      expect(screen.getByText('Operator copy')).toBeTruthy();
+      expect(screen.queryByText('v0.45.0')).toBeNull();
+    });
+
     it('renders null when there is neither a message nor a version', () => {
       mockState.footerHtmlMessage = '';
       mockState.appVersion = '';
@@ -184,7 +217,7 @@ describe('FooterMessage', () => {
       mockState.appVersion = '0.45.0';
       renderFooter();
 
-      const label = screen.getByText('v0.45.0').parentElement;
+      const label = screen.getByRole('paragraph');
       expect(label?.className).toContain('pointer-events-none');
     });
 
@@ -202,7 +235,7 @@ describe('FooterMessage', () => {
 
       /* `end-*` is a logical inset resolved against this element's own
        * direction — a `dir` here would defeat the RTL corner flip. */
-      const label = screen.getByText('v0.45.0').parentElement;
+      const label = screen.getByRole('paragraph');
       expect(label?.hasAttribute('dir')).toBe(false);
       expect(label?.className).toContain('end-4');
     });
@@ -214,7 +247,7 @@ describe('FooterMessage', () => {
 
       /* Absolute positioning against a section with no in-flow child would
        * place the label outside its collapsed box. */
-      const label = screen.getByText('v0.45.0').parentElement;
+      const label = screen.getByRole('paragraph');
       expect(label?.className).not.toContain('absolute');
       expect(label?.className).toContain('text-end');
     });

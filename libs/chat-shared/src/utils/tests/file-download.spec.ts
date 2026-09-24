@@ -2,10 +2,83 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   base64ToBlob,
   downloadTextFile,
+  ensureDownloadFilename,
   getFileExtensionForLanguage,
   triggerAnchorDownload,
   tryBase64ToBytes,
 } from '../file-download';
+
+describe('ensureDownloadFilename', () => {
+  it('returns the name unchanged when it already has an extension', () => {
+    expect(ensureDownloadFilename('report.xlsx', undefined, undefined)).toBe(
+      'report.xlsx',
+    );
+  });
+
+  it('appends the extension extracted from the url path segment', () => {
+    expect(
+      ensureDownloadFilename(
+        'Thermo Fisher Scientific - 10-K Risk Factors',
+        'files/bucket/appdata/ThermoFisher_2024.xlsx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ),
+    ).toBe('Thermo Fisher Scientific - 10-K Risk Factors.xlsx');
+  });
+
+  it('falls back to the MIME type extension when the url has no extension', () => {
+    expect(
+      ensureDownloadFilename(
+        'Q3 Financial Summary',
+        'files/bucket/appdata/document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ),
+    ).toBe('Q3 Financial Summary.xlsx');
+  });
+
+  it('returns the name unchanged when neither url nor contentType provide an extension', () => {
+    expect(ensureDownloadFilename('unknown file', undefined, undefined)).toBe(
+      'unknown file',
+    );
+  });
+
+  it('strips query string and fragment from the url before extracting the extension', () => {
+    expect(
+      ensureDownloadFilename(
+        'Report',
+        'files/bucket/report.pdf?token=abc#page=2',
+        undefined,
+      ),
+    ).toBe('Report.pdf');
+  });
+
+  it('appends the MIME-type extension when the title contains a dot that is not a real extension', () => {
+    expect(
+      ensureDownloadFilename(
+        'Blackstone vs. KKR Comparative Intelligence Briefing (Word Document)',
+        'files/bucket/appdata/applications/public/pg/pg-agent__1.0.0/Blackstone_KKR_Detailed_Report.docx',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      ),
+    ).toBe(
+      'Blackstone vs. KKR Comparative Intelligence Briefing (Word Document).docx',
+    );
+  });
+
+  it('falls back to the url extension when the title has no real extension and no contentType is given', () => {
+    expect(
+      ensureDownloadFilename(
+        'Report v2. Final (draft)',
+        'files/bucket/report.pdf',
+        undefined,
+      ),
+    ).toBe('Report v2. Final (draft).pdf');
+  });
+
+  it('does not mistake a name ending in "vs." followed by more text for an extension', () => {
+    expect(
+      ensureDownloadFilename('Blackstone vs. KKR Report', undefined, undefined),
+    ).toBe('Blackstone vs. KKR Report');
+  });
+});
 
 describe('getFileExtensionForLanguage', () => {
   it('maps known language identifiers to their file extension', () => {
@@ -92,6 +165,22 @@ describe('downloadTextFile', () => {
     vi.runAllTimers();
 
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+  });
+
+  it('uses the supplied MIME type for the downloaded blob', () => {
+    vi.useFakeTimers();
+    const createObjectURL = vi.fn().mockReturnValue('blob:mock-url');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
+
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(
+      () => undefined,
+    );
+
+    downloadTextFile('Name,Value', 'table.csv', 'text/csv;charset=utf-8');
+
+    const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
+    expect(blob.type).toBe('text/csv;charset=utf-8');
   });
 });
 

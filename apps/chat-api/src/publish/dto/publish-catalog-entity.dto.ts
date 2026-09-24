@@ -3,19 +3,30 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsNotEmpty,
+  IsBoolean,
   IsOptional,
   IsString,
+  Matches,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { IsValidFilePath } from '../../files/dto/file-path.validator';
+import {
+  CONTROL_CHARACTERS_MESSAGE,
+  DISPLAY_AUTHOR_MAX_LENGTH,
+  NO_CONTROL_CHARACTERS,
+} from './publish-author';
 import { PublishRuleDto } from './publish-rule.dto';
 
 /**
  * Request body for `POST /api/v1/catalog/{entityType}/{entityId}/publish`.
- * `version` is required — DIAL Core's Publication API has no version
- * concept, so the caller (which already knows the entity's current version)
- * supplies it for display in the response and publish-history mapping.
+ * DIAL Core's Publication API has no version concept. Callers may supply a
+ * display version; the service otherwise recovers one from versioned resource
+ * ids and leaves unversioned Prompt/Skill publications empty.
+ *
+ * `author` is likewise optional: it sets the publication's `displayAuthor`,
+ * which the catalog shows as "Hosted by". Omitting it keeps the pre-existing
+ * behaviour of attributing the publication to whoever submitted it.
  */
 export class PublishCatalogEntityDto {
   @ApiProperty({
@@ -27,13 +38,26 @@ export class PublishCatalogEntityDto {
   @IsValidFilePath()
   folderPath!: string;
 
-  @ApiProperty({
-    description: 'Version label for this publish.',
+  @ApiPropertyOptional({
+    description:
+      'Optional version label. When omitted, versioned resource ids recover it from their {name}__{version} suffix; unversioned resources use an empty version.',
     example: '1.2.0',
   })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  version!: string;
+  version?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Display author recorded on the publication as `displayAuthor`, surfaced in the catalog as the published entity\'s "Hosted by" value. Omitted, blank, or whitespace-only falls back to the session\'s own display name, which is what every caller got before this field existed.',
+    example: 'DIAL Team',
+    maxLength: DISPLAY_AUTHOR_MAX_LENGTH,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(DISPLAY_AUTHOR_MAX_LENGTH)
+  @Matches(NO_CONTROL_CHARACTERS, { message: CONTROL_CHARACTERS_MESSAGE })
+  author?: string;
 
   @ApiPropertyOptional({
     description:
@@ -47,4 +71,13 @@ export class PublishCatalogEntityDto {
   @ValidateNested({ each: true })
   @Type(() => PublishRuleDto)
   rules?: PublishRuleDto[];
+
+  @ApiPropertyOptional({
+    description:
+      "Publish the entity together with the publisher's own credentials for it. DIAL Core honours it by copying the credential onto the published copy, so members of the organization use the entity without authorising individually. Omitted or `false` sends exactly the request every caller sent before this field existed. The flag grants no additional authorization: Core still derives the actor from the bearer token, enforces target-folder write access, and holds the publication `PENDING` until an administrator approves it. No credential value ever crosses the wire — only this boolean.",
+    example: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  publishCredentials?: boolean;
 }

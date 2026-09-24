@@ -1,25 +1,143 @@
-import { mergeClasses, useIsMobile } from '@epam/ai-dial-chat-shared';
+import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import type { PdfViewerApi } from '@epam/ai-dial-react-pdf-highlighter';
 import {
   DocumentPreview,
   PageThumbnail,
 } from '@epam/ai-dial-react-pdf-highlighter';
+import {
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  Dropdown,
+  ElementSize,
+  FabButton,
+  Input,
+} from '@epam/ai-dial-ui-kit';
 import type { InputHighlightData } from '@epam/pdf-highlighter-kit';
+import { IconMenu2, IconX } from '@tabler/icons-react';
 import {
   type FC,
+  type ReactElement,
+  type UIEvent,
   useCallback,
   useEffect,
-  useMemo,
+  useId,
   useRef,
   useState,
 } from 'react';
 import { fetchBlobFromUrl } from '../../utils/download';
+import {
+  LazyContentError,
+  LazyContentPending,
+} from '../LazyContentBoundary/LazyContentBoundary';
 import styles from './PdfContent.module.scss';
+/*
+ * These stylesheets are only needed once a PDF is actually being rendered.
+ * `PdfContent` is itself only ever reached through a `lazy()` dynamic import
+ * (see AttachmentCanvasBody), so importing them here — rather than eagerly
+ * from the host app's entry point — keeps this ~20 KB of vendor CSS out of
+ * the initial page load. They come in through `pdf-vendor.css`, which puts
+ * them in a named cascade layer so they cannot outrank the host's own
+ * utilities; see that file for why that matters.
+ */
+import './pdf-vendor.css';
 
-const THUMBNAIL_OVERSCAN = 5;
-/* Conservative fallback used until the first item is measured. Overestimates
- * to avoid rendering too many items before the real height is known. */
-const THUMBNAIL_HEIGHT_FALLBACK = 200;
+/*
+ * `pdfjs-dist`'s `GlobalWorkerOptions.workerSrc` is a global, shared by every
+ * consumer of the package in the host app — this library must not decide it
+ * unilaterally (library-isolation: a host-owned third-party runtime setting,
+ * and a different `pdfjs-dist` version/consumer elsewhere in the app could
+ * disagree with a value hardcoded here). The host supplies `configurePdfWorker`
+ * instead; it's called once, the first time a PDF is actually opened, since
+ * this module is only ever reached through the dynamic import above.
+ */
+
+/** Lifecycle of the host-supplied `configurePdfWorker` preparation step. */
+enum PdfWorkerPreparationState {
+  /** Waiting for `configurePdfWorker` to resolve; `DocumentPreview` must not mount yet. */
+  Preparing = 'preparing',
+  /** Preparation resolved (or was never needed); safe to mount `DocumentPreview`. */
+  Ready = 'ready',
+  /** Preparation rejected; a later call re-invokes `configurePdfWorker`. */
+  Error = 'error',
+}
+
+/*
+ * Module-scope, not React state: concurrent `PdfContent` mounts must share
+ * one in-flight preparation instead of each triggering their own call to
+ * `configurePdfWorker`. Memoized on success (the fulfilled promise itself is
+ * the cache); cleared back to `null` on rejection so the *next* attempt —
+ * an explicit retry, or a later independent PDF open — invokes
+ * `configurePdfWorker` again rather than being permanently stuck on the
+ * first failure.
+ */
+let preparationPromise: Promise<void> | null = null;
+
+/**
+ * Runs `configurePdfWorker` at most once per successful resolution, sharing
+ * one in-flight/resolved promise across every caller until it rejects.
+ */
+const preparePdfWorker = (
+  configurePdfWorker: () => void | Promise<void>,
+): Promise<void> => {
+  if (!preparationPromise) {
+    /*
+     * `configurePdfWorker()` is invoked synchronously, right here — not
+     * deferred behind a `Promise.resolve().then(...)` microtask — so it
+     * still runs before `DocumentPreview` could start its own document
+     * fetch, matching the timing guarantee the original fire-and-forget
+     * call made.
+     */
+    preparationPromise = new Promise<void>((resolve, reject) => {
+      try {
+        resolve(configurePdfWorker());
+      } catch (error) {
+        reject(error);
+      }
+    }).catch((error: unknown) => {
+      preparationPromise = null;
+      throw error;
+    });
+  }
+  return preparationPromise;
+};
+
+/** Number of pages eagerly requested as soon as the document loads, before the user opens the panel. */
+const THUMBNAIL_EAGER_BATCH_SIZE = 15;
+/** Extra rows rendered above/below the visible window so scrolling doesn't outrun loaded thumbnails. */
+const THUMBNAIL_OVERSCAN = 3;
+/** Assumed thumbnail row height (px) until the first rendered row is measured. */
+const THUMBNAIL_ITEM_HEIGHT_FALLBACK = 172;
+/** Assumed scrollable panel height (px) until it is measured via `ResizeObserver`. */
+const THUMBNAIL_PANEL_HEIGHT_FALLBACK = 400;
+/** Debounce (ms) before requesting thumbnails for a newly scrolled-to range, so rapid scrolling doesn't restart the vendor's internal batch fetch on every frame. */
+const THUMBNAIL_SCROLL_REQUEST_DEBOUNCE_MS = 150;
+/**
+ * Number of animation frames to keep re-centering horizontal scroll after a
+ * detected zoom change. The vendor viewer re-renders pages asynchronously
+ * (`reRenderVisiblePages` awaits per-page dimensions one at a time) and
+ * exposes no `onZoomChange` callback, so the new page width isn't known the
+ * instant `getZoom()` changes — polling for a short window catches it once
+ * layout settles.
+ */
+const ZOOM_RECENTER_CORRECTION_FRAMES = 60;
+
+/** User-visible strings for the collapsible thumbnails section. */
+export interface PdfContentLabels {
+  /** Accessible name for the thumbnails region — not shown visibly. Defaults to `'Thumbnails'`. */
+  thumbnailsLabel?: string;
+  /** Accessible label for the FAB button when the thumbnails panel is closed. Defaults to `'Show thumbnails'`. */
+  showThumbnailsLabel?: string;
+  /** Accessible label for the FAB button when the thumbnails panel is open. Defaults to `'Hide thumbnails'`. */
+  hideThumbnailsLabel?: string;
+  /** Accessible label for the current-page number input at the top of the thumbnails panel. Defaults to `'Page number'`. */
+  pageNumberLabel?: string;
+  /** Accessible status text announced while the host prepares the PDF runtime. Defaults to `'Loading…'`. */
+  loadingLabel?: string;
+  /** Message shown when the host fails to prepare the PDF runtime. Defaults to `'Failed to load content'`. */
+  errorLabel?: string;
+  /** Label and accessible name for retrying PDF runtime preparation. Defaults to `'Retry'`. */
+  retryLabel?: string;
+}
 
 /** Props for the `PdfContent` component. */
 export interface PdfContentProps {
@@ -29,231 +147,557 @@ export interface PdfContentProps {
   highlights: InputHighlightData[];
   /** ID of the highlight that should be scrolled into view on mount. */
   selectedHighlightId?: string;
+  /**
+   * 1-based page to navigate to on initial load and whenever it changes,
+   * independent of highlight geometry — forwarded directly to the underlying
+   * `DocumentPreview`'s own `selectedPageNumber` prop. Takes precedence over
+   * the highlight-bbox-derived page when both are present.
+   */
+  selectedPageNumber?: number;
   /** Custom fetcher for the PDF blob; falls back to a plain `fetch` wrapper. */
   loadPdf?: (url: string) => Promise<Blob>;
   /** File name shown in the canvas header. */
   fileName?: string;
+  /**
+   * Configures `pdfjs-dist`'s worker (`GlobalWorkerOptions.workerSrc`) for the
+   * host app. Called once, the first time a PDF attachment is opened, and
+   * awaited before the viewer mounts. Concurrent PDF opens share one
+   * in-flight call; a successful call is memoized so later opens never
+   * repeat it. A rejected call is not cached — the next PDF open (or a
+   * subsequent retry) invokes it again. When omitted,
+   * `@epam/pdf-highlighter-kit`'s own CDN-hosted worker fallback is used
+   * instead, so PDF rendering still works, just without the host's own
+   * bundled worker asset.
+   */
+  configurePdfWorker?: () => void | Promise<void>;
+  /**
+   * Hides the underlying `DocumentPreview`'s own title/zoom toolbar row —
+   * for hosts that render their own header and don't want it duplicated.
+   * `DocumentPreview` (`@epam/ai-dial-react-pdf-highlighter`) has no public
+   * prop for this, so it is done via `containerClassName` targeting that
+   * row's structural position; this only holds while `PdfContent` itself
+   * never passes `title`/`fileName` through to `DocumentPreview` (it
+   * currently doesn't — see the unused `fileName` prop above). Defaults to
+   * `false`, preserving the existing chat sidebar canvas's appearance.
+   */
+  hideHeader?: boolean;
+  /** User-visible strings for the thumbnails section. All fields have English defaults. */
+  labels?: PdfContentLabels;
 }
 
-/** Renders a PDF with highlight annotations, a sidebar thumbnail strip, and page navigation. */
+/** Renders a PDF with highlight annotations, a floating collapsible thumbnails panel, and page navigation. */
 export const PdfContent: FC<PdfContentProps> = ({
   url,
   highlights,
   selectedHighlightId,
+  selectedPageNumber,
   loadPdf,
+  configurePdfWorker,
+  hideHeader = false,
+  labels: {
+    thumbnailsLabel = 'Thumbnails',
+    showThumbnailsLabel = 'Show thumbnails',
+    hideThumbnailsLabel = 'Hide thumbnails',
+    pageNumberLabel = 'Page number',
+    loadingLabel = 'Loading…',
+    errorLabel = 'Failed to load content',
+    retryLabel = 'Retry',
+  } = {},
 }) => {
-  const isMobile = useIsMobile();
+  const [preparationState, setPreparationState] = useState(() =>
+    configurePdfWorker
+      ? PdfWorkerPreparationState.Preparing
+      : PdfWorkerPreparationState.Ready,
+  );
+  const [preparationRetryKey, setPreparationRetryKey] = useState(0);
+
+  /*
+   * `DocumentPreview` below only mounts once this resolves — see the
+   * `preparationState === Ready` check below — so the worker is always
+   * configured before the document fetch/parse it triggers, without racing
+   * `DocumentPreview`'s own mount effect.
+   */
+  useEffect(() => {
+    if (!configurePdfWorker) return;
+    setPreparationState(PdfWorkerPreparationState.Preparing);
+    let isCancelled = false;
+    preparePdfWorker(configurePdfWorker)
+      .then(() => {
+        if (!isCancelled) {
+          setPreparationState(PdfWorkerPreparationState.Ready);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) setPreparationState(PdfWorkerPreparationState.Error);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, [configurePdfWorker, preparationRetryKey]);
+
+  const handleRetryPreparation = useCallback(() => {
+    setPreparationRetryKey((key) => key + 1);
+  }, []);
+
+  const thumbnailsRegionId = useId();
   const [totalPages, setTotalPages] = useState(0);
   const [thumbnails, setThumbnails] = useState<Map<number, string>>(new Map());
+  const [isThumbnailsOpen, setIsThumbnailsOpen] = useState(false);
   const [selectedPage, setSelectedPage] = useState(() => {
+    if (selectedPageNumber != null) return selectedPageNumber;
     if (!selectedHighlightId) return 1;
     const match = highlights.find((h) => h.id === selectedHighlightId);
     return match?.bboxes[0]?.page ?? 1;
   });
 
   const viewerApiRef = useRef<PdfViewerApi | null>(null);
-  const thumbnailNodeRefs = useRef<Map<number, HTMLDivElement>>(new Map());
-  const thumbnailObserverRef = useRef<IntersectionObserver | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [requestedThumbnailPages, setRequestedThumbnailPages] = useState<
     number[]
   >([]);
 
-  /* Virtual sidebar state — avoid mounting 200+ PageThumbnail instances at once. */
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const itemHeightRef = useRef(THUMBNAIL_HEIGHT_FALLBACK);
-  const [itemHeight, setItemHeight] = useState(THUMBNAIL_HEIGHT_FALLBACK);
+  const [itemHeight, setItemHeight] = useState(THUMBNAIL_ITEM_HEIGHT_FALLBACK);
+  const [panelHeight, setPanelHeight] = useState(
+    THUMBNAIL_PANEL_HEIGHT_FALLBACK,
+  );
   const [scrollTop, setScrollTop] = useState(0);
-  const [sidebarHeight, setSidebarHeight] = useState(600);
+  const hasMeasuredItemHeightRef = useRef(false);
+  const latestScrollTopRef = useRef(0);
+  const scrollRafRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (selectedPageNumber != null) {
+      setSelectedPage(selectedPageNumber);
+      return;
+    }
     if (!selectedHighlightId) return;
     const match = highlights.find((h) => h.id === selectedHighlightId);
     const page = match?.bboxes[0]?.page;
     if (page != null) setSelectedPage(page);
-  }, [selectedHighlightId, highlights]);
+  }, [selectedPageNumber, selectedHighlightId, highlights]);
 
-  /* Scroll to the selected page thumbnail. When it is outside the virtual
-   * window and not yet mounted, scroll the container to its approximate
-   * position — the element will mount on the next render and become visible. */
+  /* Keep the scrollable panel's height in sync with its actual rendered size (it's capped by `max-h-[70vh]`, so viewport size matters). */
   useEffect(() => {
-    const el = thumbnailNodeRefs.current.get(selectedPage);
-    if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    } else if (sidebarRef.current) {
-      sidebarRef.current.scrollTo({
-        top: (selectedPage - 1) * itemHeightRef.current,
-        behavior: 'smooth',
-      });
-    }
-  }, [selectedPage, totalPages]);
+    const panel = panelRef.current;
+    if (!isThumbnailsOpen || !panel) return;
+    const observer = new ResizeObserver((entries) => {
+      const height = entries[0]?.contentRect.height;
+      if (height) setPanelHeight(height);
+    });
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [isThumbnailsOpen]);
 
-  const allPageNumbers = useMemo(
-    () => (isMobile ? [] : Array.from({ length: totalPages }, (_, i) => i + 1)),
-    [isMobile, totalPages],
+  const measureItemHeight = useCallback((el: HTMLDivElement | null) => {
+    if (!el || hasMeasuredItemHeightRef.current) return;
+    const height = el.getBoundingClientRect().height;
+    if (height > 0) {
+      hasMeasuredItemHeightRef.current = true;
+      setItemHeight(height);
+    }
+  }, []);
+
+  const handlePanelScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
+    latestScrollTopRef.current = e.currentTarget.scrollTop;
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      setScrollTop(latestScrollTopRef.current);
+    });
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+    },
+    [],
   );
 
   /*
-   * Request thumbnail renders only for pages visible (or within 300 px of)
-   * the sidebar viewport. Passing all page numbers at once causes the library
-   * to queue every render upfront; when the canvas closes mid-queue the PDF.js
-   * instance is already destroyed before later batches start, producing
-   * "No PDF document loaded" errors.
+   * Scroll to the selected page, computed purely from page index * item
+   * height rather than looking up the thumbnail's DOM node — with
+   * virtualization the target page may not be mounted yet.
+   * (`Element.scrollIntoView()` is also unusable here: the panel is
+   * rendered through the `Dropdown`'s portal with floating-ui's
+   * `position: fixed` placement, which isn't anchored to any ancestor's
+   * scroll offset, so `scrollIntoView`'s ancestor walk falls through to
+   * scrolling the real `<html>` root instead.)
+   *
+   * Both `scrollTop` React state and the container's real `scrollTop` are
+   * set here directly, synchronously, rather than animated with
+   * `scrollTo({ behavior: 'smooth' })` and left to the `onScroll`
+   * round-trip: an animation can be skipped or cut short before layout
+   * settles, which otherwise leaves both the real scrollbar and the
+   * virtualized window showing the wrong page until the reader scrolls
+   * manually.
+   */
+  const scrollToSelectedPage = useCallback(
+    (container: HTMLDivElement) => {
+      if (totalPages === 0) return;
+      const targetTop = Math.max(
+        0,
+        (selectedPage - 1) * itemHeight -
+          container.clientHeight / 2 +
+          itemHeight / 2,
+      );
+      latestScrollTopRef.current = targetTop;
+      setScrollTop(targetTop);
+      container.scrollTop = targetTop;
+    },
+    [selectedPage, totalPages, itemHeight],
+  );
+
+  /*
+   * Applied through a callback ref, not only the effect below: the
+   * `Dropdown` portal tears down and recreates the panel's DOM node every
+   * time it closes and reopens, and on a reopen no dependency of the
+   * effect necessarily changes (the reader may not have scrolled the
+   * document while the panel was closed) — so the effect alone would not
+   * re-run in time for the freshly mounted node. Attaching the sync to
+   * mount itself guarantees it always runs against the current node.
+   */
+  const setPanelRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      panelRef.current = el;
+      if (el) scrollToSelectedPage(el);
+    },
+    [scrollToSelectedPage],
+  );
+
+  useEffect(() => {
+    const container = panelRef.current;
+    if (!container) return;
+    scrollToSelectedPage(container);
+  }, [scrollToSelectedPage]);
+
+  const startIndex = Math.max(
+    0,
+    Math.floor(scrollTop / itemHeight) - THUMBNAIL_OVERSCAN,
+  );
+  const visibleRowCount =
+    Math.ceil(panelHeight / itemHeight) + THUMBNAIL_OVERSCAN * 2;
+  const endIndex = Math.min(totalPages - 1, startIndex + visibleRowCount);
+
+  /*
+   * Eagerly request the first batch of thumbnails as soon as the document
+   * finishes loading, even while the panel is still collapsed, so they're
+   * ready by the time the user opens it.
    */
   useEffect(() => {
-    setRequestedThumbnailPages([]);
-
-    if (allPageNumbers.length === 0) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const newPages = entries
-          .filter((e) => e.isIntersecting)
-          .map((e) => Number((e.target as HTMLElement).dataset.page))
-          .filter((n) => n > 0);
-        if (newPages.length === 0) return;
-        setRequestedThumbnailPages((prev) => {
-          const seen = new Set(prev);
-          const toAdd = newPages.filter((p) => !seen.has(p));
-          return toAdd.length === 0 ? prev : [...prev, ...toAdd];
-        });
-      },
-      { rootMargin: '300px 0px' },
+    if (totalPages === 0) return;
+    const eagerEnd = Math.min(totalPages, THUMBNAIL_EAGER_BATCH_SIZE);
+    setRequestedThumbnailPages(
+      Array.from({ length: eagerEnd }, (_, i) => i + 1),
     );
-
-    thumbnailObserverRef.current = observer;
-    thumbnailNodeRefs.current.forEach((el) => observer.observe(el));
-
-    return () => {
-      observer.disconnect();
-      thumbnailObserverRef.current = null;
-    };
-  }, [allPageNumbers]);
-
-  /* Track sidebar scroll position and height for virtual windowing. */
-  useEffect(() => {
-    const el = sidebarRef.current;
-    if (!el) return;
-
-    setSidebarHeight(el.clientHeight);
-
-    const ro = new ResizeObserver(() => setSidebarHeight(el.clientHeight));
-    ro.observe(el);
-
-    const handleScroll = () => setScrollTop(el.scrollTop);
-    el.addEventListener('scroll', handleScroll, { passive: true });
-
-    return () => {
-      ro.disconnect();
-      el.removeEventListener('scroll', handleScroll);
-    };
   }, [totalPages]);
 
   /*
-   * Pass only pages whose thumbnail has not yet been rendered. The library's
-   * effect restarts from page 1 whenever `thumbnailPageNumbers` changes — if
-   * we pass the full accumulated list, every scroll event re-renders every
-   * previously-loaded thumbnail. Filtering to pending pages means the library
-   * only ever renders new work.
+   * Extend the requested set on demand as the user scrolls the panel,
+   * debounced so a fast scroll doesn't repeatedly restart the vendor's
+   * internal batch fetch effect. Pages already requested are never removed
+   * — the array only grows — since the vendor's `thumbnailPageNumbers`
+   * effect aborts and restarts its whole batch loop on every reference
+   * change.
    */
-  const pendingThumbnailPages = useMemo(
-    () => requestedThumbnailPages.filter((p) => !thumbnails.has(p)),
-    [requestedThumbnailPages, thumbnails],
-  );
+  useEffect(() => {
+    if (!isThumbnailsOpen || totalPages === 0) return;
+    const timeoutId = setTimeout(() => {
+      setRequestedThumbnailPages((prev) => {
+        const next = new Set(prev);
+        let changed = false;
+        for (let pageNum = startIndex + 1; pageNum <= endIndex + 1; pageNum++) {
+          if (!next.has(pageNum)) {
+            next.add(pageNum);
+            changed = true;
+          }
+        }
+        return changed ? Array.from(next).sort((a, b) => a - b) : prev;
+      });
+    }, THUMBNAIL_SCROLL_REQUEST_DEBOUNCE_MS);
+    return () => clearTimeout(timeoutId);
+  }, [isThumbnailsOpen, startIndex, endIndex, totalPages]);
+
+  /*
+   * Keep thumbnails ready around whichever page `onCurrentPageChange` moves
+   * `selectedPage` to — including while the panel is closed — since opening
+   * the panel immediately centers its scroll on `selectedPage` (see the
+   * effect below). Without this, a reader who scrolls the document past the
+   * eager batch and then opens the panel sees blank rows until the
+   * panel-scroll debounce above catches up with the jump.
+   */
+  useEffect(() => {
+    if (totalPages === 0) return;
+    const timeoutId = setTimeout(() => {
+      const halfWindow =
+        Math.ceil(panelHeight / itemHeight / 2) + THUMBNAIL_OVERSCAN;
+      const start = Math.max(0, selectedPage - 1 - halfWindow);
+      const end = Math.min(totalPages - 1, selectedPage - 1 + halfWindow);
+      setRequestedThumbnailPages((prev) => {
+        const next = new Set(prev);
+        let changed = false;
+        for (let pageNum = start + 1; pageNum <= end + 1; pageNum++) {
+          if (!next.has(pageNum)) {
+            next.add(pageNum);
+            changed = true;
+          }
+        }
+        return changed ? Array.from(next).sort((a, b) => a - b) : prev;
+      });
+    }, THUMBNAIL_SCROLL_REQUEST_DEBOUNCE_MS);
+    return () => clearTimeout(timeoutId);
+  }, [selectedPage, totalPages, panelHeight, itemHeight]);
 
   const handleThumbnailsLoaded = useCallback((map: Map<number, string>) => {
     setThumbnails((prev) => new Map([...prev, ...map]));
   }, []);
 
+  const [isViewerReady, setIsViewerReady] = useState(false);
+
   const handleViewerReady = useCallback((api: PdfViewerApi) => {
     viewerApiRef.current = api;
+    setIsViewerReady(true);
   }, []);
+
+  const viewerContainerRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * Auto zoom can render the page wider than the panel, which produces a
+   * horizontal scrollbar on the vendor's `.pdf-highlight-viewer` element
+   * (see PdfContent.module.scss). Center that overflow by width:
+   * - `ResizeObserver` on `.pdf-container`/`.pdf-highlight-viewer` catches
+   *   layout-driven changes (panel resize, page width changes once rendered).
+   * - Polling `viewerApiRef.current.getZoom()` catches a zoom change itself —
+   *   `PdfViewerApi` exposes no `onZoomChange` callback, so this is the only
+   *   way to detect it — and keeps re-centering for a short window afterward
+   *   since the vendor's re-render is asynchronous, so the new width isn't
+   *   final the instant the zoom value changes.
+   */
+  useEffect(() => {
+    if (!isViewerReady) return;
+    const root = viewerContainerRef.current;
+    const pdfContainer = root?.querySelector<HTMLElement>('.pdf-container');
+    const scrollContainer = root?.querySelector<HTMLElement>(
+      '.pdf-highlight-viewer',
+    );
+    if (!pdfContainer || !scrollContainer) return;
+
+    const centerHorizontally = () => {
+      const overflow =
+        scrollContainer.scrollWidth - scrollContainer.clientWidth;
+      if (overflow > 0) {
+        scrollContainer.scrollLeft = overflow / 2;
+      }
+    };
+
+    centerHorizontally();
+    const observer = new ResizeObserver(centerHorizontally);
+    observer.observe(pdfContainer);
+    observer.observe(scrollContainer);
+
+    let lastZoom = viewerApiRef.current?.getZoom();
+    let correctionFramesLeft = 0;
+    let rafId: number;
+    const tick = () => {
+      const zoom = viewerApiRef.current?.getZoom();
+      if (zoom !== lastZoom) {
+        lastZoom = zoom;
+        correctionFramesLeft = ZOOM_RECENTER_CORRECTION_FRAMES;
+      }
+      if (correctionFramesLeft > 0) {
+        centerHorizontally();
+        correctionFramesLeft -= 1;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      observer.disconnect();
+    };
+  }, [isViewerReady]);
+
+  /*
+   * On initial load with no highlight/page requested, explicitly scroll to
+   * the top of page 1 instead of trusting wherever the viewer's own initial
+   * layout lands — deferred by a frame so it runs after the viewer's first
+   * layout pass (page containers sized, virtual scrolling initialized)
+   * rather than racing it.
+   */
+  useEffect(() => {
+    if (!isViewerReady || selectedHighlightId || selectedPageNumber != null)
+      return;
+    const raf = requestAnimationFrame(() => {
+      viewerApiRef.current?.navigateToPage(1);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isViewerReady, selectedHighlightId, selectedPageNumber]);
 
   const handleSelectPage = useCallback((pageNum: number) => {
     setSelectedPage(pageNum);
     viewerApiRef.current?.navigateToPage(pageNum);
   }, []);
 
-  /* Virtual window: only mount PageThumbnail components near the visible area.
-   * Padding spacers preserve total scroll height so the scrollbar stays accurate. */
-  const startIdx = Math.max(
-    0,
-    Math.floor(scrollTop / itemHeight) - THUMBNAIL_OVERSCAN,
+  /* Keeps the page indicator and thumbnail highlight in sync while the reader
+   * scrolls the document, not only on explicit page selection. */
+  const handleCurrentPageChange = useCallback((page: number) => {
+    setSelectedPage(page);
+  }, []);
+
+  /* Current-page input state, kept separate from `selectedPage` so the user
+   * can freely edit/clear the field before committing a valid page number. */
+  const [pageInputValue, setPageInputValue] = useState(() =>
+    String(selectedPage),
   );
-  const endIdx = Math.min(
-    allPageNumbers.length - 1,
-    Math.ceil((scrollTop + sidebarHeight) / itemHeight) +
-      THUMBNAIL_OVERSCAN -
-      1,
-  );
-  const paddingTop = startIdx * itemHeight;
-  const paddingBottom = Math.max(
-    0,
-    (allPageNumbers.length - 1 - endIdx) * itemHeight,
+
+  useEffect(() => {
+    setPageInputValue(String(selectedPage));
+  }, [selectedPage]);
+
+  const commitPageInput = useCallback(
+    (raw: string) => {
+      const parsed = Number(raw);
+      if (Number.isInteger(parsed) && parsed >= 1 && parsed <= totalPages) {
+        handleSelectPage(parsed);
+      } else {
+        setPageInputValue(String(selectedPage));
+      }
+    },
+    [totalPages, selectedPage, handleSelectPage],
   );
 
   if (!url) return null;
 
+  if (preparationState === PdfWorkerPreparationState.Preparing) {
+    return <LazyContentPending loadingLabel={loadingLabel} />;
+  }
+
+  if (preparationState === PdfWorkerPreparationState.Error) {
+    return (
+      <LazyContentError
+        errorLabel={errorLabel}
+        retryLabel={retryLabel}
+        onRetry={handleRetryPreparation}
+      />
+    );
+  }
+
+  const thumbnailItems: ReactElement[] = [];
+  for (
+    let pageNum = startIndex + 1;
+    pageNum <= endIndex + 1 && pageNum <= totalPages;
+    pageNum++
+  ) {
+    thumbnailItems.push(
+      <div
+        key={pageNum}
+        ref={pageNum === startIndex + 1 ? measureItemHeight : undefined}
+      >
+        <PageThumbnail
+          pageNum={pageNum}
+          onSelectPage={handleSelectPage}
+          isSelected={selectedPage === pageNum}
+          isLoading={!thumbnails.has(pageNum)}
+          thumbnailUrl={thumbnails.get(pageNum) ?? null}
+        />
+      </div>,
+    );
+  }
+
+  const topSpacerHeight = startIndex * itemHeight;
+  const bottomSpacerHeight =
+    Math.max(0, totalPages - endIndex - 1) * itemHeight;
+
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="relative flex h-full overflow-hidden">
       {totalPages > 0 && (
-        <div
-          ref={sidebarRef}
-          className="w-30 me-1 shrink-0 overflow-auto pe-0.5 mobile:hidden"
-        >
-          <div style={{ paddingTop, paddingBottom }}>
-            {allPageNumbers
-              .slice(startIdx, endIdx + 1)
-              .map((pageNum, sliceIdx) => (
-                <div
-                  key={pageNum}
-                  data-page={pageNum}
-                  ref={(el) => {
-                    if (el) {
-                      /* Measure real item height from the first rendered element so
-                       * the virtual window calculation stays accurate. */
-                      if (
-                        sliceIdx === 0 &&
-                        startIdx === 0 &&
-                        itemHeightRef.current === THUMBNAIL_HEIGHT_FALLBACK
-                      ) {
-                        const h = el.getBoundingClientRect().height;
-                        if (h > 0) {
-                          itemHeightRef.current = h;
-                          setItemHeight(h);
-                        }
-                      }
-                      thumbnailNodeRefs.current.set(pageNum, el);
-                      thumbnailObserverRef.current?.observe(el);
-                    } else {
-                      thumbnailNodeRefs.current.delete(pageNum);
-                    }
-                  }}
-                >
-                  <PageThumbnail
-                    pageNum={pageNum}
-                    onSelectPage={handleSelectPage}
-                    isSelected={selectedPage === pageNum}
-                    isLoading={!thumbnails.has(pageNum)}
-                    thumbnailUrl={thumbnails.get(pageNum) ?? null}
+        <div className="absolute start-3 top-3 z-10">
+          <Dropdown
+            open={isThumbnailsOpen}
+            onOpenChange={setIsThumbnailsOpen}
+            placement="bottom-start"
+            matchReferenceWidth={false}
+            renderOverlay={() => (
+              <div className="flex w-36 flex-col">
+                <div className="shrink-0 p-1">
+                  <Input
+                    size={ElementSize.Small}
+                    aria-label={pageNumberLabel}
+                    value={pageInputValue}
+                    postfix={`/ ${totalPages}`}
+                    inputMode="numeric"
+                    onChange={(value) => setPageInputValue(value ?? '')}
+                    onBlur={() => commitPageInput(pageInputValue)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitPageInput(pageInputValue);
+                    }}
                   />
                 </div>
-              ))}
-          </div>
+                <div
+                  ref={setPanelRef}
+                  id={thumbnailsRegionId}
+                  role="region"
+                  aria-label={thumbnailsLabel}
+                  onScroll={handlePanelScroll}
+                  className="max-h-[70vh] min-h-0 overflow-y-auto overflow-x-hidden p-1 [scrollbar-gutter:stable]"
+                >
+                  <div style={{ height: topSpacerHeight }} />
+                  {thumbnailItems}
+                  <div style={{ height: bottomSpacerHeight }} />
+                </div>
+              </div>
+            )}
+          >
+            <FabButton
+              icon={
+                isThumbnailsOpen ? (
+                  <IconX
+                    size={DIAL_ICON_SIZE.LG}
+                    stroke={DIAL_KIT_ICON_STROKE}
+                    aria-hidden
+                  />
+                ) : (
+                  <IconMenu2
+                    size={DIAL_ICON_SIZE.LG}
+                    stroke={DIAL_KIT_ICON_STROKE}
+                    aria-hidden
+                  />
+                )
+              }
+              aria-label={
+                isThumbnailsOpen ? hideThumbnailsLabel : showThumbnailsLabel
+              }
+              aria-expanded={isThumbnailsOpen}
+              aria-controls={isThumbnailsOpen ? thumbnailsRegionId : undefined}
+            />
+          </Dropdown>
         </div>
       )}
       <div
-        className={mergeClasses('min-w-0 flex-1 overflow-auto', styles.viewer)}
+        ref={viewerContainerRef}
+        className={mergeClasses(
+          'min-w-0 flex-1 overflow-hidden',
+          styles.viewer,
+        )}
       >
         <DocumentPreview
           fileUrl={url}
           loadFileCb={loadPdf ?? fetchBlobFromUrl}
           highlights={highlights}
           selectedHighlightId={selectedHighlightId}
+          selectedPageNumber={selectedPageNumber}
           showOccurrences={false}
           onTotalPagesChange={setTotalPages}
-          thumbnailPageNumbers={pendingThumbnailPages}
+          thumbnailPageNumbers={requestedThumbnailPages}
           onThumbnailsLoaded={handleThumbnailsLoaded}
           onViewerReady={handleViewerReady}
+          onCurrentPageChange={handleCurrentPageChange}
+          viewerOptions={{ enableVirtualScrolling: true }}
+          containerClassName={
+            hideHeader ? '[&>div:first-child]:hidden' : undefined
+          }
         />
       </div>
     </div>

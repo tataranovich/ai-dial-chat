@@ -1,10 +1,16 @@
-## ADDED Requirements
+# markdown-code-blocks Specification
+
+## Purpose
+
+Fenced code blocks in rendered markdown: language detection, the copy action, theming, internal scrolling, RTL, and accessibility.
+
+## Requirements
 
 ### Requirement: Render fenced code blocks with polished layout
 
 The system SHALL render fenced code blocks (produced by react-markdown from ` ```lang … ``` ` and ` ``` … ``` ` markdown) using `MarkdownCodeBlock`, a dedicated component that owns its full container. The container MUST include:
 - A visible frame (rounded border, background).
-- A compact sticky header with the language label (start) and a copy icon button (end).
+- A compact sticky header with the language label (start) and action icon buttons (end). The header MUST share the same background as the code body. There MUST be no divider between the header and the code body.
 - A scrollable body with `max-h-[60vh] overflow-auto`.
 - `dir="ltr"` on the scrollable body to preserve code direction on RTL pages.
 
@@ -93,18 +99,28 @@ The copy button MUST be keyboard-focusable (rendered via `GhostIconButton`) and 
 
 After a successful copy the system SHALL:
 1. Switch the copy button icon from `IconCopy` to `IconCheck`.
-2. Update the button's `aria-label` to `copiedLabel` (default `'Copied!'`).
+2. Announce `copiedLabel` (default `'Copied!'`) through the block's own
+   `role="status" aria-live="polite"` region, which is empty at rest.
 3. Revert both after 2 000 ms.
+
+The copy button's accessible name SHALL stay `copyLabel` throughout. A control's
+name describes what activating it does, and that does not change once a copy has
+happened; renaming the element that currently holds focus also makes the
+confirmation compete with the button's own re-announcement. The transient
+confirmation therefore lives in the live region, and `copiedLabel` names that
+message rather than the button.
 
 The button MUST NOT be disabled during the feedback state (clicking again restarts the timer).
 
 #### Scenario: Copy success feedback lifecycle
 
-- **GIVEN** a rendered `MarkdownCodeBlock` in idle state (showing `IconCopy`)
-- **WHEN** the user clicks the copy button
+- **GIVEN** a rendered `MarkdownCodeBlock` in idle state (showing `IconCopy`) whose
+  live region is empty
+- **WHEN** the user activates the copy button, by click or by keyboard
 - **THEN** the icon switches to `IconCheck` immediately
-- **AND** the `aria-label` becomes `copiedLabel`
-- **AND** after 2 000 ms the icon reverts to `IconCopy` and the label reverts to `copyLabel`
+- **AND** the live region's content becomes `copiedLabel`
+- **AND** the button's `aria-label` stays `copyLabel`
+- **AND** after 2 000 ms the icon reverts to `IconCopy` and the live region empties
 
 ---
 
@@ -132,7 +148,7 @@ Code content MUST be rendered with `whitespace-pre` so that indentation and line
 
 ### Requirement: Support light and dark themes
 
-`MarkdownCodeBlock` MUST NOT hardcode a background color that is incompatible with either light or dark theme. The container and header MUST use `bg-black/20` (alpha-transparent overlay) so the component composes correctly over any message bubble background in both themes.
+`MarkdownCodeBlock` MUST NOT hardcode a background color that is incompatible with either light or dark theme. The container and header MUST use the `--bg-layer-raised` CSS custom property (with a hardcoded `#fcfcfc` fallback) so the component composes correctly over any message bubble background in both themes. The header and code body MUST share the same background token so no visual seam is visible between them.
 
 #### Scenario: Code block in light theme
 
@@ -150,7 +166,7 @@ Code content MUST be rendered with `whitespace-pre` so that indentation and line
 
 ### Requirement: Support RTL pages while keeping code LTR
 
-When the page `<html>` element has `dir="rtl"`:
+When the page `<html>` element has `dir="rtl"`, `MarkdownCodeBlock` MUST keep code content left-to-right while its own chrome follows the writing direction:
 1. The `MarkdownCodeBlock` container layout (header flex, padding, border radius) MUST respond to writing direction via logical Tailwind properties (`ps-*`, `pe-*`, `ms-*`, `me-*`, `start-*`, `end-*`).
 2. The scrollable code body MUST have `dir="ltr"` set explicitly so code text and horizontal scroll direction are always left-to-right.
 
@@ -170,7 +186,8 @@ No icon mirroring is required (`IconCopy` and `IconCheck` are symmetric).
 ### Requirement: Accessibility and keyboard support
 
 - The copy button MUST be rendered via `GhostIconButton`, which produces a `<button>` element that is keyboard-focusable and activatable via Enter and Space.
-- The `aria-label` MUST reflect the current state: `copyLabel` when idle, `copiedLabel` after copy.
+- The `aria-label` MUST stay `copyLabel` in every state; the copied confirmation is announced through the block's `role="status" aria-live="polite"` region instead (see *Copied feedback*).
+- The block MUST render exactly one such live region, empty at rest, so a copy announces once regardless of how many code blocks a message contains.
 - The code text MUST remain selectable by the user (no `user-select: none` override).
 - Focus MUST NOT be trapped inside the code block.
 
@@ -179,7 +196,8 @@ No icon mirroring is required (`IconCopy` and `IconCheck` are symmetric).
 - **GIVEN** focus is on the copy button inside a `MarkdownCodeBlock`
 - **WHEN** the user presses Enter or Space
 - **THEN** the copy action fires (same as clicking)
-- **AND** the icon and label switch to the copied state
+- **AND** the icon switches to the copied state and the live region announces `copiedLabel`
+- **AND** the button's accessible name is unchanged, so focus stays on a control that still names itself `copyLabel`
 
 ---
 

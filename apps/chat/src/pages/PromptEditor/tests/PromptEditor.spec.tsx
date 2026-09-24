@@ -1,19 +1,75 @@
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useNotification } from '../../../context/NotificationContext';
 import { usePrompts } from '../../../context/PromptsContext';
+import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
 import { useUiFeature } from '../../../hooks/useUiFeature';
 import {
   createPrompt,
-  createPromptFolder,
-  deletePromptFolder,
   getPrompt,
-  movePrompt,
   updatePrompt,
 } from '../../../server-api/prompts.api';
 import PromptEditor from '../PromptEditor';
+
+vi.mock('@epam/ai-dial-builder-form', () => ({
+  EditorLayout: ({
+    title,
+    onBack,
+    backAriaLabel,
+    isSaving,
+    labels,
+    actions,
+    leftContent,
+    rightContent,
+  }: {
+    title?: string;
+    onBack?: () => void;
+    backAriaLabel?: string;
+    isSaving?: boolean;
+    labels?: { savingStatusLabel?: string };
+    actions?: ReactNode;
+    leftContent?: ReactNode;
+    rightContent?: ReactNode;
+  }) => (
+    <div>
+      <button aria-label={backAriaLabel} onClick={onBack} />
+      <h1>{title}</h1>
+      <span role="status">
+        {isSaving ? (labels?.savingStatusLabel ?? 'Saving') : ''}
+      </span>
+      <div>{actions}</div>
+      <div>{leftContent}</div>
+      <div>{rightContent}</div>
+    </div>
+  ),
+  EditorSection: ({ children }: { children?: ReactNode }) => (
+    <div>{children}</div>
+  ),
+}));
+
+vi.mock('@epam/ai-dial-ui-kit/editors', () => ({
+  LazyMarkdownEditor: () =>
+    Promise.resolve({
+      MarkdownEditor: ({
+        value,
+        onChange,
+        placeholder,
+      }: {
+        value?: string;
+        onChange?: (value: string) => void;
+        placeholder?: string;
+      }) => (
+        <textarea
+          value={value}
+          placeholder={placeholder}
+          onChange={(event) => onChange?.(event.target.value)}
+        />
+      ),
+    }),
+}));
 
 const mockNavigate = vi.fn();
 let mockSearchParams = new URLSearchParams();
@@ -35,22 +91,22 @@ vi.mock('../../../context/NotificationContext', () => ({
   useNotification: vi.fn(),
 }));
 
+vi.mock('../../../context/ThemeContext', () => ({
+  useTheme: () => ({ currentTheme: 'light' }),
+}));
+
 vi.mock('../../../hooks/useUiFeature', () => ({
   useUiFeature: vi.fn(),
 }));
 
 vi.mock('../../../server-api/prompts.api', () => ({
   createPrompt: vi.fn(),
-  createPromptFolder: vi.fn(),
-  deletePromptFolder: vi.fn(),
   getPrompt: vi.fn(),
-  movePrompt: vi.fn(),
-  renamePromptFolder: vi.fn(),
   updatePrompt: vi.fn(),
 }));
 
 const promptDto = {
-  id: 'Work/AI/summarize',
+  id: 'prompts/my-bucket/Work/AI/summarize',
   name: 'summarize',
   description: 'Summarize a document',
   content: 'Summarize the following text:',
@@ -85,20 +141,12 @@ describe('PromptEditor', () => {
       refetchPrompts,
       refetchPublicPrompts: vi.fn().mockResolvedValue(undefined),
     });
-    vi.mocked(useNotification).mockReturnValue({
-      notifications: [],
-      showNotification,
-      dismissNotification: vi.fn(),
-    });
+    vi.mocked(useNotification).mockReturnValue(
+      createNotificationContextValue(showNotification),
+    );
     vi.mocked(createPrompt).mockResolvedValue(promptDto);
     vi.mocked(updatePrompt).mockResolvedValue(promptDto);
-    vi.mocked(movePrompt).mockResolvedValue(promptDto);
     vi.mocked(getPrompt).mockResolvedValue(promptDto);
-    vi.mocked(createPromptFolder).mockResolvedValue({
-      id: 'Drafts',
-      name: 'Drafts',
-    });
-    vi.mocked(deletePromptFolder).mockResolvedValue(undefined);
   });
 
   const fillRequiredFields = async (name: string, content: string) => {
@@ -107,7 +155,7 @@ describe('PromptEditor', () => {
       name,
     );
     await user.type(
-      screen.getByRole('textbox', { name: /promptEditor.contentLabel/ }),
+      await screen.findByPlaceholderText('promptEditor.contentPlaceholder'),
       content,
     );
   };
@@ -129,26 +177,30 @@ describe('PromptEditor', () => {
   });
 
   it('loads the prompt into the form in edit mode', async () => {
-    mockSearchParams = new URLSearchParams({ id: 'Work/AI/summarize' });
+    mockSearchParams = new URLSearchParams({
+      id: 'prompts/my-bucket/Work/AI/summarize',
+    });
 
     render(<PromptEditor />);
 
     await waitFor(() =>
-      expect(getPrompt).toHaveBeenCalledWith('Work/AI/summarize'),
+      expect(getPrompt).toHaveBeenCalledWith(
+        'prompts/my-bucket/Work/AI/summarize',
+      ),
     );
     expect(screen.getByText('promptEditor.editTitle')).toBeTruthy();
-    await waitFor(() =>
-      expect(screen.getByDisplayValue('summarize')).toBeTruthy(),
-    );
+    expect(await screen.findByDisplayValue('summarize')).toBeTruthy();
   });
 
   it('shows an error state with retry when the prompt cannot be loaded', async () => {
-    mockSearchParams = new URLSearchParams({ id: 'Work/AI/summarize' });
+    mockSearchParams = new URLSearchParams({
+      id: 'prompts/my-bucket/Work/AI/summarize',
+    });
     vi.mocked(getPrompt).mockRejectedValue(new Error('404'));
 
     render(<PromptEditor />);
 
-    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText('promptEditor.loadError')).toBeTruthy();
     expect(
       screen.getByRole('button', { name: 'promptEditor.retryLabel' }),
@@ -168,18 +220,22 @@ describe('PromptEditor', () => {
         name: 'summarize',
         description: undefined,
         content: 'Summarize:',
-        folderId: '',
       }),
     );
     expect(refetchPrompts).toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith('/catalog');
+    expect(showNotification).toHaveBeenCalledWith({
+      variant: 'success',
+      title: 'entityNotifications.prompt.createdTitle',
+      message: 'entityNotifications.prompt.created',
+    });
   });
 
   it('blocks submission and shows an inline error for an empty name', async () => {
     render(<PromptEditor />);
 
     await user.type(
-      screen.getByRole('textbox', { name: /promptEditor.contentLabel/ }),
+      await screen.findByPlaceholderText('promptEditor.contentPlaceholder'),
       'Summarize:',
     );
     await user.click(screen.getByRole('button', { name: 'buttons.save' }));
@@ -205,9 +261,9 @@ describe('PromptEditor', () => {
       screen.getByRole('textbox', { name: /promptEditor.nameLabel/ }),
       'summarize',
     );
-    const contentField = screen.getByRole('textbox', {
-      name: /promptEditor.contentLabel/,
-    });
+    const contentField = await screen.findByPlaceholderText(
+      'promptEditor.contentPlaceholder',
+    );
     await user.click(contentField);
     await user.paste('x'.repeat(50001));
     await user.click(screen.getByRole('button', { name: 'buttons.save' }));
@@ -229,9 +285,9 @@ describe('PromptEditor', () => {
     await fillRequiredFields('summarize', 'Summarize:');
     await user.click(screen.getByRole('button', { name: 'buttons.save' }));
 
-    await waitFor(() =>
-      expect(screen.getByText('promptEditor.error.nameConflict')).toBeTruthy(),
-    );
+    expect(
+      await screen.findByText('promptEditor.error.nameConflict'),
+    ).toBeTruthy();
     expect(mockNavigate).not.toHaveBeenCalledWith('/catalog');
   });
 
@@ -251,116 +307,71 @@ describe('PromptEditor', () => {
     expect(mockNavigate).not.toHaveBeenCalledWith('/catalog');
   });
 
-  it('updates content only, without dispatching a move', async () => {
-    mockSearchParams = new URLSearchParams({ id: 'Work/AI/summarize' });
+  it('updates the prompt in place', async () => {
+    mockSearchParams = new URLSearchParams({
+      id: 'prompts/my-bucket/Work/AI/summarize',
+    });
 
     render(<PromptEditor />);
-    await waitFor(() =>
-      expect(screen.getByDisplayValue('summarize')).toBeTruthy(),
-    );
+    expect(await screen.findByDisplayValue('summarize')).toBeTruthy();
 
-    const contentField = screen.getByRole('textbox', {
-      name: /promptEditor.contentLabel/,
-    });
+    const contentField = await screen.findByPlaceholderText(
+      'promptEditor.contentPlaceholder',
+    );
     await user.clear(contentField);
-    await user.type(contentField, 'Summarize in three bullets:');
+    await user.click(contentField);
+    await user.paste('Summarize in three bullets:');
     await user.click(screen.getByRole('button', { name: 'buttons.save' }));
 
     await waitFor(() =>
-      expect(updatePrompt).toHaveBeenCalledWith('Work/AI/summarize', {
-        name: 'summarize',
-        description: 'Summarize a document',
-        content: 'Summarize in three bullets:',
-      }),
+      expect(updatePrompt).toHaveBeenCalledWith(
+        'prompts/my-bucket/Work/AI/summarize',
+        {
+          name: 'summarize',
+          description: 'Summarize a document',
+          content: 'Summarize in three bullets:',
+        },
+      ),
     );
-    expect(movePrompt).not.toHaveBeenCalled();
+    expect(showNotification).toHaveBeenCalledWith({
+      variant: 'success',
+      title: 'entityNotifications.prompt.editedTitle',
+      message: 'entityNotifications.prompt.edited',
+    });
   });
 
-  it('creates a folder and refetches so the picker sees it', async () => {
+  it('updates a writable shared prompt using the owner-bucket-qualified id', async () => {
+    mockSearchParams = new URLSearchParams({
+      id: 'prompts/owner-bucket/Work/AI/summarize',
+    });
+    vi.mocked(getPrompt).mockResolvedValue({
+      ...promptDto,
+      id: 'prompts/owner-bucket/Work/AI/summarize',
+      isMy: false,
+      canEdit: true,
+      sharedWithMe: true,
+    });
+
     render(<PromptEditor />);
 
-    await user.click(
-      screen.getByRole('button', {
-        name: 'promptEditor.folderCreateLabel',
-      }),
+    expect(await screen.findByDisplayValue('summarize')).toBeTruthy();
+    expect(getPrompt).toHaveBeenCalledWith(
+      'prompts/owner-bucket/Work/AI/summarize',
     );
-    const folderForm = screen.getByRole('group', {
-      name: 'promptEditor.folderCreateLabel',
-    });
-    await user.type(
-      within(folderForm).getByRole('textbox', {
-        name: /promptEditor.folderNameLabel/,
-      }),
-      'Drafts',
-    );
-    await user.click(
-      within(folderForm).getByRole('button', { name: 'buttons.save' }),
-    );
+
+    await user.click(screen.getByRole('button', { name: 'buttons.save' }));
 
     await waitFor(() =>
-      expect(createPromptFolder).toHaveBeenCalledWith({
-        name: 'Drafts',
-        parentId: undefined,
-      }),
+      expect(updatePrompt).toHaveBeenCalledWith(
+        'prompts/owner-bucket/Work/AI/summarize',
+        {
+          name: 'summarize',
+          description: 'Summarize a document',
+          content: 'Summarize the following text:',
+        },
+      ),
     );
-    expect(refetchPrompts).toHaveBeenCalled();
   });
-
-  it('shows an inline conflict error when the folder already exists', async () => {
-    vi.mocked(createPromptFolder).mockRejectedValue({
-      response: {
-        status: 409,
-        json: () => Promise.resolve({ message: 'Folder already exists' }),
-      },
-    });
-
-    render(<PromptEditor />);
-
-    await user.click(
-      screen.getByRole('button', { name: 'promptEditor.folderCreateLabel' }),
-    );
-    const folderForm = screen.getByRole('group', {
-      name: 'promptEditor.folderCreateLabel',
-    });
-    await user.type(
-      within(folderForm).getByRole('textbox', {
-        name: /promptEditor.folderNameLabel/,
-      }),
-      'Work',
-    );
-    await user.click(
-      within(folderForm).getByRole('button', { name: 'buttons.save' }),
-    );
-
-    await waitFor(() =>
-      expect(screen.getByText('promptEditor.error.nameConflict')).toBeTruthy(),
-    );
-    expect(showNotification).not.toHaveBeenCalled();
-  });
-
-  it('rejects a folder name the storage contract does not allow, without dispatching', async () => {
-    render(<PromptEditor />);
-
-    await user.click(
-      screen.getByRole('button', { name: 'promptEditor.folderCreateLabel' }),
-    );
-    const folderForm = screen.getByRole('group', {
-      name: 'promptEditor.folderCreateLabel',
-    });
-    await user.type(
-      within(folderForm).getByRole('textbox', {
-        name: /promptEditor.folderNameLabel/,
-      }),
-      'bad/name',
-    );
-    await user.click(
-      within(folderForm).getByRole('button', { name: 'buttons.save' }),
-    );
-
-    expect(createPromptFolder).not.toHaveBeenCalled();
-    expect(screen.getByText('promptEditor.error.nameInvalid')).toBeTruthy();
-  });
-
   it('navigates to the return url on cancel without dispatching a mutation', async () => {
     mockSearchParams = new URLSearchParams({ returnUrl: '/catalog' });
 

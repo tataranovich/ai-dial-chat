@@ -1,28 +1,18 @@
-import type {
-  PublishCatalogEntityDto,
-  PublishHistoryEntryDto,
-  PublishResultDto,
-} from '@epam/ai-dial-chat-api-client';
 import { PublishCatalogEntityEntityTypeEnum } from '@epam/ai-dial-chat-api-client';
+import { createPublishApiClient } from '@epam/ai-dial-chat-hooks';
 import { publishApi } from './api-client';
 
-/** Catalog entity kinds that can be published. */
+/**
+ * Catalog entity kinds that can be published. Re-exported from the generated
+ * enum rather than the lib's string-literal union so existing call sites keep
+ * their `CatalogPublishEntityType.Skill`-style member access.
+ */
 export type CatalogPublishEntityType = PublishCatalogEntityEntityTypeEnum;
 export const CatalogPublishEntityType = PublishCatalogEntityEntityTypeEnum;
 
-export const publishCatalogEntity = (
-  entityType: CatalogPublishEntityType,
-  entityId: string,
-  body: PublishCatalogEntityDto,
-): Promise<PublishResultDto> =>
-  publishApi.publishCatalogEntity({
-    entityType,
-    entityId,
-    publishCatalogEntityDto: body,
-  });
+const publishApiClient = createPublishApiClient(publishApi);
 
-export const getCatalogPublishHistory = (
-  entityType: CatalogPublishEntityType,
-  entityId: string,
-): Promise<PublishHistoryEntryDto[]> =>
-  publishApi.getCatalogPublishHistory({ entityType, entityId });
+export const publishCatalogEntity = publishApiClient.publishCatalogEntity;
+export const unpublishCatalogEntity = publishApiClient.unpublishCatalogEntity;
+export const getCatalogPublishHistory =
+  publishApiClient.getCatalogPublishHistory;

@@ -1,7 +1,8 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
-  DialConditionalResizableContainer,
+  DIAL_KIT_ICON_STROKE,
+  ConditionalResizableContainer,
   GhostIconButton,
   ResizableContainerSide,
 } from '@epam/ai-dial-ui-kit';
@@ -14,6 +15,7 @@ import {
   useState,
   type FC,
 } from 'react';
+import { SIDEBAR_CLASS } from '../../constants/public-class-names';
 import { type SidebarPanelProps } from '../../models/panel-props';
 import { SidebarOrientation } from '../../types/orientation';
 import { Header } from '../Header/Header';
@@ -31,6 +33,7 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
   children,
   styles: panelStyles,
   resizable,
+  isOverlay = false,
   defaultWidth = 360,
   minWidth = 280,
   maxWidth = 600,
@@ -44,6 +47,7 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
     titleClassName,
     className,
     headerClassName,
+    headerActionsClassName,
   } = panelStyles ?? {};
 
   const panelCssVars = useMemo(
@@ -119,15 +123,66 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
    */
   const hasFullWidthClass = className?.includes('w-full');
 
-  const dividerClass =
-    orientation === SidebarOrientation.Right ? 'border-s' : 'border-e';
+  /*
+   * An overlay panel keeps its full size in both states and only moves, so no
+   * inline width may be applied - a width animating towards 0 would reflow the
+   * header actions and the list rows on every frame of the transition.
+   */
+  const shouldSetInlineWidth = !isOverlay && !hasFullWidthClass;
+
+  /*
+   * Resting positions of an overlay panel. A closed one leaves through the edge
+   * it is anchored to, which flips with the writing direction; the open state
+   * declares translate-x-0 explicitly so a transform is present in both states
+   * and the browser has two transform lists to interpolate between.
+   */
+  const getOverlayTransformClass = () => {
+    if (isOpen) {
+      return 'translate-x-0';
+    }
+    return orientation === SidebarOrientation.Left
+      ? 'ltr:-translate-x-full rtl:translate-x-full'
+      : 'ltr:translate-x-full rtl:-translate-x-full';
+  };
+
+  /*
+   * Only one property animates per mode, so the transition-property utility
+   * is never left unset - the CSS default (`all`) would otherwise animate
+   * every computed change, including the ones a resize drag makes per frame.
+   */
+  const getTransitionClass = () => {
+    if (isOverlay) {
+      return 'transition-transform duration-200 ease-in-out motion-reduce:transition-none';
+    }
+    if (isResizing) {
+      return undefined;
+    }
+    return 'transition-[width] duration-200 ease-in-out motion-reduce:transition-none';
+  };
+
+  /*
+   * A Left-anchored panel sits next to the navigation rail with no divider
+   * of its own on that edge; add one (reusing the same --sb-border /
+   * --stroke-tertiary token the wrapper's border-color already resolves to)
+   * once the panel is open, so the rail and the panel read as two distinct
+   * surfaces. The panel's other edge (facing the main content) stays
+   * divider-less.
+   */
+  const navDividerClass =
+    orientation === SidebarOrientation.Left && isOpen ? 'border-s' : undefined;
   const resizableSide =
     orientation === SidebarOrientation.Right
       ? ResizableContainerSide.Left
       : ResizableContainerSide.Right;
   const closeButton = onClose ? (
     <GhostIconButton
-      icon={<IconX size={DIAL_ICON_SIZE.LG} stroke={1.5} aria-hidden />}
+      icon={
+        <IconX
+          size={DIAL_ICON_SIZE.LG}
+          stroke={DIAL_KIT_ICON_STROKE}
+          aria-hidden
+        />
+      }
       aria-label={labels.closeLabel}
       tooltipProps={{ tooltip: labels.closeLabel }}
       onClick={onClose}
@@ -136,24 +191,32 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
 
   return (
     <div
-      style={
-        hasFullWidthClass
-          ? undefined
-          : {
-              width: panelWidth,
-            }
-      }
+      style={shouldSetInlineWidth ? { width: panelWidth } : undefined}
       className={mergeClasses(
         'h-full flex-shrink-0 gap-3 overflow-hidden shadow-sm',
-        !isResizing && 'transition-[width] duration-200 ease-in-out',
-        isOpen && 'relative z-50',
+        orientation === SidebarOrientation.Left &&
+          '[clip-path:inset(-24px_-24px_-24px_0)] rtl:[clip-path:inset(-24px_0_-24px_-24px)]',
+        getTransitionClass(),
+        /*
+         * The stacking context has to outlive the close transition. Tying it to
+         * isOpen dropped the panel a layer the moment the animation started, so
+         * the main content painted over the still-visible panel for its whole
+         * duration.
+         */
+        'relative z-50',
         className,
+        /*
+         * Applied after className so an overlay panel keeps its full width in
+         * both states: it slides out of view instead of collapsing in place.
+         */
+        isOverlay && mergeClasses('w-full', getOverlayTransformClass()),
         styles.panel,
       )}
     >
-      <DialConditionalResizableContainer
+      <ConditionalResizableContainer
         enabled={(resizable ?? false) && isOpen}
         side={resizableSide}
+        ariaLabel={labels.resizeLabel ?? 'Resize panel'}
         width={
           isOpen ? animationMaxWidth || currentWidthRef.current : undefined
         }
@@ -172,35 +235,34 @@ export const SidebarPanel: FC<SidebarPanelProps> = ({
           className={mergeClasses(
             styles.wrapper,
             'flex h-full w-full flex-col gap-3',
-            isOpen && styles.appear,
-            dividerClass,
+            navDividerClass,
             typography?.fontClassName,
+            SIDEBAR_CLASS.aside,
           )}
         >
           <Header
             title={title}
             className={headerClassName}
+            actionsClassName={headerActionsClassName}
             titleClassName={titleClassName}
-            leftActions={isOpen && leftActions}
+            leftActions={leftActions}
             rightActions={
-              isOpen && (
-                <>
-                  {rightActions}
-                  {closeButton}
-                </>
-              )
+              <>
+                {rightActions}
+                {closeButton}
+              </>
             }
           />
           <div
             className={mergeClasses(
-              'flex-1 overflow-y-auto p-4',
+              'flex-1 overflow-y-auto p-4 pt-0',
               bodyClassName,
             )}
           >
             {children}
           </div>
         </aside>
-      </DialConditionalResizableContainer>
+      </ConditionalResizableContainer>
     </div>
   );
 };

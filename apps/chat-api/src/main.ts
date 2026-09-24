@@ -16,18 +16,27 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule } from '@nestjs/swagger';
 import type { ValidationError } from 'class-validator';
+import { useContainer } from 'class-validator';
 import cookieParser from 'cookie-parser';
+import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import 'reflect-metadata';
 import { AppModule } from './app/app.module';
+import { createFrontendMiddleware } from './app/static-assets';
+import { clearLegacyCookies } from './auth/cookies/cookie-options';
 import { TraceparentErrorFilter } from './common/filters/traceparent-error.filter';
-import { createHelmetOptions } from './config/csp';
+import { buildCorsOptionsDelegate } from './config/cors';
+import {
+  buildPermissionsPolicyHeader,
+  createHelmetOptions,
+} from './config/csp';
 import { EnvironmentVariables } from './config/environment.config';
 import { resolveLogLevels } from './config/log-levels';
 import {
   createOpenApiConfig,
   openApiDocumentOptions,
 } from './openapi/openapi.config';
+import { attachHttpLifecycleListener } from './telemetry/http-lifecycle-listener';
 import { NestOtelLogger } from './telemetry/nestjs-otel-logger';
 import { traceparentMiddleware } from './telemetry/traceparent.middleware';
 
@@ -65,18 +74,44 @@ async function bootstrap() {
     ),
   });
 
+  /*
+   * Must run first, before `app.enableShutdownHooks()` and before any `app.use(...)` call below:
+   * attaching directly to `app.getHttpServer()`'s raw `'request'` event is what makes this
+   * instrumentation see guard rejections, body-parser failures, and unmatched routes that a Nest
+   * interceptor or an `app.use()` middleware — whose visibility depends on registration order —
+   * cannot (design.md D1). Moving this call later in `bootstrap()` would silently reopen that gap
+   * for whatever gets registered ahead of it.
+   */
+  attachHttpLifecycleListener(app.getHttpServer());
+
   app.enableShutdownHooks();
 
+  /*
+   * Lets class-validator resolve custom `@ValidatorConstraint` classes (e.g.
+   * `IsAllowedRedirectUriConstraint`) through Nest's DI container, so they
+   * can inject `ConfigService` instead of reading `process.env` directly.
+   * `fallbackOnErrors` keeps constraints with no DI needs working via plain
+   * `new` construction.
+   */
+  useContainer(app.select(AppModule), { fallbackOnErrors: true });
+
+  const configService = app.get(ConfigService<EnvironmentVariables, true>);
+
   app.use(cookieParser());
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    clearLegacyCookies(req, res, configService);
+    next();
+  });
   app.use(traceparentMiddleware);
   app.useGlobalFilters(new TraceparentErrorFilter());
 
   app.enableVersioning({ type: VersioningType.URI });
 
-  const configService = app.get(ConfigService<EnvironmentVariables, true>);
   const allowedIframeOrigins = configService.get('ALLOWED_IFRAME_ORIGINS', {
     infer: true,
   });
+  const secureTransport =
+    configService.get('AUTH_COOKIE_SECURE', { infer: true }) !== false;
 
   app.useBodyParser('json', {
     limit: configService.get('CONVERSATION_BODY_SIZE_LIMIT_BYTES', {
@@ -85,7 +120,29 @@ async function bootstrap() {
   });
 
   // Security headers middleware
-  app.use(helmet(createHelmetOptions(allowedIframeOrigins ?? [])));
+  const allowedConnectOrigins = configService.get('ALLOWED_CONNECT_ORIGINS', {
+    infer: true,
+  });
+  app.use(
+    helmet(
+      createHelmetOptions(allowedIframeOrigins ?? [], secureTransport, {
+        allowedConnectOrigins,
+      }),
+    ),
+  );
+
+  /*
+   * Helmet has no built-in Permissions-Policy support, so it's applied here
+   * to delegate Local Network Access to the same origins allowlisted for
+   * iframe embedding (see csp.ts's buildPermissionsPolicyHeader doc comment).
+   */
+  const permissionsPolicyHeader = buildPermissionsPolicyHeader(
+    allowedIframeOrigins ?? [],
+  );
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Permissions-Policy', permissionsPolicyHeader);
+    next();
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -108,11 +165,31 @@ async function bootstrap() {
   const globalPrefix = process.env.API_PREFIX || 'api';
 
   app.setGlobalPrefix(globalPrefix);
-  app.enableCors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:4207',
-    credentials: true,
-    exposedHeaders: ['X-CSRF-Token', 'X-DIAL-CLIENT-CHANNEL-ID', 'traceparent'],
-  });
+  app.enableCors(
+    buildCorsOptionsDelegate({
+      origin: process.env.CORS_ORIGIN || 'http://localhost:4207',
+      credentials: true,
+      exposedHeaders: [
+        'X-CSRF-Token',
+        'X-DIAL-CLIENT-CHANNEL-ID',
+        'traceparent',
+      ],
+    }),
+  );
+
+  app.use(
+    await createFrontendMiddleware({
+      allowedIframeOrigins: allowedIframeOrigins ?? [],
+      allowedConnectOrigins,
+      secureTransport,
+      cspMode: configService.get('CSP_MODE', { infer: true }),
+      reportUri: configService.get('CSP_REPORT_URI', { infer: true }),
+      overlaySandboxEnabled: configService.get('OVERLAY_SANDBOX_ENABLED', {
+        infer: true,
+      }),
+      apiPrefix: configService.get('API_PREFIX', { infer: true }),
+    }),
+  );
 
   const port = process.env.PORT || 5000;
   await app.listen(port);

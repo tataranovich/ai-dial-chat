@@ -1,3 +1,4 @@
+import { AttachmentGroup } from '@epam/ai-dial-attachment-input';
 import {
   buildCssVars,
   DisplayAttachment,
@@ -5,10 +6,10 @@ import {
   MessageRole,
   useCollapsedText,
 } from '@epam/ai-dial-chat-shared';
-import { AttachmentGroup } from '@epam/ai-dial-conversation-input';
 import { DIAL_ICON_SIZE, ElementSize, LinkButton } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconChevronUp } from '@tabler/icons-react';
 import { FC, useId } from 'react';
+import { CONVERSATION_MESSAGES_CLASS } from '../../constants/public-class-names';
 import type { UserMessageBubbleProps } from '../../models/message-bubble';
 import { BubblePosition } from '../../types/bubble-position';
 import { MessageActions } from '../MessageActions/MessageActions';
@@ -26,6 +27,7 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
   attachments,
   collapsedLineCount = DEFAULT_COLLAPSED_LINE_COUNT,
   labels,
+  beforeContent,
   onAttachmentClick,
   onDownloadAll,
   onAttachmentRetry,
@@ -51,7 +53,10 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
     expandedMaxHeight,
     isCollapsed,
     toggleCollapsed,
-  } = useCollapsedText<HTMLParagraphElement>({ text, collapsedLineCount });
+  } = useCollapsedText<HTMLParagraphElement>({
+    text: text ?? '',
+    collapsedLineCount,
+  });
 
   const cssVars = buildCssVars({
     '--cm-bubble-user-bg': colors?.userBackground,
@@ -103,35 +108,54 @@ export const UserMessageBubble: FC<UserMessageBubbleProps> = ({
           styles={{ className: 'max-w-[640px]' }}
           selectedAttachmentId={selectedAttachmentId}
         />
-        {text && (
+        {(text || beforeContent != null) && (
           <div
             className={mergeClasses(
               styles.userBubble,
               'flex w-fit items-center justify-end rounded-es-2xl rounded-ss-2xl border px-6 py-4',
               positionRadius,
               bubbleClassName,
+              CONVERSATION_MESSAGES_CLASS.userBubble,
             )}
           >
             <div className="flex min-w-0 flex-col items-start">
-              <div
-                id={collapsibleTextId}
-                className={mergeClasses(
-                  'relative overflow-hidden',
-                  isOverflowing && styles.collapsibleText,
-                  isOverflowing && !isCollapsed && styles.expandedText,
-                  isTextCollapsed && styles.collapsedText,
-                )}
-              >
-                <p
-                  ref={textRef}
+              {text && (
+                <div
+                  id={collapsibleTextId}
                   className={mergeClasses(
-                    textClass,
-                    'whitespace-pre-wrap text-start [overflow-wrap:anywhere]',
+                    'relative overflow-hidden',
+                    isOverflowing && styles.collapsibleText,
+                    isOverflowing && !isCollapsed && styles.expandedText,
+                    isTextCollapsed && styles.collapsedText,
                   )}
                 >
-                  {text}
-                </p>
-              </div>
+                  <p
+                    ref={textRef}
+                    className={mergeClasses(
+                      textClass,
+                      'whitespace-pre-wrap text-start [overflow-wrap:anywhere]',
+                    )}
+                  >
+                    {/*
+                     * The slot renders inline at the start of the text so the
+                     * text word-flows after it on the same line — the
+                     * conversation input's inline-start slot behaviour.
+                     * Inline placement keeps the bubble's content-sized width
+                     * and the collapse line measurement honest, which an
+                     * overlaid or floated slot would not; the wrapper supplies
+                     * the chip-to-text gap because generic slot content
+                     * carries no padding of its own. In flow when there is no
+                     * text: the bubble then renders for the slot alone and
+                     * needs its height.
+                     */}
+                    {beforeContent != null && (
+                      <span className="me-1">{beforeContent}</span>
+                    )}
+                    {text}
+                  </p>
+                </div>
+              )}
+              {beforeContent != null && !text && <div>{beforeContent}</div>}
               {isOverflowing && (
                 <LinkButton
                   label={<>{toggleLabel}</>}

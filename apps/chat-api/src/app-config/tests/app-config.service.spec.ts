@@ -42,6 +42,31 @@ describe('AppConfigService', () => {
   });
 
   describe('getClientConfig', () => {
+    it('keeps client-owned variables in their own namespace without overriding built-in config', async () => {
+      const custom = {
+        defaultDeploymentId: 'custom-only',
+        asrEnabled: true,
+        nested: { values: [null, false, 3] },
+      };
+      const { service } = makeService(async (key) =>
+        key === 'customVariables' ? custom : undefined,
+      );
+      const result = await service.getClientConfig(ctx);
+      expect(result.config.customVariables).toEqual(custom);
+      expect(result.config.defaultDeploymentId).toBeNull();
+      expect(result.features['asrEnabled']).toBe(false);
+    });
+    it.each([undefined, null, [], 'invalid', 4])(
+      'returns empty custom variables for missing or invalid provider value %j',
+      async (value) => {
+        const { service } = makeService(async (key) =>
+          key === 'customVariables' ? value : undefined,
+        );
+        expect(
+          (await service.getClientConfig(ctx)).config.customVariables,
+        ).toEqual({});
+      },
+    );
     it('filters server-only keys and only returns client-visible config', async () => {
       const { service } = makeService(async () => undefined);
       const result = await service.getClientConfig(ctx);
@@ -76,11 +101,22 @@ describe('AppConfigService', () => {
       expect(result.config.announcementHtml).toBeNull();
       expect(result.config.footerHtmlMessage).toBe('');
       expect(result.config.customVisualizers).toEqual([]);
+      expect(result.config.applicationVisualizers).toEqual({});
       expect(result.config.publicationFilterSources).toEqual([
         'title',
         'role',
         'dial_roles',
       ]);
+      expect(result.config.maxAttachmentFileSizeBytes).toBe(536_870_912);
+    });
+
+    it('surfaces an operator-configured maxAttachmentFileSizeBytes value', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'attachments.maxFileSizeBytes' ? 104_857_600 : undefined,
+      );
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.maxAttachmentFileSizeBytes).toBe(104_857_600);
     });
 
     it('surfaces an operator-configured publicationFilterSources list verbatim', async () => {
@@ -111,6 +147,31 @@ describe('AppConfigService', () => {
       expect(result.config.customVisualizers).toEqual([entry]);
     });
 
+    it('surfaces the resolved applicationVisualizers registry verbatim', async () => {
+      const registry = {
+        'app-1': {
+          title: 'my-viz',
+          url: 'https://viz.example.com',
+          passAuthInfo: true,
+        },
+      };
+      const { service } = makeService(async (key: string) =>
+        key === 'applicationVisualizers' ? registry : undefined,
+      );
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.applicationVisualizers).toEqual(registry);
+    });
+
+    it('falls back to an empty applicationVisualizers registry when the resolved value is an array', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'applicationVisualizers' ? [] : undefined,
+      );
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.applicationVisualizers).toEqual({});
+    });
+
     it('returns resolved values when providers succeed', async () => {
       const { service } = makeService(async (key: string) => {
         if (key === 'asr.modelId') return 'whisper-1';
@@ -124,7 +185,6 @@ describe('AppConfigService', () => {
           return ['https://partner.example.com'];
         if (key === 'uiFeatures.enabledUiFeatures') return ['likes'];
         if (key === 'announcement.html') return 'Welcome to <b>DIAL</b>!';
-        if (key === 'deployments.deepResearchToolId') return 'deep_research';
         return undefined;
       });
       const result = await service.getClientConfig(ctx);
@@ -142,7 +202,6 @@ describe('AppConfigService', () => {
         'https://partner.example.com',
       ]);
       expect(result.config.enabledUiFeatures).toEqual(['likes']);
-      expect(result.config.deepResearchToolId).toBe('deep_research');
     });
 
     it('filters unrecognized enabledUiFeatures entries, keeps known ones, and logs a warning', async () => {
@@ -166,6 +225,39 @@ describe('AppConfigService', () => {
       );
     });
 
+    it('resolves a deprecated enabledUiFeatures alias to its replacement and logs a warning', async () => {
+      const { service } = makeService(async (key: string) => {
+        if (key === 'uiFeatures.enabledUiFeatures')
+          return ['likes', 'custom-applications'];
+        return undefined;
+      });
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.enabledUiFeatures).toEqual(['likes', 'schema-apps']);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('custom-applications'),
+      );
+    });
+
+    it('does not duplicate a feature supplied both under its deprecated alias and its current name', async () => {
+      const { service } = makeService(async (key: string) => {
+        if (key === 'uiFeatures.enabledUiFeatures')
+          return ['schema-apps', 'custom-applications'];
+        return undefined;
+      });
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.enabledUiFeatures).toEqual(['schema-apps']);
+    });
+
     it('falls back to null (use defaults) when every enabledUiFeatures entry is unrecognized', async () => {
       const { service } = makeService(async (key: string) => {
         if (key === 'uiFeatures.enabledUiFeatures') return ['totally-invalid'];
@@ -175,6 +267,119 @@ describe('AppConfigService', () => {
       const result = await service.getClientConfig(ctx);
 
       expect(result.config.enabledUiFeatures).toBeNull();
+    });
+
+    it.each([
+      ['a non-array value', 'not-an-array'],
+      ['an empty array', []],
+    ])(
+      'falls back to null with no warning when enabledUiFeatures resolves to %s',
+      async (_label, value) => {
+        const { service } = makeService(async (key: string) =>
+          key === 'uiFeatures.enabledUiFeatures' ? value : undefined,
+        );
+        const warnSpy = vi
+          .spyOn(
+            (service as never as { logger: { warn: () => void } }).logger,
+            'warn',
+          )
+          .mockImplementation(() => undefined);
+
+        const result = await service.getClientConfig(ctx);
+
+        expect(result.config.enabledUiFeatures).toBeNull();
+        expect(warnSpy).not.toHaveBeenCalled();
+      },
+    );
+
+    it('preserves the input order of multiple recognized enabledUiFeatures entries', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'uiFeatures.enabledUiFeatures'
+          ? ['likes', 'header', 'prompts']
+          : undefined,
+      );
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.enabledUiFeatures).toEqual([
+        'likes',
+        'header',
+        'prompts',
+      ]);
+    });
+
+    it('coerces a non-string enabledUiFeatures entry with String() before reporting it', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'uiFeatures.enabledUiFeatures' ? [42] : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.enabledUiFeatures).toBeNull();
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        1,
+        'Ignoring unrecognized ENABLED_UI_FEATURES entry: "42"',
+      );
+    });
+
+    it('logs the unrecognized-entry warning once per repeated occurrence, in order', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'uiFeatures.enabledUiFeatures'
+          ? ['bogus', 'likes', 'bogus']
+          : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.enabledUiFeatures).toEqual(['likes']);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        1,
+        'Ignoring unrecognized ENABLED_UI_FEATURES entry: "bogus"',
+      );
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        2,
+        'Ignoring unrecognized ENABLED_UI_FEATURES entry: "bogus"',
+      );
+    });
+
+    it('logs the deprecated-alias warning once per repeated occurrence, in order', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'uiFeatures.enabledUiFeatures'
+          ? ['custom-applications', 'custom-applications']
+          : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.enabledUiFeatures).toEqual(['schema-apps']);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        1,
+        'ENABLED_UI_FEATURES entry "custom-applications" is deprecated; using "schema-apps" instead',
+      );
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        2,
+        'ENABLED_UI_FEATURES entry "custom-applications" is deprecated; using "schema-apps" instead',
+      );
     });
 
     it('returns null defaultDeploymentId when DEFAULT_DEPLOYMENT is not set', async () => {
@@ -502,18 +707,203 @@ describe('AppConfigService', () => {
       expect(result.config.announcements[9].title).toBe('Announcement 9');
     });
 
-    it('returns null deepResearchToolId when DEEP_RESEARCH_TOOL_ID is not set', async () => {
-      const { service } = makeService(async () => undefined);
+    it('logs a single exact warning and returns an empty list when ANNOUNCEMENTS resolves to a non-array value', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'announcement.items' ? { title: 'x' } : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
       const result = await service.getClientConfig(ctx);
-      expect(result.config.deepResearchToolId).toBeNull();
+
+      expect(result.config.announcements).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'ANNOUNCEMENTS did not resolve to an array; ignoring it',
+      );
     });
 
-    it('returns the configured deepResearchToolId when DEEP_RESEARCH_TOOL_ID is set', async () => {
+    it.each([
+      ['null', null],
+      ['undefined', undefined],
+    ])(
+      'returns an empty list with no warning when ANNOUNCEMENTS resolves to %s',
+      async (_label, value) => {
+        const { service } = makeService(async (key: string) =>
+          key === 'announcement.items' ? value : undefined,
+        );
+        const warnSpy = vi
+          .spyOn(
+            (service as never as { logger: { warn: () => void } }).logger,
+            'warn',
+          )
+          .mockImplementation(() => undefined);
+
+        const result = await service.getClientConfig(ctx);
+
+        expect(result.config.announcements).toEqual([]);
+        expect(warnSpy).not.toHaveBeenCalled();
+      },
+    );
+
+    it('logs the exact warning text for a non-object announcement entry', async () => {
       const { service } = makeService(async (key: string) =>
-        key === 'deployments.deepResearchToolId' ? 'deep_research' : undefined,
+        key === 'announcement.items' ? ['not-an-object'] : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.announcements).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Ignoring announcement entry that is not an object',
+      );
+    });
+
+    it('logs the exact warning text for a blank or missing title', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'announcement.items' ? [{ title: '   ' }] : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.announcements).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Ignoring announcement entry with a blank or missing title',
+      );
+    });
+
+    it('logs the exact warning text for a blank link label', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'announcement.items'
+          ? [
+              {
+                title: 'No label',
+                link: { label: '  ', href: 'https://x.dev' },
+              },
+            ]
+          : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.announcements).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Ignoring announcement "No label": link.label is blank or missing',
+      );
+    });
+
+    it('logs the exact warning text for an invalid link href', async () => {
+      const { service } = makeService(async (key: string) =>
+        key === 'announcement.items'
+          ? [{ title: 'Bad link', link: { label: 'Go', href: '/settings' } }]
+          : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.announcements).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Ignoring announcement "Bad link": link.href is not an http(s) URL: /settings',
+      );
+    });
+
+    it('preserves duplicate announcements rather than deduplicating them', async () => {
+      const entry = {
+        title: 'Same announcement',
+        description: 'Same body',
+        link: { label: 'Go', href: 'https://x.dev' },
+      };
+      const { service } = makeService(async (key: string) =>
+        key === 'announcement.items' ? [entry, { ...entry }] : undefined,
       );
       const result = await service.getClientConfig(ctx);
-      expect(result.config.deepResearchToolId).toBe('deep_research');
+
+      expect(result.config.announcements).toHaveLength(2);
+      expect(result.config.announcements[0]).toEqual(
+        result.config.announcements[1],
+      );
+    });
+
+    it('logs a rejection warning for an invalid entry positioned beyond the cap', async () => {
+      const validEntries = Array.from({ length: 10 }, (_, index) => ({
+        title: `Announcement ${index}`,
+      }));
+      const { service } = makeService(async (key: string) =>
+        key === 'announcement.items'
+          ? [...validEntries, { title: '   ' }]
+          : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.announcements).toHaveLength(10);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Ignoring announcement entry with a blank or missing title',
+      );
+    });
+
+    it('logs the cap-exceeded warning last, reporting the total number of valid entries', async () => {
+      const validEntries = Array.from({ length: 12 }, (_, index) => ({
+        title: `Announcement ${index}`,
+      }));
+      const { service } = makeService(async (key: string) =>
+        key === 'announcement.items'
+          ? [...validEntries, { title: '   ' }]
+          : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const result = await service.getClientConfig(ctx);
+
+      expect(result.config.announcements).toHaveLength(10);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        1,
+        'Ignoring announcement entry with a blank or missing title',
+      );
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        2,
+        'ANNOUNCEMENTS carried 12 entries; keeping the first 10 and dropping the rest',
+      );
     });
 
     it('returns empty string for footerHtmlMessage when FOOTER_HTML_MESSAGE is not set', async () => {
@@ -709,6 +1099,68 @@ describe('AppConfigService', () => {
       expect(compositeProvider.resolve).toHaveBeenCalledTimes(
         CLIENT_DEFINITIONS_COUNT * 2,
       );
+    });
+
+    it('serves a cache hit without re-resolving providers or emitting new enabledUiFeatures warnings', async () => {
+      const { service, compositeProvider } = makeService(async (key: string) =>
+        key === 'uiFeatures.enabledUiFeatures'
+          ? ['likes', 'not-a-real-feature']
+          : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const first = await service.getClientConfig(ctx);
+      warnSpy.mockClear();
+      const resolveCallsAfterFirst = (
+        compositeProvider.resolve as never as {
+          mock: { calls: unknown[] };
+        }
+      ).mock.calls.length;
+
+      const second = await service.getClientConfig(ctx);
+
+      expect(second).toEqual(first);
+      expect(second.config.enabledUiFeatures).toEqual(['likes']);
+      expect(compositeProvider.resolve).toHaveBeenCalledTimes(
+        resolveCallsAfterFirst,
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('serves a cache hit without re-resolving providers or emitting new announcement warnings', async () => {
+      const { service, compositeProvider } = makeService(async (key: string) =>
+        key === 'announcement.items'
+          ? [{ title: 'Good' }, { title: '   ' }]
+          : undefined,
+      );
+      const warnSpy = vi
+        .spyOn(
+          (service as never as { logger: { warn: () => void } }).logger,
+          'warn',
+        )
+        .mockImplementation(() => undefined);
+
+      const first = await service.getClientConfig(ctx);
+      warnSpy.mockClear();
+      const resolveCallsAfterFirst = (
+        compositeProvider.resolve as never as {
+          mock: { calls: unknown[] };
+        }
+      ).mock.calls.length;
+
+      const second = await service.getClientConfig(ctx);
+
+      expect(second).toEqual(first);
+      expect(second.config.announcements).toHaveLength(1);
+      expect(compositeProvider.resolve).toHaveBeenCalledTimes(
+        resolveCallsAfterFirst,
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
     });
   });
 

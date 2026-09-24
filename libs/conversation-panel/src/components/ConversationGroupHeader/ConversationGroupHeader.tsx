@@ -1,8 +1,7 @@
-import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { DialEllipsisTooltip } from '@epam/ai-dial-ui-kit';
+import { FilterTab, mergeClasses } from '@epam/ai-dial-chat-shared';
+import { EllipsisTooltip } from '@epam/ai-dial-ui-kit';
 import { IconCaretDownFilled, IconCaretRightFilled } from '@tabler/icons-react';
 import type { DragEvent, FC } from 'react';
-import { FilterTab } from '../../types/conversation-classification';
 import styles from '../ConversationPanel/ConversationPanel.module.scss';
 
 /** Props for `ConversationGroupHeader`. */
@@ -15,7 +14,7 @@ export interface ConversationGroupHeaderProps {
   onToggle: () => void;
   /** `id` of the virtualized list container this header's rows belong to, referenced via `aria-controls`. */
   listId: string;
-  /** Typography class applied to the header button. Defaults to `'dial-tiny-semi-text uppercase'`. */
+  /** Typography class applied to the header button. Defaults to `'dial-tiny-lead-text'`. */
   className?: string;
   /** When provided the header acts as a drag-and-drop drop zone. */
   dropZoneGroupKey?: FilterTab;
@@ -78,7 +77,7 @@ export const ConversationGroupHeader: FC<ConversationGroupHeaderProps> = ({
       onDragLeave={isDropZone ? handleDragLeave : undefined}
       onDrop={isDropZone ? handleDrop : undefined}
       className={mergeClasses(
-        'flex h-6 w-full items-center gap-1 rounded py-1 pe-3 text-start',
+        'group flex h-6 w-full items-center gap-1 rounded py-1 pe-3 text-start',
         className,
         styles.groupHeader,
         isDragOver && styles.dropZoneActive,
@@ -86,20 +85,18 @@ export const ConversationGroupHeader: FC<ConversationGroupHeaderProps> = ({
     >
       {isExpanded ? (
         <IconCaretDownFilled
-          stroke={0.5}
           size={12}
-          className="shrink-0"
+          className="shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
           aria-hidden
         />
       ) : (
         <IconCaretRightFilled
-          stroke={0.5}
           size={12}
-          className="shrink-0 rtl:scale-x-[-1]"
+          className="shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 rtl:scale-x-[-1]"
           aria-hidden
         />
       )}
-      <DialEllipsisTooltip text={label} />
+      <EllipsisTooltip text={label} />
     </button>
   );
 };

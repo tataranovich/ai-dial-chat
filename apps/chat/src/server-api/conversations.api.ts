@@ -2,6 +2,7 @@ import type {
   AttachmentDto,
   ConversationResponseDto,
 } from '@epam/ai-dial-chat-api-client';
+import type { RequestSkill } from '@epam/ai-dial-chat-shared';
 import { conversationsApi } from './api-client';
 
 export const createConversation = (
@@ -10,12 +11,16 @@ export const createConversation = (
   attachments?: AttachmentDto[],
   configurationValue?: Record<string, unknown>,
   formValue?: Record<string, unknown>,
+  skills?: RequestSkill[],
 ) =>
   conversationsApi.createConversation({
     createConversationDto: {
       firstMessage,
       deploymentId,
-      ...(attachments?.length || configurationValue || formValue
+      ...(attachments?.length ||
+      configurationValue ||
+      formValue ||
+      skills?.length
         ? {
             custom_content: {
               ...(attachments?.length ? { attachments } : {}),
@@ -23,6 +28,7 @@ export const createConversation = (
                 ? { configuration_value: configurationValue }
                 : {}),
               ...(formValue ? { form_value: formValue } : {}),
+              ...(skills?.length ? { skills } : {}),
             },
           }
         : {}),
@@ -57,15 +63,6 @@ export const deleteConversation = (conversationPath: string) =>
 export const markConversationViewed = (conversationPath: string) =>
   conversationsApi.markConversationViewed({ path: conversationPath });
 
-export const getConversationMetadata = (
-  conversationPath: string,
-  options?: { permissions?: boolean },
-) =>
-  conversationsApi.getConversationMetadata({
-    path: conversationPath,
-    permissions: options?.permissions,
-  });
-
 export const listConversations = (
   params?: {
     limit?: number;
@@ -75,7 +72,7 @@ export const listConversations = (
 ) =>
   conversationsApi.listConversations(
     {
-      limit: params?.limit ?? 1000,
+      limit: params?.limit,
       nextToken: params?.nextToken,
     },
     ...(signal ? [{ signal }] : []),
@@ -93,11 +90,6 @@ export const generateConversationTitle = (conversationPath: string) =>
 export const duplicateConversation = (conversationPath: string) =>
   conversationsApi.duplicateConversation({ path: conversationPath });
 
-export const deleteConversations = (ids: string[]) =>
-  conversationsApi.deleteConversations({
-    deleteConversationsBodyDto: { ids },
-  });
-
 export const deleteAllConversations = () =>
   conversationsApi.deleteAllConversations({
     deleteAllConversationsBodyDto: { confirm: true },
@@ -113,6 +105,26 @@ export const watchConversation = async (
   );
   if (!apiResponse.raw.body) {
     throw new Error('Watch endpoint returned no response body');
+  }
+  return apiResponse.raw.body as ReadableStream<Uint8Array>;
+};
+
+/**
+ * Attaches to an active generation's live replay stream. Rejects (via the
+ * generated client's `ResponseError`) when the backend responds non-2xx —
+ * including 404 for "no active generation" — so the caller can fall back to
+ * the terminal-update watch instead.
+ */
+export const attachToGeneration = async (
+  conversationPath: string,
+  signal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array>> => {
+  const apiResponse = await conversationsApi.attachToGenerationRaw(
+    { attachGenerationDto: { path: conversationPath } },
+    signal ? { signal } : undefined,
+  );
+  if (!apiResponse.raw.body) {
+    throw new Error('Attach endpoint returned no response body');
   }
   return apiResponse.raw.body as ReadableStream<Uint8Array>;
 };

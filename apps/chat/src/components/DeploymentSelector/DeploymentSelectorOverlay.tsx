@@ -2,51 +2,65 @@ import type { CatalogItem } from '@epam/ai-dial-catalog';
 import { lazy, memo, Suspense, type FC } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  ButtonsI18nKeys,
+  BasicI18nKeys,
   DeploymentSelectorI18nKeys,
   FavoritesI18nKeys,
 } from '../../constants/translation-keys';
-import type { DeploymentSelectorLabels } from './DeploymentSelectorPanel';
+import type {
+  DeploymentSelectorExtraOption,
+  DeploymentSelectorLabels,
+} from './DeploymentSelectorPanel';
 
 const DeploymentSelectorPanel = lazy(() => import('./DeploymentSelectorPanel'));
 
 interface Props {
   favorites: CatalogItem[];
+  extraOptions?: DeploymentSelectorExtraOption[];
+  pinnedItem?: CatalogItem;
   selectedId?: string | null;
   selectedItem?: CatalogItem;
   onSelect: (id: string) => void;
   onToggleFavorite: (id: string, isFavorite: boolean) => Promise<void> | void;
   onClose: () => void;
   onBrowseCatalog?: () => void;
+  /** Additional classes merged over the panel root's defaults. */
+  panelClassName?: string;
 }
 
 const DeploymentSelectorOverlay: FC<Props> = ({
   favorites,
+  extraOptions,
+  pinnedItem,
   selectedId,
   selectedItem,
   onSelect,
   onToggleFavorite,
   onClose,
   onBrowseCatalog,
+  panelClassName,
 }) => {
   const { t } = useTranslation();
 
   const labels: DeploymentSelectorLabels = {
     searchPlaceholder: t(DeploymentSelectorI18nKeys.SearchPlaceholder),
+    clearSearchLabel: t(BasicI18nKeys.ClearSearch),
     favoritesLabel: t(FavoritesI18nKeys.FavoritesLabel),
     emptyHint: t(DeploymentSelectorI18nKeys.EmptyHint),
-    browseCatalogLabel: t(ButtonsI18nKeys.Browse),
+    browseCatalogLabel: t(DeploymentSelectorI18nKeys.BrowseCatalogLabel),
     removeFromFavoritesLabel: t(FavoritesI18nKeys.RemoveFromFavorites),
     currentlySelectedLabel: t(
       DeploymentSelectorI18nKeys.CurrentlySelectedLabel,
     ),
     addToFavoritesLabel: t(FavoritesI18nKeys.AddToFavorites),
+    listAriaLabel: t(DeploymentSelectorI18nKeys.AriaLabel),
   };
 
   return (
     <Suspense fallback={null}>
       <DeploymentSelectorPanel
         favorites={favorites}
+        extraOptions={extraOptions}
+        pinnedItem={pinnedItem}
         selectedId={selectedId}
         selectedItem={selectedItem}
         onSelect={onSelect}
@@ -54,6 +68,7 @@ const DeploymentSelectorOverlay: FC<Props> = ({
         onBrowseCatalog={onBrowseCatalog}
         onClose={onClose}
         labels={labels}
+        className={panelClassName}
       />
     </Suspense>
   );

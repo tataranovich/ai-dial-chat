@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import type {
+  ChatOverlayOptions,
+  SetOverlayOptionsPayload,
+} from '../overlay-protocol';
 import {
+  DEPRECATED_OVERLAY_FEATURE_ALIASES,
   OverlayAuthUiMode,
   OverlayEventType,
   OverlayFeature,
   OverlayRequestErrorCode,
   OverlayRequestType,
+  OverlayStageStatus,
   isOverlayMessageEvent,
   isOverlayMessageRequest,
   isOverlayMessageResponse,
+  resolveOverlayFeature,
 } from '../overlay-protocol';
 
 describe('OverlayAuthUiMode', () => {
@@ -16,6 +23,50 @@ describe('OverlayAuthUiMode', () => {
       'external',
       'sameWindow',
     ]);
+  });
+});
+
+describe('auto sign-in fields', () => {
+  it('leaves auth.autoSignInProvider optional on ChatOverlayOptions', () => {
+    const withoutAutoSignIn: ChatOverlayOptions = {
+      domain: 'https://chat.example.com',
+      auth: {
+        providerUiModes: { keycloak: OverlayAuthUiMode.SameWindow },
+      },
+    };
+
+    expect(withoutAutoSignIn.auth?.autoSignInProvider).toBeUndefined();
+  });
+
+  it('accepts a provider id alongside providerUiModes', () => {
+    const withAutoSignIn: ChatOverlayOptions = {
+      domain: 'https://chat.example.com',
+      auth: {
+        providerUiModes: { keycloak: OverlayAuthUiMode.SameWindow },
+        autoSignInProvider: 'keycloak',
+      },
+    };
+
+    expect(withAutoSignIn.auth?.autoSignInProvider).toBe('keycloak');
+  });
+
+  it('leaves authAutoSignInProvider optional on SetOverlayOptionsPayload', () => {
+    const withoutField: SetOverlayOptionsPayload = {
+      hostDomain: 'https://portal.example.com',
+    };
+    const withField: SetOverlayOptionsPayload = {
+      hostDomain: 'https://portal.example.com',
+      authAutoSignInProvider: 'keycloak',
+    };
+
+    expect(withoutField.authAutoSignInProvider).toBeUndefined();
+    expect(withField.authAutoSignInProvider).toBe('keycloak');
+  });
+});
+
+describe('OverlayStageStatus', () => {
+  it('contains exactly the settled stage outcomes', () => {
+    expect(Object.values(OverlayStageStatus)).toEqual(['completed', 'failed']);
   });
 });
 
@@ -114,14 +165,83 @@ describe('isOverlayMessageResponse', () => {
 });
 
 describe('OverlayFeature', () => {
-  it('has exactly 34 unique members', () => {
+  it('has exactly 45 unique members', () => {
     const values = Object.values(OverlayFeature);
-    expect(values).toHaveLength(34);
-    expect(new Set(values).size).toBe(34);
+    expect(values).toHaveLength(45);
+    expect(new Set(values).size).toBe(45);
+  });
+
+  it('includes the hide-keyboard-shortcuts feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('hide-keyboard-shortcuts');
+  });
+
+  it('includes the hide-conversations-filter feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain(
+      'hide-conversations-filter',
+    );
+  });
+
+  it('includes the hide-change-agent feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('hide-change-agent');
   });
 
   it('includes the prompts feature key', () => {
     expect(Object.values(OverlayFeature)).toContain('prompts');
+  });
+
+  it('includes the skills feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('skills');
+  });
+
+  it('includes the file-manager feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('file-manager');
+  });
+
+  it('includes the show-all-starters feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('show-all-starters');
+  });
+
+  it('includes the hide-footer-version feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('hide-footer-version');
+  });
+
+  it('includes the show-agent-description feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('show-agent-description');
+  });
+
+  it('includes the removable-tools feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('removable-tools');
+  });
+
+  it('includes the schema-apps feature key, not its renamed predecessor', () => {
+    const values = Object.values(OverlayFeature) as string[];
+    expect(values).toContain('schema-apps');
+    expect(values).not.toContain('custom-applications');
+  });
+
+  it('does not include the renamed marketplace keys', () => {
+    const values = Object.values(OverlayFeature) as string[];
+    [
+      'marketplace',
+      'marketplace-hide-my-apps',
+      'marketplace-table-view',
+    ].forEach((key) => {
+      expect(values).not.toContain(key);
+    });
+  });
+
+  it('does not include keys whose behavior became unconditional', () => {
+    const values = Object.values(OverlayFeature) as string[];
+    [
+      'custom-logo',
+      'show-layout-dividers',
+      'top-settings',
+      'top-chat-model-settings',
+      'chat-header-border',
+      'chat-input-border',
+    ].forEach((key) => {
+      expect(values).not.toContain(key);
+    });
   });
 
   it('includes the pre-existing and newly-added transferable keys', () => {
@@ -176,6 +296,36 @@ describe('isOverlayMessageEvent', () => {
   it('rejects an unknown type', () => {
     expect(isOverlayMessageEvent({ type: '@DIAL_OVERLAY/NOT_AN_EVENT' })).toBe(
       false,
+    );
+  });
+});
+
+describe('resolveOverlayFeature', () => {
+  it('resolves every current wire value to itself', () => {
+    Object.values(OverlayFeature).forEach((feature) => {
+      expect(resolveOverlayFeature(feature)).toBe(feature);
+    });
+  });
+
+  it('resolves a deprecated alias to its replacement', () => {
+    expect(resolveOverlayFeature('custom-applications')).toBe(
+      OverlayFeature.SchemaApps,
+    );
+  });
+
+  it('returns undefined for an unrecognized value', () => {
+    expect(resolveOverlayFeature('not-a-real-feature')).toBeUndefined();
+  });
+});
+
+describe('DEPRECATED_OVERLAY_FEATURE_ALIASES', () => {
+  it('maps every deprecated value onto a current OverlayFeature member', () => {
+    const values = Object.values(OverlayFeature) as string[];
+    Object.entries(DEPRECATED_OVERLAY_FEATURE_ALIASES).forEach(
+      ([deprecated, replacement]) => {
+        expect(values).not.toContain(deprecated);
+        expect(values).toContain(replacement);
+      },
     );
   });
 });

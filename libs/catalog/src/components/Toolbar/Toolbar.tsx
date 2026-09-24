@@ -1,5 +1,6 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import { type CSSProperties, FC } from 'react';
+import { CATALOG_CLASS } from '../../constants/public-class-names';
 import { ToolbarProps } from '../../models/toolbar-props';
 import { TitleRow } from './Rows/TitleRow';
 import styles from './Toolbar.module.scss';
@@ -20,26 +21,24 @@ export const Toolbar: FC<ToolbarProps> = ({
   filterTopicsLabel,
   gridViewLabel,
   listViewLabel,
+  viewToggleLabel,
   sortKey,
   sortOptions,
+  onSortChange,
+  sortLabel,
   ...innerProps
 }) => {
   const cssVars = {
-    '--cat-browse-title-text': browseStyles?.colors?.titleText,
-    '--cat-browse-count-text': browseStyles?.colors?.countText,
     '--cat-browse-divider': browseStyles?.colors?.divider,
-    '--cat-view-toggle-bg': browseStyles?.colors?.viewToggleBackground,
-    '--cat-view-toggle-border': browseStyles?.colors?.viewToggleBorder,
-    '--cat-view-toggle-active-bg':
-      browseStyles?.colors?.viewToggleActiveBackground,
-    '--cat-view-toggle-active-text': browseStyles?.colors?.viewToggleActiveText,
-    '--cat-view-toggle-text': browseStyles?.colors?.viewToggleText,
-    '--cat-view-toggle-text-hover': browseStyles?.colors?.viewToggleTextHover,
   } as CSSProperties;
 
   return (
     <section
-      className={mergeClasses('flex-shrink-0 px-4', styles.section)}
+      className={mergeClasses(
+        'flex-shrink-0 px-4',
+        styles.section,
+        CATALOG_CLASS.toolbar,
+      )}
       style={cssVars}
     >
       <TitleRow
@@ -49,8 +48,11 @@ export const Toolbar: FC<ToolbarProps> = ({
         searchPlaceholder={searchPlaceholder}
         gridViewLabel={gridViewLabel}
         listViewLabel={listViewLabel}
+        viewToggleLabel={viewToggleLabel}
         sortKey={sortKey}
         sortOptions={sortOptions}
+        onSortChange={onSortChange}
+        sortLabel={sortLabel}
         filters={filters}
         onFiltersChange={onFiltersChange}
         filterValues={filterValues}

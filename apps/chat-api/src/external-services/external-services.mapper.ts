@@ -59,6 +59,7 @@ export const toDialExternalServiceSigninBody = (
   apiKey: body.apiKey,
   code: body.code,
   redirectUri: body.redirectUri,
+  offlineUsageConsent: body.offlineUsageConsent,
 });
 
 export const toDialExternalServiceSignoutBody = (
@@ -78,9 +79,9 @@ export const mapDialExternalServiceToDto = (
   description: data.description,
   authenticationType:
     (data.auth_settings?.authentication_type as
-      | ExternalServiceAuthType
-      | undefined) ?? ExternalServiceAuthType.None,
+      ExternalServiceAuthType | undefined) ?? ExternalServiceAuthType.None,
   userLevelAuthStatus: data.auth_settings?.user_level_auth_status,
+  appLevelAuthStatus: data.auth_settings?.app_level_auth_status,
   globalAuthStatus: data.auth_settings?.global_auth_status,
   clientId: data.auth_settings?.client_id,
   authorizationEndpoint: data.auth_settings?.authorization_endpoint,

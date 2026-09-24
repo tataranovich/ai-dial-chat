@@ -1,14 +1,20 @@
-## ADDED Requirements
+# ui-feature-toggles Specification
+
+## Purpose
+
+`UiFeaturesContext`: the effective UI-feature set, its default baseline, server override, and overlay replace semantics.
+
+## Requirements
 
 ### Requirement: UiFeaturesContext owns the effective UI-feature set
 
-`apps/chat/src/context/UiFeaturesContext.tsx` SHALL be the sole owner of the app's effective UI-feature set, computed from `DEFAULT_ENABLED_UI_FEATURES` (`apps/chat/src/constants/ui-features.ts`), `AppConfigContext.config.enabledUiFeatures`, and an overlay-supplied replacement (see "Overlay replace semantics" below). It SHALL follow the `ThemeContext` pattern: `createContext<UiFeaturesContextType | undefined>(undefined)`, a `useMemo`-wrapped provided value, and a `useUiFeatures()` hook that throws a descriptive `Error` when called outside the provider. It SHALL expose `useUiFeature(feature: OverlayFeature): boolean` (`apps/chat/src/hooks/useUiFeature.ts`) as the primary consumption point for gating components. `UiFeaturesProvider` SHALL be mounted in `apps/chat/src/main.tsx` below `AppConfigProvider` and above `OverlayModeGate`.
+`apps/chat/src/context/UiFeaturesContext.tsx` SHALL be the sole owner of the app's effective UI-feature set, computed from `DEFAULT_ENABLED_UI_FEATURES` (`apps/chat/src/constants/ui-features.ts`), `AppConfigContext.config.enabledUiFeatures`, an overlay-supplied replacement (see "Overlay replace semantics" below), and a temporary isolated-view override (see "Isolated-view override takes precedence over every other source", `// TODO: remove in next release`). It SHALL follow the `ThemeContext` pattern: `createContext<UiFeaturesContextType | undefined>(undefined)`, a `useMemo`-wrapped provided value, and a `useUiFeatures()` hook that throws a descriptive `Error` when called outside the provider. It SHALL expose `useUiFeature(feature: OverlayFeature): boolean` (`apps/chat/src/hooks/useUiFeature.ts`) as the primary consumption point for gating components. `UiFeaturesProvider` SHALL be mounted in `apps/chat/src/main.tsx` below `AppConfigProvider` and above `OverlayModeGate`.
 
-**State ownership:** `UiFeaturesContext` (new). Reads `AppConfigContext.config.enabledUiFeatures` (existing context, extended). Written to only by `OverlayContext`'s `SET_OVERLAY_OPTIONS` handler, via the context's own setter — no other consumer may mutate the effective set.
+**State ownership:** `UiFeaturesContext` (new). Reads `AppConfigContext.config.enabledUiFeatures` (existing context, extended). Written to by two callers: `OverlayContext`'s `SET_OVERLAY_OPTIONS` handler (via `applyOverlayOverride`), and — temporarily, `// TODO: remove in next release` — `useIsolatedModelView` (via the new `applyIsolatedViewOverride`, see `isolated-model-view`). No other consumer may mutate the effective set.
 
 **Feature flag:** Not gated behind any existing flag — this capability defines the toggle system itself, not a toggle within it.
 
-**Memoization:** The computed effective `Set<OverlayFeature>` and the provided context value SHALL both be wrapped in `useMemo`, recomputed only when baseline inputs (`enabledUiFeatures`, overlay override) change. `isEnabled` SHALL be wrapped in `useCallback`.
+**Memoization:** The computed effective `Set<OverlayFeature>` and the provided context value SHALL both be wrapped in `useMemo`, recomputed only when baseline inputs (`enabledUiFeatures`, overlay override, isolated-view override) change. `isEnabled` SHALL be wrapped in `useCallback`.
 
 #### Scenario: useUiFeatures throws outside the provider
 
@@ -22,12 +28,14 @@
 
 #### Scenario: Unrelated re-renders do not recompute the context value
 
-- **WHEN** a component elsewhere in the tree re-renders without `enabledUiFeatures` or the overlay override changing
+- **WHEN** a component elsewhere in the tree re-renders without `enabledUiFeatures`, the overlay override, or the isolated-view override changing
 - **THEN** `UiFeaturesContext`'s provided value reference is unchanged
 
 ### Requirement: Default baseline preserves current unconditional behavior
 
-`DEFAULT_ENABLED_UI_FEATURES` SHALL contain exactly the 23 default-on keys and exclude the 15 default-off keys enumerated in `design.md`'s classification table (`header`, `conversations-section`, `conversations-panel-toggle`, `showConversationsSectionByDefault`, `show-layout-dividers`, `attachments-manager`, `top-settings`, `top-chat-model-settings`, `likes`, `dislike-comment`, `input-files`, `live-chat-interaction`, `hide-edit-user-message`... — the full 38-key membership is defined in `design.md`, not restated here). With no `enabledUiFeatures` and no overlay override, `isEnabled` SHALL return exactly the default-on classification for every one of the 38 keys, matching each surface's current unconditional behavior.
+`DEFAULT_ENABLED_UI_FEATURES` SHALL contain exactly the 26 default-on keys and exclude the 19 default-off (`Hide*`/restrictive modifier and not-yet-defaulted) keys (`header`, `conversations-section`, `conversations-panel-toggle`, `showConversationsSectionByDefault`, `attachments-manager`, `likes`, `dislike-comment`, `input-files`, `live-chat-interaction`, `catalog`, `catalog-table-view`, `file-manager`, `toolsets`, `prompts`, `skills`... are default-on; `hide-edit-user-message`, `disabled-send`, `hide-change-agent`, `hide-navigation-menu`... are default-off — the full 45-key membership is the `OverlayFeature` enum itself, not restated here). With no `enabledUiFeatures` and no overlay override, `isEnabled` SHALL return exactly the default-on classification for every one of the 45 keys.
+
+`catalog-table-view` is the one initial-state modifier that defaults on rather than matching the surface's original unconditional behavior. It no longer gates anything: `CatalogView` leaves `initialViewMode` unset, so Browse always opens in `Catalog`'s own default view (`CatalogViewMode.Grid`, the card grid). The key stays default-on so an overlay host still sending it is not warned about an unknown feature. Every other modifier still defaults off, so a deployment that configures nothing observes no other behavior change.
 
 **RTL impact:** None for this requirement itself — individual owning-surface gates state their own RTL impact where relevant (see per-surface requirements below).
 
@@ -39,7 +47,12 @@
 #### Scenario: Modifier features default off
 
 - **WHEN** no `enabledUiFeatures` and no overlay override are present
-- **THEN** `isEnabled('hide-new-conversation')`, `isEnabled('disabled-send')`, `isEnabled('hide-user-menu')`, and `isEnabled('chat-header-border')` all return `false`
+- **THEN** `isEnabled('hide-new-conversation')`, `isEnabled('disabled-send')`, and `isEnabled('hide-user-menu')` all return `false`
+
+#### Scenario: Browse opens in the catalog's own default view
+
+- **WHEN** no `enabledUiFeatures` and no overlay override are present
+- **THEN** `isEnabled('catalog-table-view')` returns `true`, and `CatalogView` passes no `initialViewMode`, so Browse opens in `Catalog`'s default `CatalogViewMode.Grid`
 
 #### Scenario: Non-overlay app is unaffected by this change when nothing is configured
 
@@ -48,7 +61,7 @@
 
 ### Requirement: Server baseline override replaces defaults when set
 
-When `AppConfigContext.config.enabledUiFeatures` is non-null, the effective set (outside an overlay override) SHALL be exactly the normalized intersection of `enabledUiFeatures` with `KNOWN_UI_FEATURES`. When null, `DEFAULT_ENABLED_UI_FEATURES` is used unchanged. The server override supports all `OverlayFeature` values, including `Hide*` modifier flags.
+When `AppConfigContext.config.enabledUiFeatures` is non-null, the effective set (outside an overlay override) SHALL be exactly the normalized intersection of `enabledUiFeatures` with `KNOWN_UI_FEATURES`, where normalization resolves a deprecated alias (see `chat-overlay-protocol`) to its replacement instead of dropping it. When null, `DEFAULT_ENABLED_UI_FEATURES` is used unchanged. The server override supports all `OverlayFeature` values, including `Hide*` modifier flags.
 
 #### Scenario: Server override replaces the compiled-in defaults
 
@@ -91,12 +104,17 @@ When `AppConfigContext.config.enabledUiFeatures` is non-null, the effective set 
 
 ### Requirement: Unknown values in an overlay override are filtered, not rejected
 
-When `applyOverlayOverride` receives an array containing one or more strings that are not recognized `OverlayFeature` values (including any of the 19 `status: "missing"` keys from the prior implementation, which are intentionally not part of the `OverlayFeature` enum — see `chat-overlay-protocol`), those entries SHALL be dropped from the effective set and each SHALL be logged once via the existing `logOverlayWarning` helper; the recognized entries SHALL still be applied, and the request's `SET_OVERLAY_OPTIONS/RESPONSE` SHALL still carry `applied: true` provided any other supplied fields (`theme`/`modelId`/`overlayConversationId`) were themselves valid.
+When `applyOverlayOverride` receives an array containing one or more strings that are not recognized `OverlayFeature` values (including any of the 19 `status: "missing"` keys from the prior implementation, which are intentionally not part of the `OverlayFeature` enum — see `chat-overlay-protocol`), those entries SHALL be dropped from the effective set and each SHALL be logged once via the existing `logOverlayWarning` helper; a deprecated-but-recognized alias (see `chat-overlay-protocol`) SHALL instead resolve to its replacement and be logged as deprecated; the recognized entries SHALL still be applied, and the request's `SET_OVERLAY_OPTIONS/RESPONSE` SHALL still carry `applied: true` provided any other supplied fields (`theme`/`modelId`/`overlayConversationId`) were themselves valid.
 
 #### Scenario: Unknown value is dropped, valid values still apply
 
 - **WHEN** `setOverlayOptions({ enabledFeatures: ['header', 'not-a-real-feature'] })` is called
 - **THEN** the effective set is exactly `{header}`, a warning is logged naming `'not-a-real-feature'`, and the response is `{ applied: true }`
+
+#### Scenario: A deprecated alias is resolved, not dropped
+
+- **WHEN** `setOverlayOptions({ enabledFeatures: ['custom-applications'] })` is called
+- **THEN** the effective set is exactly `{schema-apps}`, a deprecation warning naming `'custom-applications'` is logged, and the response is `{ applied: true }`
 
 #### Scenario: A missing-status legacy key is treated as unknown, not as a working toggle
 
@@ -119,7 +137,7 @@ The effective visibility of the voice-input UI affordance SHALL be `isEnabled('v
 
 ### Requirement: Each transferable feature key gates exactly one owning surface
 
-Each of the 38 transferable `OverlayFeature` values SHALL gate exactly the owning component/container documented in `design.md`'s classification table, and SHALL NOT alter the visibility or behavior of any other feature's surface. Hidden surfaces SHALL be conditionally unmounted (not rendered), not merely visually hidden, so no focus trap or hidden-but-tabbable control is left behind (per this repo's `inert`-over-`aria-hidden` accessibility rule for hidden interactive regions where applicable).
+Each of the 45 transferable `OverlayFeature` values SHALL gate exactly the owning component/container documented in `design.md`'s classification table, and SHALL NOT alter the visibility or behavior of any other feature's surface. Hidden surfaces SHALL be conditionally unmounted (not rendered), not merely visually hidden, so no focus trap or hidden-but-tabbable control is left behind (per this repo's `inert`-over-`aria-hidden` accessibility rule for hidden interactive regions where applicable).
 
 **Accessibility:** Conditionally-unmounted controls remove themselves from both the accessibility tree and the tab order by not rendering — no `aria-hidden` container with focusable descendants is introduced by this change.
 
@@ -127,10 +145,213 @@ Each of the 38 transferable `OverlayFeature` values SHALL gate exactly the ownin
 
 #### Scenario: Gating one feature does not affect another
 
-- **WHEN** `enabledUiFeatures` omits `'top-settings'` but includes everything else
+- **WHEN** `enabledUiFeatures` omits `'likes'` but includes everything else
 - **THEN** the new-conversation button's visibility (`hide-new-conversation`) is unaffected
 
 #### Scenario: hide-new-conversation hides only the new-conversation entry points
 
 - **WHEN** `isEnabled('hide-new-conversation')` is `true`
 - **THEN** the "New conversation" controls in `Header.tsx` and `ChatLayout.tsx` do not render, and no other header/layout control is affected
+
+### Requirement: chat-settings gates the settings entry everywhere; empty-chat-settings narrows it
+
+The "Chat settings" entry in the conversation input's "+" menu â and the modal (desktop) and bottom sheet (mobile) it opens, carrying temperature, system prompt, and response format â SHALL be removed wherever `isEnabled('chat-settings')` is `false`. `ConversationView` and `NewConversationComposer` SHALL both hide it by passing no `chatSettings` config to `ConversationInput`, the lib's own omit path, which drops the menu item and leaves the modal and sheet unmounted rather than hidden.
+
+`empty-chat-settings` SHALL narrow the entry to the empty-chat composer only: that screen renders it when **both** keys are enabled. A host that disables only `empty-chat-settings` therefore keeps the in-chat entry, its behavior before `chat-settings` existed, while a host that disables `chat-settings` loses the entry on every screen without having to name the narrower key too.
+
+**Accessibility:** The entry and its overlay are conditionally unmounted, so neither leaves an accessibility-tree node nor a tab stop.
+
+**i18n impact:** None â existing translated labels are shown or omitted.
+
+#### Scenario: chat-settings removes the entry from an active conversation
+
+- **WHEN** `isEnabled('chat-settings')` is `false`
+- **THEN** `ConversationView` passes no `chatSettings`, so the "+" menu renders no "Chat settings" item and neither the modal nor the bottom sheet is mounted
+
+#### Scenario: chat-settings overrides empty-chat-settings on the composer
+
+- **WHEN** `isEnabled('chat-settings')` is `false` and `isEnabled('empty-chat-settings')` is `true`
+- **THEN** the empty-chat composer still renders no "Chat settings" entry
+
+#### Scenario: empty-chat-settings alone leaves the in-chat entry
+
+- **WHEN** `isEnabled('empty-chat-settings')` is `false` and `isEnabled('chat-settings')` is `true`
+- **THEN** the empty-chat composer renders no "Chat settings" entry and an active conversation still renders it
+
+#### Scenario: Both entries render by default
+
+- **WHEN** no `enabledUiFeatures` and no overlay override are present
+- **THEN** both keys are default-on and the "Chat settings" entry renders on the composer and in an active conversation
+
+### Requirement: hide-navigation-menu removes the hamburger and the sheet it opens
+
+`isEnabled('hide-navigation-menu')` SHALL remove the mobile navigation menu in full: `Header` SHALL render no hamburger button, and `Navigation` SHALL leave `NavigationSheet` unmounted rather than merely closed. Both are required â the sheet carries focusable rows (nav items, profile, keyboard shortcuts, log out), so leaving it mounted-but-closed would keep them in the tab order once any other caller flipped its `isOpen`, and the hamburger is its only trigger.
+
+The key SHALL NOT affect the desktop navigation rail or its user menu, which `hide-user-menu` owns. It exists for embeds whose host portal already handles sign-in and sign-out, making the sheet's log-out row dead weight.
+
+**RTL impact:** None â the removed control and surface are omitted, not repositioned.
+
+**Accessibility:** Both the button and the sheet are absent from the DOM, so neither leaves an accessibility-tree node nor a tab stop.
+
+**i18n impact:** None â existing translated labels are omitted along with their controls.
+
+#### Scenario: The hamburger is gone
+
+- **WHEN** `isEnabled('hide-navigation-menu')` is `true`
+- **THEN** the header renders no button labelled by `NavigationI18nKeys.OpenMenu`
+
+#### Scenario: The sheet is unmounted even when asked to open
+
+- **WHEN** `isEnabled('hide-navigation-menu')` is `true` and `Navigation` receives `isOpen: true`
+- **THEN** no dialog is rendered and none of the sheet's rows are reachable
+
+#### Scenario: The desktop rail is untouched
+
+- **WHEN** `isEnabled('hide-navigation-menu')` is `true` and `isEnabled('hide-user-menu')` is `false`
+- **THEN** the desktop navigation rail still renders its user menu
+
+#### Scenario: The menu renders by default
+
+- **WHEN** no `enabledUiFeatures` and no overlay override are present
+- **THEN** the key is default-off, so the hamburger renders and opens the sheet
+
+### Requirement: hide-keyboard-shortcuts removes the entry on both profile surfaces
+
+`isEnabled('hide-keyboard-shortcuts')` SHALL remove the Keyboard shortcuts entry from the desktop user menu (`UserMenu`) and from the mobile profile sheet (`ProfilePageContent`). `isEnabled('hide-user-settings')` SHALL also remove it from both, so the two surfaces agree; neither key SHALL affect the other settings entries the other key governs — with only `hide-keyboard-shortcuts` enabled the language selector SHALL still render.
+
+Because Keyboard shortcuts is the mobile sheet's only settings entry, hiding it SHALL drop that entry's list and its trailing divider together, leaving no empty list or stray rule.
+
+Hiding the entry SHALL NOT change send behavior: the `SendOnEnter` preference is read from storage by `ConversationView` and `NewConversationComposer` independently of this key, and continues to resolve to its stored value, defaulting to `SendOnEnter.Enter`.
+
+**Accessibility:** The entry is not rendered, so it leaves neither an accessibility-tree node nor a tab stop.
+
+**i18n impact:** None — the existing translated label is shown or omitted; no new strings.
+
+#### Scenario: The entry disappears from the user menu
+
+- **WHEN** `isEnabled('hide-keyboard-shortcuts')` is `true` and the user opens the user menu
+- **THEN** no Keyboard shortcuts entry is rendered, and the language entry still is
+
+#### Scenario: hide-user-settings hides it too
+
+- **WHEN** `isEnabled('hide-user-settings')` is `true`
+- **THEN** the Keyboard shortcuts entry is absent from both the user menu and the mobile profile sheet
+
+#### Scenario: Send-on-Enter keeps working while the entry is hidden
+
+- **WHEN** `isEnabled('hide-keyboard-shortcuts')` is `true` and the stored preference is `SendOnEnter.MetaEnter`
+- **THEN** the conversation input still sends on `⌘`/`Ctrl`+Enter
+
+### Requirement: hide-conversations-filter removes the panel's source filter row
+
+`isEnabled('hide-conversations-filter')` SHALL remove the conversations panel's `FilterTabs` row (All / My chats / Shared / Organization). `ConversationPanelView` SHALL express this by passing `isFilterTabsHidden` to `ConversationPanel`; the lib SHALL take that decision as a boolean prop and SHALL NOT read the feature set itself, per the library-isolation rule.
+
+Hiding the control SHALL NOT filter the list: the active tab stays `FilterTab.All`, so every group — Pinned, My chats, Shared, Organization — remains listed. The row is currently the only surface that moves the list off `All` — no route, URL, or host message sets `activeFilter` to anything else — so with the row hidden the panel shows all sources permanently. `labels.filterLabels` stays a required prop whether or not the row renders.
+
+**Accessibility:** The row is not rendered, so it leaves neither an accessibility-tree node nor a tab stop.
+
+**i18n impact:** None — the existing translated tab labels are shown or omitted; no new strings.
+
+#### Scenario: The filter row is gone but every group still lists
+
+- **WHEN** `isEnabled('hide-conversations-filter')` is `true`
+- **THEN** the panel renders no filter tabs, and conversations from every source still appear under their group headings
+
+#### Scenario: The filter row renders by default
+
+- **WHEN** no `enabledUiFeatures` and no overlay override are present
+- **THEN** the panel renders the four filter tabs, because the key is default-off
+
+### Requirement: An unusable agent selector is removed, not dimmed
+
+The in-chat agent selector SHALL NOT render when the user cannot act on it. `isEnabled('hide-change-agent')` and `isEnabled('disallow-change-agent')` SHALL each remove the control from `ConversationView`'s conversation input entirely, by passing no `deployments` to `ConversationInput` — the lib's own hide path, which also leaves the send button enabled because `Input` reads an absent selector as a resolved model. Neither key SHALL render the selector greyed out: a dimmed icon carrying a caret advertises a menu that never opens, and where the deployment cannot be changed the icon carries no actionable information.
+
+A pinned `fixedModel` SHALL keep rendering the disabled selector, because the app editor's preview pane shows the same chip through `NewConversationComposer` in its empty state and would otherwise lose it after the first message. The empty-chat composer keeps its own separate key, `hide-empty-chat-change-agent`.
+
+**Accessibility:** The removed control leaves neither an accessibility-tree node nor a tab stop, replacing a `pointer-events-none` element that was still exposed to assistive tech.
+
+**i18n impact:** None — the selector's existing translated labels are shown or omitted; no new strings.
+
+#### Scenario: hide-change-agent removes the in-chat selector
+
+- **WHEN** `isEnabled('hide-change-agent')` is `true`
+- **THEN** the conversation input renders no agent selector, and the send button stays enabled
+
+#### Scenario: disallow-change-agent removes the selector rather than dimming it
+
+- **WHEN** `isEnabled('disallow-change-agent')` is `true`
+- **THEN** the conversation input renders no agent selector — in particular no greyed-out icon with a caret
+
+#### Scenario: A pinned model still shows its disabled selector
+
+- **WHEN** `ConversationView` receives a `fixedModel` and neither agent-selector key is enabled
+- **THEN** the selector renders disabled with the pinned model's icon, matching what the composer shows before the first message
+
+### Requirement: A key that gates a route hides both the entry point and the route
+
+A feature key whose owning surface is a whole route SHALL gate the navigation entry and the route element together, so that a direct URL cannot reach a section whose entry point is hidden. `file-manager` SHALL gate the File Manager navigation entry (desktop `Navigation` and mobile `NavPageContent`, both through the shared `useVisibleNavItems` hook) and the `ROUTES.FileManager` route element, which SHALL redirect to `ROUTES.Root` with `replace` when the key is disabled.
+
+Route gating SHALL NOT be treated as an authorization boundary: the backend SHALL continue to enforce access to the underlying data and operations regardless of which keys are enabled.
+
+**Accessibility:** A hidden navigation entry is not rendered at all, so it leaves neither an accessibility-tree node nor a tab stop.
+
+**i18n impact:** None — the entry's existing translated label is shown or omitted; no new strings.
+
+#### Scenario: file-manager hides the navigation entry on both layouts
+
+- **WHEN** `isEnabled('file-manager')` is `false`
+- **THEN** neither the desktop sidebar nor the mobile navigation sheet renders a File Manager entry, and every other navigation entry is unaffected
+
+#### Scenario: A direct /files URL does not bypass the hidden entry
+
+- **WHEN** `isEnabled('file-manager')` is `false` and the user navigates directly to `/files`
+- **THEN** the app redirects to `/` with `replace`, and `DialFileManagerPage` is never mounted
+
+#### Scenario: file-manager is independent of the in-chat attachment flow
+
+- **WHEN** `isEnabled('file-manager')` is `false` and `isEnabled('input-files')` is `true`
+- **THEN** the conversation input still renders the attach-file button and can open the file-manager modal — only the standalone `/files` section is gone
+
+### Requirement: show-agent-description renders the selected agent's description on the empty chat
+
+`NewConversationComposer` SHALL render the selected deployment's `description`, resolved for the active language and rendered as markdown, after the starter-button slot on the empty-chat screen when `isEnabled('show-agent-description')` is `true`. Nothing SHALL render when the key is off, when no deployment is selected, or when the resolved description is empty or whitespace-only. The key SHALL NOT affect the operator-wide welcome-screen description, which `ConversationInput` renders under the greeting from the app config and which no UI-feature key gates. The markdown renderer SHALL be loaded on demand so a deployment with the key off does not pay for it.
+
+**Accessibility:** The description is static prose in the already-labeled welcome-screen region; links inside it keep the markdown renderer's own accent treatment and focus behavior. No live region is introduced — the text does not change in response to a user action.
+
+**i18n impact:** None — the text is deployment-authored content resolved through the existing `LocalizedText` fallback chain, not a UI string.
+
+#### Scenario: The description renders below the starters when the key is on
+
+- **WHEN** `isEnabled('show-agent-description')` is `true` and the selected deployment has a description containing a markdown link
+- **THEN** the empty-chat screen renders that description after the starter buttons, with the link as an anchor
+
+#### Scenario: Nothing renders when the key is off
+
+- **WHEN** `isEnabled('show-agent-description')` is `false` and the selected deployment has a description
+- **THEN** the empty-chat screen renders no agent description
+
+#### Scenario: An agent without a description renders nothing
+
+- **WHEN** `isEnabled('show-agent-description')` is `true` and the selected deployment's resolved description is absent or whitespace-only
+- **THEN** the empty-chat screen renders no agent description, and no empty container is left in its place
+
+### Requirement: Isolated-view override takes precedence over every other source
+
+`TODO: remove in next release.` `UiFeaturesContext` SHALL expose `applyIsolatedViewOverride(features: Set<OverlayFeature> | null)`, called only by `useIsolatedModelView` (see `isolated-model-view`). When set to a non-null value, the effective UI-feature set SHALL become exactly that set, taking precedence over the overlay override, the server `enabledUiFeatures` baseline, and the compiled defaults — none of those other sources SHALL be consulted while the isolated-view override is active. When `null` (the default, and the value whenever isolated view is not active), the existing three-level priority chain (overlay override → server baseline → compiled defaults) SHALL apply unchanged.
+
+This override SHALL NOT be normalized against `DEPRECATED_OVERLAY_FEATURE_ALIASES`/`resolveOverlayFeature` the way `applyOverlayOverride`'s input is, since its caller always supplies canonical `OverlayFeature` enum members directly rather than wire strings from an external host.
+
+#### Scenario: Isolated-view override wins over an active overlay override
+
+- **WHEN** an overlay override is already active with `{header, likes}` and `applyIsolatedViewOverride` is called with `{hide-navigation-menu}`
+- **THEN** the effective set becomes exactly `{hide-navigation-menu}` — `header` and `likes` are no longer enabled
+
+#### Scenario: Isolated-view override wins over the server baseline
+
+- **WHEN** `AppConfigContext.config.enabledUiFeatures` is `['conversations-section', 'prompts']` and `applyIsolatedViewOverride` is called with `{hide-change-agent}`
+- **THEN** the effective set is exactly `{hide-change-agent}` — `conversations-section` and `prompts` are not enabled
+
+#### Scenario: Clearing the isolated-view override restores the prior priority chain
+
+- **WHEN** `applyIsolatedViewOverride(null)` is called after previously being set
+- **THEN** the effective set is recomputed from the overlay override (if any), else the server baseline, else the compiled defaults — exactly as if the isolated-view override had never been applied

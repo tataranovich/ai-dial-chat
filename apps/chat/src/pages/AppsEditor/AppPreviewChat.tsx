@@ -1,17 +1,32 @@
-import type { ConversationResponseDto } from '@epam/ai-dial-chat-api-client';
+import type {
+  ConversationResponseDto,
+  DeploymentDetailsDto,
+} from '@epam/ai-dial-chat-api-client';
 import {
+  attachmentsToDtos,
+  findDeploymentByIdOrReference,
+  getApiErrorDetails,
+  getConversationPath,
+  getQuickAppConversationStarters,
+  getStarterPopulateText,
+  useConversationHandlers,
+  useConversationStream,
+} from '@epam/ai-dial-chat-hooks';
+import {
+  generateUUID,
   MessageRating,
   MessageRole,
   ResponseFormat,
   type Attachment,
   type Conversation,
   type Message,
+  type RequestSkill,
   type StarterOption,
 } from '@epam/ai-dial-chat-shared';
 import {
-  ConfirmationPopupVariant,
   ConfirmationPopup,
-  NotificationVariant,
+  ConfirmationPopupVariant,
+  Spinner,
 } from '@epam/ai-dial-ui-kit';
 import type { FC } from 'react';
 import {
@@ -24,38 +39,59 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { NavigateFunction } from 'react-router';
 import ConversationView from '../../components/ConversationView/ConversationView';
+import NegativeFeedbackModal from '../../components/ConversationView/Rate/NegativeFeedbackModal';
 import NewConversationComposer, {
   type NewConversationChatSettings,
 } from '../../components/NewConversationComposer/NewConversationComposer';
+import { useSkillSelectorOverlay } from '../../components/SkillSelector/useSkillSelectorOverlay';
 import StarterButtons from '../../components/StarterButtons/StarterButtons';
 import {
   AppsEditorI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
+  RateI18nKeys,
 } from '../../constants/translation-keys';
 import { useUser } from '../../context/auth/UserContext';
+import { useClientChannel } from '../../context/ClientChannelContext';
 import { useDeployments } from '../../context/DeploymentsContext';
+import { useGeneration } from '../../context/GenerationContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useAudioTranscription } from '../../hooks/conversation/useAudioTranscription';
-import { useConversationHandlers } from '../../hooks/conversation/useConversationHandlers';
-import { useConversationStream } from '../../hooks/conversation/useConversationStream';
-import { getApiErrorDetails } from '../../server-api/api-error';
+import {
+  conversationsApi as configuredConversationsApi,
+  filesApi as configuredFilesApi,
+  rateApi as configuredRateApi,
+} from '../../server-api/api-client';
 import { CompletionMode } from '../../server-api/chat-stream.api';
 import {
   createConversation as apiCreateConversation,
   deleteConversation as apiDeleteConversation,
   saveConversation,
 } from '../../server-api/conversations.api';
-import { ROUTES } from '../../types/routes';
+import { getDeploymentDetails } from '../../server-api/deployments';
 import { buildNetworkUploadErrorNotification } from '../../utils/attachment-network-error-notification';
-import { attachmentsToDtos } from '../../utils/attachment-to-dto';
-import { getConversationPath } from '../../utils/conversation-path';
-import { findDeploymentByIdOrReference } from '../../utils/deployment-id';
+import { conversationStreamTransport } from '../../utils/conversation-stream-transport';
 import { resolveCatalogIconUrl } from '../../utils/icon-path';
-import { getQuickAppConversationStarters } from '../../utils/quick-app-conversation-starters';
-import { getStarterPopulateText } from '../../utils/starter-option';
+
+/*
+ * Normalizes a deployment ID that may contain raw spaces (from app creation
+ * responses that pre-date the encoding fix) to its percent-encoded form,
+ * idempotently. Each path segment is decoded then re-encoded so that both
+ * raw ("No Temp 3__1.0") and already-encoded ("No%20Temp%203__1.0") inputs
+ * produce the same valid output.
+ */
+const normalizeDeploymentId = (id: string): string =>
+  id
+    .split('/')
+    .map((segment) => {
+      try {
+        return encodeURIComponent(decodeURIComponent(segment));
+      } catch {
+        return encodeURIComponent(segment);
+      }
+    })
+    .join('/');
 
 interface Props {
   appId: string;
@@ -65,19 +101,18 @@ interface Props {
 
 const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
   const { t } = useTranslation();
-  const { showNotification } = useNotification();
+  const { showSuccessNotification, showErrorNotification } = useNotification();
   const { user } = useUser();
   const bucket = user?.bucket ?? '';
-  const { items } = useDeployments();
+  const { items, isLoading: isDeploymentsLoading } = useDeployments();
 
   /*
-   * `appId` is the raw, human-readable application id (e.g.
-   * "applications/<bucket>/My App__1.0") and matches `items[].id`. It is used
-   * as-is everywhere here — deploymentId/model/deployment are always sent as
-   * JSON body fields (createConversation, streamCompletion, transcribeAudio),
-   * never a raw URL path segment, so percent-encoding it would only embed
-   * literal `%` characters that get double-encoded once the conversation's
-   * stored path is built from it.
+   * `appId` is the application id (e.g. "applications/<bucket>/My App__1.0")
+   * and matches `items[].id`. It is used as-is for UI (fixedModel, deployment
+   * lookup, stream model id). When sent as `deploymentId` to
+   * createConversation it must be normalized first — see normalizeDeploymentId
+   * above — because older app creation responses returned raw spaces that the
+   * backend validator now rejects.
    */
   const fixedModel = useMemo(
     () => ({
@@ -96,6 +131,53 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
     () => getQuickAppConversationStarters(appDeployment?.conversationStarters),
     [appDeployment?.conversationStarters],
   );
+
+  /*
+   * The preview's fixed agent never goes through DeploymentsContext's own
+   * selection (it isn't the globally selected deployment), so nothing there
+   * fetches its details. Fetched here directly, in parallel with the full
+   * deployments list (`items` above), so skills-support gating below doesn't
+   * have to wait for that list to resolve `appId`.
+   */
+  const [appDeploymentDetails, setAppDeploymentDetails] =
+    useState<DeploymentDetailsDto | null>(null);
+  const [isAppDetailsLoading, setIsAppDetailsLoading] = useState(true);
+  useEffect(() => {
+    let isCancelled = false;
+    setAppDeploymentDetails(null);
+    setIsAppDetailsLoading(true);
+    getDeploymentDetails(appId)
+      .then((details) => {
+        if (!isCancelled) setAppDeploymentDetails(details);
+      })
+      .catch(() => {
+        // Best-effort early fallback — appDeployment (from the full list) still resolves normally.
+      })
+      .finally(() => {
+        if (!isCancelled) setIsAppDetailsLoading(false);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, [appId]);
+  const appDeploymentDetailsEntity =
+    appDeploymentDetails?.modelDetails ??
+    appDeploymentDetails?.applicationDetails;
+  const isAppSkillsSupported =
+    appDeployment?.features?.skillsSupported === true ||
+    (!appDeployment &&
+      appDeploymentDetailsEntity?.features?.skillsSupported === true);
+  /*
+   * Neither source has resolved this app yet: showing the composer now would
+   * flash starters/skill-support in as soon as whichever request lands, so a
+   * spinner covers the gap instead. Whichever of the list or the direct
+   * details fetch resolves first clears it — the other one filling in later
+   * only refines features/starters behind the scenes.
+   */
+  const isAppInfoLoading =
+    !appDeployment &&
+    !appDeploymentDetails &&
+    (isDeploymentsLoading || isAppDetailsLoading);
 
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<Conversation | null>(null);
@@ -124,41 +206,89 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         filenames,
         t,
       );
-      showNotification({ variant: NotificationVariant.Error, title, message });
+      showErrorNotification({ title, message });
     },
-    [showNotification, t],
+    [showErrorNotification, t],
   );
 
-  const { isAudioMessageSupported } = useAudioTranscription({
+  const {
+    isAudioMessageSupported,
+    isVoiceRecordingSupported,
+    handleTranscribeAudio,
+  } = useAudioTranscription({
     selectedDeploymentId: appId,
   });
 
   const handleStopError = useCallback(() => {
-    showNotification({
-      variant: NotificationVariant.Error,
+    showErrorNotification({
       message: t(ChatI18nKeys.StreamError),
     });
-  }, [showNotification, t]);
+  }, [showErrorNotification, t]);
+
+  const { startGeneration, completeGeneration } = useGeneration();
+  const {
+    channelId,
+    ensureConnected,
+    waitForChannel,
+    notifyGenerationSettled,
+  } = useClientChannel();
+  const channel = useMemo(
+    () => ({
+      channelId,
+      ensureConnected,
+      waitForChannel,
+      notifyGenerationSettled,
+    }),
+    [channelId, ensureConnected, waitForChannel, notifyGenerationSettled],
+  );
 
   const { startStream, handleStop, isStreaming, canStopStreaming } =
     useConversationStream({
       conversationId: conversationId ?? undefined,
-      setConversation,
-      conversationRef,
+      state: { setConversation, conversationRef },
+      transport: conversationStreamTransport,
+      generation: { startGeneration, completeGeneration },
+      channel,
       onStopError: handleStopError,
+      generationConflictMessage: t(ChatI18nKeys.GenerationConflict),
     });
+
+  /*
+   * Skills in the preview's pre-conversation composer: the same host wiring
+   * the main chat uses (flag, the app deployment's skills support, listing
+   * and favorites contexts, catalog picker, details panel). Once the
+   * conversation exists, the shared ConversationView below wires its own
+   * instance for the ongoing input and history display — this one serves
+   * only the composer phase.
+   */
+  const {
+    skillMenuOverlay,
+    commandMenu,
+    skillCatalogModal,
+    skillDetailsPanel,
+    selectedSkillElement,
+    selectedSkills,
+    isSkillUnsupported,
+    removeSelectedSkill,
+  } = useSkillSelectorOverlay({
+    isSkillsSupported: isAppSkillsSupported,
+  });
 
   const handleCreateConversation = useCallback(
     async (
       message: string,
       attachments: Attachment[],
       chatSettingsValues: NewConversationChatSettings,
+      skills?: RequestSkill[],
     ) => {
       const attachmentDtos = attachmentsToDtos(attachments || []);
       const created = await apiCreateConversation(
         message,
-        appId,
+        normalizeDeploymentId(appId),
         attachmentDtos,
+        undefined,
+        undefined,
+        skills,
       );
       const savedConversation = {
         ...created,
@@ -190,12 +320,46 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         message,
         withPlaceholder.messages.length - 1,
         appId,
-        attachmentDtos?.length ? { attachments: attachmentDtos } : undefined,
-        crypto.randomUUID(),
+        attachmentDtos?.length || skills?.length
+          ? {
+              ...(attachmentDtos?.length
+                ? { attachments: attachmentDtos }
+                : {}),
+              ...(skills?.length ? { skills } : {}),
+            }
+          : undefined,
+        generateUUID(),
         CompletionMode.ContinueLastUser,
       );
+      /*
+       * The selection is consumed by the created conversation's first
+       * message (or discarded on the starter path below, which carries no
+       * skill); a no-op while nothing is selected or the skill flag is off.
+       * On failure the awaits above reject first, so the selection survives
+       * for the retry.
+       */
+      removeSelectedSkill();
     },
-    [appId, startStream],
+    [appId, startStream, removeSelectedSkill],
+  );
+
+  /*
+   * The composer's send carries the selected skill; the starter path below
+   * creates without one, mirroring the main chat's starter flow.
+   */
+  const handleCreateFromComposer = useCallback(
+    (
+      message: string,
+      attachments: Attachment[],
+      chatSettingsValues: NewConversationChatSettings,
+    ) =>
+      handleCreateConversation(
+        message,
+        attachments,
+        chatSettingsValues,
+        selectedSkills,
+      ),
+    [handleCreateConversation, selectedSkills],
   );
 
   const handleStarterSelect = useCallback(
@@ -216,8 +380,7 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         } catch (err) {
           const { message: errorMessage, traceId } =
             await getApiErrorDetails(err);
-          showNotification({
-            variant: NotificationVariant.Error,
+          showErrorNotification({
             message: errorMessage ?? t(ChatI18nKeys.CreateConversationError),
             requestId: traceId,
           });
@@ -226,24 +389,21 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
 
       void createFromStarter();
     },
-    [handleCreateConversation, showNotification, t],
+    [handleCreateConversation, showErrorNotification, t],
   );
 
   /*
-   * useConversationHandlers only ever calls `navigate(ROUTES.Root)`, triggered by
-   * deleting the last message in the conversation. This stub handles only that
-   * case and resets local preview state instead of performing a real route
-   * navigation. The cast to NavigateFunction below is intentional: it satisfies
-   * useConversationHandlers's prop type without implementing the full
-   * NavigateFunction contract, since no other call shape is used here.
+   * Deleting the last message in the conversation deletes the whole
+   * conversation. There is no real route to navigate to in the preview —
+   * this just resets local preview state.
    */
-  const handlePreviewNavigate = useCallback((to: unknown) => {
-    if (to === ROUTES.Root) {
-      conversationRef.current = null;
-      setConversation(null);
-      setConversationId(null);
-    }
+  const handleConversationDeleted = useCallback(() => {
+    conversationRef.current = null;
+    setConversation(null);
+    setConversationId(null);
   }, []);
+
+  const resolveModelId = useCallback(() => appId, [appId]);
 
   const {
     handleSend,
@@ -264,11 +424,13 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
     bucket,
     isStreaming,
     startStream,
-    conversationRef,
-    setConversation,
-    navigate: handlePreviewNavigate as NavigateFunction,
+    state: { setConversation, conversationRef },
+    filesApi: configuredFilesApi,
+    conversationsApi: configuredConversationsApi,
+    rateApi: configuredRateApi,
+    resolveModelId,
+    onConversationDeleted: handleConversationDeleted,
     showNetworkError: handleNetworkUploadError,
-    fixedModelId: appId,
   });
 
   const handleConversationChange = useCallback(
@@ -286,18 +448,61 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
   );
 
   const handleRate = useCallback(
-    (messageIndex: number, rating: MessageRating | null) => {
-      void handleRateMessage(messageIndex, rating);
+    async (messageIndex: number, rating: MessageRating | null) => {
+      const success = await handleRateMessage(messageIndex, rating);
+      if (success && rating === MessageRating.Like) {
+        showSuccessNotification({
+          title: t(RateI18nKeys.LikeToastTitle),
+          message: t(RateI18nKeys.LikeToastDescription),
+        });
+      }
     },
-    [handleRateMessage],
+    [handleRateMessage, showSuccessNotification, t],
   );
 
-  const handleDislike = useCallback(
-    (messageIndex: number) => {
-      void handleRateMessage(messageIndex, MessageRating.Dislike);
+  const [pendingDislikeMessageIndex, setPendingDislikeMessageIndex] = useState<
+    number | null
+  >(null);
+
+  const handleOpenDislikeModal = useCallback((messageIndex: number) => {
+    setPendingDislikeMessageIndex(messageIndex);
+  }, []);
+
+  const handleDislikeModalClose = useCallback(() => {
+    setPendingDislikeMessageIndex(null);
+  }, []);
+
+  const handleDislikeSubmit = useCallback(
+    async (comment: string) => {
+      if (pendingDislikeMessageIndex == null) return;
+      const index = pendingDislikeMessageIndex;
+      setPendingDislikeMessageIndex(null);
+      const success = await handleRateMessage(
+        index,
+        MessageRating.Dislike,
+        comment,
+      );
+      if (success) {
+        showSuccessNotification({
+          title: t(RateI18nKeys.DislikeToastTitle),
+          message: t(RateI18nKeys.LikeToastDescription),
+        });
+      }
     },
-    [handleRateMessage],
+    [pendingDislikeMessageIndex, handleRateMessage, showSuccessNotification, t],
   );
+
+  if (isAppInfoLoading) {
+    return (
+      <div
+        role="region"
+        aria-label={t(AppsEditorI18nKeys.PreviewChatAriaLabel)}
+        className="flex size-full items-center justify-center"
+      >
+        <Spinner />
+      </div>
+    );
+  }
 
   if (!conversationId || !conversation) {
     return (
@@ -316,7 +521,12 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
             placeholder={t(AppsEditorI18nKeys.PreviewChatPlaceholder)}
             introText={quickAppStarters.introText}
             message={inputMessage}
-            onCreateConversation={handleCreateConversation}
+            onCreateConversation={handleCreateFromComposer}
+            menuOverlays={skillMenuOverlay ? [skillMenuOverlay] : undefined}
+            inlineStartSlot={selectedSkillElement}
+            onInlineStartRemove={removeSelectedSkill}
+            isSkillUnsupported={isSkillUnsupported}
+            commandMenu={commandMenu}
           >
             <StarterButtons
               starters={quickAppStarters.starters}
@@ -324,6 +534,8 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
             />
           </NewConversationComposer>
         </Suspense>
+        {skillCatalogModal}
+        {skillDetailsPanel}
       </div>
     );
   }
@@ -344,7 +556,7 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         onDeleteMessage={handleDeleteMessage}
         onRegenerateMessage={handleRegenerateMessage}
         onRateMessage={handleRate}
-        onDislikeMessage={handleDislike}
+        onDislikeMessage={handleOpenDislikeModal}
         onStartEdit={handleStartEdit}
         onCancelEdit={handleCancelEdit}
         onEditMessage={handleEditMessage}
@@ -354,6 +566,8 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         placeholder={t(AppsEditorI18nKeys.PreviewChatPlaceholder)}
         stoppedGeneratingText={t(ChatI18nKeys.StoppedGenerating)}
         isAudioMessageSupported={isAudioMessageSupported}
+        isVoiceRecordingSupported={isVoiceRecordingSupported}
+        onTranscribeAudio={handleTranscribeAudio}
         conversation={conversation}
         onConversationChange={handleConversationChange}
       />
@@ -368,6 +582,13 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         onConfirm={handleConfirmDelete}
         onClose={() => setPendingDeleteIndex(null)}
       />
+
+      {pendingDislikeMessageIndex != null && (
+        <NegativeFeedbackModal
+          onClose={handleDislikeModalClose}
+          onSubmit={handleDislikeSubmit}
+        />
+      )}
     </div>
   );
 };

@@ -6,35 +6,53 @@ Define how deployment-provided tool toggles are shown in the conversation input,
 
 ## Requirements
 
-### Requirement: Tools menu item visibility
+### Requirement: Tools visibility
 
-The system SHALL render a "Tools" item in the conversation input `+` menu only when all of the following conditions are met:
-1. The client config `deepResearchToolId` is a non-empty string (env var `DEEP_RESEARCH_TOOL_ID` is set).
-2. The selected deployment's configuration schema (`selectedDeploymentConfiguration`) is loaded.
-3. The schema's `properties` object contains a key matching `deepResearchToolId` that has a boolean-typed value (either explicit `"type": "boolean"` or a boolean `default`).
+The system SHALL derive the available tools from the selected deployment's configuration schema alone. Every boolean-typed property (explicit `"type": "boolean"`, or no `type` with a boolean `default`) of `selectedDeploymentConfiguration.properties` is one tool, in schema order.
 
-When any condition is not met, the "Tools" item SHALL NOT render and the `+` menu SHALL behave identically to its current state.
+Tools SHALL always be surfaced as a row of chips rendered directly in the conversation input — every tool, selected or not, in schema order. The chip body toggles the tool and `aria-pressed` reflects the state.
 
-#### Scenario: All conditions met — Tools item visible
-- **WHEN** `DEEP_RESEARCH_TOOL_ID=deep_research` is set AND the deployment configuration schema contains `properties.deep_research` with `type: "boolean"`
-- **THEN** the `+` menu renders a "Tools" item with `IconTool` icon between existing items and Chat Settings
+Whether a chip can additionally be taken off the input is governed by the `removable-tools` UI feature (`OverlayFeature.RemovableTools`), which is in `DEFAULT_ENABLED_UI_FEATURES`:
 
-#### Scenario: Env var unset — Tools item hidden
-- **WHEN** `DEEP_RESEARCH_TOOL_ID` is not set (client config `deepResearchToolId` is `null`)
-- **THEN** the `+` menu does not render a "Tools" item
+- **`removable-tools` enabled** — each chip additionally carries a × button that drops it from the row, turning the tool off if it was on. Dismissal is view state of the input: the chip returns when the tool is switched on again from the `+` menu, and every dismissal is forgotten when the deployment offers a different tool list. The `+` menu additionally renders a "Tools" item (desktop submenu / mobile bottom sheet).
+- **`removable-tools` disabled** — every chip is a persistent toggle. No chip renders a ×, no dismissal state exists, and the `+` menu SHALL NOT render a "Tools" item, since there is nothing to bring back. Where tools are the only content that menu would hold — attachments, chat settings, and every overlay-menu entry (prompts, and skills when the `skillUsageEnabled` flag is on) all unavailable, as in a typical overlay embed — the `+` button SHALL NOT render at all.
 
-#### Scenario: Deployment has no configuration — Tools item hidden
+When the schema is absent or contains no boolean property, neither the chip row nor the "Tools" menu item SHALL render, and the `+` menu SHALL behave as if the feature did not exist.
+
+Beyond `removable-tools`, no operator configuration gates this: there is no env var and no client-config value that turns the tools themselves on or off.
+
+#### Scenario: Schema exposes a boolean property — tools visible
+- **WHEN** the deployment configuration schema contains `properties.deep_research` with `type: "boolean"`
+- **THEN** the conversation input renders a "Deep research" toggle chip
+
+#### Scenario: removable-tools enabled — chip is dismissible and the menu offers Tools
+- **WHEN** `isEnabled('removable-tools')` is `true` AND the schema exposes `properties.deep_research`
+- **THEN** the "Deep research" chip renders a × button AND the `+` menu renders a "Tools" item
+
+#### Scenario: removable-tools disabled — chip is a persistent toggle
+- **WHEN** `isEnabled('removable-tools')` is `false` AND the schema exposes `properties.deep_research`
+- **THEN** the "Deep research" chip renders with no × button
+- **AND** the `+` menu renders no "Tools" item
+
+#### Scenario: removable-tools disabled and tools are the menu's only content — no `+` button
+- **WHEN** `isEnabled('removable-tools')` is `false` AND attachments, chat settings, the prompts overlay, and the skills overlay (when `skillUsageEnabled` is enabled) are all unavailable
+- **THEN** the input renders the tool chips and no `+` button
+
+#### Scenario: Skills overlay alone keeps the `+` button rendered
+- **WHEN** `isEnabled('removable-tools')` is `false` AND attachments and chat settings are unavailable AND `skillUsageEnabled` is enabled
+- **THEN** the `+` button renders, because the Skills overlay-menu entry is menu content
+
+#### Scenario: Schema exposes several boolean properties — one chip each
+- **WHEN** the schema contains `properties.deep_research` and `properties.web_search`, both boolean
+- **THEN** the input renders one toggle chip per tool, in schema order
+
+#### Scenario: Deployment has no configuration — tools hidden
 - **WHEN** `selectedDeploymentConfiguration` is `null` (fetch failed or deployment has no configuration endpoint)
-- **THEN** the `+` menu does not render a "Tools" item
+- **THEN** no chips and no "Tools" menu item render
 
-#### Scenario: Schema does not contain the configured tool id — Tools item hidden
-- **WHEN** the deployment configuration schema's `properties` does not contain a key matching `deepResearchToolId`
-- **THEN** the `+` menu does not render a "Tools" item
-
-#### Scenario: Schema property is not boolean — Tools item hidden
-- **WHEN** the deployment configuration schema property matching `deepResearchToolId` does not have `type: "boolean"` and does not have a boolean `default` value
-- **THEN** the `+` menu does not render a "Tools" item
-
+#### Scenario: Schema has no boolean property — tools hidden
+- **WHEN** the schema's `properties` contains only non-boolean entries (strings, numbers, `oneOf` starters)
+- **THEN** no chips and no "Tools" menu item render
 ---
 
 ### Requirement: Tools submenu rendering (desktop)
@@ -42,8 +60,8 @@ When any condition is not met, the "Tools" item SHALL NOT render and the `+` men
 On desktop viewports, the "Tools" menu item SHALL open a submenu panel (nested within the `DialDropdown`) displaying tool toggle rows.
 
 Each tool row SHALL display:
-- An icon (`IconTelescope` for the Deep Research tool) with `aria-hidden`
-- The tool label (from schema property `title`, falling back to i18n key `tools.deepResearchFallback`)
+- An icon (host-supplied, `IconTelescope` in this app) with `aria-hidden`
+- The tool label (from schema property `title`, falling back to the humanized property key — `deep_research` becomes "Deep research")
 - A trailing check icon (`IconCheck`) when the tool is selected, hidden when unselected
 
 The submenu panel SHALL use `aria-haspopup="menu"` on the trigger item and the panel SHALL have `role="menu"`.
@@ -56,8 +74,8 @@ The submenu panel SHALL use `aria-haspopup="menu"` on the trigger item and the p
 - **WHEN** the deployment configuration property has `"title": "Deep research"`
 - **THEN** the tool row label reads "Deep research"
 
-#### Scenario: Tool row displays fallback label when title is absent
-- **WHEN** the deployment configuration property has no `title` field
+#### Scenario: Tool row displays humanized key when title is absent
+- **THEN** the tool row label reads the humanized key ("Deep research")
 - **THEN** the tool row label reads the i18n fallback value ("Deep research")
 
 #### Scenario: Selected tool shows check icon
@@ -124,9 +142,39 @@ When the selected deployment changes, all tool toggle states SHALL be reinitiali
 - **WHEN** the user changes the selected deployment from deployment A (where Deep Research was toggled on) to deployment B
 - **THEN** the tool toggle state is reinitialized from deployment B's schema defaults, regardless of what was toggled on deployment A
 
-#### Scenario: Switch to deployment without tools — menu hides
-- **WHEN** the user changes to a deployment whose schema does not contain the configured tool id
-- **THEN** the Tools menu item is no longer rendered
+#### Scenario: Switch to deployment without tools — tools hide
+- **WHEN** the user changes to a deployment whose schema contains no boolean property
+- **THEN** the chip row and the Tools menu item are no longer rendered
+
+---
+
+### Requirement: Tool selection restored when a conversation (re)mounts
+
+The tools menu state is owned by a `useToolsMenu` hook instance scoped to the page component it is called from. Creating a conversation from the new-chat screen navigates from that screen's component to a separate conversation-view component, mounting a new `useToolsMenu` instance whose local toggle state starts uninitialized from conversation history. To prevent the just-sent toggle from silently reverting to the schema default on that navigation, the conversation-view component SHALL restore the toggle from the `configuration_value` stored on the conversation's last user message the first time a given conversation id is loaded in that component instance — whether freshly created, opened from the sidebar, switched to from another conversation, or reloaded — using the same value it stores per user message (see "Tool choices persisted in conversation history" below). This restore SHALL NOT be treated as a deployment-driven reset and SHALL NOT be persisted as a new user choice.
+
+The restore SHALL run at most once per conversation id per component mount. While that conversation's generation is still in flight, the last user message's `configuration_value` reflects only the turn already sent and does not change until the user sends a new message; re-running the restore on every reload of that same in-flight turn would silently overwrite a toggle change the user made locally after sending it. A conversation id already restored in this component instance SHALL NOT be restored again unless the user navigates away to a different conversation and back.
+
+#### Scenario: First message toggle survives the new-chat-to-conversation navigation
+- **WHEN** the user toggles Deep Research on and sends the first message from the new-chat screen
+- **THEN** the created conversation's user message is persisted with `configuration_value: { "deep_research": true }`
+- **AND** the conversation view that the app navigates to shows the Tools toggle as selected
+- **AND** the next message the user sends also includes `configuration_value: { "deep_research": true }`
+
+#### Scenario: Opening an existing conversation restores its last toggle state
+- **WHEN** the user opens a conversation whose last user message has `configuration_value: { "deep_research": true }`
+- **THEN** the Tools toggle displays as selected for that conversation
+
+#### Scenario: No configuration on the last user message — falls back to schema default
+- **WHEN** the conversation's last user message has no `configuration_value` (or no value for that tool id)
+- **THEN** the Tools toggle state is left at the deployment configuration schema's `default` value
+
+#### Scenario: In-flight generation does not re-clobber a local toggle change
+- **WHEN** a conversation's generation is still in flight for its last user message (`configuration_value: { "deep_research": true }`) AND the user locally toggles Deep Research off while waiting AND the component reloads that same conversation id again without the user navigating away
+- **THEN** the Tools toggle stays off — the restore does not re-run for a conversation id already restored in this component instance
+
+#### Scenario: Navigating away and back to an in-flight conversation re-derives from its persisted state
+- **WHEN** the user navigates from a conversation with an in-flight generation to a different conversation and back
+- **THEN** the Tools toggle for the original conversation is re-restored from its last user message's `configuration_value`, since it is a fresh load for that conversation id in this component instance
 
 ---
 
@@ -185,29 +233,14 @@ Whenever a completion mode creates or replaces a user message, the backend SHALL
 
 ---
 
-### Requirement: App-config pipeline for DEEP_RESEARCH_TOOL_ID
-
-The backend SHALL expose `DEEP_RESEARCH_TOOL_ID` as a client-visible config value named `deepResearchToolId` through the existing `GET /api/v1/client-config` endpoint.
-
-The env var is optional. When unset, `deepResearchToolId` SHALL be `null` in the response.
-
-#### Scenario: Env var set — value in client config
-- **WHEN** `DEEP_RESEARCH_TOOL_ID=deep_research` is configured
-- **THEN** `GET /api/v1/client-config` returns `config.deepResearchToolId: "deep_research"`
-
-#### Scenario: Env var unset — null in client config
-- **WHEN** `DEEP_RESEARCH_TOOL_ID` is not set
-- **THEN** `GET /api/v1/client-config` returns `config.deepResearchToolId: null`
-
----
-
 ### Requirement: Library isolation for tools menu
 
 The `libs/conversation-input` library SHALL render the tools submenu entirely from props:
 - `toolsMenuItems: ToolMenuItem[]` — resolved tool items with `id`, `label`, `icon: ReactNode`, `isSelected: boolean`.
 - `onToolToggle: (toolId: string) => void` — callback to toggle a tool.
+- `canRemoveTools?: boolean` — whether chips are dismissible, defaulting to `true`.
 
-The library SHALL NOT import or reference: deployment configuration schemas, app config, env vars, server-api modules, generated API clients, or any app-level context/provider.
+The library SHALL NOT read the `removable-tools` UI feature itself, nor import or reference: deployment configuration schemas, app config, env vars, server-api modules, generated API clients, or any app-level context/provider. Resolving `OverlayFeature.RemovableTools` into the `canRemoveTools` boolean is the app's job, done at the same `useUiFeature` call sites that already gate `chat-settings` and `input-files`.
 
 #### Scenario: Empty tools array — no menu item rendered
 - **WHEN** `toolsMenuItems` is an empty array or undefined
@@ -261,7 +294,7 @@ The following i18n keys SHALL be added to `apps/chat/src/i18n/locales/en.json`:
 | Key | Default value | Usage |
 |-----|---------------|-------|
 | `tools.menuTitle` | `"Tools"` | Top-level menu item label |
-| `tools.deepResearchFallback` | `"Deep research"` | Fallback label when schema property has no `title` |
+| `tools.removeTool` | `"Remove {{label}}"` | Accessible label of a chip's × button |
 
 #### Scenario: Labels use i18n values
 - **WHEN** the Tools menu renders in a locale that has translated `tools.menuTitle`
@@ -272,7 +305,7 @@ The following i18n keys SHALL be added to `apps/chat/src/i18n/locales/en.json`:
 ### Requirement: Memoization
 
 The `useToolsMenu` hook SHALL memoize:
-- The derived `ToolMenuItem[]` array with `useMemo` (dependencies: tool id, schema property, selection state).
+- The derived `ToolMenuItem[]` array with `useMemo` (dependencies: derived tool definitions, selection state, icon).
 - The `onToolToggle` callback with `useCallback`.
 - The `toolConfigurationValue` record with `useMemo`.
 
@@ -286,15 +319,19 @@ This prevents unnecessary re-renders of `AddAttachmentButton` and its children o
 
 ### Requirement: Feature gating decision
 
-This feature SHALL NOT be gated behind `ENABLED_FEATURES` / `ENABLED_FEATURES_ROLES`. Visibility is controlled by:
-1. Operator setting `DEEP_RESEARCH_TOOL_ID` env var (presence = enabled).
-2. Deployment schema containing a matching boolean property (capability = supported).
+Whether tools exist at all SHALL NOT be gated behind `ENABLED_FEATURES` / `ENABLED_FEATURES_ROLES`, and SHALL NOT be gated by any operator config value. Their visibility is controlled solely by the deployment schema containing at least one boolean property (capability = supported).
 
-No role-based restriction applies in this slice.
+Only their *removability* is gated, by the `removable-tools` UI feature. Turning it off never hides a tool — it removes the add/remove affordances around one.
 
-#### Scenario: No feature flag check
-- **WHEN** the app evaluates whether to show the Tools menu
-- **THEN** it checks only `config.deepResearchToolId` and deployment schema — not `features.*` flags
+No role-based restriction applies.
+
+#### Scenario: Tool visibility checks the schema alone
+- **WHEN** the app evaluates whether to show tools
+- **THEN** it checks only the deployment configuration schema — not `features.*` flags and not any client-config value
+
+#### Scenario: removable-tools never hides a tool
+- **WHEN** `isEnabled('removable-tools')` is `false` and the schema exposes two boolean properties
+- **THEN** both tool chips still render, and both still toggle
 
 ---
 
@@ -310,8 +347,8 @@ The system SHALL NOT introduce new analytics events, metrics, or telemetry for t
 
 ### Requirement: No new caching or rate limiting
 
-The feature SHALL NOT introduce new backend endpoints. The existing deployment-configuration endpoint caching (60s TTL, key `deployments:configuration:<userSub>:<deploymentName>`) and app-config caching (60s TTL) apply unchanged.
+The feature SHALL NOT introduce new backend endpoints. The existing deployment-configuration endpoint caching (60s TTL, key `deployments:configuration:<userSub>:<deploymentName>`) applies unchanged.
 
 #### Scenario: Config cache behavior unchanged
-- **WHEN** the frontend requests client config
-- **THEN** `deepResearchToolId` is served from the existing 60s app-config cache
+- **WHEN** the frontend selects a deployment
+- **THEN** its configuration schema is served from the existing 60s deployment-configuration cache

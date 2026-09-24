@@ -1,5 +1,9 @@
 import type { ApplicationSchemaSummaryDto } from '@epam/ai-dial-chat-api-client';
 import {
+  decomposeLocalizedFields,
+  findDeploymentByIdOrReference,
+} from '@epam/ai-dial-chat-hooks';
+import {
   Spinner,
   ErrorMessageNotification,
   StepStatus,
@@ -17,14 +21,15 @@ import {
 } from '../../constants/translation-keys';
 import { useDeployments } from '../../context/DeploymentsContext';
 import { useLanguage } from '../../hooks/language/useLanguage';
+import { useOperationNotification } from '../../hooks/useOperationNotification';
+import { updateApplication } from '../../server-api/applications';
 import { AppsEditorQuery, AppsEditorStep } from '../../types/apps-editor';
-import { ROUTES } from '../../types/routes';
-import { findDeploymentByIdOrReference } from '../../utils/deployment-id';
 import {
-  decomposeLocalizedFields,
-  PRIMARY_LOCALE,
-  resolveLocalizedText,
-} from '../../utils/locale';
+  EntityOperation,
+  NotifiableEntity,
+} from '../../types/entity-notification';
+import { ROUTES } from '../../types/routes';
+import { PRIMARY_LOCALE, resolveLocalizedText } from '../../utils/locale';
 import type {
   GeneralFormHandle,
   GeneralFormInitialValues,
@@ -53,6 +58,7 @@ const SETTINGS_READY_TIMEOUT_MS = 60000;
 const AppsEditor: FC = () => {
   const { t } = useTranslation();
   const { language } = useLanguage();
+  const { notifyOperationSuccess } = useOperationNotification();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { schemas, items: deployments, refetchDeployments } = useDeployments();
@@ -174,13 +180,15 @@ const AppsEditor: FC = () => {
 
   const handleChangeStep = useCallback(
     (stepId: string) => {
+      if (stepId === AppsEditorStep.Settings && !appIdForSettings) return;
+
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.set(AppsEditorQuery.Step, stepId);
         return next;
       });
     },
-    [setSearchParams],
+    [appIdForSettings, setSearchParams],
   );
 
   const isGeneralStep = step === AppsEditorStep.General;
@@ -256,20 +264,76 @@ const AppsEditor: FC = () => {
     void refetchDeployments(false);
   }, [refetchDeployments]);
 
+  const appDisplayName =
+    submittedAppInfo?.displayName ||
+    resolveLocalizedText(existingDeployment?.displayName, language) ||
+    schema?.displayName;
+
   const handleSaveSuccess = useCallback(
     async (hasChanges: boolean) => {
       clearSaveTimeout();
       if (isPreviewing) return;
+
+      /*
+       * Quick Apps have no chat-side UI to set `features.skills_supported`,
+       * and the embedded Settings-step editor's own save (which is what
+       * actually persists to DIAL Core here — this host never calls
+       * `updateApplication` itself for a Settings-step save) has no reason
+       * to know about it either. Re-asserting it with a follow-up PATCH,
+       * carrying the same General-step values already on record, is the
+       * frontend half of the `applications-write-api` spec's "Quick Apps
+       * always get features.skills_supported: true" hack — the backend
+       * force-sets the flag on every update regardless of body content, so
+       * this call's only purpose is to trigger that, and it must complete
+       * before the save is treated as successful.
+       */
+      if (appIdForSettings) {
+        const generalValues = generalFormRef.current?.getValues();
+        try {
+          await updateApplication(appIdForSettings, {
+            name: generalValues?.name ?? appDisplayName ?? '',
+            description: generalValues?.description,
+            iconUrl: generalValues?.iconUrl,
+            topics: generalValues?.topics,
+            locales: generalValues?.locales,
+            primaryLocale: generalValues?.primaryLocale,
+          });
+        } catch {
+          setIsSaving(false);
+          setPendingSaveAction(null);
+          setSaveError(t(AppsEditorI18nKeys.ErrorSaveFailed));
+          return;
+        }
+      }
 
       if (hasChanges) {
         setPreviewResetKey((prev) => prev + 1);
       }
 
       if (pendingSaveAction === 'preview') {
-        /* Fire-and-forget: nothing should block before showing the preview
-         * pane. `DeploymentsContext` is a shared reactive source, so once
-         * the refetch resolves, any reader re-renders on its own. */
-        void refetchDeployments().catch(() => undefined);
+        if (hasChanges) {
+          /*
+           * The preview pane remounts (via `previewResetKey`) and reads
+           * `items` straight from `DeploymentsContext` on its very first
+           * render. Firing-and-forgetting the refetch here left that first
+           * render showing the stale pre-save item (e.g. an old starter
+           * list) for as long as the refetch took, then snapping to the
+           * fresh one — waiting for it keeps the reveal in sync with the
+           * data instead.
+           */
+          try {
+            await refetchDeployments();
+          } catch (error) {
+            console.error(
+              'Failed to refetch deployments before preview:',
+              error,
+            );
+          }
+        } else {
+          /* Nothing changed — the cached list is already accurate, so this
+           * refresh is best-effort and must not delay opening the preview. */
+          void refetchDeployments().catch(() => undefined);
+        }
         setIsSaving(false);
         setIsPreviewing(true);
       } else {
@@ -282,6 +346,17 @@ const AppsEditor: FC = () => {
         } finally {
           setIsSaving(false);
         }
+        /*
+         * Only Save & Exit reports an outcome: a preview-triggered save is a
+         * side effect of opening the pane, not something the user asked about.
+         */
+        notifyOperationSuccess(
+          NotifiableEntity.QuickApp,
+          isEditingExistingApp
+            ? EntityOperation.Edited
+            : EntityOperation.Created,
+          { name: appDisplayName ?? '' },
+        );
         navigate(returnUrl);
       }
 
@@ -290,8 +365,13 @@ const AppsEditor: FC = () => {
     [
       clearSaveTimeout,
       isPreviewing,
+      appIdForSettings,
+      t,
       pendingSaveAction,
       refetchDeployments,
+      notifyOperationSuccess,
+      isEditingExistingApp,
+      appDisplayName,
       navigate,
       returnUrl,
     ],
@@ -349,10 +429,6 @@ const AppsEditor: FC = () => {
     ? t(EditorI18nKeys.NextButton)
     : t(EditorI18nKeys.SaveButton);
 
-  const appDisplayName =
-    submittedAppInfo?.displayName ||
-    resolveLocalizedText(existingDeployment?.displayName, language) ||
-    schema?.displayName;
   const appIconUrl =
     submittedAppInfo?.iconUrl ?? existingDeployment?.iconUrl ?? schema?.iconUrl;
 
@@ -381,7 +457,7 @@ const AppsEditor: FC = () => {
   const isSaveDisabled = !isGeneralStep && !isSettingsReady;
 
   return (
-    <div className="flex size-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <EditorHeader
         title={schema?.displayName}
         steps={steps}
@@ -445,7 +521,7 @@ const AppsEditor: FC = () => {
           >
             <div className="flex items-center gap-3 rounded-lg bg-layer-sunken px-4 py-3 shadow-lg">
               <Spinner />
-              <span className="text-sm text-primary">
+              <span className="dial-small-text text-primary">
                 {t(AppsEditorI18nKeys.SavingOverlayLabel)}
               </span>
             </div>

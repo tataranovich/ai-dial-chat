@@ -2,13 +2,15 @@ import type { DeploymentFeatures } from '@epam/ai-dial-chat-shared';
 import {
   buildCssVars,
   mergeClasses,
+  RESIZABLE_TEXTAREA_CLASS_NAME,
   ResponseFormat,
 } from '@epam/ai-dial-chat-shared';
 import {
-  Input,
-  DialRadioGroup,
-  DialSlider,
+  Textarea,
+  Slider,
+  RadioGroup,
   RadioGroupOrientation,
+  TextareaResize,
 } from '@epam/ai-dial-ui-kit';
 import type { FC } from 'react';
 import styles from './ChatSettingsFields.module.scss';
@@ -54,7 +56,7 @@ export interface ChatSettingsFieldsProps {
 }
 
 /** Color overrides for `ChatSettingsFields`, applied as CSS custom properties with app theme fallbacks. */
-export interface ChatSettingsFieldsColors {
+interface ChatSettingsFieldsColors {
   /** Field label text color. Fallback: `--text-primary`. */
   labelText?: string;
 }
@@ -91,32 +93,37 @@ export const ChatSettingsFields: FC<ChatSettingsFieldsProps> = ({
   );
 
   return (
-    <div className="flex flex-col gap-4 px-6 py-3" style={cssVars}>
+    <div className="flex flex-col gap-4 px-6 pb-3" style={cssVars}>
       {features.responseFormat && (
-        <DialRadioGroup
-          fieldTitle={responseFormatLabel}
-          labelClassName={fieldLabelClassName}
-          elementId="response-format"
+        <RadioGroup
+          id="response-format"
+          labelProps={{
+            label: responseFormatLabel,
+            className: fieldLabelClassName,
+            caption: responseFormatHint,
+          }}
+          optionsClassName="mb-2"
           orientation={RadioGroupOrientation.Column}
-          activeRadioButton={responseFormat ?? ResponseFormat.Markdown}
-          labelDescription={responseFormatHint}
-          radioButtons={[
+          value={responseFormat ?? ResponseFormat.Markdown}
+          items={[
             {
-              id: ResponseFormat.Markdown,
-              name: responseFormatMarkdownLabel,
+              value: ResponseFormat.Markdown,
+              label: responseFormatMarkdownLabel,
             },
             {
-              id: ResponseFormat.PlainText,
-              name: responseFormatPlainTextLabel,
+              value: ResponseFormat.PlainText,
+              label: responseFormatPlainTextLabel,
             },
           ]}
           onChange={(v) => onResponseFormatChange(v as ResponseFormat)}
         />
       )}
       {features.systemPrompt && (
-        <Input
+        <Textarea
           value={systemPrompt}
           placeholder={systemPromptTooltip}
+          className={RESIZABLE_TEXTAREA_CLASS_NAME}
+          resize={TextareaResize.Vertical}
           labelProps={{
             className: fieldLabelClassName,
             label: systemPromptLabel,
@@ -125,7 +132,7 @@ export const ChatSettingsFields: FC<ChatSettingsFieldsProps> = ({
         />
       )}
       {features.temperature && (
-        <DialSlider
+        <Slider
           labelProps={{
             label: temperatureLabel,
             className: fieldLabelClassName,
@@ -136,6 +143,7 @@ export const ChatSettingsFields: FC<ChatSettingsFieldsProps> = ({
           max={1}
           step={0.1}
           labels={temperatureLabels}
+          showValue
           onChange={onTemperatureChange}
         />
       )}

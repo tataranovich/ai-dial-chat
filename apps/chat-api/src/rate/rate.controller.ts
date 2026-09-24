@@ -1,8 +1,10 @@
 import { Body, Controller, HttpCode, Post, Req } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
-import type { SessionUser } from '../auth/session/session.types';
+import {
+  getJobTitleClaim,
+  type SessionUser,
+} from '../auth/session/session.types';
 import { RateMessageDto } from './dto/rate-message.dto';
 import { RateService } from './rate.service';
 
@@ -13,12 +15,12 @@ export class RateController {
 
   @Post()
   @HttpCode(204)
-  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({
     summary: 'Rate an assistant message',
     description:
-      'Forwards a like/dislike rating for an assistant message to DIAL Core. ' +
-      "Uses the authenticated session's access token as a Bearer credential.",
+      'Forwards a like/dislike rating, or the clearing of a previously sent rating, ' +
+      "for an assistant message to DIAL Core. Uses the authenticated session's " +
+      'access token as a Bearer credential.',
   })
   @ApiResponse({
     status: 204,
@@ -32,7 +34,6 @@ export class RateController {
     status: 401,
     description: 'Not authenticated — valid session cookie required',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an unexpected response',
@@ -45,7 +46,7 @@ export class RateController {
     @Body() dto: RateMessageDto,
     @Req() req: Request,
   ): Promise<void> {
-    const { at } = req.user as SessionUser;
-    return this.rateService.rateMessage(dto, at);
+    const { at, claims } = req.user as SessionUser;
+    return this.rateService.rateMessage(dto, at, getJobTitleClaim(claims));
   }
 }

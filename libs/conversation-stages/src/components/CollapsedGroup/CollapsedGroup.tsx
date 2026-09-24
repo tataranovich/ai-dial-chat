@@ -3,18 +3,25 @@ import {
   mergeClasses,
   StageStatus,
 } from '@epam/ai-dial-chat-shared';
-import { DIAL_ICON_SIZE, LinkButton, Spinner } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  EllipsisTooltip,
+  LinkButton,
+  Spinner,
+} from '@epam/ai-dial-ui-kit';
 import {
   IconCheck,
   IconChevronDown,
   IconChevronRight,
 } from '@tabler/icons-react';
 import { FC, useEffect, useRef, useState } from 'react';
+import { CONVERSATION_STAGES_CLASS } from '../../constants/public-class-names';
 import type { CollapsedGroupProps } from '../../models/collapsed-group';
 import {
+  calculateStagesDurationSeconds,
   cleanStageName,
   formatTotalDuration,
-  parseDurationSeconds,
 } from '../../utils/stage-name';
 import { findLiveStage, stagePosition } from '../../utils/stage-progress';
 import { StagesPanel } from '../StagesPanel/StagesPanel';
@@ -100,10 +107,9 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
   }
 
   const hasFailed = stages.some((s) => s.status === StageStatus.Failed);
-  const totalSeconds = stages.reduce((sum, stage) => {
-    const { durationLabel } = cleanStageName(stage.name);
-    return sum + (parseDurationSeconds(durationLabel) ?? 0);
-  }, 0);
+  const totalSeconds = calculateStagesDurationSeconds(
+    stages.map((stage) => stage.name),
+  );
   const totalDurationLabel =
     totalSeconds > 0 ? formatTotalDuration(totalSeconds) : undefined;
 
@@ -119,11 +125,14 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
       <span
         role="status"
         aria-live="polite"
-        className="inline-flex items-center gap-2"
+        className="flex min-w-0 items-center gap-2"
       >
-        <Spinner size={14} ariaLabel={runningAriaLabel} />
+        <span className="flex flex-none items-center">
+          <Spinner size={14} ariaLabel={runningAriaLabel} />
+        </span>
         <span
           className={mergeClasses(
+            'flex-none whitespace-nowrap',
             summaryTypography.fontClassName,
             styles.liveName,
           )}
@@ -133,11 +142,12 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
         {liveName && (
           <span
             className={mergeClasses(
+              'min-w-0 max-w-[22rem] truncate',
               summaryTypography.fontClassName,
               styles.executedLabel,
             )}
           >
-            {liveName}
+            <EllipsisTooltip text={liveName} />
           </span>
         )}
       </span>
@@ -183,6 +193,7 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
           size={DIAL_ICON_SIZE.SM}
           className={styles.doneIcon}
           aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
         />
         <span
           className={mergeClasses(
@@ -209,20 +220,33 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
   return (
     <div
       style={cssVars}
-      className={mergeClasses('flex w-full flex-col gap-1', className)}
+      className={mergeClasses(
+        'flex w-full flex-col gap-1',
+        className,
+        CONVERSATION_STAGES_CLASS.group,
+      )}
     >
       <LinkButton
-        className={styles.toggleButton}
+        className={mergeClasses(
+          styles.toggleButton,
+          CONVERSATION_STAGES_CLASS.groupToggle,
+        )}
+        textClassName="min-w-0"
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
         iconAfter={
           isOpen ? (
-            <IconChevronDown size={12} aria-hidden />
+            <IconChevronDown
+              size={12}
+              aria-hidden
+              stroke={DIAL_KIT_ICON_STROKE}
+            />
           ) : (
             <IconChevronRight
               size={12}
               className="rtl:scale-x-[-1]"
               aria-hidden
+              stroke={DIAL_KIT_ICON_STROKE}
             />
           )
         }

@@ -1,73 +1,146 @@
-import { render, screen } from '@testing-library/react';
+import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   cloneElement,
   useState,
+  type ComponentProps,
   type ReactElement,
   type ReactNode,
 } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { CatalogItem } from '../../../../models/catalog-item';
-import { CatalogEntityType } from '../../../../types/entity-type';
+import { CatalogLimitStatus } from '../../../../models/item-details-data';
 import {
+  CredentialsLevel,
   CredentialStatus,
   ToolsetAuthenticationType,
 } from '../../../../types/toolset-auth';
 import { Header } from '../Header';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   Spinner: () => <svg />,
   FolderPath: () => <div />,
   PrimaryButton: ({
     label,
     onClick,
+    disabled,
+    className,
+    'aria-busy': ariaBusy,
   }: {
     label: string;
     onClick: () => void;
+    disabled?: boolean;
+    className?: string;
+    'aria-busy'?: boolean;
   }) => (
-    <button className="primary" onClick={onClick}>
+    <button
+      data-variant="primary"
+      className={className}
+      onClick={onClick}
+      disabled={disabled}
+      aria-busy={ariaBusy}
+    >
       {label}
     </button>
   ),
   NeutralButton: ({
     label,
     onClick,
+    onMouseEnter,
+    onFocus,
+    className,
   }: {
     label: string;
     onClick: () => void;
+    onMouseEnter?: () => void;
+    onFocus?: () => void;
+    className?: string;
   }) => (
-    <button className="neutral" onClick={onClick}>
+    <button
+      data-variant="neutral"
+      className={className}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onFocus={onFocus}
+    >
+      {label}
+    </button>
+  ),
+  DangerButton: ({
+    label,
+    onClick,
+    onMouseEnter,
+    onFocus,
+  }: {
+    label: string;
+    onClick: () => void;
+    onMouseEnter?: () => void;
+    onFocus?: () => void;
+  }) => (
+    <button
+      data-variant="danger"
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onFocus={onFocus}
+    >
       {label}
     </button>
   ),
   NeutralIconButton: ({
     'aria-label': ariaLabel,
+    icon,
     onClick,
+    onMouseEnter,
+    onFocus,
   }: {
     'aria-label'?: string;
+    icon?: ReactNode;
     onClick?: () => void;
-  }) => <button aria-label={ariaLabel} onClick={onClick} />,
+    onMouseEnter?: () => void;
+    onFocus?: () => void;
+  }) => (
+    <button
+      aria-label={ariaLabel}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onFocus={onFocus}
+    >
+      {icon}
+    </button>
+  ),
   Dropdown: ({
     children,
     items,
+    open,
+    onOpenChange,
+    renderOverlay,
   }: {
     children: ReactElement<{ onClick?: () => void }>;
-    items: Array<{
+    items?: Array<{
       key: string;
       label: ReactNode;
       disabled?: boolean;
       onClick?: () => void;
     }>;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+    renderOverlay?: () => ReactNode;
   }) => {
-    const [isOpen, setIsOpen] = useState(false);
+    const [internalOpen, setInternalOpen] = useState(false);
+    const isOpen = open ?? internalOpen;
+    const toggle = () => {
+      const next = !isOpen;
+      setInternalOpen(next);
+      onOpenChange?.(next);
+    };
     return (
       <div>
-        {cloneElement(children, {
-          onClick: () => setIsOpen((value) => !value),
-        })}
+        {cloneElement(children, { onClick: toggle })}
         {isOpen &&
-          items.map((item) => (
+          items?.map((item) => (
             <button
               key={item.key}
               disabled={item.disabled}
@@ -76,28 +149,53 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
               {item.label}
             </button>
           ))}
+        {isOpen && renderOverlay?.()}
       </div>
     );
   },
 }));
 vi.mock('@tabler/icons-react', () => ({
-  IconDots: () => <svg />,
+  IconArrowRight: () => <svg />,
+  IconChevronDown: () => <svg />,
+  IconDots: ({ size }: { size?: number }) => <span>{`dots icon ${size}`}</span>,
+  IconDownload: () => <svg />,
   IconKey: () => <svg />,
   IconLogin: () => <svg />,
   IconLogout: () => <svg />,
   IconPencil: () => <svg />,
   IconPlayerPlayFilled: () => <svg />,
+  IconShare: () => <svg />,
   IconTrash: () => <svg />,
-  IconUpload: () => <svg />,
   IconUserOff: () => <svg />,
+  IconWorldOff: () => <svg />,
+  IconWorldShare: () => <svg />,
 }));
-vi.mock('../../../EntityHeader/EntityHeader', () => ({
-  EntityHeader: ({ item }: { item: CatalogItem }) => <div>{item.name}</div>,
+vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@epam/ai-dial-chat-shared')>()),
+  EntityHeader: ({
+    item,
+    statusBadge,
+  }: {
+    item: CatalogItem;
+    statusBadge?: ReactNode;
+  }) => (
+    <div>
+      {item.name}
+      {statusBadge}
+    </div>
+  ),
 }));
 vi.mock('../ShareButton/ShareButton', () => ({
   ShareButton: ({ label }: { label?: string }) => (
     <button>{label ?? 'Share'}</button>
   ),
+}));
+vi.mock('../CredentialsApiKeyOverlay/CredentialsApiKeyOverlay', () => ({
+  CredentialsApiKeyOverlay: ({
+    status,
+  }: {
+    status?: 'SIGNED_IN' | 'SIGNED_OUT' | 'FAILED';
+  }) => <div>{status === 'SIGNED_IN' ? 'Delete' : 'Add'} popover content</div>,
 }));
 
 const makeItem = (type: CatalogEntityType): CatalogItem => ({
@@ -111,6 +209,20 @@ const makeItem = (type: CatalogEntityType): CatalogItem => ({
   topics: [],
   isMyApp: true,
 });
+
+const openManage = async (label = 'Manage') => {
+  await userEvent.click(screen.getByRole('button', { name: label }));
+};
+
+/*
+ * The overflow trigger only exists once two or more actions survive
+ * filtering — a lone one is promoted to a button in the action row — so a
+ * test that asserts an action is nowhere has to cope with either surface.
+ */
+const openManageIfPresent = async () => {
+  const trigger = screen.queryByRole('button', { name: 'Manage' });
+  if (trigger) await userEvent.click(trigger);
+};
 
 describe('Header', () => {
   it('renders Use in chat for a Model item', () => {
@@ -130,7 +242,7 @@ describe('Header', () => {
 
   it('does not render Publish for a Prompt item by default', async () => {
     render(<Header item={makeItem(CatalogEntityType.Prompt)} />);
-    await openManage();
+    await openManageIfPresent();
     expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
   });
 
@@ -194,10 +306,6 @@ describe('Header', () => {
     expect(screen.getByRole('button', { name: 'Share this' })).toBeTruthy();
   });
 
-  const openManage = async (label = 'Manage') => {
-    await userEvent.click(screen.getByRole('button', { name: label }));
-  };
-
   it('does not render the Manage button for a Model item the user cannot edit, publish, or delete', () => {
     render(
       <Header
@@ -227,7 +335,7 @@ describe('Header', () => {
         isPublishVisible={() => false}
       />,
     );
-    await openManage();
+    await openManageIfPresent();
     expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
   });
 
@@ -242,6 +350,159 @@ describe('Header', () => {
     await openManage();
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
     expect(onOpenPublish).toHaveBeenCalledOnce();
+  });
+
+  it('renders Unpublish instead of Publish once the item has a published folder', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        onOpenUnpublish={vi.fn()}
+        hasPublishedFolders
+      />,
+    );
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Unpublish' })).toBeTruthy();
+    /* The two are mutually exclusive: the menu shows the item's current state. */
+    expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+  });
+
+  it('renders Publish while the item has no published folder', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        onOpenUnpublish={vi.fn()}
+        hasPublishedFolders={false}
+      />,
+    );
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Unpublish' })).toBeNull();
+  });
+
+  it('keeps Publish when the unpublish predicate rejects the item', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        onOpenUnpublish={vi.fn()}
+        isUnpublishVisible={() => false}
+        hasPublishedFolders
+      />,
+    );
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Unpublish' })).toBeNull();
+  });
+
+  /*
+   * GH #8691: a published copy under `public/` has no owner-side entries at
+   * all, so its Manage menu is empty until the publish-history lookup that
+   * produces Unpublish resolves — and that lookup is started by reaching for
+   * this very trigger. A hidden trigger left the copy permanently unactionable.
+   */
+  describe('Manage trigger while the unpublish lookup is outstanding', () => {
+    const renderPublishedCopy = (
+      props?: Partial<ComponentProps<typeof Header>>,
+    ) =>
+      render(
+        <Header
+          item={{ ...makeItem(CatalogEntityType.Agent), isMyApp: false }}
+          isPublishVisible={() => false}
+          isUnpublishVisible={() => true}
+          onOpenUnpublish={vi.fn()}
+          isPublishHistoryResolved={false}
+          {...props}
+        />,
+      );
+
+    it('renders the trigger for an item the host says is unpublishable', () => {
+      renderPublishedCopy();
+      expect(screen.getByRole('button', { name: 'Manage' })).toBeTruthy();
+    });
+
+    it('starts the lookup when the trigger is hovered', async () => {
+      const onRequestPublishHistory = vi.fn();
+      renderPublishedCopy({ onRequestPublishHistory });
+
+      await userEvent.hover(screen.getByRole('button', { name: 'Manage' }));
+
+      expect(onRequestPublishHistory).toHaveBeenCalled();
+    });
+
+    it('shows Unpublish once the lookup resolves to a folder', async () => {
+      renderPublishedCopy({
+        isPublishHistoryResolved: true,
+        hasPublishedFolders: true,
+      });
+
+      await openManage();
+
+      expect(screen.getByRole('button', { name: 'Unpublish' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+    });
+
+    it('drops the trigger again when the lookup resolves to no folder', () => {
+      renderPublishedCopy({
+        isPublishHistoryResolved: true,
+        hasPublishedFolders: false,
+      });
+
+      expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
+    });
+
+    it('leaves the trigger hidden for a host that supplies no unpublish rule', () => {
+      renderPublishedCopy({ isUnpublishVisible: undefined });
+
+      expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
+    });
+
+    it('leaves the trigger hidden when the host rejects the item', () => {
+      renderPublishedCopy({ isUnpublishVisible: () => false });
+
+      expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
+    });
+  });
+
+  it('shows neither entry when the publish predicate rejects an item with no published folder', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        onEdit={vi.fn()}
+        onOpenUnpublish={vi.fn()}
+        isPublishVisible={() => false}
+      />,
+    );
+    await openManage();
+    expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Unpublish' })).toBeNull();
+  });
+
+  it('calls onOpenUnpublish when Unpublish is clicked in the Manage menu', async () => {
+    const onOpenUnpublish = vi.fn();
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        onOpenUnpublish={onOpenUnpublish}
+        hasPublishedFolders
+      />,
+    );
+    await openManage();
+    await userEvent.click(screen.getByRole('button', { name: 'Unpublish' }));
+    expect(onOpenUnpublish).toHaveBeenCalledOnce();
+  });
+
+  it('uses texts.unpublishLabel for the Unpublish entry', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        onOpenUnpublish={vi.fn()}
+        hasPublishedFolders
+        texts={{ unpublishLabel: 'Remove from Organization' }}
+      />,
+    );
+    await openManage();
+    expect(
+      screen.getByRole('button', { name: 'Remove from Organization' }),
+    ).toBeTruthy();
   });
 
   it('does not render the Manage button when onEdit is not supplied and no other action applies', () => {
@@ -304,6 +565,271 @@ describe('Header', () => {
     expect(onEdit).toHaveBeenCalledWith(item);
   });
 
+  it('renders Download in the Manage menu when onDownload is supplied', async () => {
+    render(
+      <Header item={makeItem(CatalogEntityType.Prompt)} onDownload={vi.fn()} />,
+    );
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Download' })).toBeTruthy();
+  });
+
+  it('does not render Download when onDownload is absent', async () => {
+    render(<Header item={makeItem(CatalogEntityType.Prompt)} />);
+    await openManageIfPresent();
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+  });
+
+  it('does not render Download when isDownloadVisible returns false', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onDownload={vi.fn()}
+        isDownloadVisible={() => false}
+      />,
+    );
+    await openManage();
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+  });
+
+  it('passes texts.downloadActionLabel through to the Download item label', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Prompt)}
+        onDownload={vi.fn()}
+        texts={{ downloadActionLabel: 'Export' }}
+      />,
+    );
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Export' })).toBeTruthy();
+  });
+
+  it('calls onDownload with the item when Download is clicked', async () => {
+    const onDownload = vi.fn();
+    const item = makeItem(CatalogEntityType.Prompt);
+    render(<Header item={item} onDownload={onDownload} />);
+    await openManage();
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+    expect(onDownload).toHaveBeenCalledWith(item);
+  });
+});
+
+describe('Header — Download as primary action', () => {
+  it('defaults to Download as the primary action for a Skill', async () => {
+    render(
+      <Header item={makeItem(CatalogEntityType.Skill)} onDownload={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: 'Download' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Use in chat' })).toBeNull();
+  });
+
+  it('does not promote Download for a Model regardless of onDownload', () => {
+    render(
+      <Header item={makeItem(CatalogEntityType.Model)} onDownload={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: 'Use in chat' })).toBeTruthy();
+  });
+
+  it("Toolset's credentials swap takes precedence over Download", () => {
+    render(
+      <Header
+        item={{
+          ...makeItem(CatalogEntityType.Toolset),
+          credentials: {
+            authenticationType: ToolsetAuthenticationType.ApiKey,
+            userStatus: CredentialStatus.SignedOut,
+          },
+        }}
+        onDownload={vi.fn()}
+        isDownloadPrimary={() => true}
+        onLogin={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'API key' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+  });
+
+  it('a host can suppress the default Skill promotion', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Skill)}
+        onDownload={vi.fn()}
+        isDownloadPrimary={() => false}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Download' })).toBeTruthy();
+  });
+
+  it('a host can promote Download for a non-Skill type', () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Prompt)}
+        onDownload={vi.fn()}
+        isDownloadPrimary={(item) => item.type === CatalogEntityType.Prompt}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Download' })).toBeTruthy();
+  });
+
+  it('never renders Download in both the primary slot and the Manage menu', async () => {
+    render(
+      <Header item={makeItem(CatalogEntityType.Skill)} onDownload={vi.fn()} />,
+    );
+    await openManageIfPresent();
+    expect(screen.getAllByRole('button', { name: 'Download' })).toHaveLength(1);
+  });
+
+  it('disables the button and announces progress while a download is pending', async () => {
+    let resolveDownload!: () => void;
+    const onDownload = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDownload = resolve;
+        }),
+    );
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Skill)}
+        onDownload={onDownload}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+
+    const button = screen.getByRole('button', {
+      name: 'Download',
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(screen.getByRole('status').textContent).toBe('Downloading');
+
+    resolveDownload();
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Download' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false),
+    );
+  });
+
+  it('ignores a second click while a download is already pending', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-empty-function -- a promise that never settles by design
+    const onDownload = vi.fn(() => new Promise<void>(() => {}));
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Skill)}
+        onDownload={onDownload}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'Download' });
+    await userEvent.click(button);
+    await userEvent.click(button);
+
+    expect(onDownload).toHaveBeenCalledOnce();
+  });
+
+  it('re-enables the button after a successful download', async () => {
+    const onDownload = vi.fn().mockResolvedValue(undefined);
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Skill)}
+        onDownload={onDownload}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Download' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false),
+    );
+  });
+
+  it('re-enables the button after a failed download', async () => {
+    const onDownload = vi.fn().mockRejectedValue(new Error('failed'));
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Skill)}
+        onDownload={onDownload}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Download' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false),
+    );
+  });
+
+  it('resets pending state when the item changes, without a stale call resurrecting it', async () => {
+    let resolveDownload!: () => void;
+    const onDownload = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDownload = resolve;
+        }),
+    );
+    const { rerender } = render(
+      <Header
+        item={makeItem(CatalogEntityType.Skill)}
+        onDownload={onDownload}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+    expect(
+      (screen.getByRole('button', { name: 'Download' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    rerender(
+      <Header
+        item={{ ...makeItem(CatalogEntityType.Skill), id: 'other-skill' }}
+        onDownload={onDownload}
+      />,
+    );
+    expect(
+      (screen.getByRole('button', { name: 'Download' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+
+    resolveDownload();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      (screen.getByRole('button', { name: 'Download' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("the Manage-menu Download entry's fire-and-forget contract is unchanged", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-empty-function -- a promise that never settles by design
+    const onDownload = vi.fn(() => new Promise<void>(() => {}));
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Prompt)}
+        onDownload={onDownload}
+      />,
+    );
+
+    await openManage();
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+
+    expect(onDownload).toHaveBeenCalledOnce();
+    /* No pending/disabled state exists for the Manage-menu path. */
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+});
+
+describe('Header', () => {
   it('renders Delete in the Manage menu', async () => {
     render(<Header item={makeItem(CatalogEntityType.Toolset)} />);
     await openManage();
@@ -316,7 +842,7 @@ describe('Header', () => {
         item={{ ...makeItem(CatalogEntityType.Toolset), isMyApp: false }}
       />,
     );
-    await openManage();
+    await openManageIfPresent();
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
   });
 
@@ -376,7 +902,7 @@ describe('Header', () => {
         isUnshareVisible={() => false}
       />,
     );
-    await openManage();
+    await openManageIfPresent();
     expect(
       screen.queryByRole('button', { name: 'Remove from My List' }),
     ).toBeNull();
@@ -408,7 +934,7 @@ describe('Header', () => {
 
   it('does not render Remove from My List when onUnshare is not supplied', async () => {
     render(<Header item={makeSharedItem()} isPublishVisible={() => true} />);
-    await openManage();
+    await openManageIfPresent();
     expect(
       screen.queryByRole('button', { name: 'Remove from My List' }),
     ).toBeNull();
@@ -463,13 +989,50 @@ describe('Header', () => {
 
   it('does not render Revoke access for an item shared with the user', async () => {
     render(<Header item={makeSharedItem()} onRevokeShare={vi.fn()} />);
-    await openManage();
+    await openManageIfPresent();
     expect(screen.queryByRole('button', { name: 'Revoke access' })).toBeNull();
   });
 
   it('does not render Revoke access when onRevokeShare is not supplied', async () => {
     render(<Header item={makeItem(CatalogEntityType.Toolset)} />);
     await openManage();
+    expect(screen.queryByRole('button', { name: 'Revoke access' })).toBeNull();
+  });
+
+  it('does not render Revoke access when isRevokeShareVisible returns false', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Prompt)}
+        onRevokeShare={vi.fn()}
+        isRevokeShareVisible={() => false}
+      />,
+    );
+    await openManageIfPresent();
+    expect(screen.queryByRole('button', { name: 'Revoke access' })).toBeNull();
+  });
+
+  it('still renders Revoke access when isRevokeShareVisible returns true', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onRevokeShare={vi.fn()}
+        isRevokeShareVisible={() => true}
+      />,
+    );
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Revoke access' })).toBeTruthy();
+  });
+
+  /* The predicate narrows the built-in rule; it must not resurrect a hidden action. */
+  it('does not render Revoke access for a shared item even when isRevokeShareVisible returns true', async () => {
+    render(
+      <Header
+        item={makeSharedItem()}
+        onRevokeShare={vi.fn()}
+        isRevokeShareVisible={() => true}
+      />,
+    );
+    await openManageIfPresent();
     expect(screen.queryByRole('button', { name: 'Revoke access' })).toBeNull();
   });
 
@@ -501,8 +1064,9 @@ describe('Header', () => {
   it('hides Revoke access for an owned item nobody currently holds access to', async () => {
     render(
       <Header
-        item={{ ...makeItem(CatalogEntityType.Toolset), recipientsCount: 0 }}
+        item={makeItem(CatalogEntityType.Toolset)}
         onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={vi.fn().mockResolvedValue(0)}
       />,
     );
     await openManage();
@@ -512,21 +1076,23 @@ describe('Header', () => {
   it('shows the recipient count in the Revoke access label when it is known', async () => {
     render(
       <Header
-        item={{ ...makeItem(CatalogEntityType.Toolset), recipientsCount: 3 }}
+        item={makeItem(CatalogEntityType.Toolset)}
         onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={vi.fn().mockResolvedValue(3)}
       />,
     );
     await openManage();
     expect(
-      screen.getByRole('button', { name: 'Revoke access (3)' }),
+      await screen.findByRole('button', { name: 'Revoke access (3)' }),
     ).toBeTruthy();
   });
 
   it('uses texts.revokeShareLabelWithCount to format the counted label', async () => {
     render(
       <Header
-        item={{ ...makeItem(CatalogEntityType.Toolset), recipientsCount: 2 }}
+        item={makeItem(CatalogEntityType.Toolset)}
         onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={vi.fn().mockResolvedValue(2)}
         texts={{
           revokeShareLabelWithCount: (count) => `Отозвать у ${count} человек`,
         }}
@@ -534,7 +1100,7 @@ describe('Header', () => {
     );
     await openManage();
     expect(
-      screen.getByRole('button', { name: 'Отозвать у 2 человек' }),
+      await screen.findByRole('button', { name: 'Отозвать у 2 человек' }),
     ).toBeTruthy();
   });
 
@@ -543,10 +1109,127 @@ describe('Header', () => {
       <Header
         item={makeItem(CatalogEntityType.Toolset)}
         onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    await openManage();
+    expect(
+      await screen.findByRole('button', { name: 'Revoke access' }),
+    ).toBeTruthy();
+  });
+
+  it('keeps Revoke access reachable when the recipient-count lookup rejects', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={vi.fn().mockRejectedValue(new Error('boom'))}
+      />,
+    );
+    await openManage();
+    expect(
+      await screen.findByRole('button', { name: 'Revoke access' }),
+    ).toBeTruthy();
+  });
+
+  it('requests the recipient count when the Manage menu opens, not on render', async () => {
+    const onFetchRecipientsCount = vi.fn().mockResolvedValue(1);
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={onFetchRecipientsCount}
+      />,
+    );
+
+    expect(onFetchRecipientsCount).not.toHaveBeenCalled();
+
+    await openManage();
+    expect(onFetchRecipientsCount).toHaveBeenCalledWith(
+      makeItem(CatalogEntityType.Toolset),
+    );
+  });
+
+  it('draws the Manage trigger icon at the large icon size', () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onRevokeShare={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('dots icon 24')).toBeTruthy();
+  });
+
+  /* Hovering starts the lookup early; the subsequent click must not repeat it. */
+  it('requests the recipient count once when the Manage button is hovered and then clicked', async () => {
+    const onFetchRecipientsCount = vi.fn().mockResolvedValue(1);
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={onFetchRecipientsCount}
+      />,
+    );
+
+    await userEvent.hover(screen.getByRole('button', { name: 'Manage' }));
+    await openManage();
+
+    expect(onFetchRecipientsCount).toHaveBeenCalledOnce();
+  });
+
+  it('withholds Revoke access while the recipient count is still loading', async () => {
+    /* Never settles, so the entry is observed mid-flight. */
+    const pendingLookup = new Promise<number>(() => undefined);
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={vi.fn().mockReturnValue(pendingLookup)}
+      />,
+    );
+    await openManage();
+    expect(screen.queryByRole('button', { name: 'Revoke access' })).toBeNull();
+  });
+
+  it('offers Revoke access for every owned item when no count resolver is supplied', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onRevokeShare={vi.fn()}
       />,
     );
     await openManage();
     expect(screen.getByRole('button', { name: 'Revoke access' })).toBeTruthy();
+  });
+
+  it('re-requests the recipient count for a newly displayed item', async () => {
+    const onFetchRecipientsCount = vi.fn().mockResolvedValue(1);
+    const { rerender } = render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={onFetchRecipientsCount}
+      />,
+    );
+    await openManage();
+    /* Close it again so the next click reopens rather than dismisses. */
+    await openManage();
+
+    onFetchRecipientsCount.mockResolvedValue(5);
+    rerender(
+      <Header
+        item={{ ...makeItem(CatalogEntityType.Toolset), id: '2' }}
+        onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={onFetchRecipientsCount}
+      />,
+    );
+    await openManage();
+
+    expect(onFetchRecipientsCount).toHaveBeenCalledTimes(2);
+    expect(
+      await screen.findByRole('button', { name: 'Revoke access (5)' }),
+    ).toBeTruthy();
   });
 
   it('keeps Revoke access in the Manage menu under dir="rtl"', async () => {
@@ -618,150 +1301,795 @@ describe('Header', () => {
     expect(screen.queryByRole('button', { name: 'Log in' })).toBeNull();
   });
 
-  it('renders Log in when not signed in at any level', () => {
+  describe('OAuth authentication', () => {
+    it('renders Log in when not signed in at any level', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              userStatus: CredentialStatus.SignedOut,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Log in' })).toBeTruthy();
+    });
+
+    it('renders Log out when signed in at USER level', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              userStatus: CredentialStatus.SignedIn,
+            },
+          }}
+          onLogout={vi.fn()}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Log out' })).toBeTruthy();
+    });
+
+    it('renders Log out with the same neutral style as Log in, not a danger style', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              userStatus: CredentialStatus.SignedIn,
+            },
+          }}
+          onLogout={vi.fn()}
+        />,
+      );
+      const logoutButton = screen.getByRole('button', { name: 'Log out' });
+      expect(logoutButton.dataset.variant).toBe('neutral');
+      /* The fixed width this action used to carry moved to the credentials
+         sub-view's rows, where two stacked buttons need to line up. */
+      expect(logoutButton.className ?? '').not.toContain('w-28');
+    });
+
+    it('still renders plain "Log in" for a public item not signed in at USER level (org fallback is conveyed by the banner, not the button)', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              isPublic: true,
+              globalStatus: CredentialStatus.SignedIn,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Log in' })).toBeTruthy();
+      expect(
+        screen.queryByRole('button', { name: 'Login with my creds' }),
+      ).toBeNull();
+    });
+
+    it('renders Manage credentials when isManageableByAdmin is true', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              isManageableByAdmin: true,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole('button', { name: 'Manage credentials' }),
+      ).toBeTruthy();
+    });
+
+    it('calls onOpenCredentialsManagement when Manage credentials is clicked', async () => {
+      const onOpenCredentialsManagement = vi.fn();
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              isManageableByAdmin: true,
+            },
+          }}
+          onLogin={vi.fn()}
+          onOpenCredentialsManagement={onOpenCredentialsManagement}
+        />,
+      );
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Manage credentials' }),
+      );
+      expect(onOpenCredentialsManagement).toHaveBeenCalledOnce();
+    });
+
+    it('calls onLogin directly at USER level when Log in is clicked', async () => {
+      const onLogin = vi.fn();
+      const item = {
+        ...makeItem(CatalogEntityType.Toolset),
+        credentials: {
+          authenticationType: ToolsetAuthenticationType.OAuth,
+          userStatus: CredentialStatus.SignedOut,
+        },
+      };
+      render(<Header item={item} onLogin={onLogin} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Log in' }));
+      expect(onLogin).toHaveBeenCalledWith(item, {
+        level: CredentialsLevel.User,
+      });
+    });
+
+    it('renders the credentials button as the primary action, first in the action row, for a Toolset item', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              userStatus: CredentialStatus.SignedOut,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+
+      const buttons = screen.getAllByRole('button');
+      expect(buttons[0].textContent).toBe('Log in');
+      expect(buttons[0].dataset.variant).toBe('primary');
+    });
+
+    it('keeps the credentials button as a non-primary, non-leading action for a non-Toolset item', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Agent),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              userStatus: CredentialStatus.SignedOut,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+
+      const logInButton = screen.getByRole('button', { name: 'Log in' });
+      expect(logInButton.dataset.variant).toBe('neutral');
+    });
+
+    it('calls onRequestLogout instead of logging in directly when signed in', async () => {
+      const onLogin = vi.fn();
+      const onRequestLogout = vi.fn();
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.OAuth,
+              userStatus: CredentialStatus.SignedIn,
+            },
+          }}
+          onLogout={vi.fn()}
+          onLogin={onLogin}
+          onRequestLogout={onRequestLogout}
+        />,
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Log out' }));
+      expect(onRequestLogout).toHaveBeenCalledOnce();
+      expect(onLogin).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('API-key authentication', () => {
+    it('renders "API key" when not signed in, instead of generic Log in wording', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              userStatus: CredentialStatus.SignedOut,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'API key' })).toBeTruthy();
+    });
+
+    it('renders "Change API key" when signed in', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              userStatus: CredentialStatus.SignedIn,
+            },
+          }}
+          onLogout={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole('button', { name: 'Change API key' }),
+      ).toBeTruthy();
+    });
+
+    it('renders the "API key" trigger as the primary (call-to-action) style before a key is added', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              userStatus: CredentialStatus.SignedOut,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole('button', { name: 'API key' }).dataset.variant,
+      ).toBe('primary');
+    });
+
+    it('drops the "Change API key" trigger to the low-emphasis style once a key is configured', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              userStatus: CredentialStatus.SignedIn,
+            },
+          }}
+          onLogout={vi.fn()}
+        />,
+      );
+      const trigger = screen.getByRole('button', { name: 'Change API key' });
+      expect(trigger.dataset.variant).toBe('neutral');
+    });
+
+    it('opens the personal API-key popover instead of calling onLogin directly', async () => {
+      const onLogin = vi.fn();
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              userStatus: CredentialStatus.SignedOut,
+            },
+          }}
+          onLogin={onLogin}
+        />,
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'API key' }));
+      expect(onLogin).not.toHaveBeenCalled();
+      expect(screen.getByText('Add popover content')).toBeTruthy();
+    });
+
+    it('opens the popover showing the delete affordance when already signed in', async () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              userStatus: CredentialStatus.SignedIn,
+            },
+          }}
+          onLogout={vi.fn()}
+        />,
+      );
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Change API key' }),
+      );
+      expect(screen.getByText('Delete popover content')).toBeTruthy();
+    });
+
+    it('renders Manage API keys when isManageableByAdmin is true', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              isManageableByAdmin: true,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole('button', { name: 'Manage API keys' }),
+      ).toBeTruthy();
+    });
+
+    it('calls onOpenCredentialsManagement instead of opening a popover for Manage API keys', async () => {
+      const onOpenCredentialsManagement = vi.fn();
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              isManageableByAdmin: true,
+            },
+          }}
+          onLogin={vi.fn()}
+          onOpenCredentialsManagement={onOpenCredentialsManagement}
+        />,
+      );
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Manage API keys' }),
+      );
+      expect(onOpenCredentialsManagement).toHaveBeenCalledOnce();
+      expect(screen.queryByText('Add popover content')).toBeNull();
+    });
+  });
+
+  describe('limit status', () => {
+    it('renders no badge and keeps Use in chat enabled without limits data', () => {
+      render(<Header item={makeItem(CatalogEntityType.Model)} />);
+      expect(screen.queryByText('Running low')).toBeNull();
+      expect(screen.queryByText('Limit reached')).toBeNull();
+      const button = screen.getByRole('button', { name: 'Use in chat' });
+      expect(button.hasAttribute('disabled')).toBe(false);
+    });
+
+    it('shows a "Running low" badge but keeps Use in chat enabled', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Model),
+            details: {
+              limits: { groups: [], status: CatalogLimitStatus.RunningLow },
+            },
+          }}
+        />,
+      );
+      expect(screen.getByText('Running low')).toBeTruthy();
+      const button = screen.getByRole('button', { name: 'Use in chat' });
+      expect(button.hasAttribute('disabled')).toBe(false);
+    });
+
+    it('shows a "Limit reached" badge and disables Use in chat', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Model),
+            details: {
+              limits: { groups: [], status: CatalogLimitStatus.LimitReached },
+            },
+          }}
+        />,
+      );
+      expect(screen.getByText('Limit reached')).toBeTruthy();
+      expect(
+        screen
+          .getByRole('button', { name: 'Use in chat' })
+          .hasAttribute('disabled'),
+      ).toBe(true);
+    });
+
+    it('uses custom limit status labels from texts', () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Model),
+            details: {
+              limits: { groups: [], status: CatalogLimitStatus.LimitReached },
+            },
+          }}
+          texts={{ limitReachedLabel: 'No more requests' }}
+        />,
+      );
+      expect(screen.getByText('No more requests')).toBeTruthy();
+    });
+  });
+});
+
+/*
+ * Which of Share and Publish sits in the action row and which sits in the
+ * Manage menu is host-configurable. The defaults are the historical
+ * arrangement (covered above); these cover the opt-in swap.
+ */
+describe('Header action-surface arrangement', () => {
+  it('keeps Share in the action row and Publish in the Manage menu by default', async () => {
+    render(<Header item={makeItem(CatalogEntityType.Model)} />);
+    expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeTruthy();
+  });
+
+  it('moves Share into the Manage menu when isSharePrimary returns false', async () => {
     render(
       <Header
-        item={{
-          ...makeItem(CatalogEntityType.Toolset),
-          credentials: {
-            authenticationType: ToolsetAuthenticationType.ApiKey,
-            userStatus: CredentialStatus.SignedOut,
-          },
-        }}
-        onLogin={vi.fn()}
+        item={makeItem(CatalogEntityType.Model)}
+        isSharePrimary={() => false}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Log in' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
   });
 
-  it('renders Log out when signed in at USER level', () => {
+  it('calls onShare with the item when the Manage-menu Share entry is clicked', async () => {
+    const onShare = vi.fn();
     render(
       <Header
-        item={{
-          ...makeItem(CatalogEntityType.Toolset),
-          credentials: {
-            authenticationType: ToolsetAuthenticationType.ApiKey,
-            userStatus: CredentialStatus.SignedIn,
-          },
-        }}
-        onLogout={vi.fn()}
+        item={makeItem(CatalogEntityType.Model)}
+        isSharePrimary={() => false}
+        onShare={onShare}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Log out' })).toBeTruthy();
+    await openManage();
+    await userEvent.click(screen.getByRole('button', { name: 'Share' }));
+    expect(onShare).toHaveBeenCalledWith(makeItem(CatalogEntityType.Model));
   });
 
-  it('renders Login with my creds for a public item not signed in at USER level', () => {
+  it('opens the share overlay from the Manage trigger instead of calling onShare', async () => {
+    const onShare = vi.fn();
     render(
       <Header
-        item={{
-          ...makeItem(CatalogEntityType.Toolset),
-          credentials: {
-            authenticationType: ToolsetAuthenticationType.ApiKey,
-            isPublic: true,
-            globalStatus: CredentialStatus.SignedIn,
-          },
-        }}
-        onLogin={vi.fn()}
+        item={makeItem(CatalogEntityType.Model)}
+        isSharePrimary={() => false}
+        onShare={onShare}
+        shareOverlay={() => <div>share overlay content</div>}
       />,
     );
-    expect(
-      screen.getByRole('button', { name: 'Login with my creds' }),
-    ).toBeTruthy();
+    await openManage();
+    await userEvent.click(screen.getByRole('button', { name: 'Share' }));
+    expect(screen.getByText('share overlay content')).toBeTruthy();
+    expect(onShare).not.toHaveBeenCalled();
   });
 
-  it('renders Manage credentials when isManageableByAdmin is true', () => {
-    render(
-      <Header
-        item={{
-          ...makeItem(CatalogEntityType.Toolset),
-          credentials: {
-            authenticationType: ToolsetAuthenticationType.ApiKey,
-            isManageableByAdmin: true,
-          },
-        }}
-        onLogin={vi.fn()}
-      />,
-    );
-    expect(
-      screen.getByRole('button', { name: 'Manage credentials' }),
-    ).toBeTruthy();
-  });
-
-  it('calls onToggleCredentials when the credentials button is clicked in a non-logout state', async () => {
-    const onToggleCredentials = vi.fn();
-    render(
-      <Header
-        item={{
-          ...makeItem(CatalogEntityType.Toolset),
-          credentials: {
-            authenticationType: ToolsetAuthenticationType.ApiKey,
-            userStatus: CredentialStatus.SignedOut,
-          },
-        }}
-        onLogin={vi.fn()}
-        onToggleCredentials={onToggleCredentials}
-      />,
-    );
-    await userEvent.click(screen.getByRole('button', { name: 'Log in' }));
-    expect(onToggleCredentials).toHaveBeenCalledOnce();
-  });
-
-  it('renders the credentials button as the primary action, first in the action row, for a Toolset item', () => {
-    const { container } = render(
-      <Header
-        item={{
-          ...makeItem(CatalogEntityType.Toolset),
-          credentials: {
-            authenticationType: ToolsetAuthenticationType.ApiKey,
-            userStatus: CredentialStatus.SignedOut,
-          },
-        }}
-        onLogin={vi.fn()}
-      />,
-    );
-
-    const buttons = screen.getAllByRole('button');
-    expect(buttons[0].textContent).toBe('Log in');
-    expect(container.querySelector('.primary')?.textContent).toBe('Log in');
-  });
-
-  it('keeps the credentials button as a non-primary, non-leading action for a non-Toolset item', () => {
+  it('does not offer Share in the Manage menu for an item the user does not own', async () => {
     render(
       <Header
         item={{
           ...makeItem(CatalogEntityType.Agent),
-          credentials: {
-            authenticationType: ToolsetAuthenticationType.ApiKey,
-            userStatus: CredentialStatus.SignedOut,
-          },
+          isMyApp: false,
+          isEditable: true,
         }}
-        onLogin={vi.fn()}
+        isSharePrimary={() => false}
+        onEdit={vi.fn()}
+      />,
+    );
+    await openManage();
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
+  });
+
+  it('honours isShareVisible for the Manage-menu Share entry', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        isSharePrimary={() => false}
+        isShareVisible={() => false}
+      />,
+    );
+    await openManage();
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
+  });
+
+  it('promotes Publish to the action row when isPublishPrimary returns true', async () => {
+    render(
+      <Header
+        item={{ ...makeItem(CatalogEntityType.Model), isEditable: true }}
+        isPublishPrimary={() => true}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeTruthy();
+    await openManage();
+    /* Promoted to the row means gone from the menu — one surface, never both. */
+    expect(screen.getAllByRole('button', { name: 'Publish' })).toHaveLength(1);
+  });
+
+  it('promotes Unpublish to the action row once the item has a published folder', () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        isPublishPrimary={() => true}
+        onOpenUnpublish={vi.fn()}
+        hasPublishedFolders
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Unpublish' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+  });
+
+  it('calls onOpenPublish when the promoted Publish button is clicked', async () => {
+    const onOpenPublish = vi.fn();
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        isPublishPrimary={() => true}
+        onOpenPublish={onOpenPublish}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    expect(onOpenPublish).toHaveBeenCalledOnce();
+  });
+
+  it('starts the publish-history lookup on hover of the promoted Publish button', async () => {
+    const onRequestPublishHistory = vi.fn();
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        isPublishPrimary={() => true}
+        onRequestPublishHistory={onRequestPublishHistory}
+      />,
+    );
+    await userEvent.hover(screen.getByRole('button', { name: 'Publish' }));
+    expect(onRequestPublishHistory).toHaveBeenCalled();
+  });
+
+  it('keeps the publish-history lookup on the Manage trigger when Publish is promoted', async () => {
+    const onRequestPublishHistory = vi.fn();
+    render(
+      <Header
+        item={{ ...makeItem(CatalogEntityType.Model), isEditable: true }}
+        isPublishPrimary={() => true}
+        isPublishVisible={() => false}
+        onEdit={vi.fn()}
+        onRequestPublishHistory={onRequestPublishHistory}
+      />,
+    );
+    /* No Publish button to hover, so the Manage trigger has to keep the
+     * lookup alive or "Unpublish" could never resolve. */
+    expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+    await userEvent.hover(screen.getByRole('button', { name: 'Manage' }));
+    expect(onRequestPublishHistory).toHaveBeenCalled();
+  });
+
+  it('renders Use in chat and Publish in the row with Share and Delete in the menu when both predicates are flipped', async () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Agent)}
+        onDelete={vi.fn()}
+        isSharePrimary={() => false}
+        isPublishPrimary={() => true}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Use in chat' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
+    await openManage();
+    expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
+  });
+});
+
+describe('Header — read-only', () => {
+  it('withholds Share, Publish, Edit, and Delete — leaving no Manage menu at all', () => {
+    render(
+      <Header
+        item={{ ...makeItem(CatalogEntityType.Model), isEditable: true }}
+        onShare={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        isPublishPrimary={() => true}
+        isReadonly
       />,
     );
 
-    const logInButton = screen.getByRole('button', { name: 'Log in' });
-    expect(logInButton.className).toBe('neutral');
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
   });
 
-  it('calls onRequestLogout instead of onToggleCredentials when signed in', async () => {
-    const onToggleCredentials = vi.fn();
-    const onRequestLogout = vi.fn();
+  it('withholds Unpublish and "Revoke access" even once their lookups have resolved', () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        onOpenUnpublish={vi.fn()}
+        hasPublishedFolders
+        isPublishPrimary={() => true}
+        onRevokeShare={vi.fn()}
+        isReadonly
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Unpublish' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
+  });
+
+  it('withholds the credentials Log in button for a signed-out toolset', () => {
     render(
       <Header
         item={{
           ...makeItem(CatalogEntityType.Toolset),
           credentials: {
-            authenticationType: ToolsetAuthenticationType.ApiKey,
-            userStatus: CredentialStatus.SignedIn,
+            authenticationType: ToolsetAuthenticationType.OAuth,
+            userStatus: CredentialStatus.SignedOut,
           },
         }}
-        onLogout={vi.fn()}
-        onToggleCredentials={onToggleCredentials}
-        onRequestLogout={onRequestLogout}
+        onLogin={vi.fn()}
+        isReadonly
       />,
     );
-    await userEvent.click(screen.getByRole('button', { name: 'Log out' }));
-    expect(onRequestLogout).toHaveBeenCalledOnce();
-    expect(onToggleCredentials).not.toHaveBeenCalled();
+
+    expect(screen.queryByRole('button', { name: 'Log in' })).toBeNull();
+  });
+
+  it('keeps the non-mutating actions — "Use in chat" and Download', () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Model)}
+        onUseInChat={vi.fn()}
+        onDownload={vi.fn()}
+        isDownloadPrimary={() => true}
+        isReadonly
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Use in chat' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download' })).toBeTruthy();
+  });
+});
+
+describe('Header — the last action standing', () => {
+  const makeSharedToolset = (): CatalogItem => ({
+    ...makeItem(CatalogEntityType.Toolset),
+    isMyApp: false,
+    sharedWithMe: true,
+  });
+
+  it('renders the only surviving action as a button instead of the overflow menu', () => {
+    render(
+      <Header
+        item={makeSharedToolset()}
+        onUnshare={vi.fn()}
+        isPublishVisible={() => false}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Remove from My List' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
+  });
+
+  it('calls the action when the promoted button is clicked', async () => {
+    const onUnshare = vi.fn();
+    const item = makeSharedToolset();
+    render(
+      <Header
+        item={item}
+        onUnshare={onUnshare}
+        isPublishVisible={() => false}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Remove from My List' }),
+    );
+
+    expect(onUnshare).toHaveBeenCalledWith(item);
+  });
+
+  it('keeps a destructive action styled as one once promoted', () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        isPublishVisible={() => false}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Delete' }).dataset.variant).toBe(
+      'danger',
+    );
+  });
+
+  it('keeps the overflow menu once a second action survives', async () => {
+    render(
+      <Header
+        item={makeSharedToolset()}
+        onUnshare={vi.fn()}
+        onDownload={vi.fn()}
+        isPublishVisible={() => false}
+      />,
+    );
+
+    expect(
+      screen.queryByRole('button', { name: 'Remove from My List' }),
+    ).toBeNull();
+    await openManage();
+    expect(
+      screen.getByRole('button', { name: 'Remove from My List' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download' })).toBeTruthy();
+  });
+
+  it('holds the overflow menu for an item whose Revoke access entry resolves lazily', () => {
+    const onFetchRecipientsCount = vi.fn().mockResolvedValue(0);
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        isPublishVisible={() => false}
+        onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={onFetchRecipientsCount}
+      />,
+    );
+
+    /* Delete is the only entry, but the recipient count is what decides
+     * whether a second one joins it, so the trigger stays put. */
+    expect(screen.getByRole('button', { name: 'Manage' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+
+  it('holds the overflow menu for an item whose Unpublish entry resolves lazily', () => {
+    render(
+      <Header
+        item={{ ...makeItem(CatalogEntityType.Agent), isMyApp: false }}
+        isPublishVisible={() => true}
+        isUnpublishVisible={() => true}
+        onOpenUnpublish={vi.fn()}
+        isPublishHistoryResolved={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Manage' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+  });
+
+  it('keeps the menu for an entry the count later rules out, rather than swapping surface mid-hover', async () => {
+    const onFetchRecipientsCount = vi.fn().mockResolvedValue(0);
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        isPublishVisible={() => false}
+        onRevokeShare={vi.fn()}
+        onFetchRecipientsCount={onFetchRecipientsCount}
+      />,
+    );
+
+    /* Hovering settles the count at zero, so Delete is once again the only
+     * entry — and the trigger the pointer is on must not become it. */
+    await userEvent.hover(screen.getByRole('button', { name: 'Manage' }));
+    await waitFor(() => expect(onFetchRecipientsCount).toHaveBeenCalled());
+
+    expect(screen.getByRole('button', { name: 'Manage' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+
+  it('does not swap the trigger out from under an open menu', async () => {
+    const { rerender } = render(
+      <Header
+        item={makeSharedToolset()}
+        onUnshare={vi.fn()}
+        onDownload={vi.fn()}
+        isPublishVisible={() => false}
+      />,
+    );
+
+    await openManage();
+    /* The host resolves the item's details and Download drops away, leaving
+     * a single entry behind — with the menu open, it stays an entry. */
+    rerender(
+      <Header
+        item={makeSharedToolset()}
+        onUnshare={vi.fn()}
+        isPublishVisible={() => false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Manage' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Remove from My List' }),
+    ).toBeTruthy();
   });
 });

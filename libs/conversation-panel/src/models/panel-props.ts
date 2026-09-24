@@ -1,6 +1,6 @@
+import { FilterTab } from '@epam/ai-dial-chat-shared';
 import type { DropdownItem } from '@epam/ai-dial-ui-kit';
 import type { ReactNode } from 'react';
-import { FilterTab } from '../types/conversation-classification';
 
 /** Labels for each filter tab. */
 export interface FilterLabels {
@@ -12,6 +12,8 @@ export interface FilterLabels {
   shared: string;
   /** Label for the "Organization" tab. */
   organization: string;
+  /** Accessible name of the filter row itself. Defaults to `"Filter chats"`. */
+  groupAriaLabel?: string;
 }
 
 /** A single conversation entry shown in the history panel. */
@@ -44,7 +46,7 @@ export interface ConversationItem {
 export interface ConversationPanelTypography {
   /** A single utility class (e.g. `'dial-body-semi-text'`) applied to the title span. */
   fontClassName?: string;
-  /** Typography class applied to collapsible group header buttons. Defaults to `'dial-tiny-semi-text uppercase'`. */
+  /** Typography class applied to collapsible group header buttons. Defaults to `'dial-tiny-lead-semi-text'`. */
   groupHeaderClassName?: string;
   /** Typography class applied to conversation title text in each row. Defaults to `'dial-small-text'`. */
   itemTitleClassName?: string;
@@ -108,8 +110,31 @@ export interface ConversationPanelStyles {
   typography?: ConversationPanelTypography;
   /** CSS class applied to the icon badge in each conversation row. Defaults to `'rounded-full'`. */
   itemIconBadgeClassName?: string;
-  /** Typography class applied to the task pill badge in each conversation row. Defaults to `'dial-caption-semi-text uppercase tracking-[0.6px]'`. Colors come from the module stylesheet. */
+  /** Typography class applied to the task pill badge in each conversation row. Defaults to `'dial-caption-lead-semi-text'`. Colors come from the module stylesheet. */
   taskBadgeClassName?: string;
+  /**
+   * Extra class name(s) merged onto the panel's header bar. The header is
+   * `h-[64px]` by default; a `h-*` utility passed here replaces that height
+   * rather than losing to it, so a host does not need `!important` on
+   * `.dial-sb-header`.
+   */
+  headerClassName?: string;
+  /** Extra class name(s) merged onto the header's trailing action cluster — `headerActions` and the panel toggle. */
+  headerActionsClassName?: string;
+  /**
+   * Extra class name(s) merged onto the New chat button. Its `h-[36px]` height
+   * and `shadow-chat-button` elevation are merged, not fixed, so a `h-*` or
+   * `shadow-*` utility passed here replaces them. The corner radius is themed
+   * separately, through the kit's `--radius-control`.
+   */
+  newChatButtonClassName?: string;
+  /**
+   * Extra CSS class merged onto the search field's wrapper. The wrapper's
+   * corner radius is themed with the `--cp-search-radius` custom property, so
+   * this is only needed for anything the panel's own stylesheet does not
+   * cover; a `rounded-*` utility passed here still wins over that property.
+   */
+  searchWrapperClassName?: string;
 }
 
 /** Localised labels and text content for `ConversationPanel`. */
@@ -169,6 +194,12 @@ export interface ConversationPanelProps {
   styles?: ConversationPanelStyles;
   /** Extra class name(s) merged onto the panel root element. */
   className?: string;
+  /**
+   * Renders the panel as a drawer that slides over the content instead of
+   * collapsing its width beside it. Set it when `className` positions the panel
+   * over the page. Defaults to `false`.
+   */
+  isOverlay?: boolean;
   /** Builds dropdown actions for a row. When absent or empty, no action trigger is rendered. */
   getActions?: (item: ConversationItem) => DropdownItem[];
   /** Called when a row action menu opens; receives the trigger button. */
@@ -189,6 +220,22 @@ export interface ConversationPanelProps {
   activeFilter?: FilterTab;
   /** Called when the active filter tab changes. */
   onActiveFilterChange?: (tab: FilterTab) => void;
+  /**
+   * When `true`, the filter tabs are not rendered and the list stays on
+   * whichever tab is active — `FilterTab.All` unless `activeFilter` says
+   * otherwise. Defaults to `false`.
+   */
+  isFilterTabsHidden?: boolean;
+  /**
+   * Sources to exclude entirely. A conversation whose `source` is listed here
+   * is dropped before filtering/grouping, so it never appears under any tab
+   * (including `All`) or in a group heading, and its tab pill is not rendered
+   * in `FilterTabs`. Use this to fully gate a source (e.g. `Organization`)
+   * behind a deployment/config toggle, as opposed to `isFilterTabsHidden`,
+   * which only hides the tab row while leaving every source's conversations
+   * visible under `All`.
+   */
+  hiddenSources?: FilterTab[];
 }
 
 /** Describes a completed drag-and-drop move in the conversation panel. */

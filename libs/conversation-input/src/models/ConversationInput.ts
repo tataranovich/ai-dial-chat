@@ -1,32 +1,43 @@
+import type { AttachmentTrayStyles } from '@epam/ai-dial-attachment-input';
 import type {
   Attachment,
   AttachmentErrorReason,
   DeploymentItem,
   DisplayAttachment,
   ToolMenuItem,
+  UploadedAttachmentResult,
 } from '@epam/ai-dial-chat-shared';
 import type { ReactNode } from 'react';
 import type {
+  ActionRowLayout,
   ChatSettingsConfig,
+  CommandMenuConfig,
   InputColors,
   InputTypography,
+  MenuOverlayConfig,
   ModelSelectorLabels,
   SendOnEnter,
+  TextInsertion,
   ToolsChipLabels,
 } from './Input';
+import type { TranscribeAudio } from './Voice';
 
 /** CSS custom-property overrides for the `ConversationInput` component. */
 export interface ConversationInputColors {
   /** Welcome heading text color. */
   welcomeText?: string;
+  /** Description text color, shown below the welcome heading. */
+  descriptionText?: string;
   /** Color overrides forwarded to the inner `Input` component. */
   input?: InputColors;
 }
 
 /** Typography overrides for the `ConversationInput` component. */
 export interface ConversationInputTypography {
-  /** Tailwind (or custom) class applied to the welcome heading. */
+  /** Tailwind (or custom) class applied to the welcome heading. Defaults to `'dial-display2-text'`. */
   welcomeClassName?: string;
+  /** Tailwind (or custom) class applied to the description text. Defaults to `'dial-body-paragraph-text'`. */
+  descriptionClassName?: string;
   /** Typography overrides forwarded to the inner `Input` component. */
   input?: InputTypography;
 }
@@ -37,12 +48,31 @@ export interface ConversationInputStyles {
   colors?: ConversationInputColors;
   /** Typography overrides for the welcome heading and input. */
   typography?: ConversationInputTypography;
+  /**
+   * Style overrides for the composer's attachment tray. Its `card` slot
+   * carries `AttachmentCardStyles` through to every tile, which is how a host
+   * sizes a tile or restyles its meta line without a descendant selector on
+   * `ATTACHMENT_INPUT_CLASS`.
+   */
+  attachmentTray?: AttachmentTrayStyles;
 }
 
 /** Props accepted by the `EditMessageInput` component. */
 export interface EditMessageInputProps {
   /** Initial message text pre-populated in the textarea. */
   message?: string;
+  /**
+   * Host-supplied content rendered inside the text area at its inline-start;
+   * typed text starts after it on the first line and wraps at full width
+   * below. Forwarded to the inner `Input`.
+   */
+  inlineStartSlot?: ReactNode;
+  /**
+   * Called when Backspace is pressed with the caret collapsed at position 0
+   * while `inlineStartSlot` content is shown (the slot's remove gesture).
+   * Forwarded to the inner `Input`.
+   */
+  onInlineStartRemove?: () => void;
   /** Pre-existing attachments from the original message, shown in the attachment tray. */
   initialAttachments?: DisplayAttachment[];
   /** Called when the user clicks the Cancel button. */
@@ -53,8 +83,10 @@ export interface EditMessageInputProps {
     keptAttachments: DisplayAttachment[],
     newAttachments: Attachment[],
   ) => void;
-  /** Called immediately after a new attachment is added. Returns the uploaded attachment URL. */
-  onUploadAttachment?: (attachment: Attachment) => Promise<string>;
+  /** Called immediately after a new attachment is added. Returns the uploaded attachment URL and stored name. */
+  onUploadAttachment?: (
+    attachment: Attachment,
+  ) => Promise<UploadedAttachmentResult>;
   /** Label for the Cancel button. Defaults to `'Cancel'`. */
   cancelLabel?: string;
   /** Label for the Save & Submit button. Defaults to `'Save & Submit'`. */
@@ -65,6 +97,8 @@ export interface EditMessageInputProps {
   removeLabel?: string;
   /** Accessible label for each attachment card's retry button (error state only). */
   retryLabel?: string;
+  /** Accessible label for each attachment card's in-progress upload progress bar. Defaults to `'Uploading'`. */
+  uploadingLabel?: string;
   /** Accessible label for the add-menu trigger button. */
   addMenuTitle?: string;
   /** Label for the attach-file menu item. */
@@ -90,9 +124,19 @@ export interface EditMessageInputProps {
   /**
    * When `false`, long pasted plain text is inserted inline instead of being
    * converted to a text attachment. Set to `false` when the selected model
-   * does not support attachments. Defaults to `true`.
+   * does not support attachments. Forwarded to the inner `Input`.
    */
   isAttachmentsEnabled?: boolean;
+  /**
+   * When `false`, long pasted plain text is inserted inline instead of being
+   * converted to a text attachment even while `isAttachmentsEnabled` is `true`.
+   * The host resolves it from the selected model's allowed attachment MIME
+   * types: `true` when they accept `text/plain` (a `text/plain` entry, the
+   * `text/*` wildcard, or an all-types wildcard), `false` for models that
+   * accept only other kinds of attachments (e.g. images only). Forwarded to
+   * the inner `Input`. Defaults to `true`.
+   */
+  isTextAttachmentsAllowed?: boolean;
   /** Maximum total kept-plus-new attachments; unlimited when `undefined`, `0`, or non-finite. */
   maximumAttachmentsAmount?: number;
   /** Called when adding a batch would exceed `maximumAttachmentsAmount`. */
@@ -121,12 +165,23 @@ export interface EditMessageInputProps {
    * When absent the cards are not rendered as interactive.
    */
   onAttachmentClick?: (attachment: DisplayAttachment) => void;
-  /** Character count above which pasted plain-text triggers `onMessageTooLong` when attachments are disabled. Defaults to `4000`. */
+  /** Character count above which pasted plain-text is converted to a text attachment. Defaults to `4000`. */
   pasteTextThreshold?: number;
   /**
-   * Called when the user pastes text whose length is ≥ `pasteTextThreshold` while
-   * `isAttachmentsEnabled` is `false`. The text is still inserted inline — the
-   * host is responsible for surfacing the error to the user.
+   * Maximum character count for the message text. Sending text at or above this
+   * length triggers `onMessageTooLong` instead of being accepted, on every model.
+   * Pasting text that long additionally triggers it when the paste-to-attachment
+   * conversion is disabled (`isAttachmentsEnabled` or `isTextAttachmentsAllowed`
+   * is `false`). Separate from `pasteTextThreshold`, which only decides when a
+   * paste becomes an attachment. Defaults to `50000`.
+   */
+  maxMessageLength?: number;
+  /**
+   * Called when the user sends text whose length is ≥ `maxMessageLength`, and when
+   * they paste text that long while the paste-to-attachment conversion is disabled
+   * (`isAttachmentsEnabled` or `isTextAttachmentsAllowed` is `false`). A blocked
+   * send leaves the textarea's content in place; a paste is still inserted inline.
+   * The host is responsible for surfacing the error to the user.
    */
   onMessageTooLong?: (length: number, max: number) => void;
 }
@@ -135,6 +190,21 @@ export interface EditMessageInputProps {
 export interface ConversationInputProps {
   /** Placeholder text shown inside the textarea when empty. */
   placeholder?: string;
+  /**
+   * How the action row arranges the textarea and the controls around it.
+   * Defaults to `ActionRowLayout.Stacked`. `ActionRowLayout.Inline` applies
+   * from the desktop breakpoint (1280px) up, unless
+   * `isInlineActionRowAllowedBelowDesktop` opts the narrower widths in.
+   */
+  actionRowLayout?: ActionRowLayout;
+  /**
+   * When `true`, `ActionRowLayout.Inline` also applies below the desktop
+   * breakpoint (1280px). Set it when the embedded composer is wide enough
+   * there — a phone-width one is not. Affects the action row alone: the add
+   * menu and model picker keep their bottom-sheet presentation. Defaults to
+   * `false`.
+   */
+  isInlineActionRowAllowedBelowDesktop?: boolean;
   /**
    * Message value. Sets the initial textarea content on mount and syncs the
    * textarea whenever the value changes.
@@ -145,12 +215,23 @@ export interface ConversationInputProps {
    * when `message` itself is the same string as before.
    */
   messageRevision?: number;
+  /**
+   * Text inserted at the caret each time its `revision` changes, leaving the
+   * surrounding draft intact. Unlike `message`, this never replaces what the
+   * user has written, and it is made through the browser's editing pipeline so
+   * the native undo shortcut reverts it.
+   */
+  textInsertion?: TextInsertion;
   /** Optional welcome heading rendered above the input. */
   welcomeText?: string;
+  /** Optional description text rendered below the welcome heading. Ignored when `welcomeText` is absent. */
+  descriptionText?: string;
   /** Called when the user submits a message (Enter or send button). Receives the current local attachments as the second argument. */
   onSend?: (message: string, attachments: Attachment[]) => void;
-  /** Called immediately after an attachment is added. Returns the uploaded attachment URL. */
-  onUploadAttachment?: (attachment: Attachment) => Promise<string>;
+  /** Called immediately after an attachment is added. Returns the uploaded attachment URL and stored name. */
+  onUploadAttachment?: (
+    attachment: Attachment,
+  ) => Promise<UploadedAttachmentResult>;
   /** Called when the user clicks the stop button during streaming. */
   onStop?: () => void;
   /** When `true`, shows a stop button instead of the send button and blocks Enter. */
@@ -172,6 +253,15 @@ export interface ConversationInputProps {
   /** Character count above which a pasted plain-text string is converted to an attachment rather than inserted inline. Defaults to `4000`. Pass `Infinity` to disable. */
   pasteTextThreshold?: number;
   /**
+   * Maximum character count for the message text. Sending text at or above this
+   * length triggers `onMessageTooLong` instead of being accepted, on every model.
+   * Pasting text that long additionally triggers it when the paste-to-attachment
+   * conversion is disabled (`isAttachmentsEnabled` or `isTextAttachmentsAllowed`
+   * is `false`). Separate from `pasteTextThreshold`, which only decides when a
+   * paste becomes an attachment. Defaults to `50000`.
+   */
+  maxMessageLength?: number;
+  /**
    * List of deployment items to populate the model selector menu. When `undefined`, the selector is not rendered.
    * `iconUrl` on each item must already be a fully resolved URL usable in `<img src>`.
    */
@@ -185,9 +275,17 @@ export interface ConversationInputProps {
   /** Accessible label for the send button. */
   sendLabel?: string;
   /** Tooltip shown on hover over the send button. */
-  sendTitle?: string;
+  sendTooltip?: string;
+  /** Tooltip for an empty composer (no text, attachments, or inline-start slot). Defaults to sendTooltip. */
+  emptyMessageTooltip?: string;
   /** Accessible label for the stop button. */
   stopLabel?: string;
+  /** Accessible label for each attachment card's remove button. Defaults to `'Remove attachment'`. */
+  removeLabel?: string;
+  /** Accessible label for each attachment card's retry button (error state only). Defaults to `'Retry upload'`. */
+  retryLabel?: string;
+  /** Accessible label for each attachment card's in-progress upload progress bar. Defaults to `'Uploading'`. */
+  uploadingLabel?: string;
   /** When `true`, blocks all text input, send, attach, and drop interactions. Starter/action buttons and the model selector remain usable. Defaults to `false`. */
   isInputDisabled?: boolean;
   /**
@@ -210,11 +308,21 @@ export interface ConversationInputProps {
   inputClassName?: string;
   /**
    * When `true`, the mic button is rendered and voice recording is enabled.
-   * The host app derives this from the selected deployment's `inputAttachmentTypes`.
-   * When `false` or absent, the mic button is hidden and the voice bar is never shown.
+   * The host app derives this from its recording/recognition capabilities.
+   * When `false` or absent, the dictation button is hidden.
    */
   isAudioMessageSupported?: boolean;
-  /** Accessible label for the mic button. Defaults to `'Record voice message'`. */
+  /** Enables Record voice in the add menu when attachments are enabled. Defaults to isAudioMessageSupported. */
+  isVoiceRecordingSupported?: boolean;
+  /** Label for the audio attachment recording menu item. Defaults to 'Record voice'. */
+  recordVoiceLabel?: string;
+  /** Host-owned recognition. When supplied, the microphone button inserts draft text; Record voice always attaches audio. */
+  onTranscribeAudio?: TranscribeAudio;
+  /** Status announced while recognizing speech. Defaults to 'Transcribing audio…'. */
+  transcribingLabel?: string;
+  /** Fallback recording/recognition error. Defaults to 'Voice input failed'. */
+  voiceErrorLabel?: string;
+  /** Accessible label for the mic button. Defaults to `'Dictate'`. */
   micLabel?: string;
   /** Accessible label for the stop-recording button inside the voice bar. Defaults to `'Stop recording'`. */
   stopRecordingLabel?: string;
@@ -266,9 +374,19 @@ export interface ConversationInputProps {
   /**
    * When `false`, long pasted plain text is inserted inline instead of being
    * converted to a text attachment. Set to `false` when the selected model
-   * does not support attachments. Defaults to `true`.
+   * does not support attachments. Forwarded to the inner `Input`.
    */
   isAttachmentsEnabled?: boolean;
+  /**
+   * When `false`, long pasted plain text is inserted inline instead of being
+   * converted to a text attachment even while `isAttachmentsEnabled` is `true`.
+   * The host resolves it from the selected model's allowed attachment MIME
+   * types: `true` when they accept `text/plain` (a `text/plain` entry, the
+   * `text/*` wildcard, or an all-types wildcard), `false` for models that
+   * accept only other kinds of attachments (e.g. images only). Forwarded to
+   * the inner `Input`. Defaults to `true`.
+   */
+  isTextAttachmentsAllowed?: boolean;
   /**
    * Maximum number of attachments allowed in the input tray. Undefined, `0`,
    * or non-finite values mean there is no count limit.
@@ -302,18 +420,53 @@ export interface ConversationInputProps {
   toolsMenuItems?: ToolMenuItem[];
   /** Called when a tool row is toggled. Receives the tool id. */
   onToolToggle?: (toolId: string) => void;
+  /**
+   * When `false`, every tool chip is a persistent on/off toggle: chips render
+   * without a ×, and the `+` menu carries no "Tools" item, since there is
+   * nothing to bring back. Defaults to `true`.
+   */
+  canRemoveTools?: boolean;
   /** Label for the "Tools" menu item and mobile sheet title. Defaults to `'Tools'`. */
   toolsMenuTitle?: string;
   /** Accessible label for the back arrow in the mobile tools bottom sheet. Defaults to `'Back'`. */
   toolsBackLabel?: string;
-  /** Labels for the selected-tools chip row shown in the input when tools are active. */
+  /** Labels for the tool chips rendered in the input. */
   toolsChipLabels?: ToolsChipLabels;
+  /**
+   * Host-injected overlay entries, rendered as `+`-menu items between the
+   * "Tools" item and "Chat settings", in array order. Each item's submenu
+   * (desktop flyout / mobile stacked bottom sheet) renders the entry's
+   * host-owned overlay, mirroring `modelPickerOverlay`.
+   */
+  menuOverlays?: MenuOverlayConfig[];
+  /**
+   * Host-supplied content rendered inside the text area at its inline-start;
+   * typed text starts after it on the first line and wraps at full width
+   * below. Forwarded to the inner `Input`.
+   */
+  inlineStartSlot?: ReactNode;
+  /**
+   * Called when Backspace is pressed with the caret collapsed at position 0
+   * while `inlineStartSlot` is present (the slot's remove gesture). Forwarded
+   * to the inner `Input`.
+   */
+  onInlineStartRemove?: () => void;
+  /**
+   * Host-injected slash-command menu: typing `triggerPrefix` as the first
+   * character of an empty textarea — or pasting into an empty textarea a
+   * value that is exactly the prefix, or the prefix plus a whitespace-free
+   * query — opens an overlay above the input with host-rendered,
+   * query-filtered content. Forwarded to the inner `Input`.
+   */
+  commandMenu?: CommandMenuConfig;
   /** Arbitrary slot rendered in the action row before the model selector. Use to inject app-level controls (e.g. a token-usage indicator). */
   usageLimitsSlot?: ReactNode;
   /**
-   * Called when the user pastes text whose length is ≥ `pasteTextThreshold` while
-   * `isAttachmentsEnabled` is `false`. The text is still inserted inline — the
-   * host is responsible for surfacing the error to the user.
+   * Called when the user sends text whose length is ≥ `maxMessageLength`, and when
+   * they paste text that long while the paste-to-attachment conversion is disabled
+   * (`isAttachmentsEnabled` or `isTextAttachmentsAllowed` is `false`). A blocked
+   * send leaves the textarea's content in place; a paste is still inserted inline.
+   * The host is responsible for surfacing the error to the user.
    */
   onMessageTooLong?: (length: number, max: number) => void;
 }

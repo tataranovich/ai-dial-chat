@@ -1,4 +1,8 @@
-import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
+import {
+  DEPRECATED_OVERLAY_FEATURE_ALIASES,
+  OverlayFeature,
+  resolveOverlayFeature,
+} from '@epam/ai-dial-chat-overlay';
 import {
   createContext,
   FC,
@@ -11,14 +15,23 @@ import {
 import { DEFAULT_ENABLED_UI_FEATURES } from '../constants/ui-features';
 import { useAppConfig } from './AppConfigContext';
 
-const KNOWN_OVERLAY_FEATURES = new Set<string>(Object.values(OverlayFeature));
-
+/**
+ * Maps raw wire values onto canonical `OverlayFeature` members, dropping the
+ * unrecognized ones. A deprecated alias resolves to its replacement and warns
+ * once per normalization pass, so a host still sending the old key keeps the
+ * behavior it expects while it migrates.
+ */
 const normalizeOverlayFeatures = (features: string[]): Set<OverlayFeature> => {
   const normalized = new Set<OverlayFeature>();
   features.forEach((feature) => {
-    if (KNOWN_OVERLAY_FEATURES.has(feature)) {
-      normalized.add(feature as OverlayFeature);
+    const resolved = resolveOverlayFeature(feature);
+    if (resolved == null) return;
+    if (feature in DEPRECATED_OVERLAY_FEATURE_ALIASES) {
+      console.warn(
+        `UI feature "${feature}" is deprecated; use "${resolved}" instead.`,
+      );
     }
+    normalized.add(resolved);
   });
   return normalized;
 };
@@ -34,6 +47,14 @@ interface UiFeaturesContextType {
    * `SET_OVERLAY_OPTIONS` handler; called with `undefined` is a no-op.
    */
   applyOverlayOverride: (features: string[] | undefined) => void;
+  /**
+   * TODO: remove in next release. Replaces the effective UI-feature set with
+   * exactly `features`, taking precedence over the overlay override, the
+   * server baseline, and the compiled defaults. Consumed only by
+   * `IsolatedModelViewContext`. `null` clears the override and restores the
+   * normal priority chain.
+   */
+  applyIsolatedViewOverride: (features: Set<OverlayFeature> | null) => void;
 }
 
 const UiFeaturesContext = createContext<UiFeaturesContextType | undefined>(
@@ -56,8 +77,15 @@ export const UiFeaturesProvider: FC<Props> = ({ children }) => {
   } = useAppConfig();
   const [overlayOverride, setOverlayOverride] =
     useState<Set<OverlayFeature> | null>(null);
+  // TODO: remove in next release
+  const [isolatedViewOverride, setIsolatedViewOverride] =
+    useState<Set<OverlayFeature> | null>(null);
 
   const enabledFeatures = useMemo(() => {
+    // TODO: remove in next release
+    if (isolatedViewOverride != null) {
+      return isolatedViewOverride;
+    }
     if (overlayOverride != null) {
       return overlayOverride;
     }
@@ -65,7 +93,7 @@ export const UiFeaturesProvider: FC<Props> = ({ children }) => {
       return normalizeOverlayFeatures(enabledUiFeatures);
     }
     return new Set<OverlayFeature>(DEFAULT_ENABLED_UI_FEATURES);
-  }, [enabledUiFeatures, overlayOverride]);
+  }, [enabledUiFeatures, overlayOverride, isolatedViewOverride]);
 
   const isEnabled = useCallback(
     (feature: OverlayFeature) => enabledFeatures.has(feature),
@@ -77,9 +105,27 @@ export const UiFeaturesProvider: FC<Props> = ({ children }) => {
     setOverlayOverride(normalizeOverlayFeatures(features));
   }, []);
 
+  // TODO: remove in next release
+  const applyIsolatedViewOverride = useCallback(
+    (features: Set<OverlayFeature> | null) => {
+      setIsolatedViewOverride(features);
+    },
+    [],
+  );
+
   const value = useMemo(
-    () => ({ isEnabled, enabledFeatures, applyOverlayOverride }),
-    [isEnabled, enabledFeatures, applyOverlayOverride],
+    () => ({
+      isEnabled,
+      enabledFeatures,
+      applyOverlayOverride,
+      applyIsolatedViewOverride,
+    }),
+    [
+      isEnabled,
+      enabledFeatures,
+      applyOverlayOverride,
+      applyIsolatedViewOverride,
+    ],
   );
 
   return (

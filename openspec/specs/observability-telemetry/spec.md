@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change add-observability-support. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: OpenTelemetry SDK disabled by default
 The application SHALL treat OpenTelemetry as fully disabled unless explicitly enabled, so that a
 deployment which sets no `OTEL_*` environment variable observes byte-identical behavior to a build
@@ -234,11 +232,142 @@ or other unbounded values as metric attribute values or span names.
   `/api/v1/conversations/:id`), not the literal path containing the conversation id
 
 ### Requirement: No duplicate HTTP metric sources
-The application SHALL NOT enable any automatic HTTP instrumentation metrics feature that would
-produce a second source of HTTP server request duration data alongside the `MetricsInterceptor`
-histogram.
+The application SHALL NOT enable any automatic HTTP instrumentation metrics feature (e.g.
+`@opentelemetry/instrumentation-http`'s built-in metrics) that would produce a second source of
+`http.server.request.duration` data alongside `MetricsInterceptor`, and neither
+`http.server.request.duration` nor the `dial.chat.http.*` instrument family (`requests.started`,
+`requests.active`, `response.duration` — see the `bff-http-lifecycle-metrics` capability) SHALL
+record more than one terminal data point for the same request within its own family. The
+`dial.chat.http.*` family is a distinct, differently-scoped instrument set — observing the
+complete HTTP transport lifecycle rather than Nest handler settlement — and its existence SHALL
+NOT be read as violating this requirement; it exists alongside `http.server.request.duration`,
+not in place of it.
 
-#### Scenario: Single metrics source
+#### Scenario: Single source of http.server.request.duration
 - **WHEN** metrics are enabled
-- **THEN** `MetricsInterceptor`'s histogram is the only emitter of HTTP server request duration
+- **THEN** `MetricsInterceptor`'s histogram is the only emitter of `http.server.request.duration`
   data points for the application
+
+#### Scenario: dial.chat.http.* coexists without duplicating http.server.request.duration
+- **WHEN** metrics are enabled and a request completes
+- **THEN** `http.server.request.duration` records at most one data point for it (unchanged from
+  before this change)
+- **AND** `dial.chat.http.response.duration` independently records at most one data point for it
+- **AND** neither instrument's data point is derived from or duplicates the other's recording
+  logic
+
+#### Scenario: No automatic HTTP instrumentation metrics enabled
+- **WHEN** the OpenTelemetry SDK is initialized
+- **THEN** `HttpInstrumentation`'s own metrics feature is not enabled
+- **AND** the only HTTP-duration emitters in the application are `MetricsInterceptor` and the
+  `dial.chat.http.*` instrument family
+
+### Requirement: Runtime gauges follow metrics enablement and lifecycle
+The telemetry bootstrap SHALL register runtime memory and active-operation collection callbacks
+after SDK startup only when at least one metrics exporter is enabled. Runtime gauges SHALL use
+the existing metric readers and SHALL NOT introduce a separate sampling timer, environment
+variable, or HTTP endpoint. Shutdown SHALL remove the collection callbacks.
+
+#### Scenario: Metrics enabled independently of traces and logs
+- **WHEN** the application starts with `OTEL_SDK_DISABLED=false`,
+  `OTEL_METRICS_EXPORTER=prometheus`, `OTEL_TRACES_EXPORTER=none`, and `OTEL_LOGS_EXPORTER=none`
+- **THEN** the existing Prometheus listener exposes the runtime gauges
+- **AND** trace and log export remain disabled
+
+#### Scenario: Runtime observations disabled
+- **WHEN** the SDK is disabled or `OTEL_METRICS_EXPORTER=none`
+- **THEN** runtime collection callbacks are not registered
+- **AND** metric collection does not sample process memory
+
+#### Scenario: Runtime collection stops on shutdown
+- **WHEN** the telemetry shutdown routine runs
+- **THEN** runtime collection callbacks are removed
+
+### Requirement: Memory observed inside the serving Node.js process
+The application SHALL expose the observable gauge `dial.chat.process.memory` with unit `B`,
+exported by Prometheus as `dial_chat_process_memory`. Each collection SHALL call
+`process.memoryUsage()` once in the Node.js process serving Nest requests and observe five
+points using the fixed `kind` values `rss`, `heap_used`, `heap_total`, `external`, and
+`array_buffers`, respectively mapped to `rss`, `heapUsed`, `heapTotal`, `external`, and
+`arrayBuffers`. The values SHALL be reported independently without summation because
+`arrayBuffers` is included in `external` and the memory categories overlap.
+
+#### Scenario: One consistent memory sample per collection
+- **WHEN** a metric reader collects runtime gauges
+- **THEN** all five memory points come from one `process.memoryUsage()` result
+- **AND** each point reports the corresponding byte value with its fixed `kind` attribute
+
+### Requirement: Outstanding SSE operations observed by lifecycle
+The application SHALL expose the observable gauge `dial.chat.sse.active`, exported by Prometheus
+as `dial_chat_sse_active`, with only the fixed `kind` values `client_channel`,
+`conversation_watch`, and `generation_attach`. Client-channel subscribe and conversation-watch
+operations SHALL count from before asynchronous setup until their handlers settle. Generation
+attach operations SHALL count until subscription cleanup, including after the handler returns.
+Cleanup SHALL release each operation's contribution at most once. Ordinary completion-response
+delivery SHALL NOT contribute to this SSE gauge.
+
+#### Scenario: Subscribe or watch setup is pending
+- **WHEN** a client-channel subscription or conversation watch is awaiting upstream setup
+- **THEN** its kind's gauge includes the operation
+- **AND** a client disconnect alone does not remove it while the asynchronous handler is pending
+
+#### Scenario: Subscribe or watch settles
+- **WHEN** the asynchronous handler completes or fails
+- **THEN** its contribution is removed exactly once
+
+#### Scenario: Attached generation outlives the handler
+- **WHEN** a generation attach handler returns with its subscription still active
+- **THEN** `generation_attach` continues to include that subscription
+- **AND** its contribution is removed exactly once when subscription cleanup runs
+
+#### Scenario: Shutdown releases attached generation subscriptions
+- **WHEN** the application shuts down with registered generations and attached subscriptions
+- **THEN** the generations emit a stopped terminal event
+- **AND** the attached subscriptions run their cleanup and release their gauge contributions
+
+### Requirement: Generation gauge reflects the physical registry
+
+The application SHALL expose the observable gauge `dial.chat.generations.active`, exported by
+Prometheus as `dial_chat_generations_active`, with exactly one bounded application attribute
+`state`, taking only the fixed generation lifecycle values `active`, `cancel_requested`,
+`finalizing`, and `settling`. It SHALL report the number of entries physically retained in the
+generation registry, broken down by that state and including entries that are cancelling,
+finalizing, or retained pending an unsettled persistence write. Entry insertion, removal,
+replacement, and shutdown SHALL keep the gauge consistent with registry ownership. The gauge
+SHALL NOT claim to count upstream tasks that outlive their registry entries.
+
+A released entry contributes nothing, so the `released` lifecycle value SHALL NOT be reported.
+
+A falling gauge value SHALL NOT be documented or interpreted as evidence that conversations were
+durably persisted. It reports retention only. `state="settling"` specifically means an entry whose
+terminal write has not settled within the finalization bound and which therefore still owns its
+registry key — the operational signal that ownership is being retained, as
+`generation-registry` requires.
+
+The gauge SHALL continue to carry no user, conversation, deployment, session, or Kubernetes pod
+identifier, and its instrumentation SHALL continue to retain no request, credential, stream, or
+per-user key.
+
+#### Scenario: Generation remains registered during persistence
+- **WHEN** a stopped or aborted generation is still registered while persistence is pending
+- **THEN** it continues to contribute to the generation gauge, reported as `state="finalizing"`
+
+#### Scenario: A retained entry awaiting an unsettled write is distinguishable from live work
+- **GIVEN** a generation's terminal write has not settled within the finalization bound
+- **WHEN** runtime metrics are collected
+- **THEN** the entry is reported as `state="settling"` and is not counted as `state="active"`
+
+#### Scenario: Registry entry released or replaced
+- **WHEN** an entry is removed on completion, error, stale cancellation reaching settlement, or shutdown
+- **THEN** the removed entry no longer contributes to the gauge
+- **AND** a new entry registered for the same registry key after release does not double count the key
+
+#### Scenario: A falling gauge is not evidence of successful persistence
+- **WHEN** the gauge value decreases
+- **THEN** neither the metric description nor the operational documentation asserts that the corresponding conversations were durably persisted
+
+#### Scenario: Runtime metrics do not contain unbounded identifiers
+- **WHEN** runtime memory and active-operation gauges are collected
+- **THEN** their application attributes contain only the specified fixed `kind` and `state` values, where applicable
+- **AND** they contain no user, conversation, deployment, or Kubernetes pod identifiers
+

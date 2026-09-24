@@ -42,7 +42,13 @@ const RowValue: FC<RowValueProps> = ({
     );
   }
   return (
-    <span className={mergeClasses(valueClassName, styles.valueText)}>
+    <span
+      className={mergeClasses(
+        'min-w-0 break-words',
+        valueClassName,
+        styles.valueText,
+      )}
+    >
       {value}
     </span>
   );
@@ -62,14 +68,14 @@ export interface TableViewRow {
 }
 
 /** Color overrides for `TableView`, applied as CSS custom properties. */
-export interface TableViewColors {
+interface TableViewColors {
   /** Section heading text color. Fallback: `--text-secondary`. */
   sectionHeading?: string;
   /** Background color of alternating (even-indexed) rows. Fallback: `--bg-layer-sunken`. */
   rowAlt?: string;
   /** Row label text color. Fallback: `--text-secondary`. */
   label?: string;
-  /** Check icon color for `true` values. Fallback: `--text-accent-secondary`. */
+  /** Check icon color for `true` values. Fallback: `--text-visual-green-2`. */
   checkIcon?: string;
   /** Text color for `true` values. Fallback: `--text-primary`. */
   valueTrue?: string;
@@ -157,7 +163,7 @@ export const TableView: FC<TableViewProps> = ({
                 >
                   {row.label}
                 </span>
-                <div className="flex w-3/5 items-center gap-1">
+                <div className="flex w-3/5 min-w-0 items-center gap-1">
                   <RowValue
                     value={row.value}
                     valueClassName={valueClassName}

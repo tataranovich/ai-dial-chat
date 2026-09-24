@@ -1,4 +1,10 @@
-## ADDED Requirements
+# toolset-lookup Specification
+
+## Purpose
+
+The authenticated toolset lookup endpoint, its path-parameter validation, and the frontend server-api helper.
+
+## Requirements
 
 ### Requirement: Authenticated toolset lookup endpoint
 
@@ -12,7 +18,6 @@ The endpoint:
 - MUST NOT forward the `DIAL_API_KEY` to the client or use it as the upstream credential on this route
 - SHALL return `200 OK` with a `DialToolset` object body on success
 - SHALL return `404 Not Found` when DIAL Core responds with `404`
-- SHALL apply per-route rate limiting of **60 req/min per IP** via `@Throttle({ default: { limit: 60, ttl: 60000 } })`
 - SHALL cache the upstream response server-side for **60 seconds** using cache key `toolsets:single:<user.sub>:<toolsetName>`; a cache hit MUST NOT re-call DIAL Core
 - MUST set `Cache-Control: private, max-age=60` on the HTTP response
 - SHALL map upstream errors via `mapDialHttpStatus` / `handleDialFetchError`
@@ -73,11 +78,6 @@ The endpoint:
 - **WHEN** DIAL Core responds with `403`
 - **THEN** the BFF returns `403 Forbidden` to the caller
 
-#### Scenario: Rate limit exceeded
-
-- **WHEN** a caller sends more than 60 requests per minute to this endpoint
-- **THEN** the BFF returns `429 Too Many Requests`
-
 #### Scenario: Cache hit avoids upstream call
 
 - **WHEN** `GET /api/v1/toolsets/my-toolset` is called twice within 60 seconds for the same user
@@ -89,7 +89,7 @@ The endpoint:
 
 The `:toolsetName` path parameter MUST be validated to prevent path-traversal and injection, while still accepting the `/`-separated custom-toolset path format (`toolsets/{bucket}/{path}`).
 
-Validation MUST be applied to the value after route-parameter URL-decoding (the framework decodes `%XX` sequences before the DTO validator runs), so a percent-encoded traversal payload decodes to its literal form before the checks below run.
+Validation MUST be applied to the value after route-parameter URL-decoding (the framework decodes `%XX` sequences before the DTO validator runs). Any valid percent-encoded bytes that remain in that value MUST also be decoded for the path-segment safety check. This ensures that both single-encoded and double-encoded traversal payloads are evaluated as path segments before upstream proxying.
 
 Allowed characters: word characters, `. - : @ / ( )`, or a valid percent-encoded byte (`%XX`). In addition, no `/`-delimited path segment of the (decoded) value MAY be empty, `.`, or `..`.
 
@@ -109,6 +109,11 @@ Any value that fails either check SHALL cause the BFF to return `400 Bad Request
 
 - **WHEN** the path param is `..%2Fetc%2Fpasswd`, which decodes to the path segments `..`, `etc`, `passwd`
 - **THEN** the BFF returns `400 Bad Request` without calling DIAL Core, because the `..` segment is disallowed even though `/` itself is an allowed character
+
+#### Scenario: Double-encoded traversal payload is rejected
+
+- **WHEN** the path param is `..%252Fetc%252Fpasswd`, which the framework decodes to `..%2Fetc%2Fpasswd` and the path-segment safety check decodes to `../etc/passwd`
+- **THEN** the BFF returns `400 Bad Request` without calling DIAL Core
 
 ---
 

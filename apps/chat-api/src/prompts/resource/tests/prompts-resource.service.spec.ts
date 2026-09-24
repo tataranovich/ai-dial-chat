@@ -14,7 +14,7 @@ const errResponse = (status: number) =>
 
 const metaUrl = (path: string, bucket = BUCKET) => `prompts/${bucket}/${path}`;
 const metaItem = (path: string, bucket = BUCKET) => ({
-  nodeType: 'ITEM',
+  nodeType: 'ITEM' as const,
   url: metaUrl(path, bucket),
   createdAt: 1000,
   updatedAt: 2000,
@@ -177,9 +177,47 @@ describe('PromptsResourceService', () => {
         metaItem('my-prompt'),
       );
 
-      expect(result).toMatchObject({ id: 'my-prompt', name: 'My Prompt' });
+      expect(result).toMatchObject({
+        id: 'prompts/test-bucket/my-prompt',
+        name: 'My Prompt',
+      });
       expect(getPromptSpy).toHaveBeenCalledOnce();
       expect(metadataSpy).not.toHaveBeenCalled();
+    });
+
+    it('carries the author reported in the resource metadata', async () => {
+      const { service, dialClient } = makeService();
+      vi.spyOn(dialClient.client, 'getPrompt').mockResolvedValue(
+        okResponse(storedPrompt),
+      );
+
+      const result = await service.readPromptByPath(
+        TOKEN,
+        BUCKET,
+        'my-prompt',
+        {
+          ...metaItem('my-prompt'),
+          author: 'john.doe@example.com',
+        },
+      );
+
+      expect(result?.author).toBe('john.doe@example.com');
+    });
+
+    it('leaves the author undefined when the metadata omits one', async () => {
+      const { service, dialClient } = makeService();
+      vi.spyOn(dialClient.client, 'getPrompt').mockResolvedValue(
+        okResponse(storedPrompt),
+      );
+
+      const result = await service.readPromptByPath(
+        TOKEN,
+        BUCKET,
+        'my-prompt',
+        metaItem('my-prompt'),
+      );
+
+      expect(result?.author).toBeUndefined();
     });
 
     it('fetches metadata when knownMetadata is not provided', async () => {
@@ -193,7 +231,10 @@ describe('PromptsResourceService', () => {
 
       const result = await service.readPromptByPath(TOKEN, BUCKET, 'my-prompt');
 
-      expect(result).toMatchObject({ id: 'my-prompt', name: 'My Prompt' });
+      expect(result).toMatchObject({
+        id: 'prompts/test-bucket/my-prompt',
+        name: 'My Prompt',
+      });
     });
   });
 
@@ -228,6 +269,20 @@ describe('PromptsResourceService', () => {
         metaUrl('second'),
       ]);
       expect(metadataSpy).toHaveBeenCalledTimes(2);
+      expect(metadataSpy).toHaveBeenNthCalledWith(
+        1,
+        BUCKET,
+        '',
+        expect.objectContaining({
+          params: {
+            query: {
+              recursive: true,
+              token: undefined,
+              permissions: true,
+            },
+          },
+        }),
+      );
     });
 
     it('rejects a repeated page token instead of looping forever', async () => {

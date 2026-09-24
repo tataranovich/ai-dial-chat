@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { CreateScheduledTaskBodyDto } from '../dto/create-scheduled-task.dto';
 import {
   buildScheduledTaskChatCompletionUrl,
+  fromUpstreamRun,
   fromUpstreamSchedule,
   toUpstreamSchedulePayload,
   type UpstreamScheduleResponse,
+  type UpstreamScheduleRun,
 } from '../scheduled-tasks.mapper';
 
 const DIAL_CORE_URL = 'http://dial-core';
@@ -321,6 +323,7 @@ describe('fromUpstreamSchedule', () => {
       trigger: { date: '2026-07-24T09:00:00.000Z', cron: undefined },
       serviceId: 'dial-oauth',
       isActive: false,
+      isDeleted: false,
     });
   });
 
@@ -416,6 +419,7 @@ describe('fromUpstreamSchedule', () => {
       displayName: 'Hourly check',
       trigger: { date: undefined, cron: { fields: { minute: '0' } } },
       isActive: false,
+      isDeleted: false,
     });
   });
 
@@ -492,6 +496,7 @@ describe('fromUpstreamSchedule', () => {
     it('maps a schedule with a future next run to isActive true', () => {
       const upstream: UpstreamScheduleResponse = {
         id: 'sched_901',
+        trigger: {},
         display_name: 'Daily summary',
         trigger_type: 'cron',
         next_run_time: '2026-07-28T12:00:00.000Z',
@@ -503,6 +508,7 @@ describe('fromUpstreamSchedule', () => {
     it('maps a paused recurring schedule (no next run) to isActive false', () => {
       const upstream: UpstreamScheduleResponse = {
         id: 'sched_902',
+        trigger: {},
         display_name: 'Paused digest',
         trigger_type: 'cron',
         next_run_time: undefined,
@@ -512,13 +518,104 @@ describe('fromUpstreamSchedule', () => {
     });
 
     it('leaves isActive undefined without throwing when trigger and trigger_type are both absent', () => {
-      const upstream: UpstreamScheduleResponse = {
+      /* Deliberately malformed upstream response: validate the runtime fallback. */
+      const upstream = {
         id: 'sched_903',
         display_name: 'Unknown shape',
-      };
+      } as UpstreamScheduleResponse;
 
       expect(() => fromUpstreamSchedule(upstream)).not.toThrow();
       expect(fromUpstreamSchedule(upstream).isActive).toBeUndefined();
     });
+  });
+
+  describe('isDeleted derivation', () => {
+    it('maps is_deleted true to isDeleted true', () => {
+      const upstream: UpstreamScheduleResponse = {
+        id: 'sched_910',
+        display_name: 'Soft-deleted schedule',
+        trigger: {},
+        is_deleted: true,
+      };
+
+      expect(fromUpstreamSchedule(upstream).isDeleted).toBe(true);
+    });
+
+    it('maps is_deleted false to isDeleted false', () => {
+      const upstream: UpstreamScheduleResponse = {
+        id: 'sched_911',
+        display_name: 'Active schedule',
+        trigger: {},
+        is_deleted: false,
+      };
+
+      expect(fromUpstreamSchedule(upstream).isDeleted).toBe(false);
+    });
+
+    it('defaults isDeleted to false without throwing when is_deleted is absent', () => {
+      const upstream: UpstreamScheduleResponse = {
+        id: 'sched_912',
+        display_name: 'No deletion field',
+        trigger: {},
+      };
+
+      expect(() => fromUpstreamSchedule(upstream)).not.toThrow();
+      expect(fromUpstreamSchedule(upstream).isDeleted).toBe(false);
+    });
+
+    it('maps a soft-deleted schedule with a null next_run_time without treating deletion as evidence of anything else', () => {
+      const upstream: UpstreamScheduleResponse = {
+        id: 'sched_913',
+        trigger: {},
+        display_name: 'Soft-deleted with no next run',
+        trigger_type: 'cron',
+        is_deleted: true,
+        next_run_time: undefined,
+      };
+
+      const result = fromUpstreamSchedule(upstream);
+
+      expect(result.isDeleted).toBe(true);
+      expect(result.nextRunTime).toBeUndefined();
+      expect(result.isActive).toBe(false);
+    });
+  });
+});
+
+describe('fromUpstreamRun', () => {
+  const baseUpstreamRun: UpstreamScheduleRun = {
+    id: 'run_9f2a',
+    status: 'success',
+    start_time: '2026-09-02T07:00:00.069010Z',
+    end_time: '2026-09-02T07:00:06.452480Z',
+  };
+
+  it('maps a present conversation_id to conversationId', () => {
+    const upstream: UpstreamScheduleRun = {
+      ...baseUpstreamRun,
+      conversation_id:
+        'conversations/6By4GofuFvWFzB2WZRdmGvG9Qa9heuo4E1DkiZPaeT7ApzUK2tUfMBNX6LZDG3beNY/.scheduler/57ef4647-eadf-4b84-ab60-43e366ced72e/dial-chathub-v2-gemini-3.5-flash__123123123123123__6f6ec619-7fd3-4908-9588-aeb950dcef8d',
+    };
+
+    const result = fromUpstreamRun(upstream);
+
+    expect(result.conversationId).toBe(upstream.conversation_id);
+  });
+
+  it('maps a missing conversation_id to undefined without throwing', () => {
+    const result = fromUpstreamRun(baseUpstreamRun);
+
+    expect(result.conversationId).toBeUndefined();
+  });
+
+  it('normalizes a null conversation_id to undefined', () => {
+    const upstream: UpstreamScheduleRun = {
+      ...baseUpstreamRun,
+      conversation_id: null,
+    };
+
+    const result = fromUpstreamRun(upstream);
+
+    expect(result.conversationId).toBeUndefined();
   });
 });

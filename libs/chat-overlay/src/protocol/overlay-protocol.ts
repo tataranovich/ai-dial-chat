@@ -55,14 +55,35 @@ export enum OverlayEventType {
 export enum OverlayFeature {
   /** Enables the "Add app" menu's Code Apps entry. */
   CodeApps = 'code-apps',
-  /** Enables the "Add app" menu's custom-application creation entry point. */
-  CustomApplications = 'custom-applications',
-  /** Hides the "Custom app" creation entry in the "Add app" menu. */
+  /**
+   * Enables the catalog's Quick App creation entry, i.e. applications built
+   * on an `applicationTypeSchemaId`. Schema-less applications are gated by
+   * `CustomApps` instead.
+   */
+  SchemaApps = 'schema-apps',
+  /**
+   * Hides both of the catalog's app-creation entries, "Create Quick App" and
+   * "Create Custom app", regardless of `SchemaApps` / `CustomApps`.
+   */
   HideCustomAppCreation = 'hide-custom-app-creation',
   /** Disables the send action on the chat input without removing the button. */
   DisabledSend = 'disabled-send',
   /** Suppresses the chat input's auto-focus effect on load. */
   SkipFocusChatInputOnload = 'skip-focus-chat-input-onload',
+  /**
+   * Enables the "Chat settings" entry (temperature, system prompt, response
+   * format) in the conversation input's "+" menu, on every screen that renders
+   * that input. Disabling it removes the entry everywhere, regardless of
+   * `EmptyChatSettings`.
+   */
+  ChatSettings = 'chat-settings',
+  /**
+   * Enables removing a deployment tool from the conversation input: each tool
+   * chip gets a × that drops it from the row, and the "+" menu gets a "Tools"
+   * entry that brings a dropped chip back. Disabling it makes every chip a
+   * persistent on/off toggle that the user cannot add or remove.
+   */
+  RemovableTools = 'removable-tools',
   /** Enables the comment field in the negative-feedback (dislike) modal. */
   DislikeComment = 'dislike-comment',
   /** Enables attaching files to a message via the conversation input. */
@@ -73,9 +94,15 @@ export enum OverlayFeature {
   LiveChatInteraction = 'live-chat-interaction',
   /** Restricts (disables) changing the selected agent/model on the conversation top bar. */
   DisallowChangeAgent = 'disallow-change-agent',
+  /** Hides the agent/model selector on the in-chat conversation input. */
+  HideChangeAgent = 'hide-change-agent',
   /** Hides the new-conversation controls in the header/layout. */
   HideNewConversation = 'hide-new-conversation',
-  /** Enables the empty-chat (new conversation composer) settings UI. */
+  /**
+   * Enables the empty-chat (new conversation composer) settings UI. Narrows
+   * `ChatSettings` to that screen only â both must be enabled for the entry to
+   * appear there.
+   */
   EmptyChatSettings = 'empty-chat-settings',
   /** Hides the model selector on the empty-chat composer screen. */
   HideEmptyChatChangeAgent = 'hide-empty-chat-change-agent',
@@ -87,14 +114,24 @@ export enum OverlayFeature {
   ConversationsSection = 'conversations-section',
   /** Enables the app header. */
   Header = 'header',
+  /**
+   * Hides the header's hamburger button and the navigation sheet it opens â
+   * the mobile-breakpoint navigation surface carrying the nav items, profile,
+   * keyboard shortcuts, and log out.
+   */
+  HideNavigationMenu = 'hide-navigation-menu',
   /** Makes the conversations sidebar section open by default. */
   ShowConversationsSectionByDefault = 'showConversationsSectionByDefault',
+  /** Hides the conversations panel's source filter tabs (All / My chats / Shared / Organization). */
+  HideConversationsFilter = 'hide-conversations-filter',
   /** Enables the catalog (`/catalog`) route. */
   Catalog = 'catalog',
   /** Restricts the catalog to hide the current user's own/shared-with-me apps. */
   CatalogHideMyApps = 'catalog-hide-my-apps',
   /** Makes the catalog's table view the initial default (instead of grid). */
   CatalogTableView = 'catalog-table-view',
+  /** Enables the file manager (`/files`) route and its navigation entry. */
+  FileManager = 'file-manager',
   /** Hides the delete action on a user's own messages. */
   HideDeleteUserMessage = 'hide-delete-user-message',
   /** Hides the edit action on a user's own messages. */
@@ -113,15 +150,73 @@ export enum OverlayFeature {
   Toolsets = 'toolsets',
   /** Enables prompts: the catalog's Prompts tab, its create option, and the prompt editor route. */
   Prompts = 'prompts',
-  /** Enables the custom-app creation entry in the catalog. */
+  /** Enables skills: the catalog's Skills tab and the skill details panel. */
+  Skills = 'skills',
+  /**
+   * Enables the catalog's custom-app creation entry, the editability of
+   * schema-less applications, and the custom-app editor route. Applications
+   * built on a schema are gated by `SchemaApps` instead.
+   */
   CustomApps = 'custom-apps',
   /** Hides the user avatar/menu button in the header. */
   HideUserMenu = 'hide-user-menu',
   /** Hides the settings entry in the user menu. */
   HideUserSettings = 'hide-user-settings',
+  /** Hides the keyboard-shortcuts entry in the user menu and the mobile profile sheet. */
+  HideKeyboardShortcuts = 'hide-keyboard-shortcuts',
   /** Enables the `microphone` permission on the iframe's `allow` attribute for voice input. */
   VoiceInput = 'voice-input',
+  /**
+   * Renders every conversation starter, each on its own row, instead of
+   * fitting as many as the measured width allows on one line and collapsing
+   * the rest into a "…" dropdown. Intended for narrow embeds, where the row
+   * has space for a single starter and hides the remainder behind the menu.
+   */
+  ShowAllStarters = 'show-all-starters',
+  /**
+   * Hides the application version label in the footer. The label is
+   * diagnostic chrome an embedding host usually owns itself, and it is not
+   * gated by the operator's `footer` capability flag.
+   */
+  HideFooterVersion = 'hide-footer-version',
+  /**
+   * Renders the selected agent's own `description` on the empty-chat screen,
+   * below the conversation starters, as markdown. Independent of the
+   * operator-wide welcome-screen description, which renders under the
+   * greeting for every agent alike.
+   */
+  ShowAgentDescription = 'show-agent-description',
 }
+
+/**
+ * Wire values a host may still be sending that were renamed, mapped to the
+ * canonical `OverlayFeature` member. Accepted for backward compatibility on a
+ * transitional basis: a deprecated value resolves to its replacement instead of
+ * being dropped. Remove an entry once hosts have migrated, and record the
+ * rename in the migration guide's "Renamed flags" table.
+ */
+export const DEPRECATED_OVERLAY_FEATURE_ALIASES: Readonly<
+  Record<string, OverlayFeature>
+> = {
+  /* Renamed because it gates Quick Apps, not schema-less custom applications. */
+  'custom-applications': OverlayFeature.SchemaApps,
+};
+
+const OVERLAY_FEATURE_WIRE_VALUES = new Set<string>(
+  Object.values(OverlayFeature),
+);
+
+/**
+ * Resolves a raw wire value to an `OverlayFeature`, accepting the deprecated
+ * aliases in `DEPRECATED_OVERLAY_FEATURE_ALIASES`. Returns `undefined` for an
+ * unrecognized value so the caller can drop it and warn.
+ */
+export const resolveOverlayFeature = (
+  value: string,
+): OverlayFeature | undefined =>
+  OVERLAY_FEATURE_WIRE_VALUES.has(value)
+    ? (value as OverlayFeature)
+    : DEPRECATED_OVERLAY_FEATURE_ALIASES[value];
 
 /** Controls how an overlay starts authentication for a configured provider. */
 export enum OverlayAuthUiMode {
@@ -151,6 +246,32 @@ export interface OverlayRequestError {
   message: string;
 }
 
+/** Settled outcome of an agent execution stage carried over the protocol. */
+export enum OverlayStageStatus {
+  /** The stage completed successfully. */
+  Completed = 'completed',
+  /** The stage encountered an error. */
+  Failed = 'failed',
+}
+
+/**
+ * One agent execution stage (a tool call, retrieval step, or reasoning step)
+ * projected into the protocol. A host reads these to react to what an agent
+ * did — e.g. refreshing its own view when a particular tool has run.
+ */
+export interface OverlayMessageStage {
+  /** Zero-based ordering key, stable across updates to the same stage. */
+  index: number;
+  /** Human-readable stage label, e.g. `'Lookup available terms'`. */
+  name: string;
+  /** `null` while the stage is still running; a settled value once it finishes. */
+  status: OverlayStageStatus | null;
+  /** Text content accumulated for this stage, when the agent produced any. */
+  content?: string;
+  /** Short source/category label shown beside the name, e.g. `'MCP'`. */
+  tag?: string;
+}
+
 /** Minimal message shape carried in overlay protocol payloads. */
 export interface OverlayChatMessage {
   /** Message id. */
@@ -159,6 +280,12 @@ export interface OverlayChatMessage {
   role: string;
   /** Message text content. */
   content: string;
+  /**
+   * Agent execution stages attached to this message, omitted when it has
+   * none. Stage attachments are not carried — the protocol projects labels,
+   * status, and text only.
+   */
+  stages?: OverlayMessageStage[];
 }
 
 /** Host-agnostic conversation projection for the overlay protocol. */
@@ -193,7 +320,11 @@ export interface ChatOverlayOptions {
   domain: string;
   /** Milliseconds to wait for a request's response before rejecting. Defaults to `10000`. */
   requestTimeout?: number;
-  /** Inline CSS properties applied to the loader element while it is visible. */
+  /**
+   * Inline CSS properties applied to the loader element while it is visible.
+   * A `display` entry is dropped once `loaderHideEvent` arrives — use
+   * `loaderHideEvent` to control visibility, not `display`.
+   */
   loaderStyles?: Record<string, string>;
   /** CSS class applied to the loader element. */
   loaderClass?: string;
@@ -212,6 +343,15 @@ export interface ChatOverlayOptions {
   /** Per-provider authentication UI behavior configured by the embedding host. */
   auth?: {
     providerUiModes?: Record<string, OverlayAuthUiMode>;
+    /**
+     * Provider id whose login the embedded app starts on its own, with no user
+     * interaction, while the session is unauthenticated. Presence enables the
+     * behavior — there is no separate boolean — and the same provider must be
+     * mapped to `OverlayAuthUiMode.SameWindow` in `providerUiModes`, because
+     * only that path navigates the iframe itself. Supersedes the legacy
+     * `signInOptions.autoSignIn` + `signInProvider` pair.
+     */
+    autoSignInProvider?: string;
   };
 }
 
@@ -232,6 +372,8 @@ export interface SetOverlayOptionsPayload {
   enabledFeatures?: string[];
   /** Opaque per-provider authentication UI modes supplied by the host. */
   authProviderUiModes?: Record<string, string>;
+  /** Opaque wire form of `ChatOverlayOptions.auth.autoSignInProvider`. */
+  authAutoSignInProvider?: string;
 }
 
 /** Payload of a `SEND_MESSAGE` request. */

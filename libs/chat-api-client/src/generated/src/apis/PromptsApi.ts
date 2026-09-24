@@ -34,7 +34,7 @@ export interface CreatePromptFolderRequest {
 }
 
 export interface DeletePromptRequest {
-  path: string;
+  id: string;
 }
 
 export interface DeletePromptFolderRequest {
@@ -42,7 +42,7 @@ export interface DeletePromptFolderRequest {
 }
 
 export interface GetPromptRequest {
-  path: string;
+  id: string;
 }
 
 export interface GetPublicPromptRequest {
@@ -50,7 +50,7 @@ export interface GetPublicPromptRequest {
 }
 
 export interface MovePromptRequest {
-  path: string;
+  id: string;
   movePromptDto: MovePromptDto;
 }
 
@@ -60,7 +60,7 @@ export interface RenamePromptFolderRequest {
 }
 
 export interface UpdatePromptRequest {
-  path: string;
+  id: string;
   updatePromptDto: UpdatePromptDto;
 }
 
@@ -169,23 +169,23 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Delete a personal prompt
+   * Delete a personal or writable shared prompt
    */
   async deletePromptRaw(
     requestParameters: DeletePromptRequest,
     initOverrides?: RequestInit | runtime.InitOverrideFunction,
   ): Promise<runtime.ApiResponse<void>> {
-    if (requestParameters['path'] == null) {
+    if (requestParameters['id'] == null) {
       throw new runtime.RequiredError(
-        'path',
-        'Required parameter "path" was null or undefined when calling deletePrompt().',
+        'id',
+        'Required parameter "id" was null or undefined when calling deletePrompt().',
       );
     }
 
     const queryParameters: runtime.HTTPQuery = {};
 
-    if (requestParameters['path'] != null) {
-      queryParameters['path'] = requestParameters['path'];
+    if (requestParameters['id'] != null) {
+      queryParameters['id'] = requestParameters['id'];
     }
 
     const headerParameters: runtime.HTTPHeaders = {};
@@ -206,7 +206,7 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Delete a personal prompt
+   * Delete a personal or writable shared prompt
    */
   async deletePrompt(
     requestParameters: DeletePromptRequest,
@@ -263,23 +263,24 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Get a personal prompt
+   * Reads the exact DIAL resource `id` names, whether that is the caller\'s own bucket or another user\'s bucket for a prompt shared with the caller. DIAL Core authorises the read either way.
+   * Get a personal or shared prompt
    */
   async getPromptRaw(
     requestParameters: GetPromptRequest,
     initOverrides?: RequestInit | runtime.InitOverrideFunction,
   ): Promise<runtime.ApiResponse<PromptResponseDto>> {
-    if (requestParameters['path'] == null) {
+    if (requestParameters['id'] == null) {
       throw new runtime.RequiredError(
-        'path',
-        'Required parameter "path" was null or undefined when calling getPrompt().',
+        'id',
+        'Required parameter "id" was null or undefined when calling getPrompt().',
       );
     }
 
     const queryParameters: runtime.HTTPQuery = {};
 
-    if (requestParameters['path'] != null) {
-      queryParameters['path'] = requestParameters['path'];
+    if (requestParameters['id'] != null) {
+      queryParameters['id'] = requestParameters['id'];
     }
 
     const headerParameters: runtime.HTTPHeaders = {};
@@ -300,7 +301,8 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Get a personal prompt
+   * Reads the exact DIAL resource `id` names, whether that is the caller\'s own bucket or another user\'s bucket for a prompt shared with the caller. DIAL Core authorises the read either way.
+   * Get a personal or shared prompt
    */
   async getPrompt(
     requestParameters: GetPromptRequest,
@@ -362,8 +364,8 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Returns all personal prompts and the folder hierarchy.
-   * List personal prompts
+   * Returns all catalog-visible prompts in one response. Organisation prompts are always read-only.
+   * List personal, shared, and organisation prompts
    */
   async listPromptsRaw(
     initOverrides?: RequestInit | runtime.InitOverrideFunction,
@@ -388,8 +390,8 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Returns all personal prompts and the folder hierarchy.
-   * List personal prompts
+   * Returns all catalog-visible prompts in one response. Organisation prompts are always read-only.
+   * List personal, shared, and organisation prompts
    */
   async listPrompts(
     initOverrides?: RequestInit | runtime.InitOverrideFunction,
@@ -434,16 +436,16 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Move a personal prompt to a different folder
+   * Move a personal or writable shared prompt to another folder
    */
   async movePromptRaw(
     requestParameters: MovePromptRequest,
     initOverrides?: RequestInit | runtime.InitOverrideFunction,
   ): Promise<runtime.ApiResponse<PromptResponseDto>> {
-    if (requestParameters['path'] == null) {
+    if (requestParameters['id'] == null) {
       throw new runtime.RequiredError(
-        'path',
-        'Required parameter "path" was null or undefined when calling movePrompt().',
+        'id',
+        'Required parameter "id" was null or undefined when calling movePrompt().',
       );
     }
 
@@ -456,8 +458,8 @@ export class PromptsApi extends runtime.BaseAPI {
 
     const queryParameters: runtime.HTTPQuery = {};
 
-    if (requestParameters['path'] != null) {
-      queryParameters['path'] = requestParameters['path'];
+    if (requestParameters['id'] != null) {
+      queryParameters['id'] = requestParameters['id'];
     }
 
     const headerParameters: runtime.HTTPHeaders = {};
@@ -481,7 +483,7 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Move a personal prompt to a different folder
+   * Move a personal or writable shared prompt to another folder
    */
   async movePrompt(
     requestParameters: MovePromptRequest,
@@ -553,16 +555,16 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Update a personal prompt
+   * Update a personal or writable shared prompt
    */
   async updatePromptRaw(
     requestParameters: UpdatePromptRequest,
     initOverrides?: RequestInit | runtime.InitOverrideFunction,
   ): Promise<runtime.ApiResponse<PromptResponseDto>> {
-    if (requestParameters['path'] == null) {
+    if (requestParameters['id'] == null) {
       throw new runtime.RequiredError(
-        'path',
-        'Required parameter "path" was null or undefined when calling updatePrompt().',
+        'id',
+        'Required parameter "id" was null or undefined when calling updatePrompt().',
       );
     }
 
@@ -575,8 +577,8 @@ export class PromptsApi extends runtime.BaseAPI {
 
     const queryParameters: runtime.HTTPQuery = {};
 
-    if (requestParameters['path'] != null) {
-      queryParameters['path'] = requestParameters['path'];
+    if (requestParameters['id'] != null) {
+      queryParameters['id'] = requestParameters['id'];
     }
 
     const headerParameters: runtime.HTTPHeaders = {};
@@ -600,7 +602,7 @@ export class PromptsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Update a personal prompt
+   * Update a personal or writable shared prompt
    */
   async updatePrompt(
     requestParameters: UpdatePromptRequest,

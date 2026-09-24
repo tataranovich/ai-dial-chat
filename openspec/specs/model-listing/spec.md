@@ -1,4 +1,16 @@
-## ADDED Requirements
+# model-listing Specification
+
+## Purpose
+
+The authenticated model list endpoint and the shared `DialModel` type.
+
+`apps/chat` has no caller for this endpoint today — the frontend reads model
+metadata through the deployments endpoints (`deploymentsApi`) instead. The
+endpoint and its shared type are still served and still covered by the
+requirements below; the `apps/chat/src/server-api/models.ts` helper that used to
+front it was removed once it had zero call sites.
+
+## Requirements
 
 ### Requirement: Authenticated model list endpoint
 
@@ -10,7 +22,6 @@ The endpoint:
 - MUST proxy to `GET <DIAL_CORE_URL>/openai/models` forwarding `Authorization: Bearer <session.at>` as the upstream auth header
 - MUST NOT forward the `DIAL_API_KEY` to the client or use it as the upstream credential on this route
 - SHALL return `200 OK` with body `{ "data": DialModel[] }` mirroring the DIAL Core response shape
-- SHALL apply per-route rate limiting of **60 req/min per IP** (tighter than the global 100 req/min default) via `@Throttle`
 - SHALL cache the upstream response server-side for **30 seconds** using cache key `models:list:<user.sub>`; a cache hit MUST NOT re-call DIAL Core
 - MUST set `Cache-Control: private, max-age=30` on the HTTP response so browsers and shared proxies do not cache the user-specific list
 
@@ -49,11 +60,6 @@ The endpoint:
 - **WHEN** DIAL Core responds with a 5xx error (e.g. `500`, `502`)
 - **THEN** the BFF returns `502 Bad Gateway`
 
-#### Scenario: Rate limit exceeded
-
-- **WHEN** a caller sends more than 60 requests per minute to this endpoint
-- **THEN** the BFF returns `429 Too Many Requests`
-
 #### Scenario: Cache hit avoids upstream call
 
 - **WHEN** `GET /api/v1/models` is called twice within 30 seconds for the same authenticated user
@@ -87,21 +93,5 @@ Unknown top-level fields from DIAL Core SHALL be preserved (index signature) so 
 
 #### Scenario: Type is importable from both backend and frontend
 
-- **WHEN** `apps/chat-api` and `apps/chat/src/server-api/models.ts` import `DialModel` from `@epam/ai-dial-chat-shared`
-- **THEN** TypeScript compilation succeeds with no type errors
-
----
-
-### Requirement: Frontend server-api helper for model listing
-
-`apps/chat/src/server-api/models.ts` SHALL export a typed async function `getModels` that:
-
-- Calls `GET /api/v1/models` using the existing `get<DialModelListResponse>` helper from `server-api/base.ts`
-- Returns `Promise<DialModelListResponse>`
-
-No direct `fetch` calls are permitted in this helper.
-
-#### Scenario: Helper returns typed list
-
-- **WHEN** `getModels()` is called from a component or hook
-- **THEN** the return type is `Promise<DialModelListResponse>` and TypeScript infers `data` as `DialModel[]`
+- **WHEN** `apps/chat-api` and `apps/chat` are type-checked
+- **THEN** `DialModel` imported from `@epam/ai-dial-chat-shared` resolves with no type errors

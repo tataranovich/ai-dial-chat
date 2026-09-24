@@ -1,8 +1,9 @@
 import { buildCssVars } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
-  GhostIconButton,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
+  ToggleIconButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconStar, IconStarFilled } from '@tabler/icons-react';
 import { FC, MouseEvent } from 'react';
@@ -33,7 +34,7 @@ export const StarToggleButton: FC<StarToggleButtonProps> = ({
   className,
   starFilledColor,
 }) => (
-  <GhostIconButton
+  <ToggleIconButton
     size={size}
     style={buildCssVars({ '--cat-star-filled': starFilledColor })}
     className={className}
@@ -44,7 +45,7 @@ export const StarToggleButton: FC<StarToggleButtonProps> = ({
           className={styles.starFilledIcon}
         />
       ) : (
-        <IconStar size={DIAL_ICON_SIZE.SM} />
+        <IconStar size={DIAL_ICON_SIZE.SM} stroke={DIAL_KIT_ICON_STROKE} />
       )
     }
     aria-label={ariaLabel}

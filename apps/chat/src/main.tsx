@@ -1,12 +1,6 @@
 import { AttachmentCanvasProvider } from '@epam/ai-dial-attachment-canvas';
 import '@epam/ai-dial-ui-kit/styles.css';
 import '@epam/ai-dial-react-file-manager/styles.css';
-import '@epam/ai-dial-react-pdf-highlighter/styles.css';
-import '@epam/pdf-highlighter-kit/dist/pdf-highlight-viewer.css';
-import '@uiw/react-markdown-preview/markdown.css';
-import '@uiw/react-md-editor/markdown-editor.css';
-import { GlobalWorkerOptions } from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { lazy, StrictMode, Suspense } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { BrowserRouter, Route, Routes } from 'react-router';
@@ -22,9 +16,11 @@ import { ConversationsProvider } from './context/ConversationsContext';
 import { DeploymentsProvider } from './context/DeploymentsContext';
 import { FavoriteApplicationsProvider } from './context/FavoriteApplicationsContext';
 import { GenerationProvider } from './context/GenerationContext';
+import { IsolatedModelViewProvider } from './context/IsolatedModelViewContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { OverlayModeGate } from './context/overlay/OverlayContext';
 import { PromptsProvider } from './context/PromptsContext';
+import { SkillsProvider } from './context/SkillsContext';
 import { SourcesSidebarProvider } from './context/SourcesSidebarContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { UiFeaturesProvider } from './context/UiFeaturesContext';
@@ -35,9 +31,6 @@ import './styles.scss';
 const LoginPage = lazy(() => import('./pages/auth/Login'));
 const OverlayClose = lazy(() => import('./pages/auth/OverlayClose'));
 
-/* Override the CDN fallback set by @epam/pdf-highlighter-kit at module-load time. */
-GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement,
 );
@@ -45,6 +38,14 @@ const root = ReactDOM.createRoot(
 root.render(
   <StrictMode>
     <RootErrorBoundary>
+      {/*
+       * The ui-kit `InteractiveTooltip` portals its panel into a host-provided
+       * container with this id (floating-ui resolves a `FloatingPortal` id via
+       * `document.getElementById`); without the container the panel silently
+       * renders nothing. Theme vars and `dir` are set on `documentElement`,
+       * so the portaled panels inherit both from here.
+       */}
+      <div id="interactive-tooltip-portal" />
       <BrowserRouter>
         <NotificationProvider>
           <NotificationContainer />
@@ -71,13 +72,18 @@ root.render(
                                       <ClientChannelProvider>
                                         <UserConfigProvider>
                                           <DeploymentsProvider>
-                                            <FavoriteApplicationsProvider>
-                                              <PromptsProvider>
-                                                <ConversationsProvider>
-                                                  <App />
-                                                </ConversationsProvider>
-                                              </PromptsProvider>
-                                            </FavoriteApplicationsProvider>
+                                            {/* TODO: remove in next release */}
+                                            <IsolatedModelViewProvider>
+                                              <FavoriteApplicationsProvider>
+                                                <PromptsProvider>
+                                                  <SkillsProvider>
+                                                    <ConversationsProvider>
+                                                      <App />
+                                                    </ConversationsProvider>
+                                                  </SkillsProvider>
+                                                </PromptsProvider>
+                                              </FavoriteApplicationsProvider>
+                                            </IsolatedModelViewProvider>
                                           </DeploymentsProvider>
                                         </UserConfigProvider>
                                       </ClientChannelProvider>

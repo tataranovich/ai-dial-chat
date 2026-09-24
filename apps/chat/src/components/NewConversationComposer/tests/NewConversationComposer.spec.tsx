@@ -1,10 +1,22 @@
+import type { DeploymentItemDto } from '@epam/ai-dial-chat-api-client';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import { type DeploymentItem } from '@epam/ai-dial-chat-shared';
-import { render, screen } from '@testing-library/react';
+import { NotificationVariant } from '@epam/ai-dial-ui-kit';
+import { act, render, screen } from '@testing-library/react';
 import { Suspense } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAppConfig as mockUseAppConfig } from '../../../context/tests/app-config-context-mock';
+import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
 import * as useUiFeatureModule from '../../../hooks/useUiFeature';
 import NewConversationComposer from '../NewConversationComposer';
+
+const { mockShowNotification, capturedInputProps } = vi.hoisted(() => ({
+  mockShowNotification: vi.fn(),
+  capturedInputProps: {
+    onSend: undefined as
+      ((message: string, attachments: never[]) => Promise<void>) | undefined,
+  },
+}));
 
 vi.mock('../../../hooks/useUiFeature');
 
@@ -15,35 +27,43 @@ vi.mock('@epam/ai-dial-conversation-input', () => ({
     isSendDisabled,
     inputClassName,
     autoFocus,
+    onSend,
   }: {
     deployments?: unknown[];
     chatSettings?: unknown;
     isSendDisabled?: boolean;
     inputClassName?: string;
     autoFocus?: boolean;
-  }) => (
-    <div data-testid="conversation-input">
-      Conversation input
-      <output aria-label="deployments">
-        {deployments === undefined ? 'undefined' : JSON.stringify(deployments)}
-      </output>
-      <output aria-label="chat-settings">
-        {chatSettings === undefined ? 'undefined' : 'defined'}
-      </output>
-      <output aria-label="send-disabled">{String(!!isSendDisabled)}</output>
-      <output aria-label="input-class-name">{inputClassName ?? ''}</output>
-      <output aria-label="auto-focus">{String(!!autoFocus)}</output>
-    </div>
-  ),
+    onSend?: (message: string, attachments: never[]) => Promise<void>;
+  }) => {
+    capturedInputProps.onSend = onSend;
+    return (
+      <div data-testid="conversation-input">
+        Conversation input
+        <output aria-label="deployments">
+          {deployments === undefined
+            ? 'undefined'
+            : JSON.stringify(deployments)}
+        </output>
+        <output aria-label="chat-settings">
+          {chatSettings === undefined ? 'undefined' : 'defined'}
+        </output>
+        <output aria-label="send-disabled">{String(!!isSendDisabled)}</output>
+        <output aria-label="input-class-name">{inputClassName ?? ''}</output>
+        <output aria-label="auto-focus">{String(!!autoFocus)}</output>
+      </div>
+    );
+  },
   FileDndOverlay: () => null,
 }));
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({
-    config: { asrModelId: null, transcribeSizeLimitBytes: 5 * 1024 * 1024 },
-  }),
-  useFeatureFlag: () => false,
-}));
+vi.mock(
+  '../../../context/AppConfigContext',
+  async () => import('../../../context/tests/app-config-context-mock'),
+);
+mockUseAppConfig.mockReturnValue({
+  config: { asrModelId: null, transcribeSizeLimitBytes: 5 * 1024 * 1024 },
+});
 
 vi.mock('../../../context/auth/UserContext', () => ({
   useUser: () => ({
@@ -52,46 +72,54 @@ vi.mock('../../../context/auth/UserContext', () => ({
 }));
 
 vi.mock('../../../context/NotificationContext', () => ({
-  useNotification: () => ({
-    showNotification: vi.fn(),
-  }),
+  useNotification: () => createNotificationContextValue(mockShowNotification),
 }));
 
-vi.mock('../../../hooks/attachment/useAttachmentValidation', () => ({
-  useAttachmentValidation: () => ({
-    inputAttachmentTypes: [],
-    isAttachmentsAllowed: true,
-    validateAttachment: vi.fn(),
-    fileAccept: undefined,
-  }),
-}));
+vi.mock('@epam/ai-dial-attachment-canvas', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-attachment-canvas')>();
+  return {
+    ...actual,
+    useOpenAttachmentCanvas: () => ({
+      openAttachmentCanvas: vi.fn(),
+    }),
+  };
+});
 
-vi.mock('../../../hooks/attachment/useOpenAttachmentCanvas', () => ({
-  useOpenAttachmentCanvas: () => ({
-    openAttachmentCanvas: vi.fn(),
-  }),
+vi.mock('../../../hooks/attachment/useAttachmentCanvasResolvers', () => ({
+  useAttachmentCanvasResolvers: () => ({ resolvers: {}, options: {} }),
 }));
 
 vi.mock('../../../hooks/breakpoint/useBreakpoint', () => ({
   useIsMobile: () => false,
 }));
 
-vi.mock('../../../hooks/conversation/useAttachmentUpload', () => ({
-  useAttachmentUpload: () => ({
-    handleUploadAttachment: vi.fn(),
-  }),
-}));
-
 vi.mock('../../../hooks/conversation/useAudioTranscription', () => ({
   useAudioTranscription: () => ({
-    handleUploadAudio: vi.fn(),
+    isAudioMessageSupported: false,
+    isVoiceRecordingSupported: false,
     handleTranscribeAudio: vi.fn(),
-    isTranscriptionSupported: false,
   }),
 }));
 
-vi.mock('../../../hooks/conversation/useChatSettingsFormConfig', () => ({
-  useChatSettingsFormConfig: () => ({}),
+vi.mock('../../../hooks/conversation/useChatSettingsFormLabels', () => ({
+  useChatSettingsFormLabels: () => ({
+    settings: 'Settings',
+    savedNotification: 'Chat settings have been saved',
+    responseFormatLabel: 'Response format',
+    responseFormatHint: 'Applies to new and existing messages',
+    responseFormatMarkdown: 'Markdown',
+    responseFormatPlainText: 'Plain text',
+    systemPromptLabel: 'System prompt',
+    systemPromptTooltip: 'Enter a prompt',
+    temperatureLabel: 'Temperature',
+    temperaturePrecise: 'Precise',
+    temperatureNeutral: 'Neutral',
+    temperatureCreative: 'Creative',
+    temperatureHint: 'Hint',
+    saveLabel: 'Apply changes',
+    saveDisabledTooltip: 'Please select a response format',
+  }),
 }));
 
 vi.mock('../../../hooks/conversation/useModelSelectorLabels', () => ({
@@ -118,13 +146,38 @@ vi.mock(
   }),
 );
 
-vi.mock('../../../hooks/usePageFileDrag', () => ({
-  usePageFileDrag: () => ({
-    isDragging: false,
-    pendingFiles: [],
-    onFilesConsumed: vi.fn(),
-  }),
-}));
+vi.mock('@epam/ai-dial-chat-hooks', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-chat-hooks')>();
+  return {
+    ...actual,
+    useAttachmentUpload: () => ({
+      handleUploadAttachment: vi.fn(),
+    }),
+    useChatSettingsFormConfig: () => ({}),
+    useAttachmentValidation: () => ({
+      inputAttachmentTypes: [],
+      isAttachmentsAllowed: true,
+      validateAttachment: vi.fn(),
+      fileAccept: undefined,
+    }),
+  };
+});
+
+vi.mock('@epam/ai-dial-chat-hooks/viewport-layout', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('@epam/ai-dial-chat-hooks/viewport-layout')
+    >();
+  return {
+    ...actual,
+    usePageFileDrag: () => ({
+      isDragging: false,
+      pendingFiles: [],
+      onFilesConsumed: vi.fn(),
+    }),
+  };
+});
 
 vi.mock('../../../hooks/user-profile/useUserProfile', () => ({
   useUserProfile: () => ({
@@ -136,12 +189,23 @@ const deployments: DeploymentItem[] = [
   { id: 'gpt-4o', displayName: 'GPT-4o', type: 'model' },
 ];
 
+const agentWithDescription = {
+  id: 'gpt-4o',
+  displayName: 'GPT-4o',
+  description:
+    'Answers questions. Read [the terms](https://example.com/terms).',
+} as DeploymentItemDto;
+
 describe('NewConversationComposer', () => {
   const mockUseUiFeature = vi.mocked(useUiFeatureModule.useUiFeature);
 
   beforeEach(() => {
+    mockShowNotification.mockClear();
+    capturedInputProps.onSend = undefined;
     mockUseUiFeature.mockImplementation(
-      (feature) => feature === OverlayFeature.EmptyChatSettings,
+      (feature) =>
+        feature === OverlayFeature.EmptyChatSettings ||
+        feature === OverlayFeature.ChatSettings,
     );
   });
 
@@ -174,7 +238,7 @@ describe('NewConversationComposer', () => {
     ).toBeTruthy();
   });
 
-  it('passes chatSettings through by default (empty-chat-settings enabled)', async () => {
+  it('passes chatSettings through when both chat-settings and empty-chat-settings are enabled', async () => {
     render(
       <Suspense fallback={null}>
         <NewConversationComposer
@@ -189,8 +253,30 @@ describe('NewConversationComposer', () => {
     expect(screen.getByLabelText('chat-settings').textContent).toBe('defined');
   });
 
+  it('omits chatSettings when chat-settings is disabled even though empty-chat-settings is enabled', async () => {
+    mockUseUiFeature.mockImplementation(
+      (feature) => feature === OverlayFeature.EmptyChatSettings,
+    );
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          onCreateConversation={vi.fn()}
+        />
+      </Suspense>,
+    );
+    await screen.findByTestId('conversation-input');
+    expect(screen.getByLabelText('chat-settings').textContent).toBe(
+      'undefined',
+    );
+  });
+
   it('omits chatSettings when empty-chat-settings is disabled', async () => {
-    mockUseUiFeature.mockReturnValue(false);
+    mockUseUiFeature.mockImplementation(
+      (feature) => feature === OverlayFeature.ChatSettings,
+    );
     render(
       <Suspense fallback={null}>
         <NewConversationComposer
@@ -291,5 +377,83 @@ describe('NewConversationComposer', () => {
     );
     await screen.findByTestId('conversation-input');
     expect(screen.getByLabelText('auto-focus').textContent).toBe('true');
+  });
+
+  it('renders the agent description below the starters when show-agent-description is enabled', async () => {
+    mockUseUiFeature.mockImplementation(
+      (feature) => feature === OverlayFeature.ShowAgentDescription,
+    );
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          selectedDeployment={agentWithDescription}
+          placeholder="Message"
+          onCreateConversation={vi.fn()}
+        >
+          <button type="button">Draft</button>
+        </NewConversationComposer>
+      </Suspense>,
+    );
+
+    const link = await screen.findByRole('link', { name: 'the terms' });
+    const starterButton = screen.getByRole('button', { name: 'Draft' });
+
+    expect(link.getAttribute('href')).toBe('https://example.com/terms');
+    expect(
+      starterButton.compareDocumentPosition(link) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('omits the agent description when show-agent-description is disabled', async () => {
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          selectedDeployment={agentWithDescription}
+          placeholder="Message"
+          onCreateConversation={vi.fn()}
+        />
+      </Suspense>,
+    );
+    await screen.findByTestId('conversation-input');
+
+    expect(screen.queryByRole('link', { name: 'the terms' })).toBeNull();
+  });
+
+  it('re-throws a failed conversation creation after showing the error notification', async () => {
+    const failure = new Error('Internal Server Error');
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          onCreateConversation={vi.fn().mockRejectedValue(failure)}
+        />
+      </Suspense>,
+    );
+    await screen.findByTestId('conversation-input');
+
+    /*
+     * ConversationInput clears the textarea and the attachment tray only when
+     * onSend resolves, and restores both when it rejects. Swallowing the
+     * failure here would read as a successful send and wipe an unsent draft
+     * together with its attachments.
+     */
+    await act(async () => {
+      await expect(
+        capturedInputProps.onSend?.('Describe the attachment.', []),
+      ).rejects.toBe(failure);
+    });
+    expect(mockShowNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Internal Server Error',
+        variant: NotificationVariant.Error,
+      }),
+    );
   });
 });

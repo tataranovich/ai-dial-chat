@@ -2,16 +2,9 @@ import type {
   PromptFolderResponseDto,
   PromptResponseDto,
 } from '@epam/ai-dial-chat-api-client';
-import {
-  createContext,
-  ReactNode,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
-import { listPrompts, listPublicPrompts } from '../server-api/prompts.api';
+import { usePromptsState } from '@epam/ai-dial-chat-hooks';
+import { createContext, ReactNode, useContext, useMemo } from 'react';
+import { listPrompts } from '../server-api/prompts.api';
 
 export interface PromptsContextType {
   /** The caller's own prompts. */
@@ -24,13 +17,13 @@ export interface PromptsContextType {
   publicPrompts: PromptResponseDto[];
   /** Folders in the organisation prompt namespace. */
   publicFolders: PromptFolderResponseDto[];
-  /** True until both the personal and organisation list requests have settled. */
+  /** True until the aggregate prompt listing has settled. */
   isLoading: boolean;
   /** Rejection reason of the most recent failed list request, or `null`. */
   error: unknown;
-  /** Re-reads personal prompts, folders, and shared-with-me prompts. */
+  /** Re-reads personal, shared-with-me, and organisation prompts. */
   refetchPrompts: () => Promise<void>;
-  /** Re-reads organisation prompts and folders. */
+  /** Compatibility alias for the aggregate refetch. */
   refetchPublicPrompts: () => Promise<void>;
 }
 
@@ -46,102 +39,21 @@ export const PromptsContext = createContext<PromptsContextType | undefined>(
  * authority on prompt paths.
  */
 export const PromptsProvider = ({ children }: { children: ReactNode }) => {
-  const [prompts, setPrompts] = useState<PromptResponseDto[]>([]);
-  const [folders, setFolders] = useState<PromptFolderResponseDto[]>([]);
-  const [sharedWithMe, setSharedWithMe] = useState<PromptResponseDto[]>([]);
-  const [publicPrompts, setPublicPrompts] = useState<PromptResponseDto[]>([]);
-  const [publicFolders, setPublicFolders] = useState<PromptFolderResponseDto[]>(
-    [],
-  );
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<unknown>(null);
+  const state = usePromptsState({ listPrompts });
 
-  const refetchPrompts = useCallback(async () => {
-    try {
-      const response = await listPrompts();
-      setPrompts(response.prompts);
-      setFolders(response.folders);
-      setSharedWithMe(response.sharedWithMe);
-      setError(null);
-    } catch (err) {
-      setError(err);
-    }
-  }, []);
-
-  const refetchPublicPrompts = useCallback(async () => {
-    try {
-      const response = await listPublicPrompts();
-      setPublicPrompts(response.prompts);
-      setPublicFolders(response.folders);
-      setError(null);
-    } catch (err) {
-      setError(err);
-    }
-  }, []);
-
-  /*
-   * Both lists load independently: an organisation-bucket outage must not
-   * hide the caller's own prompts, and vice versa. `allSettled` also keeps
-   * `isLoading` honest — it always reaches false, whatever either call did.
-   */
-  useEffect(() => {
-    const cancelled = { value: false };
-
-    const load = async () => {
-      const [personal, organisation] = await Promise.allSettled([
-        listPrompts(),
-        listPublicPrompts(),
-      ]);
-      if (cancelled.value) return;
-
-      if (personal.status === 'fulfilled') {
-        setPrompts(personal.value.prompts);
-        setFolders(personal.value.folders);
-        setSharedWithMe(personal.value.sharedWithMe);
-      } else {
-        setError(personal.reason);
-      }
-
-      if (organisation.status === 'fulfilled') {
-        setPublicPrompts(organisation.value.prompts);
-        setPublicFolders(organisation.value.folders);
-      } else {
-        setError(organisation.reason);
-      }
-
-      setIsLoading(false);
-    };
-
-    load();
-
-    return () => {
-      cancelled.value = true;
-    };
-  }, []);
-
-  const contextValue = useMemo(
+  const contextValue = useMemo<PromptsContextType>(
     () => ({
-      prompts,
-      folders,
-      sharedWithMe,
-      publicPrompts,
-      publicFolders,
-      isLoading,
-      error,
-      refetchPrompts,
-      refetchPublicPrompts,
+      prompts: state.prompts,
+      folders: state.folders,
+      sharedWithMe: state.sharedWithMe,
+      publicPrompts: state.publicPrompts,
+      publicFolders: state.publicFolders,
+      isLoading: state.isLoading,
+      error: state.error,
+      refetchPrompts: state.refetch,
+      refetchPublicPrompts: state.refetchPublicPrompts,
     }),
-    [
-      prompts,
-      folders,
-      sharedWithMe,
-      publicPrompts,
-      publicFolders,
-      isLoading,
-      error,
-      refetchPrompts,
-      refetchPublicPrompts,
-    ],
+    [state],
   );
 
   return (

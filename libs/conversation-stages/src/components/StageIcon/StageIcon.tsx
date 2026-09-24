@@ -1,5 +1,9 @@
 import { StageStatus } from '@epam/ai-dial-chat-shared';
-import { DIAL_ICON_SIZE, Spinner } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  Spinner,
+} from '@epam/ai-dial-ui-kit';
 import { IconAlertCircle, IconCheck } from '@tabler/icons-react';
 import { FC } from 'react';
 import styles from '../StagesPanel/StagesPanel.module.scss';
@@ -23,10 +27,6 @@ export const StageIcon: FC<StageIconProps> = ({
   runningLabel = 'Running',
   failedLabel = 'Failed',
 }) => {
-  if (isLive) {
-    return <Spinner size={16} ariaLabel={runningLabel} />;
-  }
-
   if (status === StageStatus.Failed) {
     return (
       <>
@@ -34,17 +34,23 @@ export const StageIcon: FC<StageIconProps> = ({
           size={DIAL_ICON_SIZE.MD}
           className={styles.iconError}
           aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
         />
         <span className="sr-only">{failedLabel}</span>
       </>
     );
   }
 
-  return (
-    <IconCheck
-      size={DIAL_ICON_SIZE.SM}
-      className={styles.iconCompleted}
-      aria-hidden
-    />
-  );
+  if (status === StageStatus.Completed) {
+    return (
+      <IconCheck
+        size={DIAL_ICON_SIZE.SM}
+        className={styles.iconCompleted}
+        aria-hidden
+        stroke={DIAL_KIT_ICON_STROKE}
+      />
+    );
+  }
+
+  return isLive ? <Spinner size={16} ariaLabel={runningLabel} /> : null;
 };

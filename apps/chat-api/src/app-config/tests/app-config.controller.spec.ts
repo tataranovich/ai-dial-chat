@@ -4,7 +4,6 @@ import {
   VersioningType,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { ThrottlerModule } from '@nestjs/throttler';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionalSessionGuard } from '../../auth/session/optional-session.guard';
@@ -55,7 +54,6 @@ async function buildApp(
   mockService: ReturnType<typeof makeApp>['mockService'],
 ): Promise<INestApplication> {
   const module = await Test.createTestingModule({
-    imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }])],
     controllers: [AppConfigController],
     providers: [{ provide: AppConfigService, useValue: mockService }],
   })
@@ -114,6 +112,18 @@ describe('AppConfigController (integration)', () => {
       expect(result.body.features.asrEnabled).toBe(false);
       expect(result.body.config.asrModelId).toBeNull();
       expect(result.body.config.transcribeSizeLimitBytes).toBe(5_242_880);
+    });
+
+    /* A cached response keeps serving the previous deployment's announcements
+       and feature flags after a redeploy (issue #8827). */
+    it('forbids caching the response', async () => {
+      mockService.getClientConfig.mockResolvedValue(DEFAULT_RESPONSE);
+
+      const result = await request(app.getHttpServer())
+        .get('/v1/client-config?appId=chat-ui')
+        .expect(200);
+
+      expect(result.headers['cache-control']).toBe('private, no-store');
     });
 
     it('returns 400 when appId is missing', async () => {

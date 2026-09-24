@@ -1,6 +1,7 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   GhostButton,
   Skeleton,
   SkeletonVariant,
@@ -10,8 +11,9 @@ import {
   IconAlertTriangle,
   IconCircleCheck,
   IconCircleX,
+  IconClipboardX,
 } from '@tabler/icons-react';
-import { type FC, type KeyboardEvent } from 'react';
+import { type CSSProperties, type FC, type KeyboardEvent } from 'react';
 import type { ScheduledTaskRunHistoryListProps } from '../../models/scheduled-task-run-history-list-props';
 import type { ScheduledTaskRunItem } from '../../models/scheduled-task-run-item';
 import { ScheduledTaskRunStatus } from '../../types/scheduled-task-run-status';
@@ -25,6 +27,7 @@ const RunStatusIcon: FC<{ status: ScheduledTaskRunStatus }> = ({ status }) => {
           size={DIAL_ICON_SIZE.SM}
           className={styles.successIcon}
           aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
         />
       );
     case ScheduledTaskRunStatus.Error:
@@ -33,6 +36,7 @@ const RunStatusIcon: FC<{ status: ScheduledTaskRunStatus }> = ({ status }) => {
           size={DIAL_ICON_SIZE.SM}
           className={styles.errorIcon}
           aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
         />
       );
     case ScheduledTaskRunStatus.InProgress:
@@ -47,6 +51,7 @@ const RunStatusIcon: FC<{ status: ScheduledTaskRunStatus }> = ({ status }) => {
           size={DIAL_ICON_SIZE.SM}
           className={styles.missedIcon}
           aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
         />
       );
     default:
@@ -79,6 +84,7 @@ export const ScheduledTaskRunHistoryList: FC<
   const runTimestampClassName =
     typography?.runTimestampClassName ?? 'dial-small-text';
   const subtitleClassName = typography?.subtitleClassName ?? 'dial-body-text';
+  const unreadIndicatorLabel = labels.unreadIndicatorLabel ?? 'Unread';
 
   const cssVars = buildCssVars({
     '--strhl-success-icon': colors?.successIconColor,
@@ -86,16 +92,35 @@ export const ScheduledTaskRunHistoryList: FC<
     '--strhl-missed-icon': colors?.missedIconColor,
     '--strhl-subtitle-text': colors?.subtitleTextColor,
     '--strhl-current-run-bg': colors?.currentRunBackground,
+    '--strhl-unread-dot': colors?.unreadDotColor,
+    '--strhl-row-hover-bg': listStyles?.rowHoverBackground,
+    '--strhl-row-focus-bg': listStyles?.rowFocusBackground,
   });
 
   const renderRow = (run: ScheduledTaskRunItem) => {
     const statusLabel = labels.runStatusLabels[run.status];
     const isCurrent = run.id === currentRunId;
-    const accessibleName =
-      isCurrent && labels.currentRunLabel
-        ? `${statusLabel} ${run.timestampLabel} — ${labels.currentRunLabel}`
-        : `${statusLabel} ${run.timestampLabel}`;
-    const isClickable = Boolean(onRunClick);
+    /*
+     * The row's own aria-label overrides all descendant text per the ARIA
+     * accessible-name algorithm, so the unread state must be folded in here
+     * rather than left as a nested sr-only span the label would otherwise
+     * swallow — the same reason currentRunLabel is appended this way.
+     */
+    const accessibleNameSuffixes = [
+      run.isUnread ? unreadIndicatorLabel : undefined,
+      isCurrent ? labels.currentRunLabel : undefined,
+    ].filter((suffix): suffix is string => Boolean(suffix));
+    const accessibleName = [
+      `${statusLabel} ${run.timestampLabel}`,
+      ...accessibleNameSuffixes,
+    ].join(' — ');
+    /*
+     * A row is only ever interactive when its own run produced a
+     * conversation — an older/missed/in-progress run with no
+     * `conversationId` always renders static, even if the host supplies
+     * `onRunClick` unconditionally for the whole list.
+     */
+    const isClickable = Boolean(run.conversationId) && Boolean(onRunClick);
 
     return (
       <li
@@ -104,11 +129,11 @@ export const ScheduledTaskRunHistoryList: FC<
           ? {
               role: 'button',
               tabIndex: 0,
-              onClick: () => onRunClick?.(run.id),
+              onClick: () => onRunClick?.(run),
               onKeyDown: (event: KeyboardEvent) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  onRunClick?.(run.id);
+                  onRunClick?.(run);
                 }
               },
             }
@@ -116,15 +141,35 @@ export const ScheduledTaskRunHistoryList: FC<
         aria-label={accessibleName}
         aria-current={isCurrent ? 'true' : undefined}
         className={mergeClasses(
-          'flex h-8 items-center justify-between gap-2 rounded-full pe-2 ps-5',
+          'flex min-h-[var(--strhl-row-min-height,32px)] max-w-[328px] items-center justify-between gap-2 rounded-full pe-2',
+          styles.rowLayout,
           isCurrent && styles.currentRun,
           isClickable && 'cursor-pointer',
+          isClickable && styles.interactiveRow,
         )}
       >
-        <span className={mergeClasses(runTimestampClassName, 'truncate')}>
-          {run.timestampLabel}
+        <span className="flex items-center gap-2 truncate">
+          {/*
+           * A fixed 12x12 slot is always reserved before the timestamp so its
+           * horizontal position stays identical across rows whether or not
+           * the unread dot itself is rendered.
+           */}
+          <span className="relative flex size-3 shrink-0 items-center justify-center">
+            {run.isUnread && (
+              <span
+                className={mergeClasses(
+                  'size-[5.33px] rounded-full',
+                  styles.unreadDot,
+                )}
+                aria-hidden
+              />
+            )}
+          </span>
+          <span className={mergeClasses(runTimestampClassName, 'truncate')}>
+            {run.timestampLabel}
+          </span>
         </span>
-        <span className="flex h-8 w-14 shrink-0 items-center justify-end">
+        <span className="flex min-h-[var(--strhl-row-min-height,32px)] w-14 shrink-0 items-center justify-end">
           <RunStatusIcon status={run.status} />
         </span>
       </li>
@@ -136,7 +181,10 @@ export const ScheduledTaskRunHistoryList: FC<
       <li
         key={`history-skeleton-${index}`}
         aria-hidden="true"
-        className="flex h-8 items-center justify-between gap-2 pe-2 ps-5"
+        className={mergeClasses(
+          'flex min-h-[var(--strhl-row-min-height,32px)] max-w-[328px] items-center justify-between gap-2 pe-2',
+          styles.rowLayout,
+        )}
       >
         <Skeleton
           variant={SkeletonVariant.Rectangular}
@@ -154,7 +202,16 @@ export const ScheduledTaskRunHistoryList: FC<
 
   if (isLoading && items.length === 0) {
     return (
-      <ul style={cssVars} aria-label={labels.historyTitle}>
+      <ul
+        style={
+          {
+            ...cssVars,
+            '--strhl-row-min-height': listStyles?.rowMinHeight,
+          } as CSSProperties
+        }
+        aria-label={labels.historyTitle}
+        className="flex flex-col gap-0.5"
+      >
         {renderSkeletons(skeletonCount)}
       </ul>
     );
@@ -176,18 +233,34 @@ export const ScheduledTaskRunHistoryList: FC<
 
   if (items.length === 0) {
     return (
-      <p
-        role="status"
+      <div
         style={cssVars}
-        className={mergeClasses(subtitleClassName, styles.subtitleText)}
+        className="flex w-full flex-col items-center justify-center gap-2 py-4"
       >
-        {labels.emptyLabel}
-      </p>
+        <IconClipboardX
+          size={44}
+          stroke={DIAL_KIT_ICON_STROKE}
+          className={styles.subtitleText}
+          aria-hidden
+        />
+        <p role="status" className={runTimestampClassName}>
+          {labels.emptyLabel}
+        </p>
+      </div>
     );
   }
 
   return (
-    <ul style={cssVars} aria-label={labels.historyTitle}>
+    <ul
+      style={
+        {
+          ...cssVars,
+          '--strhl-row-min-height': listStyles?.rowMinHeight,
+        } as CSSProperties
+      }
+      aria-label={labels.historyTitle}
+      className="flex flex-col gap-0.5"
+    >
       {items.map(renderRow)}
       {isLoadingMore && renderSkeletons(skeletonCount)}
       {error ? (

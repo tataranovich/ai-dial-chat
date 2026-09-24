@@ -5,4 +5,6 @@ export enum FeatureKey {
   ScheduledTasksEnabled = 'features.scheduledTasksEnabled',
   Footer = 'features.footer',
   ResponsesApiEnabled = 'features.responsesApiEnabled',
+  SkillUsageEnabled = 'features.skillUsageEnabled',
+  DefaultDeploymentPinned = 'features.defaultDeploymentPinned',
 }

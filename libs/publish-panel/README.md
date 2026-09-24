@@ -10,6 +10,10 @@ Use this library whenever a host application needs the "publish to a folder, opt
 
 ## Installation
 
+Publishing UI includes the external file-manager folder tree. Hosts should load
+the publishing panel lazily when it opens. Only CSS/SCSS imports are declared as
+side effects, allowing unused publishing UI to be removed from eager consumers.
+
 ```json
 {
   "dependencies": {
@@ -21,11 +25,13 @@ Use this library whenever a host application needs the "publish to a folder, opt
 ## Peer Dependencies
 
 - `react`
-- `@tabler/icons-react`
-- `@epam/ai-dial-kit`
-- `@epam/ai-dial-sidebar`
 - `@epam/ai-dial-chat-shared`
 - `@epam/ai-dial-ui-kit`
+- `@epam/ai-dial-react-file-manager`
+
+`@epam/ai-dial-chat-shared` is kept external by the library build — a
+consumer's own bundler resolves it, so installing it is required rather than
+optional.
 
 ## Components
 
@@ -46,14 +52,92 @@ import { PublishPanel } from '@epam/ai-dial-publish-panel';
   hasExistingPublicationInFolder={false}
   hasWriteAccess
   isSubmitting={false}
+  author={author}
+  onAuthorChange={setAuthor}
+  rules={rules}
+  onRulesChange={setRules}
+  ruleSourceOptions={['title', 'roles', 'dial_roles']}
 />;
 ```
 
-Pass `renderSummary={() => <CustomHeader />}` instead of `resource` when the host needs to render a richer, domain-specific summary (icon, type badge, version pill) — see `libs/catalog`'s `DetailsPanel` for an example that renders its own `EntityHeader` plus a version tag this way.
+`author` is the publication's display author, rendered as a text field between
+the folder tree and the access-rules section. It is a controlled value like
+`rules`: pass `usePublishFlow`'s `author`/`setAuthor` straight through. An
+empty author is a valid state and never blocks submission — the host decides
+what an unset author means (both AI DIAL Chat hosts omit the field from the
+publish request so the backend falls back to the session's own display name).
+The library resolves nothing about the signed-in user itself; the prefill
+arrives through `usePublishFlow`'s `defaultAuthor`.
+
+Override its copy through `labels.authorLabel`, `labels.authorPlaceholder`, and
+`labels.authorHint`.
+
+#### Credentials opt-in
+
+Supply `onPublishCredentialsChange` to render an opt-in checkbox below the
+author field, asking whether the publication should carry the publisher's own
+credentials for the resource. Supplying the handler is what renders the
+control at all — omit it and the panel is exactly what it was before, which is
+what the conversation publish flow does. The value is controlled: pass
+`usePublishFlow`'s `publishCredentials`/`setPublishCredentials` straight
+through. The checkbox is disabled while `isSubmitting` is `true`.
+
+```tsx
+<PublishPanel
+  resource={{ title: item.name, version: item.version }}
+  history={history}
+  folderItems={folderItems}
+  onSelectedFolderPathChange={setSelectedFolderPath}
+  onCreateFolder={handleCreateFolder}
+  hasExistingPublicationInFolder={false}
+  hasWriteAccess
+  isSubmitting={false}
+  author={author}
+  onAuthorChange={setAuthor}
+  rules={rules}
+  onRulesChange={setRules}
+  ruleSourceOptions={['title', 'roles', 'dial_roles']}
+  publishCredentials={publishCredentials}
+  onPublishCredentialsChange={setPublishCredentials}
+  labels={{
+    credentialsLabel: t('catalog.publish.credentialsLabel'),
+    credentialsHint: t('catalog.publish.credentialsHint'),
+  }}
+/>
+```
+
+The library knows nothing about what the flag means to any backend: deciding
+whether to offer the control, and all of its copy, belong to the host.
+`labels.credentialsHint` is rendered as the checkbox's accessible description
+by the kit, so it must state what ticking the box does rather than restate the
+label.
+
+Add `type` (and optionally `iconUrl`) to `resource` to get the richer entity
+summary row — icon, type label, name, and a current-version tag — rendered by
+`ResourceSummary` from `@epam/ai-dial-chat-shared`. `libs/catalog`'s
+`DetailsPanel` uses this for versioned catalog entities:
+
+```tsx
+<PublishPanel
+  resource={{
+    title: item.name,
+    version: item.version,
+    type: item.type,
+    iconUrl: item.iconUrl,
+  }}
+  labels={{ summaryVersionLabel: t(...) }}
+  {...rest}
+/>;
+```
+
+For any other custom summary, pass `renderSummary={() => <CustomHeader />}`; it
+replaces the default title-only row and is ignored once `resource.type` is set.
 
 ### StandalonePublishPanel
 
 Standalone end-edge slide-in shell for the Publish flow: backdrop, header with Close, the `PublishPanel` body, and a pinned `PublishFooter`.
+
+While open it behaves as a modal dialog: it takes focus on mount, cycles Tab and Shift+Tab within itself, closes on Escape, and returns focus to `returnFocusRef` on close. Tab is left alone while focus sits outside the panel, so the folder-row menus and the rule source picker it renders through portals stay keyboard-operable. While closed it is `inert`, so nothing inside it is reachable.
 
 ```tsx
 import { StandalonePublishPanel } from '@epam/ai-dial-publish-panel';
@@ -69,6 +153,11 @@ import { StandalonePublishPanel } from '@epam/ai-dial-publish-panel';
   hasExistingPublicationInFolder={false}
   hasWriteAccess
   isSubmitting={false}
+  author={author}
+  onAuthorChange={setAuthor}
+  rules={rules}
+  onRulesChange={setRules}
+  ruleSourceOptions={['title', 'roles', 'dial_roles']}
   onClose={handleClose}
   onSubmit={handleSubmit}
 />;
@@ -87,6 +176,21 @@ import { PublishFooter } from '@epam/ai-dial-publish-panel';
   isSubmitLoading={false}
   onCancel={handleCancel}
   onSubmit={handleSubmit}
+/>;
+```
+
+### PublishAccessRules
+
+Access-rules section of the Publish flow: one removable chip per rule, an "Add rule" trigger opening `PublishAccessRuleEditor`, and a "Clear all" control shown only when rules exist. Pass `folderName` so the section states which destination folder the rules apply to; leave it `undefined` while no folder is selected and the section prompts the user to pick one instead, warning when rules already exist without a destination.
+
+```tsx
+import { PublishAccessRules } from '@epam/ai-dial-publish-panel';
+
+<PublishAccessRules
+  rules={rules}
+  onRulesChange={setRules}
+  sourceOptions={['title', 'roles', 'dial_roles']}
+  folderName={selectedFolderName}
 />;
 ```
 
@@ -116,11 +220,25 @@ import { PublishHistoryList } from '@epam/ai-dial-publish-panel';
 <PublishHistoryList entries={folderHistory} currentVersion={currentVersion} />;
 ```
 
+An entry whose `publishCredentials` is `true` is marked with a text label,
+overridable through `sharedCredentialsLabel` (default
+`'Shared credentials'`). The marker reports what that publication
+_requested_ — the library never claims the credential was applied, and never
+displays or accepts a credential value.
+
+```tsx
+<PublishHistoryList
+  entries={folderHistory}
+  currentVersion={currentVersion}
+  sharedCredentialsLabel={t('catalog.publish.historySharedCredentials')}
+/>
+```
+
 ## Hooks
 
 ### usePublishFlow
 
-Manages all state for the Publish flow: folder selection, optimistic local folder creation with rollback, existing-publication detection, and submit handling.
+Manages all state for the Publish flow: folder selection, optimistic local folder creation with rollback, existing-publication detection, access rules, the display author, and submit handling.
 
 ```tsx
 import { usePublishFlow } from '@epam/ai-dial-publish-panel';
@@ -129,7 +247,8 @@ const publishFlow = usePublishFlow({
   item,
   history,
   folderItems,
-  onPublish: async (item, folderPath) => {
+  defaultAuthor: currentUserDisplayName,
+  onPublish: async (item, folderPath, rules, author, publishCredentials) => {
     /* ... */
   },
   onPublishSuccess: (item, folderPath) => {
@@ -140,6 +259,22 @@ const publishFlow = usePublishFlow({
   },
 });
 ```
+
+`defaultAuthor` seeds the returned `author` and is what `reset()` restores.
+The library holds no notion of a session, so the host resolves the signed-in
+user's display name and passes it here. It may resolve after the first render:
+while the user has not edited the field, a later `defaultAuthor` replaces the
+current value; once `setAuthor` has been called, it no longer does.
+`handleSubmit` forwards the trimmed `author` to `onPublish` as its fourth
+argument.
+
+The hook also owns `publishCredentials` (a `boolean`) and
+`setPublishCredentials`, forwarded to `onPublish` as its fifth argument. It
+starts `false`, `reset()` restores it to `false`, and it is never pre-filled
+from history or the selected folder — a folder whose previous publication
+carried shared credentials still opens with the option cleared. The argument
+is additive, so a host callback declaring only the first four parameters stays
+assignable and keeps behaving as it did.
 
 ## Utilities
 
@@ -171,3 +306,45 @@ npm exec nx build publish-panel
 ```sh
 npm exec nx test publish-panel
 ```
+
+## Rollback
+
+`publish-panel` is published by `tools/publish-lib.mjs`, which reads the version from this
+package's `package.json` and writes it into `dist/package.json` before `npm publish`. To roll a
+consuming host back to a previous `@epam/ai-dial-publish-panel` release:
+
+1. Pin the host's dependency back to the previous version (e.g.
+   `"@epam/ai-dial-publish-panel": "1.1.0-dev.410"` instead of `"1.1.0-dev.412"`).
+2. `publish-panel` declares `@epam/ai-dial-chat-shared` as a peer and `@epam/ai-dial-catalog`
+   depends on `publish-panel` in turn — both are published from the same repository revision;
+   revert every package from this change's release set to its own matching previous version in
+   the same host update, rather than leaving a newer sibling installed against an older
+   `publish-panel` (or vice versa).
+3. Reinstall (`npm install`) so the host's lockfile records every reverted package's previous
+   resolved version and integrity hash, rather than a partial mix of pre- and post-change
+   versions.
+
+## Public class names
+
+A host embedding this package cannot style it through its CSS-module locals —
+they are hashed at build time — nor through DOM order or ARIA attributes, which
+are structure and accessibility contracts rather than styling ones. Selected
+elements therefore carry a stable public class.
+
+| Key     | Class                      | Element                                                |
+| ------- | -------------------------- | ------------------------------------------------------ |
+| `panel` | `dial-publish-panel-panel` | The panel body, which carries the themed CSS variables |
+
+```tsx
+import { PUBLISH_PANEL_CLASS } from '@epam/ai-dial-publish-panel';
+
+PUBLISH_PANEL_CLASS.panel; // 'dial-publish-panel-panel'
+```
+
+The classes carry no declarations of their own: nothing in `styles.css`
+selects on them, so they change nothing until a host writes a rule. Renaming
+one, or moving it to a different element, is a breaking change. The convention
+is in [`openspec/lib-styling-guide.md`](../../openspec/lib-styling-guide.md).
+
+Write host overrides with CSS logical properties (`margin-inline-start`,
+`inset-inline-end`) so they keep working under `dir="rtl"`.

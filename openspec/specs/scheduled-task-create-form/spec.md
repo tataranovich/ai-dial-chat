@@ -1,5 +1,9 @@
 # Spec: scheduled-task-create-form
 
+## Purpose
+
+The create and edit routes for scheduled tasks and the shared form component behind them.
+
 ## Requirements
 
 ### Requirement: New task navigates to a dedicated create route
@@ -80,7 +84,7 @@ It SHALL render:
 - **Display name** — required text input (`values.displayName`)
 - **Description** — optional textarea (`values.description`), rendered between Display name and Repeat, with `maxLength={500}` and accessible feedback (e.g. a character count or inline validation message per `errors.description`) shown when the field is non-empty
 - **Repeat** — a single dropdown (`DialSelectField`) bound to `values.repeat: ScheduledTaskRepeat` (`'oneTime' | 'hourly' | 'daily' | 'weekly' | 'monthly'`), replacing the separate "Schedule type" (once/recurring) and "Frequency" (daily/weekly/monthly) dropdowns. It is NOT wrapped in a `<fieldset>`/`<legend>` with a visible "Schedule" section heading — the schedule controls render as a plain grouped block inside the Details column, which already carries its own `role="group"`/`aria-label` (`labels.detailsSectionTitle`)
-- **Run at** — a `Calendar` control (`mode={CalendarMode.DateTime}`, imported from `@epam/ai-dial-ui-kit`) shown when `values.repeat === 'oneTime'`, bound to `values.runAt`
+- **Run at** — the internal `ScheduledTaskRunAtField` component (`libs/scheduled-tasks/src/components/ScheduledTaskRunAtField`, not re-exported from the package index), wrapping a `Calendar` control (`mode={CalendarMode.DateTime}`, imported from `@epam/ai-dial-ui-kit`) shown when `values.repeat === 'oneTime'`, bound to `values.runAt` (a `datetime-local`-style string) through the field's own `runAtToCalendarValue`/`calendarValueToRunAt` adaptation, with `errors.runAt` rendered below the control in the same inline-error pattern via the field's `errorClassName` prop. The field sets the earliest selectable moment to its mount time — a `minDate` pinned once per mount — so days strictly before the mount date render unselectable in the picker's month grid and activating them fires no `onFieldChange('runAt', …)`; the mount date itself and future days remain selectable. The earliest selectable moment is "now", not "now + lead": the page's existing submit-time lead validation (`runAt` must lead "now") is unchanged and still rejects `now`-ish selections at submit
 - **Time** — a `Calendar` control (`mode={CalendarMode.Time}`, imported from `@epam/ai-dial-ui-kit`) shown when `values.repeat` is `'daily'`, `'weekly'`, or `'monthly'` (NOT shown for `'hourly'`), bound to `values.time` (`HH:mm` local wall-clock string, validated at app edge)
 - **Day of week** — a `Calendar` control (`mode={CalendarMode.Weekday}`, imported from `@epam/ai-dial-ui-kit`) shown when `values.repeat === 'weekly'`, bound to `values.dayOfWeek` via `dayOfWeekToCalendarValue`/`calendarValueToDayOfWeek` (`libs/scheduled-tasks/src/utils/calendar-value.ts`), which convert between `Calendar`'s ISO weekday value (`"1"`=Monday..`"7"`=Sunday) and `values.dayOfWeek`'s APScheduler-convention string (`"0"`=Monday..`"6"`=Sunday)
 - **Day of month** — shown when `values.repeat === 'monthly'` (`values.dayOfMonth`)
@@ -93,7 +97,7 @@ It SHALL render:
 
 `description` is optional and MUST NOT participate in the Create-button required-field guard. The Create action SHALL be disabled while `isSubmitting` is `true` or while `displayName`, `values.modelId`, or `prompt` are empty (minimum client-side guard; full validation lives in the page). `values.modelId` itself continues to be owned and set by the host via the `modelSelector` element's own `onSelect` callback (bound to `onFieldChange('modelId', ...)` by the host, outside the lib) — the lib's required-field guard reads `values.modelId` exactly as it did before this change; only the rendered control changed.
 
-The `Run at` and `Time` `Calendar` controls' `onChange` callbacks MUST adapt the ui-kit's `CalendarValue` (`Date | string | null`) into calls to `onFieldChange('runAt', ...)` / `onFieldChange('time', ...)` using the same value shapes the page already consumes (`values.runAt` as a `Date`-constructible value, `values.time` as an `"HH:mm"` string) — this is a UI-control swap, not a change to the `values`/`onFieldChange` contract.
+The `Run at` and `Time` `Calendar` controls' `onChange` callbacks (inside `ScheduledTaskRunAtField` for `runAt`, in the form for `time`) MUST adapt the ui-kit's `CalendarValue` (`Date | string | null`) into calls to `onFieldChange('runAt', ...)` / `onFieldChange('time', ...)` using the same value shapes the page already consumes (`values.runAt` as a `Date`-constructible value, `values.time` as an `"HH:mm"` string) — this is a UI-control swap, not a change to the `values`/`onFieldChange` contract.
 
 The component MUST NOT import from `apps/chat`, `server-api`, any generated API client, routing, feature-flag context, notification context, deployments context, auth, env, or analytics. Importing `Calendar`/`CalendarMode` from `@epam/ai-dial-ui-kit` is permitted — it is a generic design-system control with no host-specific integration knowledge. `modelSelector` MUST remain an opaque `ReactNode` prop — the lib MUST NOT know it is a deployment selector, a dropdown, or anything about its internal behavior.
 
@@ -161,6 +165,21 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 
 - **WHEN** the create-task form renders
 - **THEN** no stream toggle or `values.stream`-bound control is present in the rendered output
+
+#### Scenario: Past days are unselectable in the run-at picker
+
+- **WHEN** `values.repeat === 'oneTime'` and the user opens the run-at picker's month grid
+- **THEN** every day strictly before the field's mount date renders disabled, and activating such a day fires no `onFieldChange('runAt', …)` — the out-of-range click is a no-op
+
+#### Scenario: The mount date and future days remain selectable
+
+- **WHEN** the user activates the field's mount date or any later day in the run-at picker
+- **THEN** `onFieldChange('runAt', <datetime-local string>)` fires with the picked moment (local midnight when no time-of-day was set yet; the pre-picked time-of-day is kept when one exists)
+
+#### Scenario: The earliest selectable moment does not change while the form stays open
+
+- **WHEN** the create or edit form re-renders repeatedly after the run-at field mounted (e.g. the user edits other fields for several minutes)
+- **THEN** the earliest selectable moment stays pinned at the field's mount time rather than advancing with each render, and the memoized `minDate` identity does not churn the `Calendar`'s internal effects
 
 ### Requirement: Page maps form values to BFF trigger shape
 
@@ -288,7 +307,7 @@ The lib remains presentational: it performs no timezone conversion, no i18n, and
 
 #### Scenario: Lib still has no host or integration imports
 
-- **WHEN** `libs/scheduled-tasks` source is statically analyzed after this change
+- **WHEN** `libs/scheduled-tasks` source is statically analyzed
 - **THEN** it contains no new imports of `apps/chat/*`, `@epam/chat-api-client`, `server-api`, routing, feature-flag, notification, deployments, auth, env, or analytics modules
 
 ### Requirement: Create-task page validates and converts the activity window to UTC boundaries
@@ -508,3 +527,74 @@ Every user-visible string on the edit-task page (page title, Save button label, 
 
 - **WHEN** the user activates "Edit" in a `ScheduledTaskCard`'s overflow menu for task `sched_123`
 - **THEN** the app navigates to `/scheduled-tasks/sched_123/edit`
+
+### Requirement: Instructions placeholder is part of the public labels contract
+
+ScheduledTaskCreateForm SHALL accept optional labels.instructionsPlaceholder and forward it directly to its lazy markdown editor. Undefined SHALL preserve the editor default and empty string SHALL suppress the placeholder. No observer, global query or editor-private class SHALL be required.
+
+#### Scenario: Placeholder survives lazy mounting and editor mode changes
+
+- **WHEN** the form receives a placeholder before the editor loads and later switches preview/edit
+- **THEN** the editable textarea displays the supplied placeholder whenever empty.
+
+#### Scenario: Locale and multiple instances are independent
+
+- **WHEN** the host changes one form's translated placeholder while another form has a different one
+- **THEN** each mounted editor reflects its own latest prop without cross-instance mutation.
+
+### Requirement: Form presentation options are forwarded through the shared shell
+
+The form SHALL expose optional backIcon, className and typed layout customization alongside existing colors/typography/theme props. It SHALL forward backIcon through builder-form and preserve the opaque modelSelector, label linkage and unique ids. Scheduled-task defaults SHALL use a narrow back arrow and tertiary header/divider tokens.
+
+#### Scenario: Host controls the back icon without changing SVG internals
+
+- **WHEN** a host provides backIcon or uses the scheduler default
+- **THEN** the supplied icon or default narrow arrow renders inside the existing accessible back control without changing its behavior.
+
+#### Scenario: Configuration copy and editor theme remain host-controlled
+
+- **WHEN** a host supplies the agreed Configuration subtitle, instructions placeholder and editor theme
+- **THEN** those values render without hardcoded English copy, and no skill selector is added.
+
+#### Scenario: Form sizing follows its own container
+
+- **WHEN** the form is rendered with configured column sizes inside a narrow host container
+- **THEN** controls fit, responsive layout falls back before overflowing, and header border retains its configured token.
+
+### Requirement: Create and edit integrate shared validation without duplicating policy
+
+Both app pages SHALL use the shared validator/checked preparation before API writes and map error codes through one host translation mapping. A local useScheduledTaskFormLabels(mode) SHALL own common labels/options. Form values and notifications SHALL remain app-owned. Network failure SHALL preserve edits. The library minimum disabled guard SHALL not replace full submit validation.
+
+#### Scenario: Both submit paths reject missing recurrence day
+
+- **WHEN** Create or Save is activated for Weekly/Monthly without its day
+- **THEN** a field error is shown and neither create nor update is called.
+
+#### Scenario: Correcting a field clears obsolete feedback
+
+- **WHEN** a user fixes an invalid field or changes repeat mode
+- **THEN** irrelevant field errors clear/recompute consistently in create and edit while other errors remain meaningful.
+
+#### Scenario: Save failure preserves entered values
+
+- **WHEN** a valid write request fails
+- **THEN** the form preserves values, reports the host error and re-enables actions without navigation.
+
+### Requirement: Edit loading failures are distinct from unsupported schedules
+
+Edit state SHALL distinguish loading, ready, not-found, load-error and unsupported. Unsupported SHALL only follow a successful DTO failing reverse mapping. Task identity changes SHALL reset stale state and guard late responses. Retry SHALL reload the current task. Existing feature and returnUrl policy SHALL be preserved.
+
+#### Scenario: Network failure offers retry
+
+- **WHEN** loading an editable task fails with a network error or 5xx
+- **THEN** a translated load error with retry appears, not the unsupported-schedule message.
+
+#### Scenario: Successful retry and task change clear stale state
+
+- **WHEN** an unsupported/error state is followed by loading another valid task or a successful retry
+- **THEN** the valid form becomes available and stale responses cannot restore the old state.
+
+#### Scenario: Unsupported trigger is still protected
+
+- **WHEN** a successful response contains a trigger that cannot round-trip through the form
+- **THEN** the unsupported state is shown and no lossy editable form is constructed.

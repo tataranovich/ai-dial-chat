@@ -28,13 +28,231 @@ Every lib under `libs/` must have these three fields in its `package.json`:
 }
 ```
 
+## `dependencies` vs `peerDependencies`
+
+A lib is a normal npm package: if it imports something at runtime, it declares
+it and npm installs it. A peer is the narrow exception — a package the **host
+also names**, where a second copy would be a bug rather than a waste.
+
+**No third-party package is a peer.** Icons, markdown, syntax highlighting,
+PDF, MCP, editors, grids — every implementation library goes in
+`dependencies` of the lib that imports it. A host installs one package and
+renders; it does not assemble a laundry list of transitive peers. Adding a
+third-party peer needs a written reason in the change's design doc.
+
+These are the peers:
+
+| Peer                               | Why                                                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `react` / `react-dom`              | one renderer per app, always                                                                    |
+| `@epam/ai-dial-chat-shared`        | the shared types/utils/context layer every host imports directly                                |
+| `@epam/ai-dial-ui-kit`             | the design-system singleton                                                                     |
+| `@epam/ai-dial-react-file-manager` | an AG-Grid-backed component a host renders itself; two AG Grid copies break module registration |
+| `@epam/ai-dial-chat-hooks`         | a host installs it as a scenario root of its own, and its hooks hold the conversation state     |
+
+**Everything else goes in `dependencies`** — third-party implementation
+libraries, and sibling libs under `libs/` that a host never names (`sidebar`
+inside `conversation-panel`, `attachment-input` inside `conversation-input`).
+A host installs one package and renders.
+
+### A sibling lib is a dependency, and the fixture has to pack it
+
+Publishing resolves a sibling spec to the release version, which exists on the
+registry, so a published package is fine either way. The catch is local: a
+tarball packed from `dist/` names a version that was never published, so
+`npm install` on it alone dies with `ETARGET`. While siblings were peers this
+never showed, because `--legacy-peer-deps` skips peers entirely.
+
+`tools/attachment-canvas-consumer-fixture` therefore packs the transitive
+closure of a lib's workspace `dependencies` and hands every tarball to one
+`npm install`, which lets npm satisfy each spec from the local tree. If you add
+a workspace dependency to a lib the fixture covers, nothing extra is needed —
+the closure is computed from the manifests. If you make the fixture cover
+another lib, keep that behaviour.
+
+### Every version spec needs an upper bound
+
+A spec that does not cap the major accepts the next breaking release, so it
+constrains nothing that matters — npm stays silent and the host finds out at
+runtime. Declare the range the lib is actually built against, normally a caret.
+
+`"*"` is the obvious form, and it sat on `@epam/ai-dial-ui-kit` in 11 libs —
+enough for a kit major to reach a host unannounced. `">=0.0.14"` is the same
+defect written longhand, which is how `chat-hooks` accepted any
+`@epam/pdf-highlighter-kit` while every lib that actually used it wanted
+`^0.0.18`. `"latest"` and `"x"` are the same thing again.
+
+The one exception is a sibling under `libs/`: `tools/publish-lib.mjs` rewrites
+workspace-lib specs to the release version, so a placeholder there never
+reaches npm.
+
+A README that annotates a peer with a version must quote the manifest's range
+verbatim — that is the number a host copies. `npm run validate:docs` fails on
+an unbounded spec, and on a README citing a range its manifest no longer
+declares (`chat-hooks` advertised `@epam/pdf-highlighter-kit ^0.0.18` and
+`react-file-manager ^0.2.0-dev.10` after both manifests had moved on).
+
+### One external package, one range
+
+A host installs a single copy of a third-party package however many libs name
+it, so two libs naming it at different ranges either agree by luck or push the
+host back to the `resolutions` pin the section below is about. This is the same
+defect as a split role, written in version specs.
+
+It reached the main line as scaffolding drift: each new lib pinned
+`@epam/ai-dial-ui-kit` at whatever the kit was that week, leaving
+`^0.14.0-dev.15`, `^0.14.0-dev.30` and `^0.14.0-dev.37` declared at once, and
+`react` at `^19.0.0`, `^19.2.6` and `^19.2.7`. None of those was a statement
+about what the lib needed.
+
+Declare the one range the workspace is built against — for a kit entry gated
+behind a feature (`/editors`, `/grid`), that is the release containing it, not
+the dev prerelease it first appeared in. Prefer a published release over a
+`-dev.N` prerelease: a caret on a prerelease lets a host resolve to another
+prerelease. `npm run validate:docs` fails on a package declared at two ranges;
+siblings under `libs/` are exempt, their spec being a placeholder.
+
+### One package, one role
+
+A package must never be a `dependency` of one lib and a required peer of
+another. npm is then free to install two divergent copies beside the host's own,
+and the host's only escape is a `resolutions` pin. This is the exact defect that
+reached the main line: `conversation-panel` was the lone lib with
+`@epam/ai-dial-ui-kit` in `dependencies` while 26 peered it, so every embedding
+application carried
+
+```json
+"resolutions": { "@epam/ai-dial-ui-kit": "0.14.0-dev.41" }
+```
+
+`npm run validate:docs` fails on a split role, so a PR catches it.
+
+### Optional peers are for scoping an install, not for hedging
+
+`peerDependenciesMeta.optional` means _this entry point does not need the
+package_. It is the right tool when a lib has real entry points whose
+dependency sets differ — `chat-shared` (`.` / `./markdown` / `./file-manager`,
+with an entry-point-to-peer matrix in its README) and `chat-hooks` (feature
+packages a conversation-only host never installs) are the two reference cases.
+
+It is the wrong tool for a package the lib imports unconditionally: `npm
+install` then succeeds and the failure surfaces later, in the consumer's
+bundler. If a lib always imports it, it is a `dependency` — optional-but-always-
+needed is just a required peer with the warning suppressed.
+
+A lazily imported package is still a `dependency`. Lazy loading governs which
+chunk it lands in, not who installs it — `attachment-canvas` keeps its PDF and
+syntax-highlighter engines in on-demand chunks while declaring both as
+dependencies, and `tools/attachment-canvas-consumer-fixture` proves the boundary
+holds.
+
+### A meta-only optional peer declares nothing
+
+`peerDependenciesMeta` annotates `peerDependencies` and nothing else. A key with
+no matching peer entry is metadata npm ignores outright, so the manifest reads
+as a deliberate "this one is optional" while putting the package on no install
+list at all — and the lib imports it regardless. That is how `chat-hooks`
+shipped `@mcp-ui/client` in its meta block alone while its MCP entry point
+imported it.
+
+Pick a real role: declare the peer (marked optional when an entry point can do
+without it), or move it to `dependencies`. `npm run validate:docs` fails on a
+meta-only orphan.
+
+### Test tooling never reaches the manifest a host installs
+
+`dependencies` and `peerDependencies` are the consuming application's install
+list. A runner named in either is installed into every host or warned about on
+every install, which is how `chat-shared` came to publish `vitest: "~4.1.0"` as
+a **required** peer — an embedding host was told it had to add a test runner to
+render a chat column.
+
+Vitest, Testing Library, Playwright, jsdom and their `@types/*` belong in
+`devDependencies`, which is never published to a consumer's tree. The same goes
+for anything else only the workspace runs: linters, generators, build plugins.
+`npm run validate:docs` fails on a test tool in either shipped field.
+
+## Every `exports` target must be a file the build emits
+
+Nothing in this workspace resolves a lib through its own `exports` map. Every
+in-repo consumer — `apps/chat`, the lib's own Vitest suite, a sibling lib —
+resolves the bare specifier straight to `src/index.ts` through a
+`resolve.alias` or the `@epam/source` condition. npm then publishes an
+`exports` map without checking that any of it resolves. So a target naming a
+file that does not exist is invisible from inside the repo, green in CI, and
+broken for every downstream host — which is exactly what happened: nine libs
+declared `"./styles.css": "./dist/style.css"` while Vite emits `index.css`,
+and every embedding application had to add a bundler alias per package
+([issue #8719](https://github.com/epam/ai-dial-chat/issues/8719)).
+
+**Vite lib builds in this workspace emit `index.*`.** `build.lib.fileName` is
+`'index'` in every `vite.config.mts`, so the outputs are `dist/index.js`,
+`dist/index.d.ts`, and — when the lib has any stylesheet — `dist/index.css`.
+There is no `style.css`. Write the manifest against those names.
+
+### The stylesheet export
+
+A lib with **any** `.scss` or `.css` under `src/` ships a stylesheet and must
+export it as `./styles.css`, placed directly after `./package.json`:
+
+```json
+{
+  "exports": {
+    "./package.json": "./package.json",
+    "./styles.css": "./dist/index.css",
+    ".": {
+      "@epam/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  }
+}
+```
+
+`import '@epam/<pkg>/styles.css'` must work with no bundler alias in the host.
+A lib with no stylesheets must not declare the export at all — an export
+pointing at a file the build never emits is the same defect in the other
+direction.
+
+Document the import in the README, directly under the Installation snippet:
+
+````md
+Import the stylesheet once in the consuming app:
+
+```ts
+import '@epam/ai-dial-example/styles.css';
+```
+````
+
+### When you add the first stylesheet to a lib
+
+A lib that had no CSS starts emitting `dist/index.css` the moment its first
+`.module.scss` lands. Add the `./styles.css` export and the README line in the
+**same change** — nothing else will tell you, since no in-repo consumer imports
+it.
+
+### What catches a mistake, and when
+
+`tools/publish-lib.mjs` verifies that every `exports` target and every
+`main`/`module`/`types` entry exists in `dist/` before it writes the
+publish-ready manifest, and aborts the publish otherwise. That is a **release**
+gate, not a PR gate — it stops a broken package from reaching npm, but it will
+not tell you during review. Get the manifest right when you write it.
+
+`tools/attachment-canvas-consumer-fixture` is the one project that installs a
+packed tarball and builds against the real `exports` map. Reach for that
+pattern when a lib's published boundary carries load beyond entry-point
+existence — lazy chunk splitting, a stylesheet that must stay free of vendor
+selectors — as `libs/attachment-canvas/tests/package-boundary/` does.
+
 ## README.md requirements
 
 Every lib under `libs/` must have a `README.md` at its root. The README must include:
 
 1. **H1 heading** — the npm package name (e.g. `# @epam/ai-dial-example`).
 2. **Overview** — a detailed paragraph explaining the lib's purpose, what problems it solves, and when to use it.
-3. **Installation** — a `package.json` snippet showing how to add the dependency.
+3. **Installation** — a `package.json` snippet showing how to add the dependency, followed by the stylesheet import when the lib ships one (see above).
 4. **Peer Dependencies** — a list of required peer deps.
 5. **Components / Hooks / Utilities** — one subsection per major export with a minimal usage example.
 
@@ -269,12 +487,12 @@ return (
 
 ## Typography and color utility classes as props
 
-**Never hardcode typography or color utility classes** (e.g. `dial-body-semi-text`, `dial-small-text`, `text-sm`, `font-bold`, `text-primary`, `text-secondary`, `text-accent`) directly in lib component JSX. The consuming app decides which type scale and color tokens to use. Instead, accept an optional prop and use a sensible default:
+**Never hardcode typography or color utility classes** directly in lib component JSX. The consuming app decides which type scale step and color tokens to use. Instead, accept an optional `<element>ClassName` prop (e.g. `titleClassName`, `labelClassName`, `placeholderIconClassName`) and give it a sensible default:
 
 ```tsx
 // Correct — configurable with a sensible default
 interface MyProps {
-  /** CSS class applied to the title. Defaults to `'dial-body-semi-bold-text'`. */
+  /** CSS class applied to the title. Defaults to `'dial-body-semi-text'`. */
   titleClassName?: string;
   /** Color class applied to the placeholder icon. Defaults to `'text-secondary'`. */
   placeholderIconClassName?: string;
@@ -294,4 +512,42 @@ export const MyComponent: FC<MyProps> = ({
 <Icon className="text-secondary" />
 ```
 
-Name the prop `<element>ClassName` (e.g. `titleClassName`, `labelClassName`, `placeholderIconClassName`). Layout helpers (`truncate`, `min-w-0`, `flex-1`) and structural color-independent utilities that do not vary by theme may remain hardcoded.
+Layout helpers (`truncate`, `min-w-0`, `flex-1`) and structural color-independent utilities that do not vary by theme may remain hardcoded.
+
+### The default must be a real class from the kit's type scale
+
+Every typography default — and every value an app passes in — is a `dial-*-text` class from `@epam/ai-dial-ui-kit`. Nothing else is a valid font size in a lib:
+
+- **Never** a raw Tailwind size utility (`text-xs`, `text-sm`, `text-base`, `text-lg`, `text-[13px]`) or weight utility (`font-bold`, `font-semibold`) — those carry no line-height from the scale.
+- **Never** a `font-size` / `line-height` / `font-weight` declaration in the lib's `.module.scss`. Only `em`-relative sizing that genuinely cannot be a static class is exempt, and it needs a comment saying why.
+- **Never** a locally defined or re-declared `.dial-*-text` rule in lib CSS — that shadows the kit and drifts on the next upgrade. If a step you need does not exist in the scale, that is a gap to raise in the kit, not to patch locally.
+- **Never** `!important` on a `line-height` (or any other typography property) in lib CSS. It silently overrides whatever scale class the app passed, leaving the typography prop half-effective.
+
+Two narrow exceptions, both requiring a comment that states the reason:
+
+- **Pseudo-element glyphs** (`::before` / `::after` content) take no class, so their sizing has to live in CSS. Keep it `em`-relative so it tracks the class on the host element.
+- **A caller-driven CSS-var channel** — a lib may accept raw `fontFamily` / `fontSize` / `lineHeight` / `letterSpacing` values and forward them through `buildCssVars`, as `AttachmentCanvas` does, when it renders into a surface that cannot take a class (a third-party viewer's inline style API, a canvas, an iframe). Declare the vars **without fallbacks** so an unset var resolves to `inherit` and a `fontClassName` on the same element still wins, and document that precedence on the props. This is a second channel, not a replacement: the lib must still expose the `<element>ClassName` prop and default it to a scale class.
+
+### Verify the class name before you write it
+
+**Look the name up with the MCP server** — `getEntityDetails("typography")` returns the full scale and is the only source of truth. Do not write a `dial-*-text` name from memory.
+
+This is not pedantry: a misspelled or removed class **compiles to nothing at all**. `typecheck` and `test` never see Tailwind class strings, so the build stays green and the text silently falls back to whatever size it inherits. `dial-body-semi-bold-text` does not exist and never did; `dial-caption-semi-text` was removed in kit 0.13.0. Both read as plausible and both render as unstyled text.
+
+The same applies to renames and rescales in a kit upgrade — the heading scale shifted one step in 0.13.0 with no TypeScript signal. After bumping `@epam/ai-dial-ui-kit`, sweep `libs/*` for `dial-*-text` and check the classes still mean what the component intended (see the migration-guide workflow in `AGENTS.md`).
+
+### `*-lead-*` classes uppercase themselves
+
+`dial-tiny-lead-text`, `dial-tiny-lead-semi-text`, and `dial-caption-lead-semi-text` apply `text-transform: uppercase` and their own `letter-spacing`. Pass them the sentence-case string and drop any `uppercase` utility, `tracking-[…]` utility, or `.toUpperCase()` call at the same spot — the CSS transform keeps the accessible name readable, while a pre-uppercased string makes screen readers spell short labels out letter by letter.
+
+```tsx
+// Correct
+badgeClassName = 'dial-caption-lead-semi-text',
+
+// Wrong — redundant tracking and a class the kit no longer ships
+badgeClassName = 'dial-caption-semi-text uppercase tracking-[0.6px]',
+```
+
+### Keep the doc comment and the default in sync
+
+The doc comment must quote the default **verbatim** (see _JSDoc on all exported symbols_ above). A comment that names a different class than the destructuring default is worse than no comment: it is the string a caller copies into their own override, which is exactly how `dial-body-semi-bold-text` spread through `libs/conversation-input`.

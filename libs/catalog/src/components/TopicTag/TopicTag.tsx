@@ -1,5 +1,5 @@
-import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
-import { DialTag, DialTooltip } from '@epam/ai-dial-ui-kit';
+import { mergeClasses } from '@epam/ai-dial-chat-shared';
+import { Tooltip } from '@epam/ai-dial-ui-kit';
 import {
   FC,
   useCallback,
@@ -8,13 +8,13 @@ import {
   useRef,
   useState,
 } from 'react';
-import styles from './TopicTag.module.scss';
+import { CardTag } from '../CardTag/CardTag';
 
 /** Color overrides for `TopicTag`, applied as CSS custom properties. */
 export interface TopicTagColors {
   /** Tag text color. Fallback: `--text-secondary`. */
   text?: string;
-  /** Tag border color. Fallback: `--stroke-secondary`. */
+  /** Tag border color. Fallback: `--stroke-tertiary`. */
   border?: string;
   /** Tag background color. Fallback: `--bg-layer-sunken`. */
   background?: string;
@@ -35,20 +35,7 @@ export const TopicTag: FC<TopicTagProps> = ({
   label,
   className = 'dial-tiny-text',
   colors,
-}) => (
-  /* `DialTag` takes no `style`, so the variables go on a `display: contents`
-   * wrapper — it generates no box, leaving layout and width measurement intact. */
-  <span
-    className="contents"
-    style={buildCssVars({
-      '--cat-pricing-tag-text': colors?.text,
-      '--cat-pricing-tag-border': colors?.border,
-      '--cat-pricing-tag-bg': colors?.background,
-    })}
-  >
-    <DialTag label={label} className={mergeClasses(className, styles.tag)} />
-  </span>
-);
+}) => <CardTag label={label} badgeClassName={className} colors={colors} />;
 
 /** Props for TopicsLine. */
 export interface TopicsLineProps {
@@ -76,6 +63,13 @@ export const TopicsLine: FC<TopicsLineProps> = ({
   const tagRefs = useRef<(HTMLDivElement | null)[]>([]);
   const tagWidthCacheRef = useRef<number[]>([]);
   const badgeRef = useRef<HTMLDivElement>(null);
+  /*
+   * Ceiling written by the overflow guard below. The prediction from cached
+   * widths runs on every render, so a correction it does not know about would
+   * be undone on the next pass; keeping the ceiling here makes the guard win
+   * until the topics or the container change.
+   */
+  const maxVisibleRef = useRef(Number.POSITIVE_INFINITY);
 
   const [visibleCount, setVisibleCount] = useState(topics.length);
 
@@ -127,11 +121,12 @@ export const TopicsLine: FC<TopicsLineProps> = ({
       count = i + 1;
     }
 
-    setVisibleCount(count);
+    setVisibleCount(Math.min(count, maxVisibleRef.current));
   }, [topics.length]);
 
   useLayoutEffect(() => {
     tagWidthCacheRef.current = [];
+    maxVisibleRef.current = Number.POSITIVE_INFINITY;
     setVisibleCount(topics.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topicsKey]);
@@ -140,11 +135,32 @@ export const TopicsLine: FC<TopicsLineProps> = ({
     computeVisibleCount();
   });
 
+  /*
+   * The prediction above trusts widths measured earlier, which can be stale —
+   * a tag measured before its web font loaded, or a cell that ended up
+   * narrower than it reported. Its only symptom is the one the layout must
+   * never show: a tag clipped mid-word with no "+N" badge to reveal it. The
+   * laid-out row is the ground truth, so drop one more tag whenever it still
+   * overflows, until it fits.
+   */
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || visibleCount === 0) return;
+    if (container.scrollWidth <= container.clientWidth) return;
+
+    maxVisibleRef.current = visibleCount - 1;
+    setVisibleCount(maxVisibleRef.current);
+  }, [visibleCount]);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    const observer = new ResizeObserver(() => computeVisibleCount());
+    const observer = new ResizeObserver(() => {
+      /* A new width invalidates the ceiling the guard settled on. */
+      maxVisibleRef.current = Number.POSITIVE_INFINITY;
+      computeVisibleCount();
+    });
     observer.observe(container);
     return () => observer.disconnect();
   }, [computeVisibleCount]);
@@ -154,7 +170,7 @@ export const TopicsLine: FC<TopicsLineProps> = ({
       <div
         ref={containerRef}
         className={mergeClasses(
-          'flex min-w-0 flex-1 flex-nowrap items-center gap-2 overflow-hidden',
+          'relative flex min-w-0 flex-1 flex-nowrap items-center gap-2 overflow-hidden',
           className,
         )}
       />
@@ -182,7 +198,7 @@ export const TopicsLine: FC<TopicsLineProps> = ({
         </div>
       ))}
       {overflow > 0 && (
-        <DialTooltip tooltip={topics.slice(visibleCount).join(', ')}>
+        <Tooltip tooltip={topics.slice(visibleCount).join(', ')}>
           <span
             aria-label={
               overflowAriaLabel?.(overflow) ?? `and ${overflow} more topics`
@@ -190,12 +206,15 @@ export const TopicsLine: FC<TopicsLineProps> = ({
           >
             <TopicTag label={`+${overflow}`} />
           </span>
-        </DialTooltip>
+        </Tooltip>
       )}
+      {/* Measures the badge before it is needed. Pinned to the container's own
+          start corner (not outside it) so it never counts as overflow for the
+          guard above, in either writing direction. */}
       <div
         ref={badgeRef}
         aria-hidden
-        className="invisible absolute -left-full -top-full"
+        className="invisible absolute start-0 top-0"
       >
         <TopicTag label={`+${topics.length}`} />
       </div>

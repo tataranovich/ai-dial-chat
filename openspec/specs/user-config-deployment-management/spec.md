@@ -1,5 +1,9 @@
 # Spec: user-config-deployment-management
 
+## Purpose
+
+Installing, uninstalling, and selecting deployments within the user configuration.
+
 ## Requirements
 
 ### Requirement: PATCH /api/v1/user-config/deployments installs or uninstalls a deployment
@@ -154,8 +158,6 @@ The handler calls `userConfigService.updateSelectedDeployment(id, at, bucket)`.
 `updateSelectedDeployment` reads the current config, sets `deployments.selectedId = id`, then writes back via `writeConfig`. The entire operation MUST be a read-modify-write.
 
 **Authorization:** Requires authenticated user (existing `SessionGuard` on the controller). Same as all other user-config mutation endpoints.
-
-**Rate limiting:** Inherits the controller-level throttle. No per-route override needed (user-initiated writes are low frequency).
 
 **operationId:** `updateSelectedDeployment` (handler method name on the controller).
 

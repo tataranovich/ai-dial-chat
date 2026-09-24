@@ -1,4 +1,10 @@
-## ADDED Requirements
+# file-metadata-get Specification
+
+## Purpose
+
+Retrieving single-file metadata through the Chat API.
+
+## Requirements
 
 ### Requirement: Retrieve single-file metadata through Chat API
 
@@ -25,9 +31,6 @@ request timed out.
 **Authorization**: session-authenticated users only (`req.user.at` bearer token
 forwarded to DIAL Core). Unauthenticated requests yield `401 Unauthorized`
 (handled by the existing session guard).
-
-**Rate limit**: `@Throttle({ default: { limit: 60, ttl: 60000 } })` — same as
-`listFiles` and `downloadFile`.
 
 **Caching**: none. File metadata changes on every write; no cache TTL or
 invalidation strategy is needed for this endpoint.
@@ -106,7 +109,7 @@ Authorization: (session cookie)
 | 401    | No valid session                                                |
 | 403    | DIAL Core returns 403 (user lacks READ permission on file)      |
 | 404    | DIAL Core returns 404, including an empty 404 response body (file does not exist) |
-| 429    | Rate limit exceeded                                             |
+| 429    | DIAL Core rate limit exceeded                                             |
 | 502    | DIAL Core returns a non-OK, non-mapped HTTP status (4xx other than above, or 5xx) |
 | 503    | No HTTP response from DIAL Core: unreachable, connection failure, or timeout |
 

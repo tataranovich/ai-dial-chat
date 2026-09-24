@@ -7,15 +7,18 @@ import {
 } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
-  GhostIconButton,
+  ToggleIconButton,
 } from '@epam/ai-dial-ui-kit';
 import {
   IconMarkdown,
   IconPencilMinus,
   IconRefresh,
   IconThumbDown,
+  IconThumbDownFilled,
   IconThumbUp,
+  IconThumbUpFilled,
   IconTrashX,
 } from '@tabler/icons-react';
 import { FC, useCallback, useState } from 'react';
@@ -37,6 +40,7 @@ export const MessageActions: FC<MessageActionsProps> = ({
   onDislike,
   activeRating,
   isAlwaysVisible,
+  isDisabled = false,
   className,
   labels,
   colors,
@@ -44,6 +48,15 @@ export const MessageActions: FC<MessageActionsProps> = ({
   const { tooltips, ariaLabels } = labels ?? {};
   const [copied, setCopied] = useState<'copy' | 'markdown' | null>(null);
   const [copyStatus, setCopyStatus] = useState('');
+
+  const hasAnyAction =
+    onEdit != null ||
+    onDelete != null ||
+    onRegenerate != null ||
+    onCopy != null ||
+    onCopyMarkdown != null ||
+    onLike != null ||
+    onDislike != null;
 
   const cssVars = buildCssVars({
     '--ma-active-rating-text': colors?.activeRatingText,
@@ -65,6 +78,14 @@ export const MessageActions: FC<MessageActionsProps> = ({
     setTimeout(() => setCopied(null), COPIED_RESET_MS);
   }, [onCopyMarkdown, ariaLabels?.copiedMarkdownStatus]);
 
+  /*
+   * No handler means a read-only message: an empty toolbar with a live region
+   * nothing ever populates is dead DOM, so render nothing at all.
+   */
+  if (!hasAnyAction) {
+    return null;
+  }
+
   return (
     <div
       role="toolbar"
@@ -82,37 +103,58 @@ export const MessageActions: FC<MessageActionsProps> = ({
       {role === MessageRole.User ? (
         <>
           {onEdit && (
-            <GhostIconButton
-              icon={<IconPencilMinus size={DIAL_ICON_SIZE.SM} aria-hidden />}
+            <ToggleIconButton
+              icon={
+                <IconPencilMinus
+                  size={DIAL_ICON_SIZE.SM}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               size={ElementSize.Small}
               aria-label={ariaLabels?.editMessage ?? 'Edit message'}
               tooltipProps={{ tooltip: tooltips?.edit ?? 'Edit' }}
               onClick={onEdit}
               onMouseEnter={onEditHover}
               onFocus={onEditHover}
+              disabled={isDisabled}
             />
           )}
           {onDelete && (
-            <GhostIconButton
-              icon={<IconTrashX size={DIAL_ICON_SIZE.SM} aria-hidden />}
+            <ToggleIconButton
+              icon={
+                <IconTrashX
+                  size={DIAL_ICON_SIZE.SM}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               size={ElementSize.Small}
               aria-label={ariaLabels?.deleteMessage ?? 'Delete message'}
               tooltipProps={{ tooltip: tooltips?.delete ?? 'Delete' }}
               onClick={onDelete}
+              disabled={isDisabled}
             />
           )}
         </>
       ) : (
         <>
           {onRegenerate && (
-            <GhostIconButton
-              icon={<IconRefresh size={DIAL_ICON_SIZE.SM} aria-hidden />}
+            <ToggleIconButton
+              icon={
+                <IconRefresh
+                  size={DIAL_ICON_SIZE.SM}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               size={ElementSize.Small}
               aria-label={
                 ariaLabels?.regenerateResponse ?? 'Regenerate response'
               }
               tooltipProps={{ tooltip: tooltips?.regenerate ?? 'Regenerate' }}
               onClick={onRegenerate}
+              disabled={isDisabled}
             />
           )}
           {onCopy && (
@@ -124,6 +166,7 @@ export const MessageActions: FC<MessageActionsProps> = ({
               copyLabel={tooltips?.copy ?? 'Copy'}
               copiedLabel={tooltips?.copied ?? 'Copied!'}
               ariaLabel={ariaLabels?.copyResponse ?? 'Copy response'}
+              isDisabled={isDisabled}
             />
           )}
           {onCopyMarkdown && (
@@ -132,41 +175,68 @@ export const MessageActions: FC<MessageActionsProps> = ({
               onClick={handleCopyMarkdown}
               size={ElementSize.Small}
               isCopied={copied === 'markdown'}
-              iconCopy={<IconMarkdown size={DIAL_ICON_SIZE.SM} aria-hidden />}
+              iconCopy={
+                <IconMarkdown
+                  size={DIAL_ICON_SIZE.SM}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
               copyLabel={tooltips?.copyMarkdown ?? 'Copy as Markdown'}
               copiedLabel={tooltips?.copiedMarkdown ?? 'Copied!'}
               ariaLabel={ariaLabels?.copyAsMarkdown ?? 'Copy as markdown'}
+              isDisabled={isDisabled}
             />
           )}
 
           {onLike && (
-            <GhostIconButton
-              icon={<IconThumbUp size={DIAL_ICON_SIZE.SM} aria-hidden />}
+            <ToggleIconButton
+              icon={
+                activeRating === MessageRating.Like ? (
+                  <IconThumbUpFilled
+                    className={styles.activeRating}
+                    size={DIAL_ICON_SIZE.SM}
+                    aria-hidden
+                  />
+                ) : (
+                  <IconThumbUp
+                    size={DIAL_ICON_SIZE.SM}
+                    aria-hidden
+                    stroke={DIAL_KIT_ICON_STROKE}
+                  />
+                )
+              }
               size={ElementSize.Small}
               aria-label={ariaLabels?.likeResponse ?? 'Like response'}
               aria-pressed={activeRating === MessageRating.Like}
-              className={
-                activeRating === MessageRating.Like
-                  ? styles.activeRating
-                  : undefined
-              }
               tooltipProps={{ tooltip: tooltips?.like ?? 'Like' }}
               onClick={onLike}
+              disabled={isDisabled}
             />
           )}
           {onDislike && (
-            <GhostIconButton
-              icon={<IconThumbDown size={DIAL_ICON_SIZE.SM} aria-hidden />}
+            <ToggleIconButton
+              icon={
+                activeRating === MessageRating.Dislike ? (
+                  <IconThumbDownFilled
+                    className={styles.activeRating}
+                    size={DIAL_ICON_SIZE.SM}
+                    aria-hidden
+                  />
+                ) : (
+                  <IconThumbDown
+                    size={DIAL_ICON_SIZE.SM}
+                    aria-hidden
+                    stroke={DIAL_KIT_ICON_STROKE}
+                  />
+                )
+              }
               size={ElementSize.Small}
               aria-label={ariaLabels?.dislikeResponse ?? 'Dislike response'}
               aria-pressed={activeRating === MessageRating.Dislike}
-              className={
-                activeRating === MessageRating.Dislike
-                  ? styles.activeRating
-                  : undefined
-              }
               tooltipProps={{ tooltip: tooltips?.dislike ?? 'Dislike' }}
               onClick={onDislike}
+              disabled={isDisabled}
             />
           )}
         </>

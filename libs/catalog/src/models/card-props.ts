@@ -1,14 +1,15 @@
+import type { CSSProperties } from 'react';
 import type { CatalogItem } from './catalog-item';
 
 /** Typography class overrides for `Card` content. */
 export interface CardTypography {
-  /** Typography class applied to the item name. Default: `'dial-h3-text'`. */
+  /** Typography class applied to the item name. Default: `'dial-body-semi-text'`. */
   nameClassName?: string;
   /** Typography class applied to the version text. Default: `'dial-tiny-text'`. */
   versionClassName?: string;
-  /** Typography class applied to the description text. Default: `'dial-small-text'`. */
+  /** Typography class applied to the description text. Default: `'dial-small-paragraph-text'`. */
   descriptionClassName?: string;
-  /** Typography class applied to the featured chip label. Default: `'dial-tiny-semi-text uppercase tracking-[0.06em]'`. */
+  /** Typography class applied to the featured chip label. Default: `'dial-tiny-lead-semi-text'`. */
   featuredChipClassName?: string;
   /** Typography class applied to folder path separator labels. Default: `'dial-tiny-text'`. */
   folderLabelClassName?: string;
@@ -24,14 +25,16 @@ export interface CardColors {
   border?: string;
   /** Version text color. Fallback: `--text-secondary`. */
   textSecondary?: string;
-  /** Border color of a selected card. Fallback: `--stroke-info`. */
+  /** Border color of a selected card. Fallback: `--stroke-accent`. */
   selectedBorder?: string;
-  /** Background color (tint) of a selected card. Fallback: `--bg-accent-primary-alpha`. */
+  /** Background color (tint) of a selected card. Fallback: `--bg-control-accent-alpha-active`. */
   selectedBackground?: string;
   /** Selected-checkmark icon color. Fallback: `--text-accent`. */
   checkIcon?: string;
   /** Top border color of the footer row (folder path / star button). Fallback: `--stroke-tertiary`. */
   footerBorder?: string;
+  /** Featured chip style override, merged over its default per-entity-type colors for every entity type, e.g. `{ backgroundColor, color, border }`. */
+  featuredChipStyle?: CSSProperties;
 }
 
 /** Grouped style overrides for `Card`. */
@@ -54,6 +57,8 @@ export interface CardProps {
   initialIsStarred?: boolean;
   /** Called when the star button is toggled. */
   onToggle?: (id: string, isStarred: boolean) => void;
+  /** Rule for whether the favorite star is shown; `false` hides the star and makes the item non-favoritable. Defaults to visible when omitted. */
+  isFavoriteVisible?: (item: CatalogItem) => boolean;
   /** Called when the card body is clicked (excluding the star button). */
   onClick?: (item: CatalogItem) => void;
   /** Grouped color and typography overrides. */
@@ -66,6 +71,12 @@ export interface CardProps {
   removeFromFavoritesAriaLabel?: string;
   /** Whether this card represents the currently selected item — shows an accent border, tinted background, and a checkmark. Default: false. */
   isSelected?: boolean;
-  /** Credentials-status badge label shown when signed out. Default: `'LOGGED OUT'`. */
+  /** Accessible label for the logged-out warning icon on the entity avatar, and the text shown in its hover tooltip. Default: `'Authorize to use this toolset.'`. */
   credentialsBadgeLoggedOutLabel?: string;
+  /**
+   * Renders the card as a read-only browsing surface: no favorite star, no
+   * footer divider, and no "Featured" tag. The footer row is dropped entirely
+   * when the item has no folder path left to show. Default: false.
+   */
+  isReadonly?: boolean;
 }

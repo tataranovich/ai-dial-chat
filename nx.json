@@ -48,7 +48,6 @@
       "plugin": "@nx/vite/plugin",
       "options": {
         "buildTargetName": "build",
-        "testTargetName": "test",
         "serveTargetName": "serve",
         "devTargetName": "dev",
         "previewTargetName": "preview",
@@ -72,14 +71,33 @@
     "build": {
       "dependsOn": ["^build", "^typecheck"]
     },
+    "typecheck": {
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/tsconfig.base.json",
+        {
+          "dependentTasksOutputFiles": "**/*.{d.ts,d.cts,d.mts,tsbuildinfo}",
+          "transitive": true
+        },
+        { "externalDependencies": ["typescript"] }
+      ],
+      "outputs": ["{projectRoot}/out-tsc/**"]
+    },
     "test": {
-      "dependsOn": ["^build"],
+      "dependsOn": [],
       "options": {
         "passWithNoTests": true
       }
     },
     "publish": {
       "dependsOn": ["build"]
+    },
+    "test-packed": {
+      "dependsOn": ["build", "test-packed-unit"]
+    },
+    "test-packed-smoke": {
+      "dependsOn": ["build", "test-packed-unit"]
     }
   },
   "generators": {
@@ -95,7 +113,8 @@
       },
       "library": {
         "style": "tailwind",
-        "linter": "eslint"
+        "linter": "eslint",
+        "unitTestRunner": "vitest"
       }
     }
   }

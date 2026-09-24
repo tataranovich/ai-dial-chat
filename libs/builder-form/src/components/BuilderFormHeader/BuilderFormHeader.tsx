@@ -1,16 +1,16 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   GhostIconButton,
-  NeutralButton,
-  PrimaryButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconArrowLeft } from '@tabler/icons-react';
 import type { FC } from 'react';
 import type { BuilderFormHeaderProps } from '../../models/builder-form-header-props';
+import { BuilderFormActions } from '../BuilderFormActions/BuilderFormActions';
 import styles from './BuilderFormHeader.module.scss';
 
-/** Builder form page header: a back control, the form title, and cancel/submit actions. */
+/** Builder form page header: a back control, the form title, and the cancel/submit actions (desktop breakpoint only — mobile shows them in the container's sticky footer, and the row's divider above the row instead of below it). */
 export const BuilderFormHeader: FC<BuilderFormHeaderProps> = ({
   labels,
   onBack,
@@ -18,6 +18,8 @@ export const BuilderFormHeader: FC<BuilderFormHeaderProps> = ({
   onSubmit,
   isCancelDisabled = false,
   isSubmitDisabled = false,
+  isSubmitting = false,
+  backIcon,
   styles: headerStyles,
 }) => {
   const { colors, typography } = headerStyles ?? {};
@@ -34,18 +36,29 @@ export const BuilderFormHeader: FC<BuilderFormHeaderProps> = ({
     <div
       style={cssVars}
       className={mergeClasses(
-        'flex h-16 items-center justify-between gap-6 border-b px-8',
+        /*
+         * The divider flips sides per breakpoint: below the row at desktop
+         * (a conventional header bar), and above it at mobile, where the
+         * row reads as the first row of the form content sitting under the
+         * app shell's floating header rather than as a page bar.
+         */
+        'flex h-16 items-center justify-between gap-6',
         styles.header,
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <GhostIconButton
           icon={
-            <IconArrowLeft
-              size={DIAL_ICON_SIZE.LG}
-              className="rtl:scale-x-[-1]"
-              aria-hidden
-            />
+            backIcon === undefined ? (
+              <IconArrowLeft
+                size={DIAL_ICON_SIZE.LG}
+                className="rtl:scale-x-[-1]"
+                aria-hidden
+                stroke={DIAL_KIT_ICON_STROKE}
+              />
+            ) : (
+              backIcon
+            )
           }
           aria-label={labels.backButtonLabel}
           onClick={onBack}
@@ -54,18 +67,26 @@ export const BuilderFormHeader: FC<BuilderFormHeaderProps> = ({
           {labels.title}
         </h1>
       </div>
-      <div className="flex items-center gap-2">
-        <NeutralButton
-          label={labels.cancelButtonLabel}
-          onClick={onCancel}
-          disabled={isCancelDisabled}
-        />
-        <PrimaryButton
-          label={labels.submitButtonLabel}
-          onClick={onSubmit}
-          disabled={isSubmitDisabled}
+      {/*
+       * The action pair is hidden below the desktop breakpoint, where the
+       * container's sticky footer renders its own copy — CSS cannot move a
+       * single instance between the top of the page and the bottom, so
+       * exactly one copy is visible (and tabbable) at any width.
+       */}
+      <div className={mergeClasses('items-center gap-2', styles.actions)}>
+        <BuilderFormActions
+          labels={labels}
+          onCancel={onCancel}
+          onSubmit={onSubmit}
+          isCancelDisabled={isCancelDisabled}
+          isSubmitDisabled={isSubmitDisabled}
+          isSubmitting={isSubmitting}
         />
       </div>
+
+      <span role="status" aria-live="polite" className="sr-only">
+        {isSubmitting ? (labels.submittingLabel ?? 'Submitting') : ''}
+      </span>
     </div>
   );
 };

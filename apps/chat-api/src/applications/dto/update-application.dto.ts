@@ -21,12 +21,16 @@ import {
   LOCALE_CODE_PATTERN,
   LOCALE_CODE_VALIDATION_MESSAGE,
 } from '../../common/validators/locale-code.pattern';
+import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
 
 /*
- * General-step update body. `applicationProperties` and `type` are
- * intentionally excluded so this endpoint can never mutate a Quick App's
- * orchestrator/tool-set configuration.  `version` is included here for
- * custom (plain-endpoint) apps where version is a General-step field.
+ * General-step (and, optionally, Settings-step) update body. `type` is
+ * intentionally excluded so this endpoint can never mutate an application's
+ * schema type. `applicationProperties` is optional: omitted (or `null`), the
+ * stored Settings-step configuration is left untouched; supplied, it fully
+ * replaces the stored value — see `ApplicationsService.updateApplication` for
+ * the replacement/hoist rules. `version` is included here for custom
+ * (plain-endpoint) apps where version is a General-step field.
  */
 export class UpdateApplicationBodyDto {
   @ApiProperty({ example: 'My App' })
@@ -43,10 +47,15 @@ export class UpdateApplicationBodyDto {
   @IsOptional()
   description?: string;
 
-  @ApiPropertyOptional({ example: 'https://example.com/icon.svg' })
+  @ApiPropertyOptional({
+    example: 'files/6FEup.../uploads/2026-06/icon.png',
+    description:
+      'An absolute https?:// URL, or a DIAL file id (files/{bucket}/{path}) ' +
+      'picked through the file manager.',
+  })
   @IsString()
   @IsOptional()
-  @IsUrl()
+  @IsValidResourceReference()
   iconUrl?: string;
 
   @ApiPropertyOptional({ example: ['nlp', 'assistant'], type: [String] })
@@ -78,7 +87,10 @@ export class UpdateApplicationBodyDto {
   @ApiPropertyOptional({ example: ['image/png'], type: [String] })
   @IsArray()
   @IsString({ each: true })
-  @Matches(/^([a-zA-Z0-9!*\-.+]+|\*)\/([a-zA-Z0-9!*\-.+]+|\*)$/, { each: true })
+  @Matches(/^([a-zA-Z0-9!*\-.+]+|\*)\/([a-zA-Z0-9!*\-.+]+|\*)$/, {
+    each: true,
+    message: 'Attachment types must be MIME types, for example image/png',
+  })
   @IsOptional()
   inputAttachmentTypes?: string[];
 
@@ -87,6 +99,22 @@ export class UpdateApplicationBodyDto {
   @Min(0)
   @IsOptional()
   maxInputAttachments?: number;
+
+  @ApiPropertyOptional({
+    example: {
+      orchestrator: {
+        system_prompt: { type: 'custom', variables: {}, content: '' },
+      },
+      contexts: [],
+      tool_sets: [],
+    },
+    description:
+      'When supplied, fully replaces the stored Settings-step configuration ' +
+      '(application_properties). Omit, or send null, to leave it unchanged.',
+  })
+  @IsObject()
+  @IsOptional()
+  applicationProperties?: Record<string, unknown> | null;
 
   /*
    * Additional (non-primary) locale translations for `name`/`description`.

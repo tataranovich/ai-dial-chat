@@ -43,6 +43,7 @@ import { getConversationRoute } from '../../constants/routes';
 import { AuthStatus } from '../../types/auth-status';
 import { UserConfigStatus } from '../../types/user-config-status';
 import { conversationIdsMatch } from '../../utils/conversation-id-match';
+import { matchesAllowedOrigin } from '../../utils/overlay-origin';
 import { useAppConfig } from '../AppConfigContext';
 import { useUser } from '../auth/UserContext';
 import { useTheme } from '../ThemeContext';
@@ -110,6 +111,8 @@ export interface OverlayContextType {
   pendingModelId: string | null;
   /** Trusted per-provider authentication UI modes received from the host. */
   authProviderUiModes: Record<string, string> | undefined;
+  /** Trusted provider id the host asked to sign in with automatically. */
+  authAutoSignInProvider: string | undefined;
   /** Clears `pendingModelId` once a consumer has applied it. */
   clearPendingModelId: () => void;
   /** Emits `SELECTED_CONVERSATION_LOADED`, and `READY_TO_INTERACT` the first time it is called. */
@@ -277,6 +280,17 @@ const getAuthProviderUiModes = (
   return value as Record<string, string>;
 };
 
+const getAuthAutoSignInProvider = (
+  payload: Partial<SetOverlayOptionsPayload> | null | undefined,
+): string | undefined => {
+  const value = payload?.authAutoSignInProvider;
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
 const hasSelectConversationPayload = (
   payload: unknown,
 ): payload is SelectConversationPayload => hasStringPayload(payload, 'id');
@@ -380,6 +394,9 @@ export const OverlayProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const [authProviderUiModes, setAuthProviderUiModes] = useState<
     Record<string, string> | undefined
   >();
+  const [authAutoSignInProvider, setAuthAutoSignInProvider] = useState<
+    string | undefined
+  >();
 
   const postBootstrapEvent = useCallback((type: OverlayEventType) => {
     window.parent.postMessage({ type }, '*');
@@ -428,7 +445,7 @@ export const OverlayProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const isTrustedHostOrigin = useCallback(
     (origin: string): boolean =>
       hostDomainRef.current === origin &&
-      overlayAllowedOrigins.includes(origin),
+      matchesAllowedOrigin(origin, overlayAllowedOrigins),
     [overlayAllowedOrigins],
   );
 
@@ -821,7 +838,7 @@ export const OverlayProvider: FC<{ children: ReactNode }> = ({ children }) => {
 
   const handleSetOverlayOptions = useCallback(
     (origin: string, request: OverlayMessageRequest) => {
-      if (!overlayAllowedOrigins.includes(origin)) {
+      if (!matchesAllowedOrigin(origin, overlayAllowedOrigins)) {
         logOverlayWarning(`rejected SET_OVERLAY_OPTIONS from ${origin}`);
         return;
       }
@@ -859,6 +876,7 @@ export const OverlayProvider: FC<{ children: ReactNode }> = ({ children }) => {
         applyOverlayOverride(enabledFeatures);
       }
       setAuthProviderUiModes(getAuthProviderUiModes(payload));
+      setAuthAutoSignInProvider(getAuthAutoSignInProvider(payload));
 
       const responsePayload: SetOverlayOptionsResponse = { applied: true };
       postToHost({
@@ -961,6 +979,7 @@ export const OverlayProvider: FC<{ children: ReactNode }> = ({ children }) => {
       registerConversationListBridge,
       pendingModelId,
       authProviderUiModes,
+      authAutoSignInProvider,
       clearPendingModelId,
       notifyConversationLoaded,
       notifyConversationsUpdated,
@@ -973,6 +992,7 @@ export const OverlayProvider: FC<{ children: ReactNode }> = ({ children }) => {
       registerConversationListBridge,
       pendingModelId,
       authProviderUiModes,
+      authAutoSignInProvider,
       clearPendingModelId,
       notifyConversationLoaded,
       notifyConversationsUpdated,

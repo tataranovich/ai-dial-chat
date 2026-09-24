@@ -1,21 +1,33 @@
+import type { DeploymentConfigurationSchema } from '@epam/ai-dial-chat-shared';
 import { NotificationVariant } from '@epam/ai-dial-ui-kit';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeploymentSelectorI18nKeys } from '../../constants/translation-keys';
+import { useDefaultAgentPreference } from '../../hooks/default-agent/useDefaultAgentPreference';
 import * as applicationSchemasApi from '../../server-api/application-schemas';
+import * as deploymentDetailsApi from '../../server-api/deployments';
 import * as deploymentsApi from '../../server-api/deployments.api';
 import * as toolsetsApi from '../../server-api/toolsets';
+import { DefaultAgentMode } from '../../types/default-agent';
+import { StorageKey } from '../../types/storage-key';
 import { DeploymentsProvider, useDeployments } from '../DeploymentsContext';
+import {
+  useAppConfig as mockUseAppConfig,
+  useFeatureFlag as mockUseFeatureFlag,
+} from './app-config-context-mock';
+import { createNotificationContextValue } from './notification-context-mock';
 
 const contextMocks = vi.hoisted(() => ({
   defaultDeploymentId: null as string | null,
   selectedDeploymentId: null as string | null,
+  isDefaultDeploymentPinned: false,
   setSelectedDeployment: vi.fn(),
   showNotification: vi.fn(),
   userSub: 'user-1' as string | undefined,
 }));
 
 vi.mock('../../server-api/deployments.api');
+vi.mock('../../server-api/deployments');
 vi.mock('../../server-api/application-schemas');
 vi.mock('../../server-api/toolsets');
 vi.mock('../auth/UserContext', () => ({
@@ -23,13 +35,18 @@ vi.mock('../auth/UserContext', () => ({
     user: contextMocks.userSub ? { sub: contextMocks.userSub } : null,
   }),
 }));
-vi.mock('../AppConfigContext', () => ({
-  useAppConfig: () => ({
-    config: {
-      defaultDeploymentId: contextMocks.defaultDeploymentId,
-    },
-  }),
+vi.mock('../AppConfigContext', async () => import('./app-config-context-mock'));
+mockUseAppConfig.mockImplementation(() => ({
+  config: {
+    defaultDeploymentId: contextMocks.defaultDeploymentId,
+  },
 }));
+mockUseFeatureFlag.mockImplementation((key?: string) => {
+  if (key === 'defaultDeploymentPinned') {
+    return contextMocks.isDefaultDeploymentPinned;
+  }
+  return false;
+});
 vi.mock('../UserConfigContext', () => ({
   useUserConfig: () => ({
     selectedDeploymentId: contextMocks.selectedDeploymentId,
@@ -37,11 +54,8 @@ vi.mock('../UserConfigContext', () => ({
   }),
 }));
 vi.mock('../NotificationContext', () => ({
-  useNotification: () => ({
-    notifications: [],
-    showNotification: contextMocks.showNotification,
-    dismissNotification: vi.fn(),
-  }),
+  useNotification: () =>
+    createNotificationContextValue(contextMocks.showNotification),
 }));
 
 const mockItem1 = {
@@ -56,6 +70,10 @@ const mockItem2 = {
 };
 const mockResponse = { deployments: [mockItem1, mockItem2] };
 const emptySchemas = { schemas: [] };
+const mockDeploymentDetails = {
+  id: mockItem1.id,
+  type: 'model' as const,
+};
 
 describe('DeploymentsContext', () => {
   const mockGetDeployments = vi.mocked(deploymentsApi.getDeployments);
@@ -63,16 +81,25 @@ describe('DeploymentsContext', () => {
     applicationSchemasApi.getApplicationSchemas,
   );
   const mockListToolsets = vi.mocked(toolsetsApi.listToolsets);
+  const mockGetDeploymentConfiguration = vi.mocked(
+    deploymentDetailsApi.getDeploymentConfiguration,
+  );
+  const mockGetDeploymentDetails = vi.mocked(
+    deploymentDetailsApi.getDeploymentDetails,
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
     contextMocks.defaultDeploymentId = null;
     contextMocks.selectedDeploymentId = null;
+    contextMocks.isDefaultDeploymentPinned = false;
     contextMocks.setSelectedDeployment.mockResolvedValue(undefined);
     contextMocks.userSub = 'user-1';
     mockGetDeployments.mockResolvedValue(mockResponse);
     mockGetApplicationSchemas.mockResolvedValue(emptySchemas);
     mockListToolsets.mockResolvedValue({ data: [] });
+    mockGetDeploymentConfiguration.mockResolvedValue({});
+    mockGetDeploymentDetails.mockResolvedValue(mockDeploymentDetails);
   });
 
   describe('identity-keyed refetch', () => {
@@ -131,9 +158,7 @@ describe('DeploymentsContext', () => {
       mockGetDeployments.mockReturnValueOnce(refetchPromise);
       contextMocks.userSub = 'user-2';
 
-      act(() => {
-        rerender();
-      });
+      rerender();
 
       expect(result.current.isLoading).toBe(true);
       expect(result.current.items).toEqual([]);
@@ -201,6 +226,96 @@ describe('DeploymentsContext', () => {
     });
   });
 
+  describe('sort pinning', () => {
+    it('hoists the operator-default deployment to position 0 when it sorts after other items alphabetically', async () => {
+      contextMocks.isDefaultDeploymentPinned = true;
+      const zAgent = {
+        id: 'z-agent',
+        displayName: 'Z Agent',
+        type: 'model' as const,
+      };
+      const pgAgent = {
+        id: 'pg-agent',
+        displayName: 'PG Agent',
+        type: 'model' as const,
+      };
+      const aAgent = {
+        id: 'a-agent',
+        displayName: 'A Agent',
+        type: 'model' as const,
+      };
+      mockGetDeployments.mockResolvedValueOnce({
+        deployments: [zAgent, pgAgent, aAgent],
+      });
+      contextMocks.defaultDeploymentId = 'pg-agent';
+
+      const { result } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() =>
+        expect(result.current.items.map((item) => item.id)).toEqual([
+          'pg-agent',
+          'a-agent',
+          'z-agent',
+        ]),
+      );
+    });
+
+    it('returns a purely alphabetical list when defaultDeploymentId is null', async () => {
+      contextMocks.isDefaultDeploymentPinned = true;
+      const zebra = {
+        id: 'z-agent',
+        displayName: 'Z Agent',
+        type: 'model' as const,
+      };
+      const alpha = {
+        id: 'a-agent',
+        displayName: 'A Agent',
+        type: 'model' as const,
+      };
+      mockGetDeployments.mockResolvedValueOnce({ deployments: [zebra, alpha] });
+
+      const { result } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() =>
+        expect(result.current.items.map((item) => item.id)).toEqual([
+          'a-agent',
+          'z-agent',
+        ]),
+      );
+    });
+
+    it('returns a purely alphabetical list when defaultDeploymentId is not in the catalog', async () => {
+      contextMocks.isDefaultDeploymentPinned = true;
+      const zebra = {
+        id: 'z-agent',
+        displayName: 'Z Agent',
+        type: 'model' as const,
+      };
+      const alpha = {
+        id: 'a-agent',
+        displayName: 'A Agent',
+        type: 'model' as const,
+      };
+      mockGetDeployments.mockResolvedValueOnce({ deployments: [zebra, alpha] });
+      contextMocks.defaultDeploymentId = 'removed-agent';
+
+      const { result } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() =>
+        expect(result.current.items.map((item) => item.id)).toEqual([
+          'a-agent',
+          'z-agent',
+        ]),
+      );
+    });
+  });
+
   it('allows updating selectedItemId via setSelectedItemId', async () => {
     const { result } = renderHook(() => useDeployments(), {
       wrapper: DeploymentsProvider,
@@ -247,6 +362,71 @@ describe('DeploymentsContext', () => {
     expect(mockGetApplicationSchemas).toHaveBeenCalledOnce();
   });
 
+  it('does not recreate restoreDefaultSelection when a manual selection updates user config', async () => {
+    contextMocks.isDefaultDeploymentPinned = true;
+    contextMocks.defaultDeploymentId = mockItem1.id;
+    contextMocks.setSelectedDeployment.mockImplementation(
+      async (id: string | null) => {
+        contextMocks.selectedDeploymentId = id;
+      },
+    );
+
+    const { result, rerender } = renderHook(() => useDeployments(), {
+      wrapper: DeploymentsProvider,
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const restoreDefaultSelection = result.current.restoreDefaultSelection;
+
+    await act(async () => {
+      result.current.setSelectedItemId(mockItem2.id);
+    });
+    rerender();
+
+    expect(result.current.restoreDefaultSelection).toBe(
+      restoreDefaultSelection,
+    );
+    expect(result.current.selectedItemId).toBe(mockItem2.id);
+  });
+
+  /*
+   * The new-chat route calls restoreDefaultSelection from an effect keyed on
+   * the callback's identity. A refetch rebuilds `items`, so an identity change
+   * here re-fires that effect and resets the selection to the operator default
+   * behind the user's back.
+   */
+  it('does not recreate restoreDefaultSelection when a deployments refetch rebuilds items', async () => {
+    contextMocks.isDefaultDeploymentPinned = true;
+    contextMocks.defaultDeploymentId = mockItem1.id;
+    contextMocks.setSelectedDeployment.mockImplementation(
+      async (id: string | null) => {
+        contextMocks.selectedDeploymentId = id;
+      },
+    );
+
+    const { result } = renderHook(() => useDeployments(), {
+      wrapper: DeploymentsProvider,
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      result.current.setSelectedItemId(mockItem2.id);
+    });
+    expect(result.current.selectedItemId).toBe(mockItem2.id);
+
+    const restoreDefaultSelection = result.current.restoreDefaultSelection;
+
+    await act(async () => {
+      await result.current.refetchDeployments();
+    });
+
+    expect(result.current.restoreDefaultSelection).toBe(
+      restoreDefaultSelection,
+    );
+    expect(result.current.selectedItemId).toBe(mockItem2.id);
+  });
+
   it('restoreSelectedItemId updates selectedItemId without persisting user config', async () => {
     const { result } = renderHook(() => useDeployments(), {
       wrapper: DeploymentsProvider,
@@ -262,7 +442,32 @@ describe('DeploymentsContext', () => {
     expect(contextMocks.setSelectedDeployment).not.toHaveBeenCalled();
   });
 
-  it('restoreDefaultSelection re-applies the persisted user preference over a stale in-memory value', async () => {
+  it('restoreDefaultSelection re-applies the operator default over a stale in-memory value when operator default is configured', async () => {
+    contextMocks.isDefaultDeploymentPinned = true;
+    contextMocks.defaultDeploymentId = mockItem1.id;
+
+    const { result } = renderHook(() => useDeployments(), {
+      wrapper: DeploymentsProvider,
+    });
+
+    await waitFor(() =>
+      expect(result.current.selectedItemId).toBe(mockItem1.id),
+    );
+
+    act(() => {
+      result.current.restoreSelectedItemId(mockItem2.id);
+    });
+    expect(result.current.selectedItemId).toBe(mockItem2.id);
+
+    act(() => {
+      result.current.restoreDefaultSelection();
+    });
+
+    expect(result.current.selectedItemId).toBe(mockItem1.id);
+    expect(contextMocks.setSelectedDeployment).not.toHaveBeenCalled();
+  });
+
+  it('restoreDefaultSelection uses the user-persisted preference when no operator default is configured', async () => {
     contextMocks.selectedDeploymentId = mockItem1.id;
 
     const { result } = renderHook(() => useDeployments(), {
@@ -286,7 +491,32 @@ describe('DeploymentsContext', () => {
     expect(contextMocks.setSelectedDeployment).not.toHaveBeenCalled();
   });
 
+  it('keeps alphabetical order and user preference when default pinning is disabled', async () => {
+    contextMocks.defaultDeploymentId = mockItem2.id;
+    contextMocks.selectedDeploymentId = mockItem1.id;
+
+    const { result } = renderHook(() => useDeployments(), {
+      wrapper: DeploymentsProvider,
+    });
+
+    await waitFor(() => {
+      expect(result.current.items.map((item) => item.id)).toEqual([
+        mockItem1.id,
+        mockItem2.id,
+      ]);
+      expect(result.current.selectedItemId).toBe(mockItem1.id);
+    });
+
+    act(() => {
+      result.current.restoreSelectedItemId(mockItem2.id);
+      result.current.restoreDefaultSelection();
+    });
+
+    expect(result.current.selectedItemId).toBe(mockItem1.id);
+  });
+
   it('restoreDefaultSelection falls back to the operator default when there is no persisted preference', async () => {
+    contextMocks.isDefaultDeploymentPinned = true;
     contextMocks.defaultDeploymentId = mockItem2.id;
 
     const { result } = renderHook(() => useDeployments(), {
@@ -321,7 +551,84 @@ describe('DeploymentsContext', () => {
     });
   });
 
+  it('prefers the operator default over the user-persisted preference when both are set', async () => {
+    contextMocks.isDefaultDeploymentPinned = true;
+    contextMocks.defaultDeploymentId = mockItem2.id;
+    contextMocks.selectedDeploymentId = mockItem1.id;
+
+    const { result } = renderHook(() => useDeployments(), {
+      wrapper: DeploymentsProvider,
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+  });
+
+  it('applies pinning when app config arrives after deployments', async () => {
+    contextMocks.selectedDeploymentId = mockItem1.id;
+
+    const { result, rerender } = renderHook(() => useDeployments(), {
+      wrapper: DeploymentsProvider,
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedItemId).toBe(mockItem1.id);
+    });
+
+    contextMocks.defaultDeploymentId = mockItem2.id;
+    contextMocks.isDefaultDeploymentPinned = true;
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current.items.map((item) => item.id)).toEqual([
+        mockItem2.id,
+        mockItem1.id,
+      ]);
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+  });
+
+  it.each([
+    [
+      'user selection',
+      (setSelection: (id: string) => void) => setSelection(mockItem2.id),
+    ],
+    [
+      'conversation restoration',
+      (
+        _setSelection: (id: string) => void,
+        restoreSelection: (id: string) => void,
+      ) => restoreSelection(mockItem2.id),
+    ],
+  ])(
+    'does not override an explicit %s when app config arrives late',
+    async (_name, select) => {
+      const { result, rerender } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      act(() => {
+        select(
+          result.current.setSelectedItemId,
+          result.current.restoreSelectedItemId,
+        );
+      });
+
+      contextMocks.defaultDeploymentId = mockItem1.id;
+      contextMocks.isDefaultDeploymentPinned = true;
+      rerender();
+
+      await waitFor(() => {
+        expect(result.current.selectedItemId).toBe(mockItem2.id);
+      });
+    },
+  );
+
   it('uses operator default when user config selected deployment is absent', async () => {
+    contextMocks.isDefaultDeploymentPinned = true;
     contextMocks.defaultDeploymentId = mockItem2.id;
 
     const { result } = renderHook(() => useDeployments(), {
@@ -847,6 +1154,149 @@ describe('DeploymentsContext', () => {
     });
   });
 
+  describe('selectedDeploymentDetails', () => {
+    it('fetches configuration and details in parallel when a deployment is selected', async () => {
+      let resolveConfiguration: (value: DeploymentConfigurationSchema) => void;
+      const configurationPromise = new Promise<DeploymentConfigurationSchema>(
+        (resolve) => {
+          resolveConfiguration = resolve;
+        },
+      );
+      let resolveDetails: (value: typeof mockDeploymentDetails) => void;
+      const detailsPromise = new Promise<typeof mockDeploymentDetails>(
+        (resolve) => {
+          resolveDetails = resolve;
+        },
+      );
+      mockGetDeploymentConfiguration.mockReturnValueOnce(configurationPromise);
+      mockGetDeploymentDetails.mockReturnValueOnce(detailsPromise);
+
+      renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() => {
+        expect(mockGetDeploymentConfiguration).toHaveBeenCalledWith(
+          mockItem1.id,
+        );
+        expect(mockGetDeploymentDetails).toHaveBeenCalledWith(mockItem1.id);
+      });
+
+      await act(async () => {
+        resolveConfiguration({});
+        resolveDetails(mockDeploymentDetails);
+        await Promise.all([configurationPromise, detailsPromise]);
+      });
+    });
+
+    it('sets selectedDeploymentDetails on successful fetch', async () => {
+      mockGetDeploymentDetails.mockResolvedValue(mockDeploymentDetails);
+
+      const { result } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() => {
+        expect(result.current.selectedDeploymentDetails).toEqual(
+          mockDeploymentDetails,
+        );
+        expect(result.current.isDeploymentDetailsLoading).toBe(false);
+      });
+    });
+
+    it('sets selectedDeploymentDetails to null on fetch failure without affecting configuration', async () => {
+      mockGetDeploymentDetails.mockRejectedValue(new Error('Details failed'));
+      mockGetDeploymentConfiguration.mockResolvedValue({
+        title: 'GPT-4o config',
+      });
+
+      const { result } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() =>
+        expect(result.current.selectedItemId).toBe(mockItem1.id),
+      );
+      await waitFor(() =>
+        expect(result.current.selectedDeploymentConfiguration).toEqual({
+          title: 'GPT-4o config',
+        }),
+      );
+      expect(result.current.isDeploymentDetailsLoading).toBe(false);
+      expect(result.current.selectedDeploymentDetails).toBeNull();
+    });
+
+    it('clears details and skips the request when no deployment is selected', async () => {
+      mockGetDeployments.mockResolvedValueOnce({ deployments: [] });
+
+      const { result } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() => expect(result.current.selectedItemId).toBeNull());
+
+      expect(result.current.selectedDeploymentConfiguration).toBeNull();
+      expect(result.current.selectedDeploymentDetails).toBeNull();
+      expect(result.current.isDeploymentDetailsLoading).toBe(false);
+      expect(mockGetDeploymentConfiguration).not.toHaveBeenCalled();
+      expect(mockGetDeploymentDetails).not.toHaveBeenCalled();
+    });
+
+    it('discards a stale details response after the selection changes again', async () => {
+      let resolveFirstDetails: (value: typeof mockDeploymentDetails) => void;
+      const firstDetailsPromise = new Promise<typeof mockDeploymentDetails>(
+        (resolve) => {
+          resolveFirstDetails = resolve;
+        },
+      );
+      mockGetDeploymentDetails.mockReturnValueOnce(firstDetailsPromise);
+
+      const { result } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() =>
+        expect(result.current.selectedItemId).toBe(mockItem1.id),
+      );
+
+      const secondDetails = { id: mockItem2.id, type: 'application' as const };
+      mockGetDeploymentDetails.mockResolvedValueOnce(secondDetails);
+
+      act(() => {
+        result.current.setSelectedItemId(mockItem2.id);
+      });
+
+      await waitFor(() =>
+        expect(result.current.selectedDeploymentDetails).toEqual(secondDetails),
+      );
+
+      await act(async () => {
+        resolveFirstDetails(mockDeploymentDetails);
+        await firstDetailsPromise;
+      });
+
+      // The stale first-selection response must not clobber the newer one.
+      expect(result.current.selectedDeploymentDetails).toEqual(secondDetails);
+    });
+
+    it('does not refetch details when the selected deployment id is unchanged', async () => {
+      const { result, rerender } = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+
+      await waitFor(() =>
+        expect(result.current.selectedDeploymentDetails).toEqual(
+          mockDeploymentDetails,
+        ),
+      );
+      expect(mockGetDeploymentDetails).toHaveBeenCalledOnce();
+
+      rerender();
+
+      expect(mockGetDeploymentDetails).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('mergeSharedItem', () => {
     it('adds a new deployment item without issuing any request', async () => {
       const { result } = renderHook(() => useDeployments(), {
@@ -947,6 +1397,253 @@ describe('DeploymentsContext', () => {
         mockItem1.id,
         mockItem2.id,
       ]);
+    });
+  });
+
+  describe('start chat with preference', () => {
+    /*
+     * The preference is read through the real useDefaultAgentPreference hook,
+     * so these drive it via localStorage rather than mocking the hook — that
+     * keeps the storage key, the default and the precedence under one test.
+     */
+    beforeEach(() => {
+      localStorage.clear();
+    });
+
+    afterEach(() => {
+      localStorage.clear();
+    });
+
+    const renderDeployments = () =>
+      renderHook(() => useDeployments(), { wrapper: DeploymentsProvider });
+
+    it('prefers a named agent over a pinned operator default', async () => {
+      localStorage.setItem(StorageKey.DefaultAgent, mockItem2.id);
+      contextMocks.isDefaultDeploymentPinned = true;
+      contextMocks.defaultDeploymentId = mockItem1.id;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+
+    it('resolves DefaultAgent to the operator default even when it is not pinned', async () => {
+      localStorage.setItem(
+        StorageKey.DefaultAgent,
+        DefaultAgentMode.DefaultAgent,
+      );
+      contextMocks.isDefaultDeploymentPinned = false;
+      contextMocks.defaultDeploymentId = mockItem1.id;
+      contextMocks.selectedDeploymentId = mockItem2.id;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedItemId).toBe(mockItem1.id);
+    });
+
+    it('falls through to the persisted user-config selection by default', async () => {
+      contextMocks.selectedDeploymentId = mockItem2.id;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+
+    /*
+     * Issue #8889: the control that writes this preference is offered only
+     * where an agent is pinned, so an explicitly chosen "Last used agent" has
+     * to outrank the pin — otherwise picking the mode does nothing.
+     */
+    it('prefers the last used agent over a pinned operator default when the mode is chosen explicitly', async () => {
+      localStorage.setItem(
+        StorageKey.DefaultAgent,
+        DefaultAgentMode.LastUsedAgent,
+      );
+      contextMocks.isDefaultDeploymentPinned = true;
+      contextMocks.defaultDeploymentId = mockItem1.id;
+      contextMocks.selectedDeploymentId = mockItem2.id;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+
+    /*
+     * The counterpart: an untouched preference is not a choice, so the pin
+     * still beats the implicit last-used selection — the precedence
+     * DEFAULT_DEPLOYMENT_PINNED documents.
+     */
+    it('keeps the pinned operator default ahead of the last used agent while nothing is stored', async () => {
+      contextMocks.isDefaultDeploymentPinned = true;
+      contextMocks.defaultDeploymentId = mockItem1.id;
+      contextMocks.selectedDeploymentId = mockItem2.id;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedItemId).toBe(mockItem1.id);
+    });
+
+    it('falls back to the pinned operator default when LastUsedAgent is chosen but nothing was ever used', async () => {
+      localStorage.setItem(
+        StorageKey.DefaultAgent,
+        DefaultAgentMode.LastUsedAgent,
+      );
+      contextMocks.isDefaultDeploymentPinned = true;
+      contextMocks.defaultDeploymentId = mockItem2.id;
+      contextMocks.selectedDeploymentId = null;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+
+    /*
+     * The new-chat screen resolves through restoreDefaultSelection, so the
+     * explicit mode has to survive the round trip through the refs that
+     * callback reads — not just the post-fetch resolution.
+     */
+    it('resolves a new chat to the last used agent over the pin on restoreDefaultSelection', async () => {
+      localStorage.setItem(
+        StorageKey.DefaultAgent,
+        DefaultAgentMode.LastUsedAgent,
+      );
+      contextMocks.isDefaultDeploymentPinned = true;
+      contextMocks.defaultDeploymentId = mockItem1.id;
+      contextMocks.selectedDeploymentId = mockItem2.id;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      act(() => result.current.restoreSelectedItemId(mockItem1.id));
+      act(() => result.current.restoreDefaultSelection());
+
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+
+    it('applies a mid-session switch to LastUsedAgent on the next restoreDefaultSelection', async () => {
+      contextMocks.isDefaultDeploymentPinned = true;
+      contextMocks.defaultDeploymentId = mockItem1.id;
+      contextMocks.selectedDeploymentId = mockItem2.id;
+
+      const { result } = renderHook(
+        () => ({
+          deployments: useDeployments(),
+          defaultAgent: useDefaultAgentPreference(),
+        }),
+        { wrapper: DeploymentsProvider },
+      );
+
+      await waitFor(() =>
+        expect(result.current.deployments.isLoading).toBe(false),
+      );
+      expect(result.current.deployments.selectedItemId).toBe(mockItem1.id);
+
+      act(() =>
+        result.current.defaultAgent.setPreference(
+          DefaultAgentMode.LastUsedAgent,
+        ),
+      );
+      act(() => result.current.deployments.restoreDefaultSelection());
+
+      expect(result.current.deployments.selectedItemId).toBe(mockItem2.id);
+    });
+
+    it('falls through when the preference names a deployment that no longer exists', async () => {
+      localStorage.setItem(StorageKey.DefaultAgent, 'retired-model');
+      contextMocks.selectedDeploymentId = mockItem2.id;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+      expect(localStorage.getItem(StorageKey.DefaultAgent)).toBe(
+        'retired-model',
+      );
+    });
+
+    it('falls through when DefaultAgent is set but no operator default is configured', async () => {
+      localStorage.setItem(
+        StorageKey.DefaultAgent,
+        DefaultAgentMode.DefaultAgent,
+      );
+      contextMocks.defaultDeploymentId = null;
+      contextMocks.selectedDeploymentId = mockItem2.id;
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+
+    it('keeps an in-session pick over the preference across a refetch', async () => {
+      localStorage.setItem(StorageKey.DefaultAgent, mockItem1.id);
+      contextMocks.setSelectedDeployment.mockImplementation(
+        async (id: string | null) => {
+          contextMocks.selectedDeploymentId = id;
+        },
+      );
+
+      const { result } = renderDeployments();
+
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      await act(async () => {
+        result.current.setSelectedItemId(mockItem2.id);
+      });
+
+      await act(async () => {
+        await result.current.refetchDeployments();
+      });
+
+      expect(result.current.selectedItemId).toBe(mockItem2.id);
+    });
+
+    it('does not recreate restoreDefaultSelection when the preference changes', async () => {
+      const { result } = renderHook(
+        () => ({
+          deployments: useDeployments(),
+          defaultAgent: useDefaultAgentPreference(),
+        }),
+        { wrapper: DeploymentsProvider },
+      );
+
+      await waitFor(() =>
+        expect(result.current.deployments.isLoading).toBe(false),
+      );
+      const restoreDefaultSelection =
+        result.current.deployments.restoreDefaultSelection;
+
+      act(() => result.current.defaultAgent.setPreference(mockItem2.id));
+
+      expect(result.current.defaultAgent.preference).toBe(mockItem2.id);
+      expect(result.current.deployments.restoreDefaultSelection).toBe(
+        restoreDefaultSelection,
+      );
+    });
+
+    it('applies a preference changed mid-session on the next restoreDefaultSelection', async () => {
+      const { result } = renderHook(
+        () => ({
+          deployments: useDeployments(),
+          defaultAgent: useDefaultAgentPreference(),
+        }),
+        { wrapper: DeploymentsProvider },
+      );
+
+      await waitFor(() =>
+        expect(result.current.deployments.isLoading).toBe(false),
+      );
+
+      act(() => result.current.defaultAgent.setPreference(mockItem2.id));
+      act(() => result.current.deployments.restoreDefaultSelection());
+
+      expect(result.current.deployments.selectedItemId).toBe(mockItem2.id);
     });
   });
 });

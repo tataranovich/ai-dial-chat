@@ -1,4 +1,5 @@
 import type { DisplayAttachment } from '@epam/ai-dial-chat-shared';
+import type { AttachmentCardStyles } from './attachment-card';
 
 /** Localised accessible labels for the `AttachmentTray` component. */
 export interface AttachmentTrayLabels {
@@ -10,12 +11,16 @@ export interface AttachmentTrayLabels {
   retryLabel?: string;
   /** Accessible label forwarded to each card's root when it is interactive. When omitted, the card's own default (`'Open attachment'`) applies. */
   clickLabel?: string;
+  /** Accessible label for each card's in-progress upload progress bar. Defaults to `'Uploading'`. */
+  uploadingLabel?: string;
 }
 
 /** Style overrides for the `AttachmentTray` component. */
 export interface AttachmentTrayStyles {
   /** Extra class name(s) merged onto the root element. */
   className?: string;
+  /** Colors, typography, and shape forwarded to every card in the tray. */
+  card?: AttachmentCardStyles;
 }
 
 /** Props accepted by the `AttachmentTray` component. */

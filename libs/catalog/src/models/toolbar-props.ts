@@ -1,13 +1,14 @@
-import { DropdownItem } from '@epam/ai-dial-ui-kit';
+import { SelectOption } from '@epam/ai-dial-ui-kit';
+import type { ReactNode } from 'react';
 import { CatalogViewMode } from '../types/view-mode';
 
 /** Typography class overrides for `Toolbar`. */
 export interface ToolbarTypography {
-  /** Typography class for the section title. Default: `'dial-h3-text'`. */
+  /** Typography class for the section title. Default: `'dial-body-semi-text'`. */
   titleClassName?: string;
-  /** Typography class for the total count. Default: `'dial-tiny-text'`. */
+  /** Typography class for the total count. Default: `'dial-tiny-semi-text'`. */
   countClassName?: string;
-  /** Typography class for the filter section label. Default: `'dial-tiny-semi-text'`. */
+  /** Typography class for the filter section label. Default: `'dial-tiny-lead-semi-text'`. */
   filterSectionLabelClassName?: string;
   /** Typography class for the filter checkbox labels. Default: `'dial-small-semi-text'`. */
   filterButtonClassName?: string;
@@ -21,18 +22,6 @@ export interface ToolbarColors {
   countText?: string;
   /** Vertical divider color next to sort dropdown. Fallback: `--stroke-secondary`. */
   divider?: string;
-  /** Background color of the view-toggle wrapper. Fallback: `--bg-layer-sunken`. */
-  viewToggleBackground?: string;
-  /** Border color of the view-toggle wrapper. Fallback: `--stroke-tertiary`. */
-  viewToggleBorder?: string;
-  /** Background color of the active grid/list view-toggle button. Fallback: `--bg-layer-raised`. */
-  viewToggleActiveBackground?: string;
-  /** Icon color of the active grid/list view-toggle button. Fallback: `--text-accent`. */
-  viewToggleActiveText?: string;
-  /** Icon color of an inactive grid/list view-toggle button. Fallback: `--text-secondary`. */
-  viewToggleText?: string;
-  /** Icon color of an inactive grid/list view-toggle button on hover. Fallback: `--text-primary`. */
-  viewToggleTextHover?: string;
 }
 
 /** Grouped style overrides for `Toolbar`. */
@@ -57,12 +46,20 @@ export interface ToolbarProps {
   onQueryChange: (q: string) => void;
   /** Section heading text. Default: 'Browse'. */
   title?: string;
+  /**
+   * Renders in place of the `title`/`totalCount` heading when supplied, e.g.
+   * so a host can render a clickable breadcrumb instead of a plain text
+   * label.
+   */
+  browseHeaderRenderer?: ReactNode;
   /** Search input placeholder. Default: 'Search models, tools, agents…'. */
   searchPlaceholder?: string;
   /** Accessible label for switching to grid view. Default: 'Grid view'. */
   gridViewLabel?: string;
   /** Accessible label for switching to list view. Default: 'List view'. */
   listViewLabel?: string;
+  /** Accessible label naming the grid/list view toggle group. Default: 'View mode'. */
+  viewToggleLabel?: string;
   /** Grouped typography and color overrides. */
   styles?: ToolbarStyles;
   /** Currently selected topic filters. Empty set means no topic filter is active. */
@@ -83,6 +80,13 @@ export interface ToolbarProps {
   filterTopicsLabel?: string;
   /** Currently active sort key. */
   sortKey?: string;
-  /** Available sort options shown in the dropdown. */
-  sortOptions?: DropdownItem[];
+  /**
+   * Values the sort menu lists. Only the values — the toolbar owns which one
+   * is marked as applied and what a click does.
+   */
+  sortOptions?: SelectOption[];
+  /** Called with the picked option's `value` when the sort order changes. */
+  onSortChange?: (sortKey: string) => void;
+  /** The sort control's own name, prepended to its accessible name. Default: 'Sort'. */
+  sortLabel?: string;
 }

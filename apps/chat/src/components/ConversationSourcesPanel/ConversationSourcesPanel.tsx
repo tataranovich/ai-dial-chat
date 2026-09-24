@@ -1,4 +1,20 @@
-import type { DisplayAttachment } from '@epam/ai-dial-chat-shared';
+import { useOpenAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
+import {
+  useAttachmentAction,
+  isDownloadableAttachment,
+  downloadAttachment as triggerAttachmentDownload,
+} from '@epam/ai-dial-chat-hooks/attachments';
+import { useConversationSources } from '@epam/ai-dial-chat-hooks/conversation-sources';
+import {
+  isDialFileId,
+  isExternalSourcePreviewable,
+  resolveExternalSourceContentType,
+} from '@epam/ai-dial-chat-hooks/file-manager';
+import { usePanelMaxWidth } from '@epam/ai-dial-chat-hooks/viewport-layout';
+import type {
+  AttachmentDisplayResolvers,
+  DisplayAttachment,
+} from '@epam/ai-dial-chat-shared';
 import {
   MDMessageViewer,
   AttachmentType,
@@ -7,6 +23,7 @@ import {
 import {
   ScheduledTaskDetailsSummary,
   ScheduledTaskRunHistoryList,
+  type ScheduledTaskRunItem,
 } from '@epam/ai-dial-scheduled-tasks';
 import { ConversationSourcesPanel } from '@epam/ai-dial-source-panel';
 import type { QuotationSource } from '@epam/ai-dial-source-panel';
@@ -20,34 +37,32 @@ import {
   type FC,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router';
+import { MIN_CONTENT_AREA_WIDTH } from '../../constants/layout';
+import { getConversationRoute } from '../../constants/routes';
 import {
   AttachmentsI18nKeys,
   BasicI18nKeys,
   ButtonsI18nKeys,
+  ConversationPanelI18nKeys,
   ScheduledTasksI18nKeys,
   SidebarI18nKeys,
 } from '../../constants/translation-keys';
 import { useActiveScheduledTask } from '../../context/ActiveScheduledTaskContext';
+import { useConversations } from '../../context/ConversationsContext';
 import { useDeployments } from '../../context/DeploymentsContext';
 import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
-import {
-  downloadAttachment as triggerAttachmentDownload,
-  isDownloadableAttachment,
-  useAttachmentAction,
-} from '../../hooks/attachment/useAttachmentAction';
-import { useOpenAttachmentCanvas } from '../../hooks/attachment/useOpenAttachmentCanvas';
+import { useAttachmentCanvasResolvers } from '../../hooks/attachment/useAttachmentCanvasResolvers';
 import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
-import { useConversationSources } from '../../hooks/conversation-sources/useConversationSources';
 import { useLanguage } from '../../hooks/language/useLanguage';
 import useLocalStorage from '../../hooks/useLocalStorage';
-import usePanelMaxWidth from '../../hooks/usePanelMaxWidth';
 import {
   ActiveScheduledTaskDetailState,
   ActiveScheduledTaskStatus,
 } from '../../types/active-scheduled-task';
 import { StorageKey } from '../../types/storage-key';
-import { isExternalSourcePreviewable } from '../../utils/attachment-canvas';
-import { isDialFileId } from '../../utils/dial-file';
+import { resolveDialFileDownloadUrl } from '../../utils/dial-file';
+import { resolveCatalogIconUrl } from '../../utils/icon-path';
 import { resolveLocalizedText } from '../../utils/locale';
 import { mapScheduledTaskRunDtosToItems } from '../../utils/map-scheduled-task-run-dto';
 
@@ -56,15 +71,29 @@ const DEFAULT_PANEL_WIDTH = 360;
 /** Delay between successive triggered downloads so browsers don't block a burst of anchor clicks. */
 const DOWNLOAD_ALL_STAGGER_MS = 150;
 
+/* Stable references so useConversationSources'/useAttachmentAction's memoization isn't defeated by a new object/function each render. */
+const attachmentDisplayResolvers: AttachmentDisplayResolvers = {
+  resolvePreviewUrl: (dto) => resolveCatalogIconUrl(dto.url),
+  resolvePlayUrl: (dto) => dto.url && resolveDialFileDownloadUrl(dto.url),
+};
+
 const ConversationSourcesPanelContainer: FC = () => {
   const { t } = useTranslation();
   const { language } = useLanguage();
   const { handleClose, isOpen, messages } = useSourcesSidebar();
-  const { uploaded, generated, sources } = useConversationSources(messages);
-  const { handleAttachmentClick: downloadAttachment } = useAttachmentAction();
-  const { openAttachmentCanvas } = useOpenAttachmentCanvas();
+  const { uploaded, generated, sources } = useConversationSources(
+    messages,
+    attachmentDisplayResolvers,
+  );
+  const { handleAttachmentClick: downloadAttachment } = useAttachmentAction({
+    resolveDownloadUrl: resolveDialFileDownloadUrl,
+  });
+  const { resolvers, options } = useAttachmentCanvasResolvers();
+  const { openAttachmentCanvas } = useOpenAttachmentCanvas(resolvers, options);
   const activeScheduledTask = useActiveScheduledTask();
   const { items: deploymentItems } = useDeployments();
+  const { conversations } = useConversations();
+  const navigate = useNavigate();
   const isTaskConversation =
     activeScheduledTask.status === ActiveScheduledTaskStatus.TaskConversation;
 
@@ -77,8 +106,21 @@ const ConversationSourcesPanelContainer: FC = () => {
   }, [activeScheduledTask.scheduleId]);
 
   const runItems = useMemo(
-    () => mapScheduledTaskRunDtosToItems(activeScheduledTask.history.items, t),
-    [activeScheduledTask.history.items, t],
+    () =>
+      mapScheduledTaskRunDtosToItems(
+        activeScheduledTask.history.items,
+        t,
+        conversations,
+      ),
+    [activeScheduledTask.history.items, t, conversations],
+  );
+
+  const handleRunClick = useCallback(
+    (run: ScheduledTaskRunItem) => {
+      if (!run.conversationId) return;
+      navigate(getConversationRoute(run.conversationId));
+    },
+    [navigate],
   );
 
   const taskModel = activeScheduledTask.task?.model;
@@ -105,6 +147,7 @@ const ConversationSourcesPanelContainer: FC = () => {
       currentRunLabel: t(
         ScheduledTasksI18nKeys.ConversationPanelCurrentRunLabel,
       ),
+      unreadIndicatorLabel: t(ConversationPanelI18nKeys.UnreadIndicatorLabel),
     }),
     [t],
   );
@@ -165,6 +208,7 @@ const ConversationSourcesPanelContainer: FC = () => {
             error={activeScheduledTask.history.error}
             onRetry={activeScheduledTask.history.refetch}
             currentRunId={activeScheduledTask.runId}
+            onRunClick={handleRunClick}
             labels={historyLabels}
             footer={historyFooter}
           />
@@ -211,11 +255,15 @@ const ConversationSourcesPanelContainer: FC = () => {
         window.open(url, '_blank', 'noopener,noreferrer');
         return;
       }
+      const resolvedContentType = resolveExternalSourceContentType(
+        contentType,
+        url,
+      );
       const attachment: DisplayAttachment = {
         id: url,
         name: title,
-        contentType,
-        type: contentType.startsWith('image/')
+        contentType: resolvedContentType,
+        type: resolvedContentType.startsWith('image/')
           ? AttachmentType.Image
           : AttachmentType.File,
         status: RequestStatus.Idle,
@@ -243,14 +291,14 @@ const ConversationSourcesPanelContainer: FC = () => {
   const handleDownloadAll = useCallback(() => {
     downloadableAttachments.forEach((attachment, index) => {
       setTimeout(
-        () => triggerAttachmentDownload(attachment),
+        () => triggerAttachmentDownload(attachment, resolveDialFileDownloadUrl),
         index * DOWNLOAD_ALL_STAGGER_MS,
       );
     });
   }, [downloadableAttachments]);
 
   const isMobile = useIsMobile();
-  const maxPanelWidth = usePanelMaxWidth();
+  const maxPanelWidth = usePanelMaxWidth(MIN_CONTENT_AREA_WIDTH);
   const [storedWidth, setStoredWidth] = useLocalStorage(
     StorageKey.ConversationSourcesWidth,
     DEFAULT_PANEL_WIDTH,

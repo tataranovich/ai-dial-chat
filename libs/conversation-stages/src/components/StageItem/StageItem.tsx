@@ -1,6 +1,10 @@
 import type { Stage } from '@epam/ai-dial-chat-shared';
 import { mergeClasses, StageStatus } from '@epam/ai-dial-chat-shared';
-import { DIAL_ICON_SIZE, DialEllipsisTooltip } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  EllipsisTooltip,
+} from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconChevronRight } from '@tabler/icons-react';
 import { FC, useState } from 'react';
 import type {
@@ -66,13 +70,13 @@ export const StageItem: FC<StageItemProps> = ({
           isMono && styles.monoName,
         )}
       >
-        <DialEllipsisTooltip text={displayName || stage.status || ''} />
+        <EllipsisTooltip text={displayName || stage.status || ''} />
       </span>
       {stage.tag && (
         <span
           className={mergeClasses(
-            'flex-none uppercase',
-            typography?.countFontClassName ?? 'dial-tiny-text',
+            'flex-none',
+            typography?.tagClassName ?? 'dial-tiny-lead-text',
             styles.tag,
           )}
         >
@@ -93,12 +97,17 @@ export const StageItem: FC<StageItemProps> = ({
       {hasExpandableContent && (
         <span className={mergeClasses('flex-none', styles.iconSecondary)}>
           {isOpen ? (
-            <IconChevronDown size={DIAL_ICON_SIZE.SM} aria-hidden />
+            <IconChevronDown
+              size={DIAL_ICON_SIZE.SM}
+              aria-hidden
+              stroke={DIAL_KIT_ICON_STROKE}
+            />
           ) : (
             <IconChevronRight
               size={DIAL_ICON_SIZE.SM}
               className="rtl:scale-x-[-1]"
               aria-hidden
+              stroke={DIAL_KIT_ICON_STROKE}
             />
           )}
         </span>
@@ -117,14 +126,16 @@ export const StageItem: FC<StageItemProps> = ({
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
-        aria-expanded={isOpen}
-        className={mergeClasses(rowClassName, 'cursor-pointer text-start')}
-      >
-        {header}
-      </button>
+      <div className={rowClassName}>
+        <button
+          type="button"
+          onClick={() => setIsOpen((prev) => !prev)}
+          aria-expanded={isOpen}
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-start"
+        >
+          {header}
+        </button>
+      </div>
       <div
         className={mergeClasses(
           'grid overflow-hidden transition-[grid-template-rows] duration-[250ms] ease-in-out',

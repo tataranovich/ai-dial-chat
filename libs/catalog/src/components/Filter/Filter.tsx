@@ -1,9 +1,16 @@
-import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  buildCssVars,
+  mergeClasses,
+  SELECT_LIST_MAX_HEIGHT_CLASS_NAME,
+} from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   Dropdown,
-  PrimaryButton,
   GhostButton,
+  MenuItem,
+  MenuItemMark,
+  PrimaryButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconFilter } from '@tabler/icons-react';
 import {
@@ -22,13 +29,17 @@ import styles from './Filter.module.scss';
 /** Props for Filter. */
 /** Color overrides for `Filter`, applied as CSS custom properties. */
 export interface FilterColors {
-  /** Trigger button background. Fallback: `#ffffff`. */
+  /** Trigger button background. Fallback: `--bg-control-neutral`. */
   buttonBackground?: string;
-  /** Trigger button border color while the dropdown has focus. Fallback: `--stroke-info`. */
+  /** Trigger button border color at rest. Fallback: `--stroke-tertiary`. */
+  buttonBorder?: string;
+  /** Trigger button border color on hover. Fallback: `--stroke-secondary`. */
+  buttonBorderHover?: string;
+  /** Trigger button border color while the dropdown has focus. Fallback: `--stroke-accent-focus`. */
   buttonBorderFocus?: string;
-  /** Trigger button border color while a filter is applied. Fallback: `--stroke-info`. */
+  /** Trigger button border color while a filter is applied. Fallback: `--stroke-accent`. */
   buttonBorderActive?: string;
-  /** Trigger button border color while the dropdown is open. Fallback: `--stroke-info`. */
+  /** Trigger button border color while the dropdown is open. Fallback: `--stroke-accent-alpha`. */
   buttonBorderOpen?: string;
   /** Trigger button label color. Fallback: `--text-primary`. */
   buttonLabel?: string;
@@ -36,20 +47,18 @@ export interface FilterColors {
   buttonFunnel?: string;
   /** Chevron icon color in the trigger button. Fallback: `--text-tertiary`. */
   buttonChevron?: string;
-  /** Dropdown overlay background. Fallback: `#ffffff`. */
+  /** Dropdown overlay background. Fallback: `--bg-layer-raised`. */
   overlayBackground?: string;
-  /** Row background on hover. Fallback: `--bg-layer-raised`. */
-  rowHoverBackground?: string;
-  /** Background of a checked row. Fallback: `--bg-accent-primary-alpha`. */
-  rowCheckedBackground?: string;
+  /** Dropdown overlay border color. Fallback: `--stroke-tertiary`. */
+  overlayBorder?: string;
   /** Row label text color. Fallback: `--text-primary`. */
   rowLabel?: string;
-  /** Checkbox border color in its unchecked state. Fallback: `--stroke-tertiary`. */
-  checkboxBorder?: string;
-  /** Checkbox background in its unchecked state. Fallback: `#ffffff`. */
-  checkboxBackground?: string;
   /** Section heading ("Topics") text color. Fallback: `--text-tertiary`. */
   sectionLabel?: string;
+  /** Divider line color between filter sections. Fallback: `--stroke-tertiary`. */
+  divider?: string;
+  /** Footer top-border color. Fallback: `--stroke-tertiary`. */
+  footerBorder?: string;
 }
 
 export interface FilterProps {
@@ -125,6 +134,8 @@ export const Filter: FC<FilterProps> = ({
    * its overlay, so it is not a DOM descendant of the trigger. */
   const cssVars = buildCssVars({
     '--cat-filter-btn-bg': colors?.buttonBackground,
+    '--cat-filter-btn-border': colors?.buttonBorder,
+    '--cat-filter-btn-border-hover': colors?.buttonBorderHover,
     '--cat-filter-btn-border-focus': colors?.buttonBorderFocus,
     '--cat-filter-btn-border-active': colors?.buttonBorderActive,
     '--cat-filter-btn-border-open': colors?.buttonBorderOpen,
@@ -132,12 +143,11 @@ export const Filter: FC<FilterProps> = ({
     '--cat-filter-btn-funnel': colors?.buttonFunnel,
     '--cat-filter-btn-chevron': colors?.buttonChevron,
     '--cat-filter-overlay-bg': colors?.overlayBackground,
-    '--cat-filter-row-hover-bg': colors?.rowHoverBackground,
-    '--cat-filter-row-checked-bg': colors?.rowCheckedBackground,
+    '--cat-filter-overlay-border': colors?.overlayBorder,
     '--cat-filter-row-label': colors?.rowLabel,
-    '--cat-filter-checkbox-border': colors?.checkboxBorder,
-    '--cat-filter-checkbox-bg': colors?.checkboxBackground,
     '--cat-filter-section-label': colors?.sectionLabel,
+    '--cat-filter-divider': colors?.divider,
+    '--cat-filter-footer-border': colors?.footerBorder,
   });
 
   const topics = useMemo(
@@ -172,7 +182,7 @@ export const Filter: FC<FilterProps> = ({
    */
   const totalItems = topics.length + 1;
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   const focusRow = useCallback(
@@ -224,14 +234,6 @@ export const Filter: FC<FilterProps> = ({
     }
   };
 
-  const makeRowKeyDown =
-    (toggle: () => void) => (e: KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault();
-        toggle();
-      }
-    };
-
   const handleApply = () => {
     onChange(pendingChecked);
     onMyAppsChange?.(pendingMyApps);
@@ -256,46 +258,46 @@ export const Filter: FC<FilterProps> = ({
           role="menu"
           aria-label={defaultLabel}
           tabIndex={-1}
-          style={cssVars}
+          /*
+           * Bound to the kit Dropdown's own live available-height var (set by
+           * floating-ui) so the topics list, not the floating panel, absorbs
+           * any height constraint. Without it both scroll: the panel keeps its
+           * default overflow and the list keeps its full 344px, so a viewport
+           * too short for the two of them plus the header and footer leaves
+           * the user with two scrollbars. The -8px accounts for this overlay's
+           * own p-[6px] plus the panel's border.
+           */
+          style={{
+            ...cssVars,
+            maxHeight: 'calc(var(--fui-available-height, 9999px) - 8px)',
+          }}
           className={mergeClasses(
-            'min-w-[360px] rounded-xl p-[6px]',
+            'flex min-w-[360px] flex-col rounded-xl p-[6px]',
             styles.overlay,
           )}
           onKeyDown={handleMenuKeyDown}
         >
-          {/* My Apps row */}
-          <div
+          {/* My Apps row — the kit's own multiselect menu row, so its rest,
+              hover, focus and checked states come from the Menu-item spec. */}
+          <MenuItem
             role="menuitemcheckbox"
             aria-checked={pendingMyApps}
+            mark={MenuItemMark.Checkbox}
+            selected={pendingMyApps}
+            label={myAppsLabel}
+            labelClassName={mergeClasses(
+              styles.rowLabel,
+              typography?.filterButtonClassName ?? 'dial-small-semi-text',
+            )}
+            /* Its height is a `height`, so as a flex child of the panel it
+               would shrink instead of leaving the topics list to scroll. */
+            className="shrink-0"
             tabIndex={focusedIndex === 0 ? 0 : -1}
             ref={(el) => {
               rowRefs.current[0] = el;
             }}
-            className={mergeClasses(
-              'flex cursor-pointer select-none items-center gap-3 rounded-lg px-[10px] py-[9px] outline-none',
-              styles.row,
-              pendingMyApps && styles.rowChecked,
-            )}
             onClick={() => setPendingMyApps(!pendingMyApps)}
-            onKeyDown={makeRowKeyDown(() => setPendingMyApps(!pendingMyApps))}
-          >
-            <span
-              className={mergeClasses(
-                'flex size-5 shrink-0 items-center justify-center rounded-md',
-                styles.checkbox,
-                pendingMyApps && styles.checkboxChecked,
-              )}
-              aria-hidden
-            />
-            <span
-              className={mergeClasses(
-                styles.rowLabel,
-                typography?.filterButtonClassName ?? 'dial-small-semi-text',
-              )}
-            >
-              {myAppsLabel}
-            </span>
-          </div>
+          />
 
           {topics.length > 0 && (
             <>
@@ -306,48 +308,47 @@ export const Filter: FC<FilterProps> = ({
               />
               <div
                 className={mergeClasses(
-                  'px-[10px] pb-1 pt-[10px] uppercase tracking-[0.06em]',
+                  'px-[10px] pb-1 pt-[10px]',
                   typography?.filterSectionLabelClassName ??
-                    'dial-tiny-semi-text',
+                    'dial-tiny-lead-semi-text',
                   styles.sectionLabel,
                 )}
                 aria-hidden
               >
                 {topicsLabel}
               </div>
-              <div className="flex max-h-[220px] flex-col gap-1 overflow-y-auto">
+              {/* The options are their own scroll box at the design's maximum
+                  list length, so the My Apps row, the section heading and the
+                  Clear/Apply footer stay put as the topics scroll. `min-h-0`
+                  lets it give way when the panel's available height is under
+                  that maximum, keeping it the only thing that scrolls. */}
+              <div
+                className={mergeClasses(
+                  SELECT_LIST_MAX_HEIGHT_CLASS_NAME,
+                  'flex min-h-0 flex-col gap-1 overflow-y-auto',
+                )}
+              >
                 {topics.map((topic, i) => {
                   const isChecked = pendingChecked.has(topic);
                   const idx = i + 1;
                   const toggle = () =>
                     setPendingChecked(toggleTopic(topic, pendingChecked));
                   return (
-                    <div
+                    <MenuItem
                       key={topic}
                       role="menuitemcheckbox"
                       aria-checked={isChecked}
+                      mark={MenuItemMark.Checkbox}
+                      selected={isChecked}
+                      label={topic}
+                      labelClassName={styles.rowLabel}
+                      className="shrink-0"
                       tabIndex={focusedIndex === idx ? 0 : -1}
                       ref={(el) => {
                         rowRefs.current[idx] = el;
                       }}
-                      className={mergeClasses(
-                        'flex cursor-pointer select-none items-center gap-3 rounded-lg px-[10px] py-[9px] outline-none',
-                        styles.row,
-                        isChecked && styles.rowChecked,
-                      )}
                       onClick={toggle}
-                      onKeyDown={makeRowKeyDown(toggle)}
-                    >
-                      <span
-                        className={mergeClasses(
-                          'flex size-5 shrink-0 items-center justify-center rounded-md',
-                          styles.checkbox,
-                          isChecked && styles.checkboxChecked,
-                        )}
-                        aria-hidden
-                      />
-                      <span className={styles.rowLabel}>{topic}</span>
-                    </div>
+                    />
                   );
                 })}
               </div>
@@ -356,7 +357,7 @@ export const Filter: FC<FilterProps> = ({
 
           <div
             className={mergeClasses(
-              'mt-1 flex items-center px-1 py-3',
+              'mt-1 flex shrink-0 items-center px-1 py-3',
               styles.footer,
             )}
             onKeyDown={(e) => {
@@ -384,7 +385,7 @@ export const Filter: FC<FilterProps> = ({
         onKeyDown={handleTriggerKeyDown}
         style={cssVars}
         className={mergeClasses(
-          'flex h-[50px] shrink-0 cursor-pointer items-center gap-[7px] whitespace-nowrap rounded-xl px-[18px]',
+          'flex h-12 shrink-0 cursor-pointer items-center gap-[7px] whitespace-nowrap rounded-lg px-[18px]',
           styles.filterBtn,
           isActive && styles.filterBtnActive,
           isOpen && styles.filterBtnOpen,
@@ -392,7 +393,7 @@ export const Filter: FC<FilterProps> = ({
       >
         <IconFilter
           size={DIAL_ICON_SIZE.SM}
-          strokeWidth={1.8}
+          stroke={DIAL_KIT_ICON_STROKE}
           className={mergeClasses('shrink-0', styles.filterBtnFunnel)}
           aria-hidden
         />
@@ -406,7 +407,7 @@ export const Filter: FC<FilterProps> = ({
         </span>
         <IconChevronDown
           size={14}
-          strokeWidth={2.2}
+          stroke={DIAL_KIT_ICON_STROKE}
           className={mergeClasses(
             'shrink-0 transition-transform duration-150',
             styles.filterBtnChevron,

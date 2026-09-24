@@ -5,6 +5,10 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
+  "sideEffects": [
+    "**/*.css",
+    "**/*.scss"
+  ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,25 +19,49 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    }
+    },
+    "./file-manager": {
+      "@epam/source": "./src/entry-points/file-manager.ts",
+      "types": "./dist/file-manager.d.ts",
+      "import": "./dist/file-manager.js",
+      "default": "./dist/file-manager.js"
+    },
+    "./markdown": {
+      "@epam/source": "./src/entry-points/markdown.ts",
+      "types": "./dist/markdown.d.ts",
+      "import": "./dist/markdown.js",
+      "default": "./dist/markdown.js"
+    },
+    "./styles.css": "./dist/index.css"
   },
   "peerDependencies": {
-    "react": "^19.2.6",
-    "vitest": "~4.1.0",
+    "react": "^19.2.8",
+    "@epam/ai-dial-ui-kit": "^0.15.0-dev.12",
+    "@epam/ai-dial-react-file-manager": "^0.3.0-dev.4",
+    "ag-grid-community": "^35.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@epam/ai-dial-react-file-manager": {
+      "optional": true
+    },
+    "ag-grid-community": {
+      "optional": true
+    }
+  },
+  "dependencies": {
     "@tabler/icons-react": "^3.44.0",
-    "react-syntax-highlighter": "^16.1.1",
+    "classnames": "2.5.1",
+    "dompurify": "3.4.15",
+    "katex": "^0.16.22",
     "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "rehype-stringify": "^10.0.1",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "rehype-katex": "^7.0.1",
-    "katex": "^0.16.22",
-    "@epam/ai-dial-ui-kit": "^0.13.0-dev.26"
-  },
-  "dependencies": {
-    "classnames": "2.5.1",
-    "dompurify": "3.4.12",
-    "rehype-stringify": "^10.0.1",
     "remark-parse": "^11.0.0",
     "remark-rehype": "^11.1.2",
     "tailwind-merge": "^3.6.0",

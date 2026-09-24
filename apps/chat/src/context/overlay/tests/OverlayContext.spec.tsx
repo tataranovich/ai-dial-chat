@@ -8,6 +8,7 @@ import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthStatus } from '../../../types/auth-status';
 import { UserConfigStatus } from '../../../types/user-config-status';
+import { useAppConfig as mockUseAppConfig } from '../../tests/app-config-context-mock';
 import {
   type ConversationListBridge,
   OverlayProvider,
@@ -26,11 +27,10 @@ vi.mock('react-router', () => ({
   useNavigate: () => mockNavigate,
 }));
 
-vi.mock('../../AppConfigContext', () => ({
-  useAppConfig: () => ({
-    config: { overlayAllowedOrigins: mockOverlayAllowedOrigins },
-  }),
-}));
+vi.mock(
+  '../../AppConfigContext',
+  async () => import('../../tests/app-config-context-mock'),
+);
 
 vi.mock('../../auth/UserContext', () => ({
   useUser: () => ({ status: mockAuthStatus }),
@@ -66,6 +66,11 @@ describe('OverlayContext', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     mockAuthStatus = AuthStatus.Authenticated;
     mockOverlayAllowedOrigins = ['https://partner.example.com'];
+    /* Re-armed here because `restoreAllMocks` in `afterEach` wipes the
+       implementation set on the shared spy. */
+    mockUseAppConfig.mockImplementation(() => ({
+      config: { overlayAllowedOrigins: mockOverlayAllowedOrigins },
+    }));
   });
 
   afterEach(() => {
@@ -248,6 +253,80 @@ describe('OverlayContext', () => {
       });
     });
 
+    it('accepts a missing auto-sign-in provider and exposes undefined', async () => {
+      const { result } = renderHook(() => useOverlay(), { wrapper });
+      const postMessageSpy = vi.spyOn(window.parent, 'postMessage');
+
+      dispatchFromHost({
+        type: OverlayRequestType.SetOverlayOptions,
+        requestId: 'req-no-auto-sign-in',
+        payload: { hostDomain: 'https://partner.example.com' },
+      });
+
+      expect(result.current.authAutoSignInProvider).toBeUndefined();
+      await waitFor(() => {
+        expect(
+          postMessageSpy.mock.calls.some(
+            ([message]) =>
+              (message as { requestId?: string }).requestId ===
+              'req-no-auto-sign-in',
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it('stores a valid auto-sign-in provider id', async () => {
+      const { result } = renderHook(() => useOverlay(), { wrapper });
+
+      act(() => {
+        dispatchFromHost({
+          type: OverlayRequestType.SetOverlayOptions,
+          requestId: 'req-auto-sign-in',
+          payload: {
+            hostDomain: 'https://partner.example.com',
+            authAutoSignInProvider: 'keycloak',
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(result.current.authAutoSignInProvider).toBe('keycloak');
+      });
+    });
+
+    it.each([
+      ['a non-string value', 42],
+      ['a whitespace-only value', '   '],
+    ])(
+      'treats %s for the auto-sign-in provider as absent',
+      async (_, value) => {
+        const { result } = renderHook(() => useOverlay(), { wrapper });
+        const postMessageSpy = vi.spyOn(window.parent, 'postMessage');
+
+        act(() => {
+          dispatchFromHost({
+            type: OverlayRequestType.SetOverlayOptions,
+            requestId: 'req-invalid-auto-sign-in',
+            payload: {
+              hostDomain: 'https://partner.example.com',
+              authAutoSignInProvider: value,
+            },
+          });
+        });
+
+        expect(result.current.authAutoSignInProvider).toBeUndefined();
+        await waitFor(() => {
+          expect(
+            postMessageSpy.mock.calls.some(
+              ([message]) =>
+                (message as { requestId?: string }).requestId ===
+                'req-invalid-auto-sign-in',
+            ),
+          ).toBe(true);
+        });
+      },
+    );
+
     it('rejects an auth provider mode map from an untrusted origin', () => {
       const { result } = renderHook(() => useOverlay(), { wrapper });
 
@@ -281,6 +360,48 @@ describe('OverlayContext', () => {
       );
 
       expect(mockSetTheme).not.toHaveBeenCalled();
+      expect(postMessageSpy).not.toHaveBeenCalled();
+    });
+
+    it('accepts an origin matching a wildcard allowlist entry', async () => {
+      mockOverlayAllowedOrigins = ['https://*.example.com'];
+      renderHook(() => useOverlay(), { wrapper });
+      const postMessageSpy = vi.spyOn(window.parent, 'postMessage');
+
+      dispatchFromHost(
+        {
+          type: OverlayRequestType.SetOverlayOptions,
+          requestId: 'req-wildcard-match',
+          payload: { hostDomain: 'https://portal.example.com' },
+        },
+        'https://portal.example.com',
+      );
+
+      await waitFor(() => {
+        expect(
+          postMessageSpy.mock.calls.some(
+            ([message]) =>
+              (message as { requestId?: string }).requestId ===
+              'req-wildcard-match',
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it('rejects an origin not matching a wildcard allowlist entry', () => {
+      mockOverlayAllowedOrigins = ['https://*.example.com'];
+      renderHook(() => useOverlay(), { wrapper });
+      const postMessageSpy = vi.spyOn(window.parent, 'postMessage');
+
+      dispatchFromHost(
+        {
+          type: OverlayRequestType.SetOverlayOptions,
+          requestId: 'req-wildcard-mismatch',
+          payload: { hostDomain: 'https://evil.example.com.attacker.test' },
+        },
+        'https://evil.example.com.attacker.test',
+      );
+
       expect(postMessageSpy).not.toHaveBeenCalled();
     });
 

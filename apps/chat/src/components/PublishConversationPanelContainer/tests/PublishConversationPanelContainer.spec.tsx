@@ -2,8 +2,11 @@ import type { PublicationRule } from '@epam/ai-dial-publish-panel';
 import { PublicationRuleFunction } from '@epam/ai-dial-publish-panel';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useNotification } from '../../../context/NotificationContext';
+import { useAppConfig as useAppConfigMock } from '../../../context/tests/app-config-context-mock';
+import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
 import { usePublishFolders } from '../../../hooks/publish/usePublishFolders';
 import { publishConversation } from '../../../server-api/conversation-publish.api';
 import { getPublishRules } from '../../../server-api/publish-rules.api';
@@ -29,6 +32,8 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
       hasWriteAccess,
       isSubmitting,
       hasSubmitError,
+      author,
+      onAuthorChange,
       rules,
       onRulesChange,
       ruleSourceOptions,
@@ -45,6 +50,8 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
       hasWriteAccess: boolean;
       isSubmitting: boolean;
       hasSubmitError: boolean;
+      author: string;
+      onAuthorChange: (author: string) => void;
       rules: PublicationRule[];
       onRulesChange: (rules: PublicationRule[]) => void;
       ruleSourceOptions: string[];
@@ -59,6 +66,7 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
         <span>existing:{String(hasExistingPublicationInFolder)}</span>
         <span>writeAccess:{String(hasWriteAccess)}</span>
         <span>submitting:{String(isSubmitting)}</span>
+        <span>author:{author}</span>
         <span>ruleSourceOptions:{ruleSourceOptions.join(',')}</span>
         <span>rules:{rules.map((r) => r.source).join(',')}</span>
         <span>rulesLoading:{String(isRulesLoading)}</span>
@@ -76,6 +84,8 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
         <button onClick={() => onRulesChange([...rules, mockRule])}>
           Add mock rule
         </button>
+        <button onClick={() => onAuthorChange('DIAL Team')}>Set author</button>
+        <button onClick={() => onAuthorChange('   ')}>Clear author</button>
         <button onClick={onSubmit}>Publish</button>
         <button onClick={onClose}>Close</button>
       </div>
@@ -84,6 +94,9 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
 });
 
 vi.mock('../../../hooks/publish/usePublishFolders');
+vi.mock('../../../hooks/user-profile/useUserProfile', () => ({
+  useUserProfile: () => ({ displayName: 'Daniil Pavlov' }),
+}));
 vi.mock('../../../server-api/conversation-publish.api');
 vi.mock('../../../server-api/publish-rules.api');
 vi.mock('../../../context/NotificationContext');
@@ -93,10 +106,10 @@ vi.mock('../../../hooks/publish/usePublishErrorNotification', () => ({
   usePublishErrorNotification: () => mockShowPublishError,
 }));
 
-const useAppConfigMock = vi.fn();
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => useAppConfigMock(),
-}));
+vi.mock(
+  '../../../context/AppConfigContext',
+  async () => import('../../../context/tests/app-config-context-mock'),
+);
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -117,7 +130,9 @@ const baseFoldersResult = {
   hasPublishWriteAccess: () => true,
 };
 
-const renderContainer = (props?: Partial<{ isOpen: boolean }>) =>
+const renderContainer = (
+  props?: Partial<ComponentProps<typeof PublishConversationPanelContainer>>,
+) =>
   render(
     <PublishConversationPanelContainer
       isOpen
@@ -131,11 +146,9 @@ const renderContainer = (props?: Partial<{ isOpen: boolean }>) =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(usePublishFolders).mockReturnValue(baseFoldersResult);
-  vi.mocked(useNotification).mockReturnValue({
-    notifications: [],
-    showNotification: mockShowNotification,
-    dismissNotification: vi.fn(),
-  });
+  vi.mocked(useNotification).mockReturnValue(
+    createNotificationContextValue(mockShowNotification),
+  );
   useAppConfigMock.mockReturnValue({
     config: { publicationFilterSources: ['title', 'role', 'dial_roles'] },
   });
@@ -198,14 +211,15 @@ describe('PublishConversationPanelContainer', () => {
         'my-conversation-abc',
         'Shared',
         [],
+        'Daniil Pavlov',
       );
     });
     await waitFor(() => {
-      expect(mockShowNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: 'conversationPublish.successMessage',
-        }),
-      );
+      expect(mockShowNotification).toHaveBeenCalledWith({
+        variant: 'success',
+        title: 'entityNotifications.conversation.publishRequestedTitle',
+        message: 'entityNotifications.conversation.publishRequested',
+      });
       expect(onClose).toHaveBeenCalled();
     });
   });
@@ -244,6 +258,62 @@ describe('PublishConversationPanelContainer', () => {
     expect(mockRememberPublishFolder).not.toHaveBeenCalled();
   });
 
+  it('pre-fills the author field with the signed-in user display name', async () => {
+    await renderContainer();
+
+    expect(screen.getByText('author:Daniil Pavlov')).toBeTruthy();
+  });
+
+  it('forwards an edited author to publishConversation', async () => {
+    vi.mocked(publishConversation).mockResolvedValue({
+      path: 'conversations/bucket-123/my-conversation-abc',
+      folderPath: 'Shared',
+      publishedAt: new Date().toISOString(),
+      publishedBy: 'Test User',
+    });
+    await renderContainer();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Select Shared' }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Set author' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => {
+      expect(publishConversation).toHaveBeenCalledWith(
+        'my-conversation-abc',
+        'Shared',
+        [],
+        'DIAL Team',
+      );
+    });
+  });
+
+  it('forwards a cleared author as an empty string', async () => {
+    vi.mocked(publishConversation).mockResolvedValue({
+      path: 'conversations/bucket-123/my-conversation-abc',
+      folderPath: 'Shared',
+      publishedAt: new Date().toISOString(),
+      publishedBy: 'Test User',
+    });
+    await renderContainer();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Select Shared' }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Clear author' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => {
+      expect(publishConversation).toHaveBeenCalledWith(
+        'my-conversation-abc',
+        'Shared',
+        [],
+        '',
+      );
+    });
+  });
+
   it('forwards rules added in the panel to publishConversation', async () => {
     vi.mocked(publishConversation).mockResolvedValue({
       path: 'conversations/bucket-123/my-conversation-abc',
@@ -266,6 +336,7 @@ describe('PublishConversationPanelContainer', () => {
         'my-conversation-abc',
         'Shared',
         [mockRule],
+        'Daniil Pavlov',
       );
     });
   });
@@ -296,8 +367,36 @@ describe('PublishConversationPanelContainer', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('never reports an existing publication in the folder (version history is not fetched, see GH issue #7897)', async () => {
+  it('reports no existing publication for a folder absent from the handed-down history', async () => {
     await renderContainer();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Select Shared' }),
+    );
+
+    expect(screen.getByText('existing:false')).toBeTruthy();
+  });
+
+  /*
+   * `allowReplace={false}` became observable once history stopped being
+   * hardcoded empty: a conversation carries no version, so a second publish
+   * to the same folder would create a duplicate public copy rather than an
+   * update. See the change's design.md D6.
+   */
+  it('reports an existing publication for a folder the handed-down history names', async () => {
+    await renderContainer({
+      history: [{ publishedAt: 1_700_000_000_000, folderPath: ['Shared'] }],
+    });
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Select Shared' }),
+    );
+
+    expect(screen.getByText('existing:true')).toBeTruthy();
+  });
+
+  it('does not treat a loading or failed history as an existing publication', async () => {
+    await renderContainer({ isHistoryLoading: true, hasHistoryError: true });
 
     await userEvent.click(
       screen.getByRole('button', { name: 'Select Shared' }),

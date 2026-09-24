@@ -16,6 +16,8 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeatureFlagsService } from '../../app-config/feature-flags/feature-flags.service';
 import { FEATURE_KEY_METADATA } from '../../app-config/feature-flags/require-feature.decorator';
+import { AuthSource } from '../../auth/auth-source.enum';
+import type { EnvironmentVariables } from '../../config/environment.config';
 import { DeploymentsService } from '../../deployments/deployments.service';
 import { DialClientService } from '../../dial/dial-client.service';
 import { ScheduledTaskUnreadService } from '../../scheduled-task-unread/scheduled-task-unread.service';
@@ -90,6 +92,7 @@ describe('ConversationController (integration)', () => {
     app.use(
       (req: ExpressRequest, _res: ExpressResponse, next: NextFunction) => {
         req.user = TEST_USER;
+        req.authSource = AuthSource.Cookie;
         next();
       },
     );
@@ -154,10 +157,10 @@ describe('ConversationController (integration)', () => {
         .expect(400);
     });
 
-    it('returns 400 when firstMessage exceeds 4000 characters', async () => {
+    it('returns 400 when firstMessage exceeds 50000 characters', async () => {
       await request(app.getHttpServer())
         .post('/conversations')
-        .send({ firstMessage: 'a'.repeat(4001), deploymentId: 'gpt-4o' })
+        .send({ firstMessage: 'a'.repeat(50001), deploymentId: 'gpt-4o' })
         .expect(400);
     });
 
@@ -282,6 +285,7 @@ describe('ConversationController (integration)', () => {
       realApp.use(
         (req: ExpressRequest, _res: ExpressResponse, next: NextFunction) => {
           req.user = TEST_USER;
+          req.authSource = AuthSource.Cookie;
           next();
         },
       );
@@ -571,9 +575,9 @@ describe('ConversationController (integration)', () => {
         .expect(400);
     });
 
-    it('returns 400 when nextToken exceeds 512 characters', async () => {
+    it('returns 400 when nextToken exceeds 4096 characters', async () => {
       await request(app.getHttpServer())
-        .get(`/conversations/list?nextToken=${'x'.repeat(513)}`)
+        .get(`/conversations/list?nextToken=${'x'.repeat(4097)}`)
         .expect(400);
     });
 
@@ -903,6 +907,91 @@ describe('ConversationController (integration)', () => {
         ConversationController.prototype.streamCompletion,
       );
       expect(metadata).toBeUndefined();
+    });
+
+    /*
+     * `generation-registry`'s admission rule is "a present entry is always a
+     * conflict" — including one that is finalizing, not only an active one.
+     * Wired against the real registry, not a mock, because the previous
+     * behaviour (silently replacing a finalizing entry) is exactly what this
+     * change removes.
+     */
+    it('returns 409 for a same-principal, same-path submit arriving while the prior generation is finalizing, before an SSE 200 opens', async () => {
+      const path = 'test-bucket/gpt-4o__Hello__uuid';
+      const realGenerationService = new ConversationGenerationService({
+        get: () => undefined,
+      } as unknown as ConfigService<EnvironmentVariables>);
+      const existingLease = realGenerationService.register(
+        `c:${TEST_USER.sid}`,
+        path,
+        'existing-gen-id',
+      );
+      realGenerationService.beginFinalizing(existingLease);
+
+      const streamingStub = {
+        streamCompletion: vi.fn().mockImplementation(async function* (
+          streamPath: string,
+          _at: string,
+          _bucket: string,
+          generationId: string,
+        ) {
+          /* Mirrors ConversationStreamingService.streamCompletion's first call. */
+          realGenerationService.register(
+            `c:${TEST_USER.sid}`,
+            streamPath,
+            generationId,
+          );
+          yield Buffer.from('data: unused\n\n');
+        }),
+      };
+
+      const module: TestingModule = await Test.createTestingModule({
+        controllers: [ConversationController],
+        providers: [
+          { provide: ConversationService, useValue: streamingStub },
+          {
+            provide: ConversationGenerationService,
+            useValue: realGenerationService,
+          },
+        ],
+      }).compile();
+
+      const conflictApp = module.createNestApplication();
+      conflictApp.use(
+        (req: ExpressRequest, _res: ExpressResponse, next: NextFunction) => {
+          req.user = TEST_USER;
+          req.authSource = AuthSource.Cookie;
+          next();
+        },
+      );
+      conflictApp.useGlobalPipes(
+        new ValidationPipe({
+          whitelist: true,
+          forbidNonWhitelisted: true,
+          transform: true,
+        }),
+      );
+      await conflictApp.init();
+      await conflictApp.listen(0, '127.0.0.1');
+
+      try {
+        const res = await request(conflictApp.getHttpServer())
+          .post('/conversations/completions')
+          .send({
+            generationId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+            path,
+            model: 'gpt-4o',
+            mode: 'append',
+            message: 'Hello',
+          })
+          .expect(409);
+
+        expect(res.body.message).toContain('already active');
+        expect(res.headers['content-type']).not.toContain('text/event-stream');
+      } finally {
+        realGenerationService.onModuleDestroy();
+        await conflictApp.close();
+      }
     });
   });
 });

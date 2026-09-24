@@ -1,11 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { handleDialSdkError } from '../../common/dial/dial-error.mapper';
 import { getBearerAuthHeaders } from '../../common/utils/auth-header';
 import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
-import {
-  countRecipientsByUrl,
-  resolveRecipientsCount,
-} from '../../common/utils/resource-ownership';
 import { safeDecodeURIComponent } from '../../common/utils/uri';
 import { HIDDEN_FILE } from '../../constants/dial.constants';
 import { DialClientService } from '../../dial/dial-client.service';
@@ -31,10 +27,25 @@ import {
   encodeCompoundToken,
   getConversationTitleFromName,
   isApplicationDeploymentPath,
-  qualifySessionConversationPath,
   resolveListDisplayTitle,
 } from '../utils/conversation.utils';
 import { parseScheduledTaskConversationPath } from '../utils/parse-scheduled-task-conversation-path';
+
+/** Leading segment of every DIAL Core conversation resource id. */
+const CONVERSATION_RESOURCE_TYPE = 'conversations';
+const FULL_CONVERSATION_LIST_PAGE_LIMIT = 1000;
+
+/** True for a writable list item in the caller's own bucket. */
+const isOwned = (item: ConversationListItemDto): boolean =>
+  !item.isReadonly && !item.sharedWithMe && !item.publishedWithMe;
+
+/** The most recently updated slice of one source group's items. */
+const pickMostRecent = (
+  group: ConversationListItemDto[],
+): ConversationListItemDto[] =>
+  [...group]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, MAX_LIST_DISPLAY_NAME_ENRICHMENTS);
 
 @Injectable()
 export class ConversationListingService {
@@ -47,92 +58,108 @@ export class ConversationListingService {
     private readonly persistenceService: ConversationPersistenceService,
   ) {}
 
+  private async listBucketMetadata(
+    token: string,
+    bucket: string,
+    limit: number,
+    cursor: string | undefined,
+    aggregateAllPages: boolean,
+    permissions?: boolean,
+  ): Promise<MetadataResult> {
+    const items: MetadataItem[] = [];
+    const seenCursors = new Set<string>();
+    let result: MetadataResult;
+
+    do {
+      result = (await this.dialClient.client.getConversationMetadata(
+        bucket,
+        '',
+        {
+          headers: getBearerAuthHeaders(token),
+          params: {
+            query: {
+              recursive: true,
+              limit,
+              ...(cursor ? { token: cursor } : {}),
+              ...(permissions != null ? { permissions } : {}),
+            },
+          },
+        },
+      )) as MetadataResult;
+
+      if (!aggregateAllPages || result.error != null || !result.data) {
+        return result;
+      }
+
+      items.push(...(result.data.items ?? []));
+      cursor = result.data.nextToken;
+      if (cursor && seenCursors.has(cursor)) {
+        throw new BadGatewayException(
+          'DIAL Core repeated a conversation listing cursor',
+        );
+      }
+      if (cursor) seenCursors.add(cursor);
+    } while (cursor);
+
+    return { data: { items }, response: result.response };
+  }
+
   async listConversations(
     token: string,
     bucket: string,
-    limit = 100,
+    limit?: number,
     nextToken?: string,
   ): Promise<ConversationListResponseDto> {
     const { u: userNextToken, p: publicNextToken } = decodeNextToken(nextToken);
 
-    const buildQuery = (cursor?: string) => ({
-      recursive: true as const,
-      limit,
-      ...(cursor ? { token: cursor } : {}),
-    });
+    /* Match file listing: omitted pagination requests the complete history. */
+    const aggregateAllPages = limit == null && nextToken == null;
+    const pageLimit = aggregateAllPages
+      ? FULL_CONVERSATION_LIST_PAGE_LIMIT
+      : (limit ?? 100);
 
     try {
-      const [
-        userResult,
-        publicResult,
-        sharedResult,
-        sharedByMeResult,
-        pinnedIds,
-        viewedIds,
-      ] = await Promise.all([
-        this.dialClient.client.getConversationMetadata(bucket, '', {
-          headers: getBearerAuthHeaders(token),
-          params: {
-            query: { ...buildQuery(userNextToken), permissions: true },
-          },
-        }) as Promise<MetadataResult & { response: globalThis.Response }>,
-        (
-          this.dialClient.client.getConversationMetadata(PUBLIC_BUCKET, '', {
-            headers: getBearerAuthHeaders(token),
-            params: { query: buildQuery(publicNextToken) },
-          }) as Promise<MetadataResult>
-        ).catch((err: unknown) => {
-          this.logger.warn(
-            'DIAL Core listConversations (public bucket) failed',
-            err,
-          );
-          return { data: undefined, error: err } satisfies MetadataResult;
-        }),
-        (
-          this.dialClient.client.getSharedResources({
-            headers: getBearerAuthHeaders(token),
-            body: { resourceTypes: ['CONVERSATION'], with: 'me' },
-          }) as Promise<SharedResourcesResult>
-        ).catch((err: unknown) => {
-          this.logger.warn(
-            'DIAL Core listConversations (shared resources) failed',
-            err,
-          );
-          return {
-            data: undefined,
-            error: err,
-          } satisfies SharedResourcesResult;
-        }),
-        /*
-         * The mirror image of the call above: conversations the caller owns
-         * and has shared with *others*, with `includeUserInfo` so each one
-         * carries its recipient list. Only the count is kept — it lets the
-         * frontend hide "Revoke access" for a conversation nobody holds.
-         * Best-effort like its sibling: a failure leaves every count absent
-         * rather than failing the whole listing.
-         */
-        (
-          this.dialClient.client.getSharedResources({
-            headers: getBearerAuthHeaders(token),
-            body: {
-              resourceTypes: ['CONVERSATION'],
-              with: 'others',
-              includeUserInfo: true,
-            },
-          }) as Promise<SharedResourcesResult>
-        ).catch((err: unknown) => {
-          this.logger.warn(
-            'DIAL Core listConversations (shared-with-others resources) failed',
-            err,
-          );
-          return {
-            data: undefined,
-            error: err,
-          } satisfies SharedResourcesResult;
-        }),
-        this.userConfigService.getPinnedIds(token, bucket),
-        this.scheduledTaskUnreadService.getViewedIds(token, bucket),
-      ]);
+      const [userResult, publicResult, sharedResult, pinnedIds, viewedIds] =
+        await Promise.all([
+          this.listBucketMetadata(
+            token,
+            bucket,
+            pageLimit,
+            userNextToken,
+            aggregateAllPages,
+            true,
+          ),
+          this.listBucketMetadata(
+            token,
+            PUBLIC_BUCKET,
+            pageLimit,
+            publicNextToken,
+            aggregateAllPages,
+          ).catch((err: unknown) => {
+            this.logger.warn(
+              'DIAL Core listConversations (public bucket) failed',
+              err,
+            );
+            return { data: undefined, error: err } satisfies MetadataResult;
+          }),
+          (
+            this.dialClient.client.getSharedResources({
+              headers: getBearerAuthHeaders(token),
+              body: { resourceTypes: ['CONVERSATION'], with: 'me' },
+            }) as Promise<SharedResourcesResult>
+          ).catch((err: unknown) => {
+            this.logger.warn(
+              'DIAL Core listConversations (shared resources) failed',
+              err,
+            );
+            return {
+              data: undefined,
+              error: err,
+            } satisfies SharedResourcesResult;
+          }),
+          this.userConfigService.getPinnedIds(token, bucket),
+          this.scheduledTaskUnreadService.getViewedIds(token, bucket),
+        ]);
 
       const {
         data: userData,
@@ -175,23 +202,6 @@ export class ConversationListingService {
       const pinnedSet = new Set(pinnedIds.map(safeDecodeURIComponent));
       const viewedSet = new Set(viewedIds.map(safeDecodeURIComponent));
 
-      const { data: sharedByMeData, error: sharedByMeError } = sharedByMeResult;
-      if (sharedByMeError !== undefined) {
-        this.logger.warn(
-          'DIAL Core listConversations (shared-with-others resources) failed',
-          sharedByMeError,
-        );
-      }
-      /*
-       * `null` on failure, not an empty map: a successful response omits
-       * conversations nobody holds, so a missing entry is a real zero, while
-       * a failed call means the count is unknown.
-       */
-      const recipientCounts =
-        sharedByMeError === undefined
-          ? countRecipientsByUrl(sharedByMeData?.resources ?? [])
-          : null;
-
       const mapItems = (
         items: MetadataItem[],
         overrides: {
@@ -223,11 +233,6 @@ export class ConversationListingService {
                 overrides.publishedWithMe ?? item.publishedWithMe ?? false,
               isPinned: pinnedSet.has(decodedId),
               isReadonly,
-              recipientsCount: resolveRecipientsCount(
-                recipientCounts,
-                id,
-                decodedId,
-              ),
               isScheduledTask: scheduledTask !== null,
               ...(scheduledTask !== null
                 ? {
@@ -358,33 +363,47 @@ export class ConversationListingService {
     }
   }
 
-  private getListItemRelativePath(itemId: string): string {
-    const decodedId = safeDecodeURIComponent(itemId);
-    const parts = decodedId.split('/');
-    if (parts.length >= 3 && parts[0] === 'conversations') {
-      return parts.slice(2).join('/');
+  /*
+   * Resolves the `{bucket}/{subPath}` storage path of a list item so its body
+   * is read from the bucket the item actually lives in: the caller's own
+   * bucket for owned items, `public` for published copies, another user's
+   * bucket for shared ones. DIAL Core returns ids as
+   * `conversations/{bucket}/{subPath}`; dropping only the resource-type
+   * segment keeps the bucket, which `resolveConversationLocation` (inside
+   * `getStoredConversation`) reads back off the path. An id that carries no
+   * bucket falls back to the session bucket there.
+   */
+  private getListItemStoragePath(itemId: string): string {
+    const segments = safeDecodeURIComponent(itemId).split('/').filter(Boolean);
+    if (segments[0] === CONVERSATION_RESOURCE_TYPE) {
+      segments.shift();
     }
-    if (parts.length >= 2) {
-      return parts.slice(1).join('/');
-    }
-    return decodedId;
+    return segments.join('/');
   }
 
+  /*
+   * A manual rename (and LLM naming) writes the new title into the
+   * conversation body's `name` at the unchanged storage path, so a
+   * filename-derived title can be stale for any item — including a published
+   * copy, whose public-bucket filename is taken from the source filename at
+   * publish time and never follows a later rename. Reading the body back is
+   * the only way to recover the authoritative name, so it is budgeted: the
+   * most recently updated items of each source group (owned, and read-only
+   * ones — published or shared) are enriched per group, so a long list of one
+   * kind cannot starve the other.
+   */
   private async enrichListItemsWithStoredDisplayNames(
     items: ConversationListItemDto[],
     token: string,
     bucket: string,
   ): Promise<ConversationListItemDto[]> {
-    const enrichable = items.filter(
-      (item) => !item.isReadonly && !item.sharedWithMe && !item.publishedWithMe,
-    );
-    if (enrichable.length === 0) {
+    const candidates = [
+      ...pickMostRecent(items.filter(isOwned)),
+      ...pickMostRecent(items.filter((item) => !isOwned(item))),
+    ];
+    if (candidates.length === 0) {
       return items;
     }
-
-    const candidates = [...enrichable]
-      .sort((left, right) => right.updatedAt - left.updatedAt)
-      .slice(0, MAX_LIST_DISPLAY_NAME_ENRICHMENTS);
 
     const displayNameById = new Map<string, string>();
     const batchSize = 25;
@@ -396,10 +415,7 @@ export class ConversationListingService {
           try {
             const conversation =
               await this.persistenceService.getStoredConversation(
-                qualifySessionConversationPath(
-                  this.getListItemRelativePath(item.id),
-                  bucket,
-                ),
+                this.getListItemStoragePath(item.id),
                 token,
                 bucket,
               );

@@ -1,3 +1,4 @@
+import type { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import type {
   PublicationRule,
   PublishFolderNode,
@@ -5,16 +6,34 @@ import type {
   PublishHistoryEntry,
   PublishPanelLabels,
 } from '@epam/ai-dial-publish-panel';
-import { DropdownItem } from '@epam/ai-dial-ui-kit';
+import { DropdownItem, TabModel } from '@epam/ai-dial-ui-kit';
 import type { ReactNode } from 'react';
-import type { CatalogEntityType } from '../types/entity-type';
+import type { ListViewColumnVisibility } from '../components/ListView/columns';
 import type { CatalogSortKey } from '../types/sort';
 import type { CredentialsLevel } from '../types/toolset-auth';
 import type { CatalogViewMode } from '../types/view-mode';
 import type { CatalogItem } from './catalog-item';
 import type { CatalogStyles } from './catalog-styles';
-import type { CatalogItemDetailsFetchResult } from './item-details-data';
+import type {
+  CatalogContentFilePreview,
+  CatalogItemDetailsFetchResult,
+} from './item-details-data';
 import type { ItemDetailsTexts } from './item-details-props';
+
+/**
+ * Live search/filter/tab state passed to `CatalogProps.renderEmptyState` when
+ * the Browse section's displayed result set is empty.
+ */
+export interface CatalogEmptyStateContext {
+  /** Current search query text. */
+  query: string;
+  /** Currently active entity-type tab id, or `''` when no tab is active. */
+  activeTab: string;
+  /** Whether at least one Topics filter value is currently selected. */
+  hasTopicFilters: boolean;
+  /** Current state of the "My Apps" filter toggle. */
+  isMyAppsActive: boolean;
+}
 
 /** Text labels used by the `Catalog` surface. */
 export interface CatalogTitles {
@@ -33,6 +52,8 @@ export interface CatalogTitles {
    * Default: (q) => `No results for "${q}"`.
    */
   noResultsTitle?: (query: string) => string;
+  /** The sort control's own name, prepended to its accessible name. Default: 'Sort'. */
+  sortLabel?: string;
   /** Label for the "Recently Updated" sort option. Default: 'Recently Updated'. */
   sortRecentlyUpdatedLabel?: string;
   /** Label for the "Newest" sort option. Default: 'Newest'. */
@@ -45,12 +66,15 @@ export interface CatalogTitles {
   gridViewLabel?: string;
   /** Accessible label for switching to list view. Default: 'List view'. */
   listViewLabel?: string;
+  /** Accessible label naming the grid/list view toggle group. Default: 'View mode'. */
+  viewToggleLabel?: string;
   /** ARIA label for the page/grid. Default: 'Catalog'. */
   ariaLabel?: string;
   /**
    * Display labels for entity-type filter tabs. Only types present in `items`
-   * are shown. Defaults: Model → 'Model', Agent → 'Agent', Toolset → 'Toolset',
-   * Guardrail → 'Guardrail', Skill → 'Skill', Mcp → 'MCP'.
+   * are shown, and the row is hidden entirely when fewer than two types are
+   * present. Defaults: Model → 'Models', Agent → 'Agents',
+   * Toolset → 'Toolsets', Skill → 'Skills', Prompt → 'Prompts'.
    */
   tabLabels?: Partial<Record<CatalogEntityType, string>>;
   /** Label for the filter button when nothing is filtered. Default: 'From'. */
@@ -63,18 +87,69 @@ export interface CatalogTitles {
 
 /** Props for Catalog. */
 export interface CatalogProps {
-  /** Items to display in the Browse section. */
+  /**
+   * Items to display in the Browse section's grid/list. Also drives the
+   * default entity-type tabs and Topics filter options when `tabs`/
+   * `topicOptions` are omitted.
+   */
   items: CatalogItem[];
+  /**
+   * Externally-controlled entity-type tab list. When omitted, `Catalog`
+   * derives tabs internally from `items` via `buildCatalogTabs`. Fewer than
+   * two tabs renders no tab row.
+   *
+   * Lets a host compute tabs from a wider item set than `items` — e.g. so a
+   * host that narrows `items` for grid display (by a category-tree
+   * selection) doesn't lose a tab for a type with zero matches in that
+   * narrowed set.
+   */
+  tabs?: TabModel[];
+  /**
+   * Externally-controlled set of available Topics filter options. When
+   * omitted, `Catalog` derives them internally from `items` via
+   * `getTopicOptions`.
+   *
+   * Lets a host compute the option set from a wider item set than `items`,
+   * for the same reason as `tabs`.
+   */
+  topicOptions?: Set<string>;
   /** Items to display in the Favorites section. */
   favorites: CatalogItem[];
   /** Grouped text labels for headings and actions. */
   titles?: CatalogTitles;
+  /**
+   * Renders in place of the Browse section's heading (`titles.browseTitle`)
+   * when supplied, e.g. so a host can render a clickable breadcrumb instead
+   * of a plain text label. The item count normally shown next to the heading
+   * is not rendered alongside it — include it in the supplied node if needed.
+   */
+  browseHeaderRenderer?: ReactNode;
   /** Whether catalog data is loading (reserved for future loading state). */
   isLoading?: boolean;
   /** Error to display if data loading failed (reserved for future error state). */
   error?: Error | null;
   /** Called when any item's star is toggled. */
   onToggleFavorite?: (id: string, isStarred: boolean) => void;
+  /**
+   * Additional caller-supplied rule for whether the favorite star is shown for
+   * an item, in the browse grid, the list view, the favorites strip, and the
+   * details panel. Returning `false` hides the star everywhere and makes the
+   * item non-favoritable. Defaults to **visible** when omitted, so a predicate
+   * can only ever narrow visibility, never widen it.
+   */
+  isFavoriteVisible?: (item: CatalogItem) => boolean;
+  /**
+   * Per-column overrides for whether an optional `ListView` column (`folder`,
+   * `tags`, `favorite`) renders for the active tab, given its entity type.
+   * Independent of `isFavoriteVisible` (which only gates the star on
+   * individual rows, in the browse grid and cards too, not the column).
+   * Replaces that column's built-in default rule — e.g. `folder` normally
+   * hides for `CatalogEntityType.Model`; columns omitted from this map keep
+   * their default. `favorite` is additionally combined (AND) with
+   * `isReadonly`. No effect on the Browse grid/cards, only the list view's
+   * table.
+   */
+  columnVisibility?: ListViewColumnVisibility;
   /** Called when the "Use in chat" button is clicked in the details panel. */
   onUseInChat?: (item: CatalogItem) => void;
   /** Controls whether the primary action button is shown for an item. */
@@ -83,6 +158,12 @@ export interface CatalogProps {
   onShare?: (item: CatalogItem) => void;
   /** Controls whether the "Publish" action is shown for an item. */
   isPublishVisible?: (item: CatalogItem) => boolean;
+  /**
+   * Resolves whether whichever of "Publish"/"Unpublish" applies renders as its
+   * own button in the details header rather than an entry in its "Manage"
+   * menu. Defaults to `false` — the menu entry.
+   */
+  isPublishPrimary?: (item: CatalogItem) => boolean;
   /** Resolves previously published versions for an item, most recent first. */
   getPublishHistory?: (item: CatalogItem) => Promise<PublishHistoryEntry[]>;
   /** Root-level destination folder nodes offered by the publish flow. */
@@ -99,11 +180,24 @@ export interface CatalogProps {
   publishLoadingPaths?: Set<string>;
   /** Resolves whether the current user can publish to a given folder path. */
   hasPublishWriteAccess?: (folderPath: string[]) => boolean;
-  /** Called with the destination folder path and current access rules when the user confirms publish/update. */
+  /**
+   * Initial value for the publish flow's display-author field, and the value
+   * it returns to on reset. Resolved by the host from the signed-in user's
+   * display name; the catalog library holds no notion of a session.
+   */
+  publishDefaultAuthor?: string;
+  /**
+   * Called with the destination folder path, current access rules, trimmed
+   * display author, and the credentials opt-in when the user confirms
+   * publish/update. The fifth argument is additive — a callback declaring only
+   * the first four parameters stays assignable.
+   */
   onPublish?: (
     item: CatalogItem,
     folderPath: string[],
     rules: PublicationRule[],
+    author: string,
+    publishCredentials: boolean,
   ) => Promise<void>;
   /** Called after a successful publish; use this to surface a success notification. */
   onPublishSuccess?: (item: CatalogItem, folderPath: string[]) => void;
@@ -127,6 +221,46 @@ export interface CatalogProps {
   onFetchExistingRules?: (folderPath: string[]) => Promise<PublicationRule[]>;
   /** Called when the "Edit" button is clicked in the details panel. Shown only when the item's `isEditable` is `true`. */
   onEdit?: (item: CatalogItem) => void;
+  /**
+   * Called when the "Download" action is clicked in the details panel, with no
+   * confirmation step. When "Download" renders in the Manage menu (see
+   * `isDownloadPrimary`), the panel does not await the result or show a
+   * pending state, so the host owns any progress and failure feedback. When
+   * "Download" is the primary action, the panel awaits this call and shows a
+   * pending/disabled state for its duration.
+   */
+  onDownload?: (item: CatalogItem) => Promise<void> | void;
+  /**
+   * Narrows which items offer the "Download" action. Defaults to `true`
+   * (visible for every item) whenever `onDownload` is supplied.
+   */
+  isDownloadVisible?: (item: CatalogItem) => boolean;
+  /**
+   * Resolves whether an item's Download action renders as the primary action
+   * instead of a Manage-menu entry. Defaults to
+   * `item.type === CatalogEntityType.Skill`.
+   */
+  isDownloadPrimary?: (item: CatalogItem) => boolean;
+  /**
+   * Resolves the text of a file picked in the details panel's Content tab,
+   * given its opaque `id`. The panel shows a loading state while it is
+   * pending and renders the resolved text as the body. Superseded by
+   * `onLoadContentFilePreview` for a given pick when both are supplied.
+   */
+  onLoadContentFile?: (fileId: string) => Promise<string | undefined>;
+  /**
+   * Resolves a picked file's typed preview, given its opaque `id`. Takes
+   * precedence over `onLoadContentFile` when both are supplied.
+   */
+  onLoadContentFilePreview?: (
+    fileId: string,
+  ) => Promise<CatalogContentFilePreview | undefined>;
+  /**
+   * Renders a picked file through a host-owned preview surface. Takes
+   * precedence over both loading callbacks, while the catalog continues to
+   * own selection and passes the opaque file id and resolved basename only.
+   */
+  renderContentFilePreview?: (fileId: string, fileName: string) => ReactNode;
   /**
    * Called immediately when the "Delete" button in the details panel is
    * clicked, with no confirmation step. Shown only when the item's `isMyApp`
@@ -156,6 +290,38 @@ export interface CatalogProps {
    */
   onRevokeShare?: (item: CatalogItem) => Promise<void> | void;
   /**
+   * Resolves how many users currently hold shared access to an owned item.
+   * Called when the owner opens the details panel's Manage menu, so "Revoke
+   * access" is gated and labelled on a count that is never stale. `0` hides
+   * the action; `undefined` (or a rejection) leaves it reachable without a
+   * count. Omit to offer the action for every owned item.
+   */
+  onFetchRecipientsCount?: (item: CatalogItem) => Promise<number | undefined>;
+  /**
+   * Narrows where the "Revoke access" action is offered, on top of the
+   * built-in `isMyApp` rule and the recipient count. Use it to declare that
+   * revoking is unsupported for a kind of item. Defaults to `true` (visible)
+   * when absent.
+   */
+  isRevokeShareVisible?: (item: CatalogItem) => boolean;
+  /**
+   * Called when unpublish is confirmed via the details panel's confirmation
+   * step, with the published folder's path segments. May return a promise;
+   * the confirmation shows a loading state and prevents duplicate submission
+   * while pending. The published copy survives until an administrator
+   * approves, so the panel stays open and the item stays visible.
+   */
+  onUnpublish?: (
+    item: CatalogItem,
+    folderPath: string[],
+  ) => Promise<void> | void;
+  /**
+   * Narrows where the "Unpublish" action is offered, on top of the presence
+   * of `onUnpublish` and at least one resolved `getPublishHistory` entry.
+   * Defaults to `true` (visible) when absent.
+   */
+  isUnpublishVisible?: (item: CatalogItem) => boolean;
+  /**
    * Renders the Share popover content anchored to the Share button in the
    * details panel. When provided, clicking Share opens this popover instead
    * of calling `onShare`.
@@ -168,6 +334,12 @@ export interface CatalogProps {
    */
   isShareVisible?: (item: CatalogItem) => boolean;
   /**
+   * Resolves whether "Share" renders as its own button in the details header
+   * rather than an entry in its "Manage" menu. Defaults to `true` — the
+   * button. Returning `false` moves it into the menu, beside "Delete".
+   */
+  isSharePrimary?: (item: CatalogItem) => boolean;
+  /**
    * Called when the credentials login form is submitted in the details
    * panel, for the given credentials `level` (`USER` or `GLOBAL`). May
    * return a promise; awaited before refreshing via `onFetchDetails`.
@@ -176,6 +348,8 @@ export interface CatalogProps {
     item: CatalogItem,
     params: { level: CredentialsLevel; apiKey?: string },
   ) => Promise<void> | void;
+  /** Renders host-owned credential controls below the details header. Omitted in read-only mode. */
+  renderCredentials?: (item: CatalogItem) => ReactNode;
   /**
    * Called when logout is confirmed in the details panel's credentials
    * section, for the given credentials `level`. May return a promise;
@@ -204,10 +378,28 @@ export interface CatalogProps {
   onCreateClick?: () => void;
   /** Hides the "Create" button entirely, e.g. when rendering as a read-only picker. Default: false. */
   hideCreateButton?: boolean;
+  /**
+   * Renders the whole catalog as a read-only browsing surface. Browse cards
+   * lose their favorite star, footer divider, and "Featured" tag; the list
+   * view loses its "Favorite" column; the "Create" button and the favorites
+   * strip are not rendered; and the details panel withholds its favorite star
+   * and every mutating action (Share, Publish/Unpublish, Edit, Delete,
+   * "Remove from My List", "Revoke access", and the credentials Log in / Log
+   * out / manage button). The non-mutating actions — the primary "Use in
+   * chat" and Download — still render. Default: false.
+   */
+  isReadonly?: boolean;
   /** Hides the page heading (title row), e.g. when the host renders its own title outside the catalog. Default: false. */
   hidePageTitle?: boolean;
-  /** Initial Browse view mode (grid or list). Default: `CatalogViewMode.Grid`. */
+  /** Initial Browse view mode (`Grid` renders the card grid, `Cards` the list view). Default: `CatalogViewMode.Grid`. */
   initialViewMode?: CatalogViewMode;
+  /**
+   * Lets the Browse content (card grid and list view) span the full width of
+   * its container instead of sitting in a centered, 1180 px-wide column with
+   * empty gutters on wide screens. The 32 px side padding is kept either way,
+   * and the wider container yields more card columns. Default: false.
+   */
+  isFullWidth?: boolean;
   /** ID of an item to visually mark as selected (border, tint, and checkmark) in the Browse grid. */
   selectedItemId?: string;
   /**
@@ -225,6 +417,11 @@ export interface CatalogProps {
   styles?: CatalogStyles;
   /** Text overrides forwarded to the item details panel. */
   detailsTexts?: ItemDetailsTexts;
+  /**
+   * Footer note forwarded to the item details panel's Limits tab, e.g. a
+   * link to a full usage-limits page. Omitted (the default) hides the footer.
+   */
+  detailsLimitsFooterNote?: ReactNode;
   /**
    * Externally-controlled active sort key. When omitted, `Catalog` manages
    * its own sort state internally, defaulting to `CatalogSortKey.RecentlyUpdated`.
@@ -247,4 +444,21 @@ export interface CatalogProps {
   isMyAppsActive?: boolean;
   /** Called when the user toggles the "My Apps" filter; required to control `isMyAppsActive`. */
   onMyAppsActiveChange?: (isActive: boolean) => void;
+  /**
+   * Externally-controlled active entity-type tab id. When omitted, `Catalog`
+   * manages its own tab state internally, defaulting to the first tab
+   * returned by `buildCatalogTabs`.
+   */
+  activeTab?: string;
+  /** Called when the user switches tabs; required to control `activeTab`. */
+  onActiveTabChange?: (tabId: string) => void;
+  /**
+   * Renders a custom empty state in place of the Browse section's default
+   * icon/title (`PanelEmptyState`) when the displayed result set is empty.
+   * Called with the live `CatalogEmptyStateContext` only after loading has
+   * finished and the result set is empty; not called at all when there are
+   * items to show. Returning `null` or `undefined` — or omitting the prop —
+   * keeps the existing default empty state, including `titles.noResultsTitle`.
+   */
+  renderEmptyState?: (context: CatalogEmptyStateContext) => ReactNode;
 }

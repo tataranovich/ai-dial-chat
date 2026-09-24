@@ -1,20 +1,27 @@
+import {
+  DeploymentCreationFieldErrorCode,
+  SEMVER_VERSION_PATTERN,
+  validateDeploymentCreationFields,
+} from '@epam/ai-dial-builder-form';
 import type {
   CreateApplicationBodyDto,
   DeploymentDetailsDto,
 } from '@epam/ai-dial-chat-api-client';
 import {
-  DeploymentCreationFieldErrorCode,
-  validateDeploymentCreationFields,
-} from '@epam/ai-dial-deployment-creation-form';
-import {
-  ConfirmationPopup,
-  NotificationVariant,
-  Spinner,
-} from '@epam/ai-dial-ui-kit';
+  composeLocalePayload,
+  decomposeLocalizedFields,
+  findDeploymentByIdOrReference,
+  getApiErrorDetails,
+  isValidAbsoluteUrl,
+  isValidFeaturesData,
+  parseFeaturesData,
+} from '@epam/ai-dial-chat-hooks';
+import { ConfirmationPopup, Spinner, StepStatus } from '@epam/ai-dial-ui-kit';
 import type { FC } from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router';
+import EditorHeader from '../../components/EditorHeader/EditorHeader';
 import RouteFallback from '../../components/RouteFallback/RouteFallback';
 import {
   DEFAULT_CUSTOM_APP_GENERAL_FORM,
@@ -27,38 +34,31 @@ import {
 } from '../../constants/toolsets';
 import {
   AppsEditorI18nKeys,
+  BasicI18nKeys,
   ButtonsI18nKeys,
   CustomAppI18nKeys,
   EditorI18nKeys,
 } from '../../constants/translation-keys';
 import { useDeployments } from '../../context/DeploymentsContext';
 import { useNotification } from '../../context/NotificationContext';
+import { useOperationNotification } from '../../hooks/useOperationNotification';
 import type {
   CustomAppFormData,
   CustomAppFormErrors,
   CustomAppGeneralFormData,
 } from '../../models/custom-apps';
-import { getApiErrorDetails } from '../../server-api/api-error';
 import {
   createApplication,
   updateApplication,
 } from '../../server-api/applications';
 import { getDeploymentDetails } from '../../server-api/deployments';
+import {
+  EntityOperation,
+  NotifiableEntity,
+} from '../../types/entity-notification';
 import { ROUTES } from '../../types/routes';
-import {
-  isValidAbsoluteUrl,
-  isValidFeaturesData,
-  parseFeaturesData,
-} from '../../utils/custom-apps';
-import { findDeploymentByIdOrReference } from '../../utils/deployment-id';
-import {
-  composeLocalePayload,
-  decomposeLocalizedFields,
-  PRIMARY_LOCALE,
-  resolveLocalizedText,
-} from '../../utils/locale';
+import { PRIMARY_LOCALE, resolveLocalizedText } from '../../utils/locale';
 import CustomAppEditorView from './CustomAppEditorView';
-import ToolsetEditorHeader from './ToolsetEditorHeader';
 
 const CustomAppEditor: FC = () => {
   const { t } = useTranslation();
@@ -69,7 +69,8 @@ const CustomAppEditor: FC = () => {
     refetchDeployments,
     isLoading: isDeploymentsLoading,
   } = useDeployments();
-  const { showNotification } = useNotification();
+  const { showErrorNotification } = useNotification();
+  const { notifyOperationSuccess } = useOperationNotification();
 
   const step =
     (searchParams.get(ToolsetEditorQuery.Step) as ToolsetEditorSteps) ??
@@ -109,8 +110,7 @@ const CustomAppEditor: FC = () => {
       })
       .catch(() => {
         if (!cancelled) {
-          showNotification({
-            variant: NotificationVariant.Error,
+          showErrorNotification({
             message: t(CustomAppI18nKeys.ErrorLoadFailed),
           });
           navigate(returnUrl, { replace: true });
@@ -133,16 +133,15 @@ const CustomAppEditor: FC = () => {
    */
   useEffect(() => {
     if (!loadedDto) return;
-    const appProps = (loadedDto.applicationDetails?.applicationProperties ??
-      {}) as Record<string, unknown>;
+    const customAppFeatures = loadedDto.applicationDetails?.customAppFeatures;
     const deployment = customAppId
       ? findDeploymentByIdOrReference(deployments, customAppId)
       : undefined;
 
     setSettingsForm({
       completionUrl: loadedDto.applicationDetails?.endpoint ?? '',
-      featuresData: appProps.features
-        ? JSON.stringify(appProps.features, null, '\t')
+      featuresData: customAppFeatures
+        ? JSON.stringify(customAppFeatures, null, '\t')
         : '',
       inputAttachmentTypes:
         loadedDto.applicationDetails?.inputAttachmentTypes ??
@@ -202,6 +201,22 @@ const CustomAppEditor: FC = () => {
 
   const canOpenSettings = Boolean(generalForm.name.trim());
 
+  const steps = useMemo(
+    () => [
+      {
+        id: ToolsetEditorSteps.General,
+        name: t(EditorI18nKeys.StepGeneral),
+        status: canOpenSettings ? StepStatus.VALID : undefined,
+      },
+      {
+        id: ToolsetEditorSteps.Settings,
+        name: t(BasicI18nKeys.Settings),
+        status: canOpenSettings ? StepStatus.VALID : undefined,
+      },
+    ],
+    [t, canOpenSettings],
+  );
+
   const setEditorStep = useCallback(
     (stepId: string) => {
       setSearchParams((prev) => {
@@ -247,7 +262,7 @@ const CustomAppEditor: FC = () => {
     }
 
     const generalCodes = validateDeploymentCreationFields(generalForm, {
-      validateVersionPattern: true,
+      validateVersionPattern: SEMVER_VERSION_PATTERN,
     });
     if (
       generalCodes.version === DeploymentCreationFieldErrorCode.InvalidFormat
@@ -283,6 +298,26 @@ const CustomAppEditor: FC = () => {
       return next;
     });
   }, [computeGeneralErrors]);
+
+  /*
+   * Owned by the editor rather than the settings form so the error survives
+   * the form unmounting while the wizard is on the General step.
+   */
+  const handleCompletionUrlBlur = useCallback(() => {
+    const trimmed = settingsForm.completionUrl.trim();
+    let completionUrl: string | undefined;
+    if (!trimmed) {
+      completionUrl = t(CustomAppI18nKeys.CompletionUrlRequired);
+    } else if (!isValidAbsoluteUrl(trimmed)) {
+      completionUrl = t(CustomAppI18nKeys.CompletionUrlInvalid);
+    }
+    setSettingsErrors((prev) => {
+      const next = { ...prev };
+      if (completionUrl) next.completionUrl = completionUrl;
+      else delete next.completionUrl;
+      return next;
+    });
+  }, [settingsForm.completionUrl, t]);
 
   const handleNext = useCallback(() => {
     if (!validateGeneralForm()) return;
@@ -364,11 +399,15 @@ const CustomAppEditor: FC = () => {
         await createApplication(body);
       }
       await refetchDeployments();
+      notifyOperationSuccess(
+        NotifiableEntity.CustomApp,
+        isEditMode ? EntityOperation.Edited : EntityOperation.Created,
+        { name: generalForm.name },
+      );
       navigate(returnUrl);
     } catch (err) {
       const { message, traceId } = await getApiErrorDetails(err);
-      showNotification({
-        variant: NotificationVariant.Error,
+      showErrorNotification({
         message:
           message ??
           t(
@@ -389,7 +428,8 @@ const CustomAppEditor: FC = () => {
     refetchDeployments,
     navigate,
     returnUrl,
-    showNotification,
+    showErrorNotification,
+    notifyOperationSuccess,
     t,
   ]);
 
@@ -412,15 +452,21 @@ const CustomAppEditor: FC = () => {
       });
       return;
     }
-    setSettingsErrors({});
-
     const hasMimeError = settingsForm.inputAttachmentTypes.some(
       (tag) => !MIME_TYPE_REGEX.test(tag),
     );
+    if (hasMimeError) {
+      setSettingsErrors({
+        inputAttachmentTypes: t(CustomAppI18nKeys.InvalidMimeType),
+      });
+      return;
+    }
+    setSettingsErrors({});
+
     const hasFeaturesDataError = !isValidFeaturesData(
       settingsForm.featuresData,
     );
-    if (hasMimeError || hasFeaturesDataError) {
+    if (hasFeaturesDataError) {
       setIsConfirmSaveOpen(true);
       return;
     }
@@ -444,12 +490,15 @@ const CustomAppEditor: FC = () => {
     !isValidAbsoluteUrl(settingsForm.completionUrl.trim());
 
   return (
-    <div className="flex h-full flex-col">
-      <ToolsetEditorHeader
-        step={step}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <EditorHeader
+        steps={steps}
+        currentStep={step}
+        navAriaLabel={t(EditorI18nKeys.StepsNavAriaLabel)}
         isSaving={isSaving}
         isSaveDisabled={isSaveDisabled}
-        canOpenSettings={canOpenSettings}
+        cancelButtonLabel={t(ButtonsI18nKeys.Cancel)}
+        saveButtonLabel={t(EditorI18nKeys.SaveButton)}
         onChangeStep={handleChangeStep}
         onCancel={handleCancel}
         onSave={handleSave}
@@ -468,6 +517,7 @@ const CustomAppEditor: FC = () => {
             onCancel={handleCancel}
             onNameBlur={handleNameBlur}
             onVersionBlur={handleVersionBlur}
+            onCompletionUrlBlur={handleCompletionUrlBlur}
             onGeneralChange={handleGeneralChange}
             onSettingsChange={handleSettingsChange}
           />
@@ -484,7 +534,7 @@ const CustomAppEditor: FC = () => {
           >
             <div className="flex items-center gap-3 rounded-lg bg-layer-sunken px-4 py-3 shadow-lg">
               <Spinner />
-              <span className="text-sm text-primary">
+              <span className="dial-small-text text-primary">
                 {t(
                   isSaving
                     ? CustomAppI18nKeys.SavingOverlayLabel

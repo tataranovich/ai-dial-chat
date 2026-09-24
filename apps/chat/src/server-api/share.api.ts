@@ -1,16 +1,10 @@
 import type {
   AcceptInvitationResponseDto,
-  CreateShareLinkDto,
   DiscardSharedCatalogItemResponseDto,
   RevokeSharedAccessResponseDto,
-  ShareLinkResponseDto,
+  ShareRecipientsResponseDto,
 } from '@epam/ai-dial-chat-api-client';
 import { shareApi } from './api-client';
-
-export const createShareLink = (
-  body: CreateShareLinkDto,
-): Promise<ShareLinkResponseDto> =>
-  shareApi.createShareLink({ createShareLinkDto: body });
 
 export const acceptInvitation = (
   invitationId: string,
@@ -30,3 +24,8 @@ export const revokeSharedAccess = (
   shareApi.revokeSharedAccess({
     revokeSharedAccessDto: { itemId },
   });
+
+export const getShareRecipientsCount = (
+  itemId: string,
+): Promise<ShareRecipientsResponseDto> =>
+  shareApi.getShareRecipientsCount({ itemId });

@@ -8,9 +8,9 @@ TBD - created by archiving change catalog-toolset-credentials-login. Update Purp
 ### Requirement: Credentials action visibility and label resolution
 The Catalog Details Panel SHALL show a credentials action for `Toolset` items whose
 `authenticationType` is not `NONE`, and SHALL show no credentials action (button, section, or
-badge) for toolsets whose `authenticationType` is `NONE`. The action label and behavior SHALL be
+logged-out warning icon) for toolsets whose `authenticationType` is `NONE`. The action label and behavior SHALL be
 resolved from four states, matching the legacy Marketplace decision tree:
-- **Manage credentials**: the current user is an admin and the toolset is public.
+- **Manage credentials** / **Manage API keys**: the current user is an admin and the toolset is public. The label depends on the toolset's own `authenticationType`: an `ApiKey` toolset reads **"Manage API keys"**, every other authenticating type reads **"Manage credentials"**. Both resolve through the same `manageCredentialsActionLabel` override, which receives the `authenticationType` and defaults to that pair — so an assertion on this state MUST branch on the authentication type rather than expecting the generic wording.
 - **Login with my creds**: the user is not an admin, the toolset is public, and the user is not
   personally (`USER`-level) signed in.
 - **Log in**: none of the above, and the toolset is not signed in at `USER` or `GLOBAL` level.
@@ -23,8 +23,13 @@ English text.
 
 #### Scenario: No auth toolset shows no credentials UI
 - **WHEN** a user opens the Details Panel for a toolset with `authenticationType: NONE`
-- **THEN** no credentials button, section, or badge is rendered anywhere in the panel or on its
-  card/list row
+- **THEN** no credentials button, section, or logged-out warning icon is rendered anywhere in
+  the panel or on its card/list row
+
+#### Scenario: Admin on a public API-key toolset sees Manage API keys
+- **GIVEN** the current user is an admin and the toolset is public with `authenticationType: ApiKey`
+- **WHEN** the Details Panel is opened
+- **THEN** the credentials action reads "Manage API keys", not "Manage credentials"
 
 #### Scenario: Admin on public toolset sees Manage credentials
 - **WHEN** an admin user opens the Details Panel for a public toolset with `authenticationType`
@@ -65,13 +70,14 @@ with no level chooser.
 
 ### Requirement: Signed-in detection uses either credentials level
 A toolset SHALL be considered signed in if its `USER`-level status **or** its `GLOBAL`-level
-status is `SIGNED_IN`. This applies to the header action label, the card/list badge, and the
-level resolved for a direct "Log out" action.
+status is `SIGNED_IN`. This applies to the header action label, the card/list logged-out
+warning icon, and the level resolved for a direct "Log out" action.
 
 #### Scenario: Signed in via GLOBAL only still shows Log out
 - **WHEN** a toolset's `USER`-level status is `SIGNED_OUT` and its `GLOBAL`-level status is
   `SIGNED_IN`
-- **THEN** the panel shows "Log out" (not "Log in"), and its card badge is not "LOGGED OUT"
+- **THEN** the panel shows "Log out" (not "Log in"), and its card shows no logged-out warning
+  icon
 
 ### Requirement: API key login submission with level and header hint
 For toolsets with `authenticationType: API_KEY`, the active section SHALL present an API key
@@ -187,29 +193,36 @@ action was performed by an admin at `GLOBAL` level on a public toolset, a person
 After a successful API-key or OAuth login or logout, the system SHALL refresh the open Details
 Panel's credential status, the Toolset Editor's login/logout action, and the underlying toolset
 list used by the Catalog grid/list/favorites views, without a full page reload, so cards, rows,
-and favorite cards reflect the change immediately.
+and favorite cards reflect the change immediately. The Details Panel's post-action refresh SHALL
+retry a bounded number of times (3 attempts, 300ms apart) when the refreshed credentials do not
+yet show the expected sign-in state for the level just acted on, before falling back to whatever
+the last attempt returned — covering a transient blip or upstream credential-propagation lag
+without retrying indefinitely.
 
 #### Scenario: Panel updates after API-key login
 - **WHEN** an API key login succeeds
 - **THEN** the Details Panel's credentials status updates to reflect the signed-in state
   without the user reloading the page
 
-#### Scenario: Card badge updates after API-key logout
+#### Scenario: Card warning icon updates after API-key logout
 - **WHEN** an API-key logout succeeds
-- **THEN** the corresponding toolset card's credentials badge updates without a full page reload
+- **THEN** the logged-out warning icon on the corresponding toolset card's avatar appears without
+  a full page reload
 
 #### Scenario: Catalog refreshes after a successful OAuth login
 - **WHEN** the tab that initiated an OAuth login for a Catalog toolset receives a success result
   from the callback popup
 - **THEN** the system refetches the toolset list without a full page reload, the open Details
   Panel (if any) updates its credentials status to signed in, its "Log in" action becomes
-  "Log out", and the toolset's card/row/favorite-card badge is removed
+  "Log out", and the logged-out warning icon is removed from the toolset's card, row, and
+  favorite card
 
 #### Scenario: Catalog shows an error after a failed OAuth login
 - **WHEN** the tab that initiated an OAuth login receives a failure result from the callback
   popup
 - **THEN** the system shows an error notification, shows no success notification, keeps "Log in"
-  available, and the toolset's card/row/favorite-card badge remains "LOGGED OUT"
+  available, and the logged-out warning icon remains on the toolset's card, row, and favorite
+  card
 
 #### Scenario: Toolset Editor reflects a successful OAuth login
 - **WHEN** the Toolset Editor tab that initiated an OAuth login receives a success result from
@@ -229,38 +242,75 @@ and favorite cards reflect the change immediately.
   success notification; when the pending timeout elapses, the system also closes the popup so a
   late callback cannot complete the abandoned login
 
-### Requirement: Toolset card and list credentials badge
-Toolset cards (grid view), rows (list view), and favorite cards in the Catalog SHALL show a
-"LOGGED OUT" credentials badge when `authenticationType` is not `NONE` and the toolset is not
-signed in at `USER` or `GLOBAL` level. No badge is shown when the toolset is signed in at either
-level, or when `authenticationType` is `NONE`. This applies identically to `API_KEY` and `OAUTH`
+#### Scenario: Post-login details refresh retries past a stale first read
+- **WHEN** a login succeeds but the details refresh issued immediately afterward still reports
+  the pre-login (signed-out) status for the level just logged in
+- **THEN** the system retries the details refresh up to 2 more times, 300ms apart, and applies
+  the first result that reports the expected signed-in status; if all attempts still report
+  signed-out, the panel shows the last attempt's result rather than retrying indefinitely
+
+#### Scenario: Post-logout details refresh stops once signed-out is confirmed
+- **WHEN** a logout succeeds and the first details refresh issued afterward already reports the
+  expected signed-out status for the level just logged out
+- **THEN** the system does not issue any further retry for that logout
+
+### Requirement: Toolset card and list logged-out warning icon
+Toolset cards (grid view), rows (list view), and favorite cards in the Catalog SHALL mark a
+signed-out toolset with a filled warning-triangle icon anchored to the bottom-end corner of the
+entity avatar and overlapping its edge, rather than with a text tag placed in the card body. The
+icon SHALL be shown when `authenticationType` is not `NONE` and the toolset is not signed in at
+`USER` or `GLOBAL` level. No icon is shown when the toolset is signed in at either level, or
+when `authenticationType` is `NONE`. This applies identically to `API_KEY` and `OAUTH`
 toolsets and is deliberately simpler than the legacy Marketplace's `CredentialsStatusIndicator`,
-which also distinguished "MY CREDS"/"ORG CREDS" signed-in states; no positive/signed-in badge is
-introduced.
+which also distinguished "MY CREDS"/"ORG CREDS" signed-in states; no positive/signed-in indicator
+is introduced.
 
-#### Scenario: Logged out badge
+The icon SHALL carry `role="img"` with an accessible label and SHALL show that same text in a
+hover tooltip, so its meaning is available without relying on color or shape alone. The text
+defaults to `'Authorize to use this toolset.'` and is overridable by the host through the
+existing `credentialsBadgeLoggedOutLabel` text prop (`CardGridTitles`, `ListViewProps`,
+`FavoritesProps`, `ItemDetailsTexts`, `GridContext`). The triangle icon itself is decorative
+(`aria-hidden`) inside that labeled wrapper.
+
+The icon SHALL be visually separated from the avatar artwork behind it by a halo stroke drawn in
+the surrounding surface color. Its fill and halo colors SHALL be themable CSS custom properties
+with `--text-warning-icon` and `--bg-layer-raised` fallbacks, overridable through
+`CredentialsBadgeColors` (`icon`, `halo`), which `libs/catalog` exports alongside
+`CredentialsBadgeProps`.
+
+Hosting the icon over the avatar is the responsibility of the avatar block: `AppIdentity` SHALL
+accept an `iconOverlay` node rendered inside a positioned icon wrapper, so the same icon appears
+in the same corner across grid cards, favorite cards, and list rows.
+
+#### Scenario: Logged out warning icon
 - **WHEN** a toolset with auth enabled has no active credentials at any level
-- **THEN** its card and list row show a "LOGGED OUT" badge
+- **THEN** its card and list row show the warning icon on the bottom-end corner of the entity
+  avatar
 
-#### Scenario: No badge when signed in
+#### Scenario: Warning icon exposes its meaning as text
+- **WHEN** a user hovers or focuses the logged-out warning icon
+- **THEN** a tooltip shows the logged-out label, and assistive technology reads the same text as
+  the icon's accessible name
+
+#### Scenario: No icon when signed in
 - **WHEN** a toolset is signed in at `USER` level, at `GLOBAL` level, or both
-- **THEN** its card and list row show no credentials badge
+- **THEN** its card and list row show no credentials warning icon
 
-#### Scenario: No badge for no-auth toolsets
+#### Scenario: No icon for no-auth toolsets
 - **WHEN** a toolset has `authenticationType: NONE`
-- **THEN** its card and list row show no credentials badge
+- **THEN** its card and list row show no credentials warning icon
 
-#### Scenario: Favorite card shows the same logged out badge
+#### Scenario: Favorite card shows the same warning icon
 - **WHEN** a toolset with auth enabled has no active credentials at any level and is displayed as
   a favorite card
-- **THEN** the favorite card shows the same "LOGGED OUT" badge as the toolset's grid card and
-  list row
+- **THEN** the favorite card shows the same avatar-anchored warning icon as the toolset's grid
+  card and list row
 
-#### Scenario: Badge rule is identical for API key and OAuth toolsets
+#### Scenario: Icon rule is identical for API key and OAuth toolsets
 - **WHEN** two toolsets, one with `authenticationType: API_KEY` and one with
   `authenticationType: OAUTH`, are both signed out at every credentials level
-- **THEN** both show the "LOGGED OUT" badge on their card, list row, and favorite card, with no
-  difference in badge treatment based on authentication type
+- **THEN** both show the warning icon on their card, list row, and favorite card, with no
+  difference in treatment based on authentication type
 
 ### Requirement: Library isolation for credentials UI
 `libs/catalog` SHALL expose the credentials UI only through additive props on `CatalogItem`,

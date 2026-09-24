@@ -28,7 +28,10 @@ import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
 import { StringUtils } from '../../common/utils/string-utils';
 import type { EnvironmentVariables } from '../../config/environment.config';
 import { DialClientService } from '../../dial/dial-client.service';
-import { buildDialFileUrl } from '../dial-resource-path.util';
+import {
+  buildDialFileUrl,
+  encodeDialFilePath,
+} from '../dial-resource-path.util';
 import type {
   UploadArchiveEntryResultDto,
   UploadArchiveResponseDto,
@@ -559,17 +562,20 @@ export class FilesUploadService {
        * The SDK upload helper requires FormData/Blob, which would buffer the
        * staged file again. Raw fetch lets archive uploads stream from disk.
        */
-      const response = await fetch(this.buildDialUploadUrl(bucket, path), {
-        method: 'PUT',
-        headers: {
-          ...getBearerAuthHeaders(token),
-          'If-None-Match': '*',
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        },
-        body: Readable.toWeb(multipartStream) as RequestInit['body'],
-        signal,
-        duplex: 'half',
-      } as RequestInit & { duplex: 'half' });
+      const response = await this.dialClient.fetchCore(
+        this.buildDialUploadUrl(bucket, path),
+        {
+          method: 'PUT',
+          headers: {
+            ...getBearerAuthHeaders(token),
+            'If-None-Match': '*',
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          },
+          body: Readable.toWeb(multipartStream) as RequestInit['body'],
+          signal,
+          duplex: 'half',
+        } as RequestInit & { duplex: 'half' },
+      );
 
       if (response.status === 412) {
         throw new ConflictException('File already exists at this path');
@@ -617,8 +623,8 @@ export class FilesUploadService {
   }
 
   private buildDialUploadUrl(bucket: string, path: string): string {
-    const baseUrl = this.dialClient.baseUrl.replace(/\/+$/, '');
-    return `${baseUrl}/v1/files/${encodeURIComponent(bucket)}/${encodeDialResourcePath(path)}`;
+    const baseUrl = StringUtils.stripTrailingSlashes(this.dialClient.baseUrl);
+    return `${baseUrl}/v1/files/${encodeURIComponent(bucket)}/${encodeDialFilePath(path)}`;
   }
 
   private async removeArchiveUploadTempDirectory(

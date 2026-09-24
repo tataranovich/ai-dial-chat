@@ -11,7 +11,6 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { SessionUser } from '../auth/session/session.types';
 import { ApplicationsService } from './applications.service';
@@ -32,7 +31,6 @@ export class ApplicationsController {
   constructor(private readonly applicationsService: ApplicationsService) {}
 
   @Get()
-  @Throttle({ default: { limit: 60, ttl: 60000 } })
   @Header('Cache-Control', 'private, max-age=30')
   @ApiOperation({
     operationId: 'listApplications',
@@ -55,7 +53,6 @@ export class ApplicationsController {
     status: 403,
     description: 'Caller lacks permission to list applications',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -71,7 +68,6 @@ export class ApplicationsController {
 
   @Post()
   @HttpCode(201)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({
     operationId: 'createApplication',
     summary: 'Create a new application',
@@ -94,7 +90,6 @@ export class ApplicationsController {
     description: 'Not authenticated — valid session cookie required',
   })
   @ApiResponse({ status: 409, description: 'Application name already taken' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 503,
     description: 'DIAL Core is unavailable or timed out',
@@ -109,15 +104,15 @@ export class ApplicationsController {
 
   @Patch(':applicationName')
   @HttpCode(200)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({
     operationId: 'updateApplication',
     summary: 'Update an application',
     description:
       'Updates the General-step fields (name, description, iconUrl, topics) of an ' +
       'existing application for the authenticated session user, by proxying DIAL Core. ' +
-      'Settings-step configuration (application_properties, version) is preserved untouched. ' +
-      'Invalidates the applications and deployments list caches on success.',
+      'Settings-step configuration (application_properties) is preserved untouched unless ' +
+      'the request supplies applicationProperties, in which case it fully replaces the ' +
+      'stored value. Invalidates the applications and deployments list caches on success.',
   })
   @ApiBody({ type: UpdateApplicationBodyDto })
   @ApiResponse({
@@ -135,7 +130,6 @@ export class ApplicationsController {
   })
   @ApiResponse({ status: 403, description: 'Caller lacks permission' })
   @ApiResponse({ status: 404, description: 'Application not found' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -160,7 +154,6 @@ export class ApplicationsController {
 
   @Delete(':applicationName')
   @HttpCode(204)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({
     operationId: 'deleteApplication',
     summary: 'Delete an application',
@@ -176,7 +169,6 @@ export class ApplicationsController {
   })
   @ApiResponse({ status: 403, description: 'Caller lacks permission' })
   @ApiResponse({ status: 404, description: 'Application not found' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',

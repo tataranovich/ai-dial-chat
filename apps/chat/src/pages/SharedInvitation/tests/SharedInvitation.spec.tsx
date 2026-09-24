@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ShareI18nKeys } from '../../../constants/translation-keys';
 import { useDeployments } from '../../../context/DeploymentsContext';
 import { useNotification } from '../../../context/NotificationContext';
+import { usePrompts } from '../../../context/PromptsContext';
+import { useSkills } from '../../../context/SkillsContext';
+import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
 import { acceptInvitation } from '../../../server-api/share.api';
 import { ROUTES } from '../../../types/routes';
 import SharedInvitationPage from '../SharedInvitation';
@@ -28,6 +31,14 @@ vi.mock('../../../context/DeploymentsContext', () => ({
   useDeployments: vi.fn(),
 }));
 
+vi.mock('../../../context/SkillsContext', () => ({
+  useSkills: vi.fn(),
+}));
+
+vi.mock('../../../context/PromptsContext', () => ({
+  usePrompts: vi.fn(),
+}));
+
 vi.mock('../../../server-api/share.api', () => ({
   acceptInvitation: vi.fn(),
 }));
@@ -37,17 +48,20 @@ describe('SharedInvitationPage', () => {
   const refetchDeployments = vi.fn();
   const refetchToolsets = vi.fn();
   const mergeSharedItem = vi.fn();
+  const refetchSkills = vi.fn();
+  const mergeSharedSkill = vi.fn();
+  const refetchPrompts = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvitationId = 'abc123';
-    vi.mocked(useNotification).mockReturnValue({
-      notifications: [],
-      showNotification,
-      dismissNotification: vi.fn(),
-    });
+    vi.mocked(useNotification).mockReturnValue(
+      createNotificationContextValue(showNotification),
+    );
     refetchDeployments.mockResolvedValue(undefined);
     refetchToolsets.mockResolvedValue(undefined);
+    refetchSkills.mockResolvedValue(undefined);
+    refetchPrompts.mockResolvedValue(undefined);
     vi.mocked(useDeployments).mockReturnValue({
       items: [],
       selectedItemId: null,
@@ -55,6 +69,8 @@ describe('SharedInvitationPage', () => {
       restoreSelectedItemId: vi.fn(),
       restoreDefaultSelection: vi.fn(),
       selectedDeploymentConfiguration: null,
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       isLoading: false,
       error: null,
       schemas: [],
@@ -62,6 +78,26 @@ describe('SharedInvitationPage', () => {
       refetchToolsets,
       refetchDeployments,
       mergeSharedItem,
+    });
+    vi.mocked(useSkills).mockReturnValue({
+      skills: [],
+      publicSkills: [],
+      sharedWithMe: [],
+      isLoading: false,
+      error: null,
+      refetchSkills,
+      mergeSharedSkill,
+    });
+    vi.mocked(usePrompts).mockReturnValue({
+      prompts: [],
+      folders: [],
+      sharedWithMe: [],
+      publicPrompts: [],
+      publicFolders: [],
+      isLoading: false,
+      error: null,
+      refetchPrompts,
+      refetchPublicPrompts: vi.fn(),
     });
   });
 
@@ -186,5 +222,115 @@ describe('SharedInvitationPage', () => {
     );
     expect(mergeSharedItem).not.toHaveBeenCalled();
     expect(refetchDeployments).toHaveBeenCalled();
+  });
+
+  it('merges the resolved sharedSkill before refetching and navigating', async () => {
+    const sharedSkill = {
+      name: 'search',
+      path: 'search',
+      url: 'skills/b/search',
+      bucket: 'b',
+      nodeType: 'item' as const,
+    };
+    vi.mocked(acceptInvitation).mockResolvedValue({
+      itemId: 'skills/b/search',
+      sharedSkill,
+    });
+
+    render(<SharedInvitationPage />);
+
+    await waitFor(() =>
+      expect(mockNavigate).toHaveBeenCalledWith(
+        `${ROUTES.Catalog}?itemId=${encodeURIComponent('skills/b/search')}`,
+        { replace: true },
+      ),
+    );
+    expect(mergeSharedSkill).toHaveBeenCalledWith(sharedSkill);
+    expect(refetchSkills).toHaveBeenCalled();
+  });
+
+  it('refetches the skills listing before merging the resolved sharedSkill (acceptance order unchanged)', async () => {
+    const sharedSkill = {
+      name: 'search',
+      path: 'search',
+      url: 'skills/b/search',
+      bucket: 'b',
+      nodeType: 'item' as const,
+      author: 'jane.doe@example.com',
+      updatedAt: 1752100000000,
+    };
+    vi.mocked(acceptInvitation).mockResolvedValue({
+      itemId: 'skills/b/search',
+      sharedSkill,
+    });
+
+    render(<SharedInvitationPage />);
+
+    await waitFor(() => expect(mergeSharedSkill).toHaveBeenCalled());
+
+    const refetchOrder = refetchSkills.mock.invocationCallOrder[0];
+    const mergeOrder = mergeSharedSkill.mock.invocationCallOrder[0];
+    expect(refetchOrder).toBeLessThan(mergeOrder);
+  });
+
+  it('merges the invitation-resolved sharedSkill with full provenance even though the refetched listing carries a sparse entry (the regression this change fixes)', async () => {
+    /*
+     * `refetchSkills` in this test double never actually replaces
+     * `useSkills()`'s data — it mirrors the real `useSkillsState.refetch`,
+     * which can settle with a sparse `sharedWithMe` entry (no author/
+     * updatedAt) right after a share is accepted. `mergeSharedSkill` still
+     * receives the invitation's own fully-resolved `sharedSkill`, which is
+     * what the details panel's authoritative `getSkillMetadata` fetch no
+     * longer even depends on, but which this page must still forward
+     * unchanged regardless of what the listing refetch settled with.
+     */
+    const sparseListingEntry = {
+      name: 'search',
+      path: 'search',
+      url: 'skills/b/search',
+      bucket: 'b',
+      nodeType: 'item' as const,
+    };
+    vi.mocked(useSkills).mockReturnValue({
+      skills: [],
+      publicSkills: [],
+      sharedWithMe: [sparseListingEntry],
+      isLoading: false,
+      error: null,
+      refetchSkills,
+      mergeSharedSkill,
+    });
+
+    const sharedSkill = {
+      ...sparseListingEntry,
+      author: 'jane.doe@example.com',
+      updatedAt: 1752100000000,
+    };
+    vi.mocked(acceptInvitation).mockResolvedValue({
+      itemId: 'skills/b/search',
+      sharedSkill,
+    });
+
+    render(<SharedInvitationPage />);
+
+    await waitFor(() =>
+      expect(mergeSharedSkill).toHaveBeenCalledWith(sharedSkill),
+    );
+  });
+
+  it('refetches prompts and redirects to the shared prompt id', async () => {
+    vi.mocked(acceptInvitation).mockResolvedValue({
+      itemId: 'prompts/owner-bucket/Work/tone of voice',
+    });
+
+    render(<SharedInvitationPage />);
+
+    await waitFor(() =>
+      expect(mockNavigate).toHaveBeenCalledWith(
+        `${ROUTES.Catalog}?itemId=${encodeURIComponent('prompts/owner-bucket/Work/tone of voice').replace(/%20/g, '+')}`,
+        { replace: true },
+      ),
+    );
+    expect(refetchPrompts).toHaveBeenCalled();
   });
 });

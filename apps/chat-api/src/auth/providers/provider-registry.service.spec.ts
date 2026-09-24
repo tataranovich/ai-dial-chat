@@ -41,10 +41,14 @@ describe('ProviderRegistryService', () => {
   let discoverSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    discoverSpy = vi.spyOn(Issuer, 'discover').mockResolvedValue({
-      Client: class {},
-      metadata: {},
-    } as unknown as Issuer<never>);
+    discoverSpy = vi
+      .spyOn(Issuer, 'discover')
+      .mockImplementation(async (discoveryUrl: string) => {
+        return {
+          Client: class {},
+          metadata: { issuer: discoveryUrl },
+        } as unknown as Issuer<never>;
+      });
   });
 
   afterEach(() => {
@@ -261,6 +265,146 @@ describe('ProviderRegistryService', () => {
       const svc = module.get(ProviderRegistryService);
       const { config } = svc.getProvider('keycloak');
       expect(config.rolesClaim).toBe('dial_roles');
+    });
+  });
+
+  describe('findByIssuer', () => {
+    const AZURE_AD_ENV = {
+      AUTH_AZURE_AD_CLIENT_ID: 'azure-client',
+      AUTH_AZURE_AD_SECRET: 'azure-secret',
+      AUTH_AZURE_AD_TENANT_ID: 'tenant-123',
+    };
+
+    it('matches a non-Azure-AD provider by exact issuer', async () => {
+      const module = await buildModule(KEYCLOAK_ENV);
+      await module.init();
+      const svc = module.get(ProviderRegistryService);
+      const { config } = svc.getProvider('keycloak');
+      // eslint-disable-next-line testing-library/await-async-queries -- ProviderRegistryService.findByIssuer is synchronous, not an async testing-library query
+      const entry = svc.findByIssuer(config.issuer);
+      expect(entry?.config.id).toBe('keycloak');
+    });
+
+    it('matches the canonical issuer returned by discovery when the discovery URL is internal', async () => {
+      const internalDiscoveryUrl = 'http://keycloak.internal:8080/realms/test';
+      const canonicalIssuer = 'https://login.example.com/auth/realms/test';
+      discoverSpy.mockResolvedValueOnce({
+        Client: class {},
+        metadata: { issuer: canonicalIssuer },
+      } as unknown as Issuer<never>);
+
+      const module = await buildModule({
+        ...KEYCLOAK_ENV,
+        AUTH_KEYCLOAK_HOST: internalDiscoveryUrl,
+      });
+      await module.init();
+      const svc = module.get(ProviderRegistryService);
+
+      expect(discoverSpy).toHaveBeenCalledWith(internalDiscoveryUrl);
+      expect(svc.getProvider('keycloak').config.issuer).toBe(canonicalIssuer);
+      // eslint-disable-next-line testing-library/await-async-queries -- ProviderRegistryService.findByIssuer is synchronous, not an async testing-library query
+      expect(svc.findByIssuer(canonicalIssuer)?.config.id).toBe('keycloak');
+      // eslint-disable-next-line testing-library/await-async-queries -- ProviderRegistryService.findByIssuer is synchronous, not an async testing-library query
+      expect(svc.findByIssuer(internalDiscoveryUrl)).toBeUndefined();
+    });
+
+    it('resolves an Azure AD v1 issuer to the registered v2 provider for the same tenant', async () => {
+      const module = await buildModule(AZURE_AD_ENV);
+      await module.init();
+      const svc = module.get(ProviderRegistryService);
+      // eslint-disable-next-line testing-library/await-async-queries -- ProviderRegistryService.findByIssuer is synchronous, not an async testing-library query
+      const entry = svc.findByIssuer('https://sts.windows.net/tenant-123/');
+      expect(entry?.config.id).toBe('azure-ad');
+      expect(entry?.config.issuer).toBe(
+        'https://login.microsoftonline.com/tenant-123/v2.0',
+      );
+    });
+
+    it('does not match a v1 issuer for a different tenant than the registered v2 provider', async () => {
+      const module = await buildModule(AZURE_AD_ENV);
+      await module.init();
+      const svc = module.get(ProviderRegistryService);
+      // eslint-disable-next-line testing-library/await-async-queries -- ProviderRegistryService.findByIssuer is synchronous, not an async testing-library query
+      const entry = svc.findByIssuer('https://sts.windows.net/other-tenant/');
+      expect(entry).toBeUndefined();
+    });
+
+    it('returns undefined for a v1 issuer when no Azure AD provider is registered', async () => {
+      const module = await buildModule(KEYCLOAK_ENV);
+      await module.init();
+      const svc = module.get(ProviderRegistryService);
+      // eslint-disable-next-line testing-library/await-async-queries -- ProviderRegistryService.findByIssuer is synchronous, not an async testing-library query
+      const entry = svc.findByIssuer('https://sts.windows.net/tenant-123/');
+      expect(entry).toBeUndefined();
+    });
+  });
+
+  describe('issuer derivation from host variables', () => {
+    const issuerOf = async (env: Record<string, unknown>, id: string) => {
+      const module = await buildModule(env);
+      await module.init();
+      return module.get(ProviderRegistryService).getProvider(id).config.issuer;
+    };
+
+    it('prefixes https:// when the host carries no scheme', async () => {
+      await expect(issuerOf(KEYCLOAK_ENV, 'keycloak')).resolves.toBe(
+        'https://keycloak.example.com/realms/test',
+      );
+    });
+
+    it('preserves an explicit https:// URL instead of prefixing it again', async () => {
+      await expect(
+        issuerOf(
+          {
+            ...KEYCLOAK_ENV,
+            AUTH_KEYCLOAK_HOST: 'https://keycloak.example.com/realms/test',
+          },
+          'keycloak',
+        ),
+      ).resolves.toBe('https://keycloak.example.com/realms/test');
+    });
+
+    it('preserves an explicit http:// URL for a provider without TLS', async () => {
+      await expect(
+        issuerOf(
+          {
+            ...KEYCLOAK_ENV,
+            AUTH_KEYCLOAK_HOST: 'http://keycloak.internal:8080/realms/test',
+          },
+          'keycloak',
+        ),
+      ).resolves.toBe('http://keycloak.internal:8080/realms/test');
+    });
+
+    it('strips a trailing slash from the configured URL', async () => {
+      await expect(
+        issuerOf(
+          {
+            ...KEYCLOAK_ENV,
+            AUTH_KEYCLOAK_HOST: 'https://keycloak.example.com/realms/test/',
+          },
+          'keycloak',
+        ),
+      ).resolves.toBe('https://keycloak.example.com/realms/test');
+    });
+
+    it('keeps exactly one trailing slash on the Auth0 issuer given a full URL', async () => {
+      await expect(
+        issuerOf(
+          { ...AUTH0_ENV, AUTH_AUTH0_HOST: 'https://tenant.auth0.com/' },
+          'auth0',
+        ),
+      ).resolves.toBe('https://tenant.auth0.com/');
+    });
+
+    it('fails boot when the host uses a non-http(s) scheme', async () => {
+      const module = await buildModule({
+        ...KEYCLOAK_ENV,
+        AUTH_KEYCLOAK_HOST: 'ftp://keycloak.example.com/realms/test',
+      });
+      await expect(module.init()).rejects.toThrow(
+        /AUTH_KEYCLOAK_HOST must be a bare host or an http/,
+      );
     });
   });
 

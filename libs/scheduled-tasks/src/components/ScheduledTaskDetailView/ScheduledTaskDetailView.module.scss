@@ -2,11 +2,19 @@
   background: var(--stdv-bg, var(--bg-layer-base, #f5f7fa));
 }
 
-.header {
-  border-bottom-color: var(
-    --stdv-header-border,
-    var(--stroke-tertiary, #e0e6f0)
-  );
+/* Set the color for every side at once: the divider is drawn below the
+ * header at desktop and above it at mobile/tablet, so only the side with a
+ * non-zero width from the scoped responsive rules shows. */
+.header.header {
+  border-block-start-width: 1px;
+  border-block-end-width: 0;
+
+  @media (min-width: 1280px) {
+    border-block-start-width: 0;
+    border-block-end-width: 1px;
+  }
+
+  border-color: var(--stdv-header-border, var(--stroke-tertiary, #e0e6f0));
 }
 
 .detailsColumn {
@@ -20,18 +28,23 @@
   color: var(--stdv-subtitle-text, var(--text-secondary, #57647a));
 }
 
-.successIcon {
-  color: var(--stdv-success-icon, var(--text-success, #007274));
+/* Visibility must agree with useIsMobile regardless of host utilities. */
+.desktopTitle.desktopTitle,
+.desktopBadge.desktopBadge {
+  display: none;
+}
+.mobileTitleRow.mobileTitleRow {
+  display: flex;
 }
 
-.errorIcon {
-  color: var(--stdv-error-icon, var(--text-error, #ae2f2f));
-}
-
-.missedIcon {
-  color: var(--stdv-missed-icon, var(--text-secondary, #57647a));
-}
-
-.historyCard {
-  background: var(--stdv-history-bg, var(--bg-layer-raised, #fcfcfc));
+@media (min-width: 1280px) {
+  .desktopTitle.desktopTitle {
+    display: block;
+  }
+  .desktopBadge.desktopBadge {
+    display: inline;
+  }
+  .mobileTitleRow.mobileTitleRow {
+    display: none;
+  }
 }

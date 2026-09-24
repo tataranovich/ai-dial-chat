@@ -1,4 +1,9 @@
-import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  buildCssVars,
+  ItemHeader,
+  mergeClasses,
+} from '@epam/ai-dial-chat-shared';
+import { DIAL_KIT_ICON_STROKE } from '@epam/ai-dial-ui-kit';
 import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
 import {
   FC,
@@ -10,7 +15,6 @@ import {
 } from 'react';
 import { FavoritesProps } from '../../models/favorites';
 import { useFavColumns } from '../../utils/use-fav-columns';
-import { ItemHeader } from '../ItemHeader/ItemHeader';
 import { FavoriteCard } from './FavoriteCard';
 import styles from './Favorites.module.scss';
 
@@ -54,6 +58,7 @@ export const Favorites: FC<FavoritesProps> = ({
   totalCount,
   title = 'Your Favorites',
   onToggleFavorite,
+  isFavoriteVisible,
   onItemClick,
   styles: favoritesStyles,
   isLeaving,
@@ -79,6 +84,12 @@ export const Favorites: FC<FavoritesProps> = ({
     '--cat-fav-selected-bg': favoritesStyles?.colors?.selectedCardBackground,
     '--cat-fav-nav-btn': favoritesStyles?.colors?.navButton,
     '--cat-fav-nav-btn-disabled': favoritesStyles?.colors?.navButtonDisabled,
+    '--cat-fav-nav-btn-hover-bg':
+      favoritesStyles?.colors?.navButtonHoverBackground,
+    '--cat-fav-nav-btn-active-bg':
+      favoritesStyles?.colors?.navButtonActiveBackground,
+    '--cat-fav-page-nav-border': favoritesStyles?.colors?.pageNavBorder,
+    '--cat-fav-page-nav-bg': favoritesStyles?.colors?.pageNavBackground,
   });
   const sortedItems = useMemo(
     () =>
@@ -412,7 +423,11 @@ export const Favorites: FC<FavoritesProps> = ({
                     styles.navBtn,
                   )}
                 >
-                  <IconChevronLeft size={14} className="rtl:scale-x-[-1]" />
+                  <IconChevronLeft
+                    size={14}
+                    className="rtl:scale-x-[-1]"
+                    stroke={DIAL_KIT_ICON_STROKE}
+                  />
                 </button>
                 <span
                   className={mergeClasses(
@@ -432,7 +447,11 @@ export const Favorites: FC<FavoritesProps> = ({
                     styles.navBtn,
                   )}
                 >
-                  <IconChevronRight size={14} className="rtl:scale-x-[-1]" />
+                  <IconChevronRight
+                    size={14}
+                    className="rtl:scale-x-[-1]"
+                    stroke={DIAL_KIT_ICON_STROKE}
+                  />
                 </button>
               </div>
             ) : undefined
@@ -452,6 +471,7 @@ export const Favorites: FC<FavoritesProps> = ({
               key={`${favPage}-${item.id}`}
               item={item}
               onToggle={onToggleFavorite}
+              isFavoriteVisible={isFavoriteVisible}
               onClick={onItemClick}
               addToFavoritesAriaLabel={addToFavoritesAriaLabel}
               removeFromFavoritesAriaLabel={removeFromFavoritesAriaLabel}

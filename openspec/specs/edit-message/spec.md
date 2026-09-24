@@ -4,7 +4,7 @@
 
 Specifies inline editing of user messages within a conversation: entering edit mode, modifying text and attachments, submitting (truncates subsequent messages and re-runs the AI), and cancelling.
 
----
+## Requirements
 
 ### Requirement: Edit button availability
 The edit button on user message bubbles SHALL be visible at all times and disabled while the AI is streaming a response or when the conversation is read-only.
@@ -44,7 +44,7 @@ Clicking the edit button on a user message SHALL replace the static message bubb
 ---
 
 ### Requirement: Edit area layout
-The inline edit area consists of two parts stacked vertically:
+The inline edit area SHALL consist of two parts stacked vertically:
 1. A bordered box containing the attachment tray (pre-existing and newly added attachments shown together) and the textarea below it.
 2. An action row below the bordered box: the attach (+) button on the left, Cancel and Save & Submit buttons on the right.
 
@@ -109,6 +109,18 @@ Clicking Save & Submit (or pressing Enter in the textarea) SHALL update the mess
 - **THEN** all messages after the edited message are removed from the conversation
 - **THEN** the AI is re-triggered with the updated message and attachments
 - **THEN** a new streaming assistant response begins
+
+#### Scenario: Unchanged message whose answer never completed
+- **WHEN** the user submits an edit without changing the text or attachments,
+  and the answer below it is missing, was stopped by the user, or ended with a
+  stream error
+- **THEN** the generation is re-run for that message, because the point of
+  re-submitting an unchanged message is to replace the incomplete answer
+
+#### Scenario: Unchanged message whose answer is complete
+- **WHEN** the user submits an edit without changing the text or attachments
+  and the answer below it completed normally
+- **THEN** edit mode is exited and no new generation starts
 
 #### Scenario: Other edits silently cancelled on submit
 - **WHEN** the user submits an edit while other messages are also in edit mode

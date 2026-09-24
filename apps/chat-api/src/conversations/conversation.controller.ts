@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   Logger,
   NotFoundException,
@@ -13,16 +14,38 @@ import {
   Req,
   Res,
 } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
+import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
-import type { SessionUser } from '../auth/session/session.types';
+import { resolvePrincipalKey } from '../auth/session/principal-key';
+import {
+  getJobTitleClaim,
+  type SessionUser,
+} from '../auth/session/session.types';
+import {
+  releaseSseResponse,
+  SSE_DRAIN_TIMEOUT_MS,
+  SSE_KEEPALIVE_PAYLOAD,
+  SSE_RELEASE_TIMEOUT_MS,
+  SseReleaseOutcome,
+  SseResponseState,
+  startSseResponse,
+  waitForDrain,
+  writeSseChunk,
+} from '../common/utils/sse';
 import {
   ConversationMetadataDto,
   ConversationResponseDto,
 } from '../openapi/openapi-response.dto';
-import { ConversationGenerationService } from './conversation-generation.service';
+import {
+  SseSubscriptionKind,
+  trackSseSubscription,
+} from '../telemetry/runtime-metrics';
+import {
+  ConversationGenerationService,
+  type GenerationTerminalEvent,
+} from './conversation-generation.service';
 import { ConversationService } from './conversation.service';
+import { AttachGenerationDto } from './dto/attach-generation.dto';
 import { ConversationListResponseDto } from './dto/conversation-list.dto';
 import { ConversationPathDto } from './dto/conversation-path.dto';
 import { CreateConversationDto } from './dto/create-conversation.dto';
@@ -44,9 +67,34 @@ import {
 import { SendCompletionDto } from './dto/send-completion.dto';
 import { StopCompletionDto } from './dto/stop-completion.dto';
 import { WatchConversationBodyDto } from './dto/watch-conversation.dto';
+import {
+  completionResponseTerminations,
+  CompletionResponseTermination,
+} from './streaming/completion-response-metrics';
+import {
+  assertValidOptionalTimezone,
+  TIMEZONE_HEADER,
+  TIMEZONE_MAX_LENGTH,
+} from './utils/timezone-header';
 
 const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
-const SSE_KEEPALIVE_PAYLOAD = ': keepalive\n\n';
+
+/**
+ * Bounds per-connection buffered output for `streamCompletion`. Past this
+ * many bytes buffered in `res`, the handler stops writing to that response
+ * (marking it detached, the same as a client disconnect) without pausing or
+ * aborting the backend-owned generation loop. See
+ * `backend-owned-generation-persistence`.
+ */
+const SSE_COMPLETION_MAX_BUFFERED_BYTES = 1024 * 1024;
+
+/**
+ * Bounds per-subscriber buffered output for `attachToGeneration`. Past this
+ * many bytes buffered in a subscriber's `res`, that subscriber is detached
+ * (its own cleanup runs) without affecting the generation or any other
+ * concurrently attached subscriber. See `generation-live-replay`.
+ */
+const SSE_ATTACH_MAX_BUFFERED_BYTES = 1024 * 1024;
 
 @ApiTags('conversations')
 @Controller({ path: 'conversations', version: '1' })
@@ -60,7 +108,6 @@ export class ConversationController {
 
   @Post()
   @HttpCode(201)
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({
     summary: 'Create a new conversation',
     description:
@@ -95,7 +142,7 @@ export class ConversationController {
   @ApiOperation({
     summary: 'List conversations',
     description:
-      'Returns a flat, paginated list of all conversations for the authenticated user by calling the DIAL Core metadata endpoint with `recursive=true` on the root path.',
+      'Returns a flat conversation list for the authenticated user. Without limit or nextToken, follows all personal and public DIAL Core metadata pages with recursive=true, merges shared conversations, and sorts the complete result by latest activity. Explicit pagination parameters request one page per bucket.',
   })
   @ApiResponse({
     status: 200,
@@ -189,14 +236,28 @@ export class ConversationController {
 
   @Post('completions')
   @HttpCode(200)
-  @Throttle({ default: { limit: 100, ttl: 60000 } })
   @ApiOperation({
     summary: 'Stream a chat completion',
     description:
       'Appends the user message to the conversation history, streams a completion from DIAL Core as SSE, persists the result, and returns the raw event stream. Backend owns persistence.',
   })
+  @ApiHeader({
+    name: TIMEZONE_HEADER,
+    required: false,
+    description:
+      'Current browser IANA timezone forwarded to DIAL Core for date- and time-sensitive tools.',
+    schema: {
+      type: 'string',
+      maxLength: TIMEZONE_MAX_LENGTH,
+      pattern: '^[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)*$',
+      example: 'Europe/Warsaw',
+    },
+  })
   @ApiResponse({ status: 200, description: 'SSE stream of completion chunks' })
-  @ApiResponse({ status: 400, description: 'Invalid request body' })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid request body or X-Timezone header',
+  })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
   @ApiResponse({
     status: 403,
@@ -205,17 +266,21 @@ export class ConversationController {
   @ApiResponse({ status: 404, description: 'Conversation not found' })
   @ApiResponse({
     status: 409,
-    description: 'Another generation is already active for this conversation',
+    description:
+      'Another generation is already active for this conversation and principal',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({ status: 502, description: 'DIAL Core error' })
   @ApiResponse({ status: 503, description: 'DIAL Core unreachable' })
   async streamCompletion(
     @Req() req: Request,
     @Res() res: Response,
     @Body() dto: SendCompletionDto,
+    @Headers(TIMEZONE_HEADER) timezoneHeader: string | string[] | undefined,
   ): Promise<void> {
-    const { at, bucket, sid, sub } = req.user as SessionUser;
+    const user = req.user as SessionUser;
+    const { at, bucket, claims, sub } = user;
+    const ownerKey = resolvePrincipalKey(user, req.authSource);
+    const timezone = assertValidOptionalTimezone(timezoneHeader);
     const stream = this.conversationService.streamCompletion(
       dto.path,
       at,
@@ -226,42 +291,140 @@ export class ConversationController {
       dto.messageIndex,
       dto.model,
       dto.custom_content,
-      sid,
-      () => {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        res.flushHeaders();
-      },
+      ownerKey,
+      () => startSseResponse(res),
       sub,
       dto.clientChannelId,
+      timezone,
+      getJobTitleClaim(claims),
     );
 
-    for await (const chunk of stream) {
-      res.write(chunk);
-    }
+    /*
+     * This generation is backend-owned and independent of the originating
+     * browser connection (see backend-owned-generation-persistence): closing,
+     * refreshing, or navigating away from this response must not abort the
+     * generation or stop the consuming loop below. `responseState` only
+     * decides what happens to `res`.
+     *
+     * The two non-streaming states are deliberately distinct, because their
+     * cleanup obligations are opposites: a `ClientClosed` response has
+     * already been destroyed by Node and must never be touched again, while
+     * a `BackpressureDetached` one is still open and this handler owns
+     * terminating it. Treating the second as the first is what used to leave
+     * a slow client's response open with a megabyte buffered after the
+     * handler had already returned.
+     *
+     * The initial value is widened deliberately: every transition happens
+     * inside a closure (the `'close'` listener, `detachForBackpressure`),
+     * which TypeScript's control-flow analysis does not track, so without it
+     * the type would stay narrowed to `Streaming` and the cleanup's
+     * comparisons would be rejected as impossible.
+     */
+    let responseState = SseResponseState.Streaming as SseResponseState;
+    const handleClose = () => {
+      /*
+       * Unconditional: a disconnect is the strongest fact available about the
+       * response, and it can legitimately arrive while a detached response is
+       * being released.
+       */
+      responseState = SseResponseState.ClientClosed;
+    };
+    res.on('close', handleClose);
 
-    if (!res.writableEnded) res.end();
+    /*
+     * `streamCompletion` is an async generator, so everything it does before
+     * `onReadyToStream` — registering the generation, resolving the
+     * deployment, loading the conversation — runs on the first `next()` from
+     * the loop below, not at the call above. A rejection from that phase
+     * therefore lands here with no headers sent yet, and ending the response
+     * would flush an empty 200 that leaves the exception filter nothing to
+     * write. That is how a second browser tab submitting into a conversation
+     * that is already generating rendered an empty answer instead of the 409
+     * this endpoint documents (issue #8688). Once the stream is open the
+     * status is already committed, so a later failure ends the response as
+     * before and only the SSE transport reports it.
+     */
+    let hasFailedBeforeStreamOpened = false;
+    const detachForBackpressure = () => {
+      /*
+       * Only from `Streaming`: a response the client already closed stays
+       * `ClientClosed`, which owes no cleanup.
+       */
+      if (responseState === SseResponseState.Streaming) {
+        responseState = SseResponseState.BackpressureDetached;
+      }
+    };
+    try {
+      for await (const chunk of stream) {
+        /*
+         * `continue`, never `break`: abandoning this loop injects `.return()`
+         * into the generator, whose own cleanup aborts the generation's
+         * `AbortController`. A slow or absent client must never cancel
+         * backend-owned work.
+         */
+        if (responseState !== SseResponseState.Streaming) continue;
+        try {
+          writeSseChunk(res, chunk);
+          if (res.writableLength > SSE_COMPLETION_MAX_BUFFERED_BYTES) {
+            detachForBackpressure();
+          }
+        } catch {
+          detachForBackpressure();
+        }
+      }
+    } catch (err) {
+      hasFailedBeforeStreamOpened = !res.headersSent;
+      throw err;
+    } finally {
+      res.off('close', handleClose);
+      /*
+       * Reached only after the generator has returned, which it does only
+       * after awaiting its own terminal save and registry release. So
+       * nothing below can alter what was persisted or how the generation
+       * finished — it decides the fate of the HTTP response alone.
+       */
+      if (responseState === SseResponseState.BackpressureDetached) {
+        const outcome = await releaseSseResponse(res, SSE_RELEASE_TIMEOUT_MS);
+        completionResponseTerminations.add(1, {
+          reason:
+            outcome === SseReleaseOutcome.Destroyed
+              ? CompletionResponseTermination.BackpressureDestroyed
+              : CompletionResponseTermination.BackpressureEnded,
+        });
+      } else if (responseState === SseResponseState.ClientClosed) {
+        completionResponseTerminations.add(1, {
+          reason: CompletionResponseTermination.ClientClosed,
+        });
+      } else if (!hasFailedBeforeStreamOpened && !res.writableEnded) {
+        res.end();
+        responseState = SseResponseState.Completed;
+        completionResponseTerminations.add(1, {
+          reason: CompletionResponseTermination.Completed,
+        });
+      }
+    }
   }
 
   @Post('completions/stop')
-  @Throttle({ default: { limit: 60, ttl: 60000 } })
   @ApiOperation({ summary: 'Stop an active generation' })
   @ApiResponse({ status: 204, description: 'Generation stopped successfully' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
   @ApiResponse({
     status: 404,
     description:
-      'No active generation found for the given path and generationId',
+      'No active generation found for this principal for the given path and generationId',
   })
   async stopCompletion(
     @Req() req: Request,
     @Res() res: Response,
     @Body() dto: StopCompletionDto,
   ): Promise<void> {
-    const { sid } = req.user as SessionUser;
+    const ownerKey = resolvePrincipalKey(
+      req.user as SessionUser,
+      req.authSource,
+    );
     const aborted = this.generationService.abort(
-      sid,
+      ownerKey,
       dto.path,
       dto.generationId,
     );
@@ -273,9 +436,113 @@ export class ConversationController {
     res.status(204).end();
   }
 
+  @Post('completions/attach')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'attachToGeneration',
+    summary: 'Attach to an active generation and replay it live',
+    description:
+      'Opens an SSE stream for the active generation on this conversation path: one `snapshot` event carrying the assistant message as assembled so far, then a `chunk` event for every subsequent delta, then exactly one terminal event (`done`/`error`/`stopped`). Used by the frontend to show progressive content when reopening a conversation mid-generation instead of only a typing indicator. Principal-scoped — only the principal that could stop the generation can attach to it.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'SSE stream: one snapshot event, live chunk events, then one terminal event',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid or missing path' })
+  @ApiResponse({ status: 401, description: 'Not authenticated' })
+  @ApiResponse({
+    status: 404,
+    description:
+      'No active generation found for the given path for this principal — including one that already finished',
+  })
+  async attachToGeneration(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Body() dto: AttachGenerationDto,
+  ): Promise<void> {
+    const ownerKey = resolvePrincipalKey(
+      req.user as SessionUser,
+      req.authSource,
+    );
+    const attachment = this.generationService.attach(ownerKey, dto.path);
+    if (!attachment) {
+      throw new NotFoundException(
+        'No active generation found for the given path',
+      );
+    }
+
+    startSseResponse(res);
+
+    const finishSubscription = trackSseSubscription(
+      SseSubscriptionKind.GenerationAttach,
+    );
+
+    let isCleanedUp = false;
+    const timers: { keepalive?: ReturnType<typeof setInterval> } = {};
+
+    const cleanup = (): void => {
+      if (isCleanedUp) return;
+      isCleanedUp = true;
+      finishSubscription();
+      if (timers.keepalive) clearInterval(timers.keepalive);
+      attachment.emitter.off('chunk', onChunk);
+      attachment.emitter.off('terminal', onTerminal);
+      res.off('close', handleClose);
+      /*
+       * Fire-and-forget: `cleanup` runs from synchronous emitter callbacks,
+       * so it cannot await. `releaseSseResponse` never rejects, and the
+       * `isCleanedUp` guard above is what keeps a second cleanup — a late
+       * disconnect, the terminal event, shutdown — from re-ending or
+       * re-destroying this response.
+       *
+       * `res.end()` on its own would leave a subscriber whose peer stopped
+       * reading holding everything already queued for it (up to
+       * `SSE_ATTACH_MAX_BUFFERED_BYTES`), because `'finish'` never arrives;
+       * the bounded `destroy()` inside is what reclaims it.
+       */
+      void releaseSseResponse(res, SSE_RELEASE_TIMEOUT_MS);
+    };
+
+    const writeEvent = (payload: unknown): void => {
+      if (isCleanedUp || res.writableEnded) return;
+      writeSseChunk(res, `data: ${JSON.stringify(payload)}\n\n`);
+      if (res.writableLength > SSE_ATTACH_MAX_BUFFERED_BYTES) {
+        cleanup();
+      }
+    };
+
+    const onChunk = (rawChunk: unknown): void => {
+      writeEvent({ type: 'chunk', chunk: rawChunk });
+    };
+    const onTerminal = (event: GenerationTerminalEvent): void => {
+      writeEvent(event);
+      cleanup();
+    };
+    const handleClose = (): void => {
+      cleanup();
+    };
+
+    writeEvent({ type: 'snapshot', message: attachment.assembledMessage });
+    if (isCleanedUp) return;
+
+    timers.keepalive = setInterval(() => {
+      writeSseChunk(res, SSE_KEEPALIVE_PAYLOAD);
+    }, SSE_KEEPALIVE_INTERVAL_MS);
+
+    /*
+     * Subscribing here — synchronously, right after `attach()` read the
+     * snapshot above, with no `await` in between — is what guarantees no
+     * concurrently-emitted chunk is lost between the snapshot and the first
+     * live event (see ConversationGenerationService.attach).
+     */
+    attachment.emitter.on('chunk', onChunk);
+    attachment.emitter.on('terminal', onTerminal);
+    res.on('close', handleClose);
+  }
+
   @Post('watch')
   @HttpCode(200)
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({
     operationId: 'watchConversation',
     summary: 'Subscribe to conversation resource updates via SSE',
@@ -292,26 +559,20 @@ export class ConversationController {
     @Body() dto: WatchConversationBodyDto,
   ) {
     const { at, bucket } = req.user as SessionUser;
-    const stream = await this.conversationService.watchConversation(
-      dto.path,
-      at,
-      bucket,
+    const finishSubscription = trackSseSubscription(
+      SseSubscriptionKind.ConversationWatch,
     );
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    const reader = stream.getReader();
-
+    const abortController = new AbortController();
     let isClientAborted = false;
     let isReaderReleased = false;
     let isCancelRequested = false;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
     const handleClose = () => {
       isClientAborted = true;
-      if (isReaderReleased || isCancelRequested) {
+      abortController.abort();
+      if (isReaderReleased || isCancelRequested || !reader) {
         return;
       }
 
@@ -321,39 +582,74 @@ export class ConversationController {
 
     res.on('close', handleClose);
 
-    let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
     try {
-      keepaliveTimer = setInterval(() => {
-        if (!isClientAborted && !res.writableEnded) {
-          res.write(SSE_KEEPALIVE_PAYLOAD);
-        }
-      }, SSE_KEEPALIVE_INTERVAL_MS);
+      const stream = await this.conversationService.watchConversation(
+        dto.path,
+        at,
+        bucket,
+        abortController.signal,
+      );
 
-      while (true) {
-        if (isClientAborted) break;
-
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        res.write(value);
+      if (isClientAborted) {
+        await stream.cancel().catch(() => undefined);
+        return;
       }
-    } catch (err) {
-      if (!isClientAborted) {
-        this.logger.error('Error while streaming watch events to client', err);
+
+      startSseResponse(res);
+
+      reader = stream.getReader();
+
+      let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+      try {
+        keepaliveTimer = setInterval(() => {
+          if (!isClientAborted && !res.writableEnded) {
+            writeSseChunk(res, SSE_KEEPALIVE_PAYLOAD);
+          }
+        }, SSE_KEEPALIVE_INTERVAL_MS);
+
+        while (true) {
+          if (isClientAborted) break;
+
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const { needsDrain } = writeSseChunk(res, value);
+          if (needsDrain) {
+            const outcome = await waitForDrain(
+              res,
+              abortController.signal,
+              SSE_DRAIN_TIMEOUT_MS,
+            );
+            if (outcome === 'timeout') {
+              isClientAborted = true;
+              void reader.cancel().catch(() => undefined);
+              break;
+            }
+            if (outcome === 'aborted') break;
+          }
+        }
+      } catch (err) {
+        if (!isClientAborted) {
+          this.logger.error(
+            'Error while streaming watch events to client',
+            err,
+          );
+        }
+      } finally {
+        if (keepaliveTimer) clearInterval(keepaliveTimer);
+        isReaderReleased = true;
+        reader.releaseLock();
+        if (!res.writableEnded) {
+          res.end();
+        }
       }
     } finally {
-      if (keepaliveTimer) clearInterval(keepaliveTimer);
       res.off('close', handleClose);
-      isReaderReleased = true;
-      reader.releaseLock();
-      if (!res.writableEnded) {
-        res.end();
-      }
+      finishSubscription();
     }
   }
 
   @Patch()
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({ summary: 'Rename a conversation by path' })
   @ApiResponse({
     status: 200,
@@ -384,7 +680,6 @@ export class ConversationController {
 
   @Post('generate-title')
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({
     operationId: 'generateConversationTitle',
     summary: 'Generate an LLM-based title suggestion for a conversation',
@@ -410,7 +705,6 @@ export class ConversationController {
     description: 'Not authorized to use the configured utility model',
   })
   @ApiResponse({ status: 404, description: 'Conversation not found' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({ status: 502, description: 'LLM title generation failed' })
   @ApiResponse({
     status: 503,
@@ -430,7 +724,6 @@ export class ConversationController {
   }
 
   @Post('duplicate')
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({
     summary: "Duplicate a conversation into the user's own bucket",
   })
@@ -458,7 +751,6 @@ export class ConversationController {
 
   @Post('deletions')
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({
     operationId: 'deleteConversations',
     summary: 'Delete selected conversations',
@@ -476,7 +768,6 @@ export class ConversationController {
       'ids is empty, exceeds 100, contains non-strings, or body is missing',
   })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({ status: 500, description: 'Unexpected internal error' })
   deleteConversations(
     @Req() req: Request,
@@ -488,7 +779,6 @@ export class ConversationController {
 
   @Post('deletions/all')
   @HttpCode(200)
-  @Throttle({ default: { limit: 2, ttl: 60000 } })
   @ApiOperation({
     operationId: 'deleteAllConversations',
     summary: 'Delete all conversations in the user bucket',
@@ -505,7 +795,6 @@ export class ConversationController {
     description: 'confirm is missing, false, or non-boolean',
   })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core metadata listing failed (bucket unreadable)',

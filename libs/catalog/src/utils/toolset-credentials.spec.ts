@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { CatalogItemCredentials } from '../models/catalog-item-credentials';
 import {
   CredentialsBadgeState,
+  CredentialsBannerState,
   CredentialStatus,
   CredentialsUiState,
   ToolsetAuthenticationType,
 } from '../types/toolset-auth';
 import {
+  canPublishCredentials,
   getCredentialsBadgeState,
+  getCredentialsBannerState,
   getCredentialsUiState,
 } from './toolset-credentials';
 
@@ -98,5 +101,143 @@ describe('getCredentialsBadgeState', () => {
         base({ authenticationType: ToolsetAuthenticationType.OAuth }),
       ),
     ).toBe(CredentialsBadgeState.LoggedOut);
+  });
+});
+
+describe('canPublishCredentials', () => {
+  it('is false when the item has no credentials at all', () => {
+    expect(canPublishCredentials(undefined)).toBe(false);
+  });
+
+  it('is false for a toolset that needs no login', () => {
+    expect(
+      canPublishCredentials({
+        authenticationType: ToolsetAuthenticationType.None,
+        globalStatus: CredentialStatus.SignedIn,
+      }),
+    ).toBe(false);
+  });
+
+  /* Access the publisher does not hold cannot be passed on. */
+  it('is false when signed out at every level', () => {
+    expect(
+      canPublishCredentials({
+        authenticationType: ToolsetAuthenticationType.OAuth,
+        userStatus: CredentialStatus.SignedOut,
+        globalStatus: CredentialStatus.SignedOut,
+      }),
+    ).toBe(false);
+  });
+
+  it('is false when no status is reported at all', () => {
+    expect(
+      canPublishCredentials({
+        authenticationType: ToolsetAuthenticationType.OAuth,
+      }),
+    ).toBe(false);
+  });
+
+  it('is true for an OAuth toolset signed in at the global level', () => {
+    expect(
+      canPublishCredentials({
+        authenticationType: ToolsetAuthenticationType.OAuth,
+        globalStatus: CredentialStatus.SignedIn,
+      }),
+    ).toBe(true);
+  });
+
+  it('is true for an API-key toolset signed in at the user level', () => {
+    expect(
+      canPublishCredentials({
+        authenticationType: ToolsetAuthenticationType.ApiKey,
+        userStatus: CredentialStatus.SignedIn,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('getCredentialsBannerState', () => {
+  it('returns undefined when organization credentials are not signed in', () => {
+    expect(getCredentialsBannerState(base())).toBeUndefined();
+  });
+
+  it('returns UsingOrgCredentials for a non-admin, personally signed-out user on a public item with active org credentials', () => {
+    expect(
+      getCredentialsBannerState(
+        base({ isPublic: true, globalStatus: CredentialStatus.SignedIn }),
+      ),
+    ).toBe(CredentialsBannerState.UsingOrgCredentials);
+  });
+
+  it('returns undefined for a public item with active org credentials once the user is also signed in personally', () => {
+    expect(
+      getCredentialsBannerState(
+        base({
+          isPublic: true,
+          globalStatus: CredentialStatus.SignedIn,
+          userStatus: CredentialStatus.SignedIn,
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined for a non-public item with active org credentials (no fallback context)', () => {
+    expect(
+      getCredentialsBannerState(
+        base({ isPublic: false, globalStatus: CredentialStatus.SignedIn }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('returns OrgCredentialsActive for an admin managing a public item with active org credentials', () => {
+    expect(
+      getCredentialsBannerState(
+        base({
+          isManageableByAdmin: true,
+          globalStatus: CredentialStatus.SignedIn,
+        }),
+      ),
+    ).toBe(CredentialsBannerState.OrgCredentialsActive);
+  });
+
+  it('prefers OrgCredentialsActive over UsingOrgCredentials when the admin flag is set', () => {
+    expect(
+      getCredentialsBannerState(
+        base({
+          isManageableByAdmin: true,
+          isPublic: true,
+          globalStatus: CredentialStatus.SignedIn,
+        }),
+      ),
+    ).toBe(CredentialsBannerState.OrgCredentialsActive);
+  });
+
+  it('returns PersonalCredentialsActive for an admin managing an item with personal credentials signed in', () => {
+    expect(
+      getCredentialsBannerState(
+        base({
+          isManageableByAdmin: true,
+          userStatus: CredentialStatus.SignedIn,
+        }),
+      ),
+    ).toBe(CredentialsBannerState.PersonalCredentialsActive);
+  });
+
+  it('prefers PersonalCredentialsActive over OrgCredentialsActive when an admin has both signed in', () => {
+    expect(
+      getCredentialsBannerState(
+        base({
+          isManageableByAdmin: true,
+          userStatus: CredentialStatus.SignedIn,
+          globalStatus: CredentialStatus.SignedIn,
+        }),
+      ),
+    ).toBe(CredentialsBannerState.PersonalCredentialsActive);
+  });
+
+  it('returns undefined for an admin managing an item signed out at every level', () => {
+    expect(
+      getCredentialsBannerState(base({ isManageableByAdmin: true })),
+    ).toBeUndefined();
   });
 });

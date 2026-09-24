@@ -1,3 +1,4 @@
+export { CONVERSATION_MESSAGES_CLASS } from './constants/public-class-names';
 export { MessageBubble } from './components/MessageBubble/MessageBubble';
 export { UserMessageBubble } from './components/MessageBubble/UserMessageBubble';
 export { AssistantMessageBubble } from './components/MessageBubble/AssistantMessageBubble';
@@ -20,6 +21,7 @@ export type {
 } from './components/MessageBubble/StatusMessageBubble';
 export type {
   MessageActionsProps,
+  MessageActionColors,
   MessageActionLabels,
   MessageActionTooltips,
   MessageActionAriaLabels,

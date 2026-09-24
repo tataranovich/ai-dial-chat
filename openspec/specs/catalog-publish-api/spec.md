@@ -1,109 +1,141 @@
-## ADDED Requirements
+# catalog-publish-api Specification
+
+## Purpose
+Lets a user with write access to a target folder publish a catalog entity (model, toolset, or application) to the shared public catalog, and retrieve that entity's publish history, via BFF endpoints that proxy DIAL Core's Publication API. `chat-api` holds no durable publish state of its own — DIAL Core's Publication API is the sole source of truth.
+## Requirements
 
 ### Requirement: Publish endpoint proxies DIAL Core's Publication API
-The backend SHALL expose `POST /api/v1/catalog/{entityType}/{entityId}/publish` in a new `apps/chat-api/src/publish/` domain (`publish.controller.ts`, `publish.service.ts`, `publish.module.ts`, `dto/`), following `apps/chat-api/AGENTS.md` (thin controller, `@ApiTags`/`@ApiOperation`/`@ApiResponse` per status code, Logger + ConfigService in the service, validated DTOs).
 
-`publish.service.ts` SHALL NOT persist publish records itself. `apps/chat-api` has no database/ORM dependency; the only durable source of truth for publish state is DIAL Core's Publication API, already typed in `@epam/ai-dial-typescript-sdk` (`createPublication`, `getPublications`, `getPublication`). The service SHALL call `DialClientService` (`apps/chat-api/src/dial/dial-client.service.ts`) the same way `ShareService` (`apps/chat-api/src/share/share.service.ts`) proxies DIAL Core's resource-sharing API — injecting `DialClientService` and calling `this.dialClient.client.createPublication({...})` directly, never persisting a copy of the result.
+The backend SHALL expose authenticated `POST /api/v1/catalog/{entityType}/{entityId}/publish` through the existing `apps/chat-api/src/publish/` domain. The controller remains thin and delegates to `PublishService`, which calls `DialClientService.client.createPublication` and stores no publish records locally. DIAL Core remains the authorization and persistence authority.
 
-`entityId` is treated as the entity's DIAL Core resource path, the same assumption `ShareService.createShareLink`'s `itemId` already makes — only resource-backed, user-owned/editable entities (Toolset, Application) are publishable, consistent with `isPublishVisible` in `catalog-publish-flow`.
+`entityType` SHALL accept `model | toolset | application | prompt | skill`. `entityId` SHALL be the entity's full DIAL Core resource path. A Prompt SHALL use its whole `prompts/{bucket}/{path}` resource URL, exactly like a Skill uses its whole `skills/{bucket}/{path}` resource URL — neither requires bucket qualification by `PublishService`, since `PromptResponseDto.id` (see `prompts-api`) is already the full path. Neither Skill nor Prompt SHALL ever use an individual file URL.
 
-Request:
-```
-POST /api/v1/catalog/toolset/toolsets%2Fbucket-123%2Ftool-abc123__1.2.0/publish
+`PublishCatalogEntityDto` SHALL contain:
+
+- required `folderPath: string`, validated with `IsValidFilePath`;
+- optional `version?: string`, validated with `@IsOptional()` and `@IsString()`;
+- optional `author?: string`, validated with `@IsOptional()`, `@IsString()`, `@MaxLength(200)`, and `@Matches(/^[^\p{Cc}]*$/u)`;
+- optional validated `rules?: PublishRuleDto[]` under the existing maximum and nested-validation constraints.
+
+Existing callers MAY continue sending `version`. When it is absent or empty, `PublishService` SHALL recover it from a versioned `{name}__{version}` resource id. An unversioned Prompt or Skill SHALL use an empty string in `PublishResultDto.version`, and the Core publication title SHALL contain only the decoded resource name without a synthetic version or trailing space.
+
+`author` SHALL be the display author recorded on the publication. `PublishController.publish` SHALL resolve the effective value as `author?.trim() || getUserDisplayName(claims)` and pass that single string to `PublishService.publish`, whose signature and its `displayAuthor: author` line on the `createPublication` body SHALL remain unchanged. A request that omits `author`, or sends it blank or whitespace-only, SHALL therefore behave exactly as it did before this change.
+
+`author` SHALL NOT affect authorization or the recorded actor. DIAL Core continues to derive the publication's `author` from the caller's bearer token and to enforce target-folder write access against it; `displayAuthor` is presentation only. `PublishResultDto.publishedBy` SHALL report the publication's display author, reading `publication.displayAuthor` before `publication.author` (`readPublicationDisplayAuthor`), so the response and publish history name the author the publisher chose. Core always records its own `author`, so reading that first would leave a submitted display author unobservable in every response this API returns.
+
+Example versioned toolset request with a custom author:
+
+```http
+POST /api/v1/catalog/toolset/toolsets%2Fbucket-123%2Fteam-a%2Fjira__1.2.0/publish
 Content-Type: application/json
 
 {
-  "folderPath": "Organization/Data Science/Published models",
+  "folderPath": "Organization/Data Science",
   "version": "1.2.0",
-  "rules": [
-    {
-      "source": "roles",
-      "function": "CONTAIN",
-      "targets": ["engineering", "support"]
-    }
-  ]
+  "author": "DIAL Team",
+  "rules": []
 }
 ```
-(`entityId` here is `toolsets/bucket-123/tool-abc123__1.2.0` — the entity's full DIAL Core resource path, URL-encoded as a single path segment by the generated client. Catalog entity IDs always end in `{name}__{version}`, e.g. `tool-abc123__1.2.0` — see `applications.service.ts`/`toolsets.service.ts`. `rules` is optional; omitting it is equivalent to `rules: []`.)
 
-Core call made by the service (via `DialClientService.client.createPublication`):
-```json
+The Core call for that request SHALL carry `displayAuthor: "DIAL Team"`.
+
+Example unversioned skill request:
+
+```http
+POST /api/v1/catalog/skill/skills%2Fbucket-123%2Fteam-a%2Fdocs-helper/publish
+Content-Type: application/json
+
 {
-  "name": "tool-abc123 1.2.0",
-  "targetFolder": "public/Organization/Data Science/Published models/",
-  "resources": [
-    {
-      "action": "ADD",
-      "sourceUrl": "toolsets/bucket-123/tool-abc123__1.2.0",
-      "targetUrl": "toolsets/public/Organization/Data Science/Published models/tool-abc123__1.2.0"
-    }
-  ],
-  "displayAuthor": "Test User",
-  "rules": [
-    {
-      "source": "roles",
-      "function": "CONTAIN",
-      "targets": ["engineering", "support"]
-    }
-  ]
+  "folderPath": "Organization/Data Science",
+  "rules": []
 }
 ```
-This shape is confirmed against DIAL Core's own published OpenAPI spec (https://dialx.ai/dial_api#tag/Publications/operation/createPublication), whose documented example is `targetFolder: public/folder/` and `targetUrl: conversations/public/folder/conversation`. DIAL Core's Publication API has no opaque per-org bucket-id hash for the shared Organization/public area — it is addressed by the **literal path segment `public`**. `targetFolder` is `public/{folderPath}/` and **requires a trailing slash** (bare `public/` when `folderPath` is empty, i.e. publishing to the public root). `resources[].targetUrl` **is** a full destination file path: `{resourceTypePrefix}/{targetFolder}{resourceName}`, where `resourceTypePrefix` is `entityId`'s first path segment (e.g. `toolsets`) and `resourceName` is its last segment — never the full `entityId` nested wholesale, and never folder-shaped with a trailing slash. `folderPath`'s segments SHALL be percent-encoded (`encodeDialResourcePath`) before being interpolated into `targetFolder`/`targetUrl` — it arrives as plain, unencoded text from the request body, and Core rejects a raw space or other special character with `Bad resource url: public/{folderPath}/`. Core's `Publication`/`PublicationResource` schema has no version field: `name` is a free-text request title, built as `"{entity name} {version}"` (never the bare version alone, and never the author — `displayAuthor` carries that), with both the entity name and version recovered from `entityId`'s own `{name}__{version}` suffix. `displayAuthor` is the caller's human display name, resolved from the session's allowlisted OIDC claims (`getUserDisplayName`: `name` → `preferred_username` → email local-part → `'Unknown Author'`); `rules` is the caller-supplied, validated array of access-restriction rules (`dto.rules ?? []`), passed through to Core unchanged — the service does not interpret or re-map rule contents, only validates their shape (see the "Publish request accepts optional access rules" requirement below).
 
-Response (201):
+The Core call SHALL use `targetFolder: public/Organization/Data%20Science/`, `sourceUrl: skills/bucket-123/team-a/docs-helper`, and `targetUrl: skills/public/Organization/Data%20Science/docs-helper`. Folder segments SHALL remain encoded through `encodeDialResourcePath`; publishing to the public root SHALL continue to use `public/`.
+
+A successful request SHALL return 201 with the existing `PublishResultDto` shape. For the request above it includes:
+
 ```json
 {
-  "entityId": "toolsets/bucket-123/tool-abc123__1.2.0",
-  "entityType": "toolset",
-  "folderPath": "Organization/Data Science/Published models",
-  "version": "1.2.0",
+  "entityId": "skills/bucket-123/team-a/docs-helper",
+  "entityType": "skill",
+  "folderPath": "Organization/Data Science",
+  "version": "",
   "publishedAt": "2026-07-13T10:00:00.000Z",
   "publishedBy": "user@example.com"
 }
 ```
-`folderPath` in the response is the plain path the caller sent (not Core's `public/`-qualified `targetFolder`); `publishedAt`/`publishedBy` are read back from the Core `Publication` response (`createdAt`/`author`), not generated or stored by `apps/chat-api`. The response SHALL NOT echo back `rules` — the caller already has the value it sent, and no other field in this response echoes request input either.
 
-`entityType` is a path param restricted to an allowlist enum (`model | toolset | application`); `folderPath` and `entityId` are validated with `class-validator` reusing the existing `IsValidFilePath` decorator (`apps/chat-api/src/files/dto/file-path.validator.ts`) to block path traversal (`..`, absolute-path escapes) before being forwarded to Core. `version` is required — Core has no way to derive it, so the caller (which already has `item.version`) always supplies it. `rules` is optional and validated per the requirement below.
+The endpoint SHALL return 400 for invalid path/body input, 401 for an unauthenticated caller, 403 when Core denies target-folder write access, 429 when DIAL Core rejects the request due to its rate limit, 502 for an upstream non-OK response, and 503 when Core is unavailable. Structured Core errors SHALL continue through `mapDialHttpStatus` with the upstream message. A successful publish SHALL invalidate `publish-history:{entityType}:{entityId}`.
 
-Generated-client impact: OpenAPI `operationId: publishCatalogEntity`; request DTO `PublishCatalogEntityDto` (now including optional `rules?: PublishRuleDto[]`); response DTO `PublishResultDto` (unchanged). Frontend caller uses the normal (non-`Raw`) generated method via the existing `apps/chat/src/server-api/publish.api.ts` thin wrapper.
+OpenAPI operation `publishCatalogEntity` SHALL expose `PublishCatalogEntityDto.version?: string` and `PublishCatalogEntityDto.author?: string` alongside the unchanged `PublishResultDto`; frontend callers SHALL use the normal generated method through `apps/chat/src/server-api/publish.api.ts`. Because `author` is optional, the regenerated client SHALL stay source-compatible with request literals that omit it.
 
-Rate limiting: `@Throttle` at a stricter-than-default limit (write endpoint) — e.g. 10 requests/minute per user, matching `ShareController`'s write-endpoint throttle profile. Unchanged by this requirement.
+#### Scenario: Owned skill is published without version
 
-Authorization: caller SHALL be authenticated (existing session guard). Write access to `folderPath` is enforced by DIAL Core itself when `createPublication` is called — the backend does not duplicate that check locally; a Core 403 SHALL map to `ForbiddenException` via `handleDialSdkError`/`mapDialHttpStatus`. This is unchanged by adding `rules`: the backend does not validate `rules[].source` against any allowlist, since DIAL Core itself treats an unrecognized source as "never matches" rather than an error (see the requirement below for the full rationale).
+- **WHEN** an authenticated user with target-folder write access publishes `skills/{bucket}/{path}` without `version`
+- **THEN** the BFF calls Core for the whole skill resource, returns 201, and reports `version: ""`
 
-(An in-memory-stub interim fallback was considered in case Core's Publication API wiring proved unavailable; Core integration succeeded directly, so no such stub was built and none exists in the shipped code.)
+#### Scenario: Owned prompt is published using its own full resource id
 
-#### Scenario: Successful publish
-- **WHEN** an authenticated user with write access to the target folder submits a valid publish request
-- **THEN** the service calls Core's `createPublication`, returns 201 with `PublishResultDto`, and the entry becomes retrievable via the publish-history endpoint
+- **WHEN** an authenticated user with target-folder write access publishes their own prompt using its `entityId: 'prompts/{bucket}/{path}'`
+- **THEN** the BFF calls Core with that `sourceUrl` unmodified — no bucket qualification step runs — returns 201, and reports `version: ""`
 
-#### Scenario: Publish targets the public bucket, not the entity's own source bucket
-- **WHEN** `entityId` is `toolsets/{bucket}/{name}` and `folderPath` is `Organization/Data Science`
-- **THEN** `targetFolder` sent to Core is `public/Organization/Data Science/` and `targetUrl` is `toolsets/public/Organization/Data Science/{name}` — qualified with the literal `public` segment and the resource's own type prefix and name, never the full `entityId`
+#### Scenario: Versioned entity remains backward compatible
 
-#### Scenario: Publish to the public root with no subfolder
-- **WHEN** `folderPath` is empty (publishing to the public/Organization root)
-- **THEN** `targetFolder` sent to Core is `public/` and `targetUrl` is `{resourceTypePrefix}/public/{name}`
+- **WHEN** an existing client publishes an application or toolset with `version: "1.2.0"`
+- **THEN** the request succeeds unchanged and the response retains `version: "1.2.0"`
 
-#### Scenario: Unknown entity
-- **WHEN** `entityId` does not correspond to an existing catalog entity of `entityType`
-- **THEN** Core returns 404 and the service throws `NotFoundException` (404) via `handleDialSdkError`
+#### Scenario: Version is recovered when omitted
 
-#### Scenario: No write access to target folder
-- **WHEN** the caller lacks write access to `folderPath`
-- **THEN** Core returns 403 and the service throws `ForbiddenException` (403) via `handleDialSdkError`
+- **WHEN** a versioned `{name}__{version}` resource is published without the optional field
+- **THEN** the BFF derives the publication title and response version from `entityId`
 
-#### Scenario: Invalid folder path
-- **WHEN** `folderPath` fails the `IsValidFilePath` validation (e.g. contains `..`)
-- **THEN** the request is rejected at the `ValidationPipe` with 400 before reaching the service or Core
+#### Scenario: Custom author is forwarded to Core as displayAuthor
 
-#### Scenario: Upstream failure
-- **WHEN** the Core `createPublication` call fails unexpectedly (network error, 5xx, timeout)
-- **THEN** the service throws `BadGatewayException` or `ServiceUnavailableException` (per `handleDialSdkError`) and logs the failure without logging request bodies containing tokens
+- **WHEN** an authenticated user publishes with `author: "DIAL Team"`
+- **THEN** the `createPublication` body sent to Core carries `displayAuthor: "DIAL Team"` instead of the session-derived display name
 
-#### Scenario: Request omitting rules behaves exactly as before this change
-- **WHEN** a request body has no `rules` field at all (an older client, or a client not using the new UI)
-- **THEN** the DTO normalizes the missing field to `rules: []`, Core receives `rules: []`, and the request succeeds exactly as it did before this change
+#### Scenario: Author is trimmed before it reaches Core
+
+- **WHEN** a request sends `author: "  DIAL Team  "`
+- **THEN** the `createPublication` body carries `displayAuthor: "DIAL Team"`
+
+#### Scenario: Omitted author falls back to the session display name
+
+- **WHEN** a request body has no `author` field at all (an older client, or a client not using the new UI)
+- **THEN** the controller passes `getUserDisplayName(claims)` to the service and Core receives exactly the `displayAuthor` it received before this change
+
+#### Scenario: Blank author falls back to the session display name
+
+- **WHEN** a request sends `author: "   "`
+- **THEN** the trimmed value is empty, the controller falls back to `getUserDisplayName(claims)`, and Core never receives an empty `displayAuthor`
+
+#### Scenario: Custom author is reported back as the publication author
+
+- **WHEN** a user publishes with an `author` different from their own display name and the publication is read back
+- **THEN** `PublishResultDto.publishedBy` reports `publication.displayAuthor` (the submitted author), falling back to Core's own `publication.author` only when Core stored no display author
+- **AND** authorization and the actor Core records are unchanged — `displayAuthor` is presentation only
+
+#### Scenario: Over-long author is rejected before Core
+
+- **WHEN** `author` exceeds 200 characters
+- **THEN** the `ValidationPipe` returns 400 without calling Core
+
+#### Scenario: Author containing control characters is rejected before Core
+
+- **WHEN** `author` contains a control character such as a newline or a NUL byte
+- **THEN** the `ValidationPipe` returns 400 without calling Core
+
+#### Scenario: Invalid request is rejected before Core
+
+- **WHEN** `entityType`, `entityId`, `folderPath`, `version`, `author`, or `rules` fails DTO validation
+- **THEN** the request returns 400 without calling Core
+
+#### Scenario: Core rejects publication
+
+- **WHEN** Core denies access or returns a structured upstream failure
+- **THEN** the BFF maps it to the documented 403/502/503 response without logging tokens or request bodies
+---
 
 ### Requirement: Publish request accepts optional, validated access rules
 `PublishCatalogEntityDto` SHALL gain an optional `rules?: PublishRuleDto[]` field (`@IsOptional`, `@IsArray`, `@ArrayMaxSize(20)`, `@ValidateNested({ each: true })`, `@Type(() => PublishRuleDto)`). `PublishRuleDto` (new, `apps/chat-api/src/publish/dto/publish-rule.dto.ts`) SHALL validate:
@@ -173,8 +205,31 @@ Authorization: caller SHALL be authenticated (existing session guard). Write acc
 - **WHEN** a publish request includes a rule with `source: 'not_a_configured_source'` that is not present in `publish.publicationFilterSources`
 - **THEN** the request still passes DTO validation and is forwarded to Core unchanged — the backend does not enforce source-allowlist membership
 
+---
+
 ### Requirement: Publish history endpoint derives history from Core publications, not chat-api storage
-The backend SHALL expose `GET /api/v1/catalog/{entityType}/{entityId}/publish-history` returning publish entries for the given entity **across every folder it has ever been published to** (folder-scoping happens client-side, in `PublishPanel`), most recent first. It SHALL call DIAL Core's `getPublications` with a `ResourceLink` body scoped to `entityId` itself (the entity's own resource url, not a folder), filtered to publications whose `resources[].sourceUrl` reference `entityId`, mapped to `PublishHistoryEntryDto[]`. Each entry's `folderPath` SHALL have Core's `public/` prefix and trailing slash stripped back off before being returned, so it matches the plain folder-path form the frontend sends when publishing and uses for `selectedFolderPath` comparisons. Each entry's `version` SHALL be recovered from `entityId`'s own `{name}__{version}` suffix (the same value for every entry in a single call, since `entityId` — and therefore its version — is fixed for the whole request), never from `Publication.name`.
+The backend SHALL expose `GET /api/v1/catalog/{entityType}/{entityId}/publish-history` returning publish entries for the given entity **across every folder it has ever been published to** (folder-scoping happens client-side, in `PublishPanel`), most recent first. It SHALL call DIAL Core's `getPublications` with a `ResourceLink` body scoped to the caller's own-bucket publication list (`{ url: "publications/{bucket}/" }`, built by `getPublicationsListScope`), then narrow the response to publications whose `resources[].sourceUrl` reference the entity's own resource url, mapped to `PublishHistoryEntryDto[]`. Core exposes no per-resource publication filter, so a bucket-wide scan plus a local narrowing is the only available shape.
+
+That narrowing SHALL NOT read `resources` off the list response. Core's `getPublications` returns publication **metadata only** — `url`, `status`, `targetFolder`, `createdAt`, `author` — with no `resources` array, so filtering the list on `resources[].sourceUrl` matches nothing: a live Core returned 60 publications and history still came back empty, hiding `Unpublish` on an entity that was demonstrably published. Each candidate SHALL therefore be re-read through Core's `getPublication` (`{ url: publication.url }`) and matched on that detailed record. Candidacy SHALL be defined by exclusion, not inclusion: a publication is a candidate unless Core positively reports it as `PENDING` or `REJECTED`. A `PENDING` request has not created a published copy yet and a `REJECTED` one never will, so neither describes a folder the entity is published to, and skipping them keeps the number of detail lookups proportional to real publications. A publication with **no** status is still read — an absent field is not evidence that the publication is unfinished, and dropping it would silently shorten history.
+
+A publication that already carries `resources` SHALL be matched without a round trip. The lookups SHALL be issued in bounded-concurrency batches rather than all at once, and a failed lookup SHALL drop that one publication rather than fail the request: history is informational, and one unreadable publication must not take down the publish panel for the whole entity.
+
+The `getPublications` response SHALL be accepted both as the bare array the SDK types (`ListPublication = Publication[]`) and as the `{ publications: [...] }` envelope a live Core returns. Calling `.filter` straight on the envelope threw `TypeError: (result.data ?? []).filter is not a function`, which `handleDialFetchError` reported as "DIAL Core is currently unavailable" (503) — this, not a Core outage, is what [GH #7897](https://github.com/epam/ai-dial-chat/issues/7897) actually was, and what led to both frontend publish-history fetches being stubbed out. An unrecognised shape SHALL degrade to an empty list with a warning, never a throw.
+
+Resource-url comparison SHALL tolerate a percent-encoding difference between the url Core echoes and the url the service built, so an encoded `sourceUrl` cannot silently produce an empty history for a working publication. `entityId` SHALL be used as that resource url directly — for a Prompt just as for a Skill, since both are already full resource paths and neither goes through a bucket-qualification helper. Each entry's `folderPath` SHALL have Core's `public/` prefix and trailing slash stripped back off before being returned, so it matches the plain folder-path form the frontend sends when publishing and uses for `selectedFolderPath` comparisons. Each entry's `version` SHALL be recovered from `entityId`'s own `{name}__{version}` suffix (the same value for every entry in a single call, since `entityId` — and therefore its version — is fixed for the whole request), never from `Publication.name`; an unversioned Prompt or Skill yields an empty version.
+
+A publication whose matching resource carries `action: 'DELETE'` SHALL never itself appear in the result. Such a publication is a removal request submitted by the unpublish endpoint (see `catalog-unpublish-api`), not a publication of the entity. Including it would list the same folder twice — once for the original `ADD`, once for the `DELETE` — and would read as a second publish to that folder.
+
+Whether the removal also cancels the `ADD` it targets depends on its status, and the two cases differ:
+
+- A removal Core has **not** positively approved leaves the `ADD` alone. Until an administrator approves it the entity genuinely is still published there, so the folder SHALL continue to appear exactly once, sourced from its `ADD`.
+- An **approved** removal SHALL cancel every `ADD` for the same target folder that is not newer than it, removing the folder from history. Offering Unpublish for a copy Core has already deleted is exactly the failure this cancellation prevents.
+
+The stricter test for a removal than for a detail candidate is deliberate: cancelling an `ADD` on an *assumed* approval is the more expensive mistake, because it both hides Unpublish for a live copy and offers a Publish that Core then rejects for an already-occupied target.
+
+When a publication carries no usable `createdAt`, the comparison SHALL fall back asymmetrically — an undateable approved removal counts as infinitely recent, an undateable `ADD` as infinitely old — so a removal wins any comparison it cannot make on timestamps. That deliberately also cancels a genuine re-publish created after the removal; the trade is that this outcome is recoverable (the panel lists the folder and the resulting error names the conflict) while the alternative leaves an unpublish request that can never succeed. Core stamps every publication, so the fallback fires only on a malformed response, and SHALL be logged as a warning rather than applied silently.
+
+This filter is what makes the endpoint safe to use as the visibility source for the Unpublish action (see `catalog-unpublish-flow`): the folder list it returns is the set of folders a published copy currently exists in.
 
 Response (200):
 ```json
@@ -192,11 +247,11 @@ Response (200):
 
 Generated-client impact: OpenAPI `operationId: getCatalogPublishHistory`; response DTO `PublishHistoryEntryDto[]`. Frontend caller: `apps/chat/src/server-api/publish.api.ts`, normal generated method.
 
-Caching: this endpoint MAY cache the mapped Core response with key `publish-history:{entityType}:{entityId}`, TTL 60 seconds, invalidated immediately on a successful publish for the same `entityType`/`entityId` (cache entry deleted synchronously after the publish endpoint commits). This caches a read of Core's own source of truth — it is a performance optimization, not a persistence layer, and losing the cache (e.g. on restart) SHALL NOT lose any data since Core remains authoritative.
+Caching: this endpoint MAY cache the mapped Core response with key `publish-history:{entityType}:{entityId}`, TTL 60 seconds, invalidated immediately on a successful publish **or unpublish** for the same `entityType`/`entityId` (cache entry deleted synchronously after the endpoint commits). This caches a read of Core's own source of truth — it is a performance optimization, not a persistence layer, and losing the cache (e.g. on restart) SHALL NOT lose any data since Core remains authoritative.
 
-**Known open issue (task 6.8 in `tasks.md`, unresolved)**: this requirement's `getPublications` call is scoped by `{ url: entityId }` (the entity's own resource url). DIAL Core's own OpenAPI spec defines `getPublications`'s `url` field as the list **scope** (`publications/{bucket}/` for a user's own submissions, `publications/public/` for admins), not a resource filter — so the current call likely does not match Core's contract and may return no results in practice, even though the publish endpoint itself works end-to-end. This has not yet been fixed or confirmed against a live Core instance; the scenarios below describing history retrieval should be treated as unverified until it is.
+This supersedes the requirement's earlier `{ url: entityId }` call shape, which was recorded here as an unresolved open issue (task 6.8 of the `add-catalog-publish` change): Core's OpenAPI spec defines `getPublications`'s `url` as the list **scope**, not a resource filter, and passing the resource's own url there was rejected with a 400. `PublishService.getPublishHistory` now passes the list scope and filters locally, and `getPublicationsListScope`'s own doc comment records the confirmation against Core's spec. That open issue is closed, and the history scenarios below are no longer to be read as unverified.
 
-Rate limiting: default global throttle applies (read endpoint, no stricter override needed).
+The endpoint is load-bearing beyond the publish panel: the Unpublish action's visibility derives from it, so an empty or failed result hides that action entirely (see `catalog-unpublish-flow`). Its frontend caller SHALL therefore actually issue the call rather than resolving to a frozen empty list — see `catalog-publish-flow`, which lifts that workaround.
 
 #### Scenario: History returned for entity with prior publishes
 - **WHEN** a caller requests history for an entity that has been published before
@@ -206,13 +261,71 @@ Rate limiting: default global throttle applies (read endpoint, no stricter overr
 - **WHEN** a caller requests history for an entity that has never been published
 - **THEN** the endpoint returns 200 with an empty array
 
+#### Scenario: History for a prompt uses its own full id with no qualification step
+- **WHEN** history is requested for `entityId: 'prompts/{bucket}/{path}'`
+- **THEN** the service compares Core's echoed `sourceUrl` against that `entityId` directly, with no bucket-qualification helper involved
+
 #### Scenario: History folderPath strips the public-bucket prefix and trailing slash
 - **WHEN** Core returns a publication with `targetFolder: "public/Organization/Data Science/"`
 - **THEN** the mapped `PublishHistoryEntryDto.folderPath` is `"Organization/Data Science"` (or `""` when Core's `targetFolder` is the bare string `"public/"`)
 
+#### Scenario: A pending removal does not duplicate or drop the folder
+- **GIVEN** the entity has an approved `ADD` publication and a pending `DELETE` publication for the same folder
+- **WHEN** history is requested
+- **THEN** the folder appears exactly once, sourced from the `ADD` publication
+
+#### Scenario: An approved removal drops the folder
+- **GIVEN** the entity has an `ADD` publication and a later **approved** `DELETE` publication for the same folder
+- **WHEN** history is requested
+- **THEN** the folder does not appear at all
+
+#### Scenario: A re-publish after an approved removal is listed again
+- **GIVEN** an approved `DELETE` for a folder, followed by a newer `ADD` for that same folder
+- **WHEN** history is requested
+- **THEN** the folder appears once, sourced from the newer `ADD`
+
+#### Scenario: An undateable approved removal cancels its folder and is logged
+- **GIVEN** an approved `DELETE` whose `createdAt` is missing or unusable
+- **WHEN** history is requested
+- **THEN** every `ADD` for that folder is cancelled, including one created later, and a warning naming the publication is logged
+
+#### Scenario: An entity whose only publication is a pending removal
+- **GIVEN** the entity's only matching publication carries `action: 'DELETE'`
+- **WHEN** history is requested
+- **THEN** the endpoint returns an empty array
+
+#### Scenario: The list response carries no resources
+- **GIVEN** Core's `getPublications` returns publications with `url`, `status` and `targetFolder` but no `resources` array
+- **WHEN** history is requested
+- **THEN** each `APPROVED` publication is re-read through `getPublication` and the entity's own publications are returned, rather than an empty array
+
+#### Scenario: Pending and rejected publications are never re-read
+- **GIVEN** the bucket's publication list contains `PENDING` and `REJECTED` publications
+- **WHEN** history is requested
+- **THEN** no `getPublication` call is made for them and they contribute no entries
+
+#### Scenario: A publication with no status is still re-read
+- **GIVEN** a listed publication carries no `status` field at all
+- **WHEN** history is requested
+- **THEN** it is treated as a candidate and re-read, rather than skipped
+
+#### Scenario: One unreadable publication does not fail the request
+- **GIVEN** one candidate's `getPublication` call fails while another succeeds and matches
+- **WHEN** history is requested
+- **THEN** the endpoint returns 200 with the matching entry and omits the unreadable publication
+
+#### Scenario: Core returns the publication list as an envelope
+- **GIVEN** Core answers `getPublications` with `{ "publications": [...] }` rather than a bare array
+- **WHEN** history is requested
+- **THEN** the endpoint reads the publications out of the envelope and returns 200, never a 503
+
 #### Scenario: Cache invalidation on new publish
 - **WHEN** a publish request for `{entityType}/{entityId}` succeeds
 - **THEN** the next history request for the same `{entityType}/{entityId}` bypasses the stale cache entry and re-reads Core, reflecting the new entry
+
+#### Scenario: Cache invalidation on unpublish
+- **WHEN** an unpublish request for `{entityType}/{entityId}` succeeds
+- **THEN** the next history request for the same pair bypasses the stale cache entry and re-reads Core
 
 #### Scenario: Unknown entity
 - **WHEN** `entityId` does not correspond to an existing catalog entity of `entityType`
@@ -221,3 +334,140 @@ Rate limiting: default global throttle applies (read endpoint, no stricter overr
 #### Scenario: Upstream failure
 - **WHEN** the Core `getPublications` call fails unexpectedly
 - **THEN** the service throws `BadGatewayException` or `ServiceUnavailableException` (per `handleDialSdkError`)
+
+#### Scenario: Core rejects the history request with a structured error
+- **WHEN** `getPublications` resolves with a structured error response (`result.error`)
+- **THEN** the service calls `mapDialHttpStatus` with `result.error` and `extractDialErrorMessage(result.error)`, so the thrown exception's `message` is Core's own reason instead of a generic placeholder
+
+---
+
+### Requirement: Skill publication uses the whole-skill resource URL; no version recovery is required
+
+Skill publication SHALL always target the whole skill (`skills/{bucket}/{path}`), and SHALL NOT invent or require a skill version. The resource does not follow the application/toolset `{name}__{version}` convention, so an omitted publish-request version and every skill publish-history entry SHALL use an empty string.
+
+An older caller MAY still supply a version; the immediate `PublishResultDto` SHALL echo that value for backward compatibility, while publish history remains empty-versioned because DIAL Core metadata has no durable skill version field.
+
+The app adapter SHALL omit `version` when `CatalogItem.version` is empty and expose the existing Publish control only for an owned personal skill. Shared-with-me and public skills SHALL not expose Publish even when metadata reports write permission. The surface remains gated by `OverlayFeature.Skills`. No new labels, layout, directional icon, focus behavior, telemetry, or hand-authored library API are introduced; the existing Publish button and panel retain their keyboard, mobile, and RTL behavior.
+
+#### Scenario: Personal skill exposes Publish
+
+- **WHEN** an owned personal skill is opened in the catalog details panel
+- **THEN** Publish is available and submission omits the empty version field
+
+#### Scenario: Shared and public skills cannot start publication
+
+- **WHEN** a skill is shared-with-me or public
+- **THEN** the catalog does not render its Publish action even if metadata reports write permission or ownership
+
+#### Scenario: Skill publish still records the caller-supplied version for the publish call itself
+
+- **WHEN** a skill publish request supplies `version: "2.1.0"`
+- **THEN** the immediate `PublishResultDto` response for that call echoes `version: "2.1.0"`, because the value comes from the request body rather than from `entityId` parsing
+
+#### Scenario: Skill history remains unversioned
+
+- **WHEN** publish history is requested for a skill id without a `__{version}` suffix
+- **THEN** every `PublishHistoryEntryDto.version` is an empty string
+
+### Requirement: Publish request accepts an optional publishCredentials flag
+
+`PublishCatalogEntityDto` SHALL gain an optional `publishCredentials?: boolean` field, validated with `@IsOptional()` and `@IsBoolean()` and documented with `@ApiPropertyOptional`. It SHALL mean "publish this entity together with the publisher's own credentials for it", which DIAL Core honours by copying the credential onto the published copy so members of the organization use the entity without authorising individually.
+
+`PublishController.publish` SHALL pass the field through to `PublishService.publish` unchanged; the controller SHALL NOT derive, infer, or override it. Whether the caller holds a credential at all is the frontend's decision (see `catalog-publish-flow`) — being signed in is exactly the state in which both `true` and `false` are legitimate, so the value carries the publisher's intent and nothing else.
+
+`PublishService.publish` SHALL include `publishCredentials: true` on the single `ADD` resource of the `createPublication` body **only** when the flag is `true`, and SHALL omit the property entirely otherwise:
+
+```ts
+resources: [
+  {
+    action: 'ADD',
+    sourceUrl,
+    targetUrl,
+    ...(publishCredentials ? { publishCredentials: true } : {}),
+  },
+];
+```
+
+This keeps the Core request byte-identical to the pre-change request for every caller that does not send the field, so no existing publication path can change behaviour.
+
+The flag SHALL NOT affect authorization or the recorded actor. DIAL Core continues to derive the publication's `author` from the caller's bearer token, to enforce target-folder write access against it, and to hold the publication `PENDING` until an administrator approves it. This endpoint SHALL apply no role gate of its own: any caller who may publish the entity may set the flag.
+
+No credential value SHALL ever appear in the request, the response, or any log line — only the boolean crosses the wire.
+
+The unpublish endpoint SHALL NOT accept the field: a `DELETE` resource grants nobody anything.
+
+OpenAPI operation `publishCatalogEntity` SHALL expose `PublishCatalogEntityDto.publishCredentials?: boolean`. Because the field is optional, the regenerated `libs/chat-api-client` SHALL stay source-compatible with request literals that omit it.
+
+#### Scenario: Publish with shared credentials sets the flag on the Core resource
+
+- **WHEN** an authenticated user with target-folder write access publishes a toolset with `publishCredentials: true`
+- **THEN** the `createPublication` body's single `ADD` resource carries `publishCredentials: true`, and the endpoint returns 201
+
+#### Scenario: Publish without the field sends the pre-change request
+
+- **WHEN** a request body omits `publishCredentials` entirely
+- **THEN** the `ADD` resource sent to Core has no `publishCredentials` property at all, exactly as before this change
+
+#### Scenario: Explicit false is omitted rather than sent
+
+- **WHEN** a request sends `publishCredentials: false`
+- **THEN** the `ADD` resource sent to Core has no `publishCredentials` property
+
+#### Scenario: Non-boolean value is rejected before Core
+
+- **WHEN** a request sends `publishCredentials: "yes"`
+- **THEN** the `ValidationPipe` returns 400 without calling Core
+
+#### Scenario: The flag applies no additional authorization
+
+- **WHEN** a non-administrator with target-folder write access publishes with `publishCredentials: true`
+- **THEN** the request is accepted and forwarded to Core on exactly the same terms as a publish without the flag — Core's own write-access check and pending-approval lifecycle are the only gates
+
+#### Scenario: Unpublish rejects the field
+
+- **WHEN** an unpublish request body includes `publishCredentials`
+- **THEN** the global `ValidationPipe`'s `forbidNonWhitelisted` returns 400, and the `DELETE` resource sent to Core is unchanged
+
+### Requirement: Publish history reports whether each publication carried shared credentials
+
+`PublishHistoryEntryDto` SHALL gain a required `publishCredentials: boolean` field, reporting whether that publication requested the publisher's credentials be shared. It SHALL be read from the `publishCredentials` property of the same resource the history narrowing already matches by `sourceUrl`, and SHALL default to `false` when Core omits the property — the field is always present in the response, never optional, so a frontend never has to distinguish "false" from "unknown".
+
+`publication.util.ts` SHALL expose a helper alongside `getPublicationSourceAction` that reads the flag off that matched resource, and `PublicationResourceLike` SHALL gain the optional `publishCredentials?: boolean` property. The narrowing, the `DELETE`-cancellation rules, the bounded-concurrency detail lookups, and the caching behaviour of the history endpoint SHALL be otherwise unchanged.
+
+The field reports what the publication **requested**, not what DIAL Core ultimately applied. Core is the authority on whether a credential was actually copied; this endpoint holds no publish state of its own and SHALL NOT assert more than the publication record says.
+
+Response (200):
+
+```json
+[
+  {
+    "entityId": "toolsets/bucket-123/tool-abc123__1.2.0",
+    "entityType": "toolset",
+    "folderPath": "Organization/Data Science/Published models",
+    "version": "1.2.0",
+    "publishedAt": "2026-07-13T10:00:00.000Z",
+    "publishedBy": "user@example.com",
+    "publishCredentials": true
+  }
+]
+```
+
+#### Scenario: History reports a publication made with shared credentials
+
+- **WHEN** the entity's matched publication resource carries `publishCredentials: true`
+- **THEN** that history entry reports `publishCredentials: true`
+
+#### Scenario: History reports a publication made without shared credentials
+
+- **WHEN** the entity's matched publication resource carries `publishCredentials: false`
+- **THEN** that history entry reports `publishCredentials: false`
+
+#### Scenario: A publication predating the field reports false
+
+- **WHEN** Core returns a matched resource with no `publishCredentials` property at all
+- **THEN** that history entry reports `publishCredentials: false` rather than omitting the field
+
+#### Scenario: The new field does not change history narrowing
+
+- **WHEN** publish history is read for an entity with a mix of `ADD` and approved `DELETE` publications
+- **THEN** the set of entries returned, their order, and their folder paths are exactly what they were before this change — only the extra field is added to each entry

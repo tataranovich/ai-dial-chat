@@ -1,6 +1,6 @@
 {
   "name": "@epam/ai-dial-attachment-canvas",
-  "description": "Canvas viewer for rendering attachment content — images, PDFs, JSON, markdown, and plain text",
+  "description": "Canvas viewer for rendering attachment content — images, PDFs, Office documents, CSV, JSON, markdown, and plain text",
   "version": "0.0.1",
   "private": true,
   "license": "Apache-2.0",
@@ -10,7 +10,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
-    "./styles.css": "./dist/style.css",
+    "./styles.css": "./dist/index.css",
     ".": {
       "@epam/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
@@ -18,27 +18,46 @@
       "default": "./dist/index.js"
     }
   },
-  "peerDependencies": {
-    "@epam/ai-dial-chat-shared": "0.0.1",
-    "@epam/ai-dial-shared": "0.48.0",
-    "@epam/ai-dial-sidebar": "0.0.1",
-    "@epam/ai-dial-visualizer-connector": "0.48.0",
-    "@epam/ai-dial-ui-kit": "^0.13.0-dev.26",
-    "@epam/pdf-highlighter-kit": ">=0.0.14",
+  "dependencies": {
+    "@silurus/ooxml": "^0.87.0",
     "@tabler/icons-react": "^3.44.0",
-    "react": "^19.0.0",
     "react-json-view-lite": "^2.5.0",
     "react-syntax-highlighter": "^16.1.1",
-    "@epam/ai-dial-react-pdf-highlighter": "0.2.0-dev.22"
+    "@epam/ai-dial-react-pdf-highlighter": "0.3.0-dev.1",
+    "@epam/ai-dial-shared": "0.48.0",
+    "@epam/ai-dial-visualizer-connector": "0.48.0",
+    "@epam/pdf-highlighter-kit": "^0.0.19",
+    "@mcp-ui/client": "^7.1.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "pdfjs-dist": "^5.4.149",
+    "@epam/ai-dial-sidebar": "*"
   },
-  "dependencies": {},
+  "peerDependencies": {
+    "@epam/ai-dial-chat-shared": "*",
+    "@epam/ai-dial-ui-kit": "^0.15.0-dev.12",
+    "react": "^19.2.8"
+  },
   "nx": {
     "tags": [
       "publishable"
     ],
     "targets": {
+      "build": {
+        "dependsOn": [
+          "typecheck",
+          "^build",
+          "^typecheck"
+        ]
+      },
       "publish": {
         "command": "node tools/publish-lib.mjs {projectName} --version={args.ver} --dry={args.dry} --tag={args.tag} --development={args.development}"
+      },
+      "test": {
+        "dependsOn": [
+          "build",
+          "^build"
+        ]
       }
     }
   }

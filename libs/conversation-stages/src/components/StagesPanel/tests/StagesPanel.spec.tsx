@@ -1,14 +1,15 @@
 import { StageStatus } from '@epam/ai-dial-chat-shared';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { StagesPanel } from '../StagesPanel';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 14, MD: 16 },
   Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
     <span role="status" aria-label={ariaLabel} />
   ),
-  DialEllipsisTooltip: ({ text }: { text: string }) => <>{text}</>,
+  EllipsisTooltip: ({ text }: { text: string }) => <>{text}</>,
 }));
 
 vi.mock('@epam/ai-dial-attachment-input', () => ({
@@ -69,6 +70,12 @@ describe('StagesPanel', () => {
       />,
     );
 
+    /*
+     * The outermost panel div carries the CSS custom properties and custom
+     * className but has no ARIA role of its own — a CSS-level check with no
+     * semantic query available.
+     */
+    // eslint-disable-next-line testing-library/no-node-access -- see comment above
     const panel = container.firstElementChild as HTMLElement;
 
     expect(panel.className).toContain('custom-panel');
@@ -87,12 +94,12 @@ describe('StagesPanel', () => {
       />,
     );
 
-    expect(
-      screen.getByText('Running step').closest('span')?.className,
-    ).toContain('dial-body-text');
-    expect(
-      screen.getByText('Completed step').closest('span')?.className,
-    ).toContain('dial-body-text');
+    expect(screen.getByText('Running step').className).toContain(
+      'dial-body-text',
+    );
+    expect(screen.getByText('Completed step').className).toContain(
+      'dial-body-text',
+    );
   });
 
   it('defaults the row name to dial-small-text and expanded content to dial-tiny-text', () => {
@@ -105,12 +112,12 @@ describe('StagesPanel', () => {
       />,
     );
 
-    expect(
-      screen.getByText('Completed step').closest('span')?.className,
-    ).toContain('dial-small-text');
+    expect(screen.getByText('Completed step').className).toContain(
+      'dial-small-text',
+    );
 
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText('Detail text').closest('p')?.className).toContain(
+    expect(screen.getByText('Detail text').className).toContain(
       'dial-tiny-text',
     );
   });
@@ -186,10 +193,23 @@ describe('StagesPanel', () => {
     expect(screen.queryByRole('status', { name: 'Running' })).toBeNull();
   });
 
-  it('shows the running spinner only for the last null-status stage when streaming', () => {
-    render(
+  it('keeps every null-status stage running until its completed status arrives', () => {
+    const { rerender } = render(
       <StagesPanel
         stages={[stageRunning, stageCompleted, stageRunningSecond]}
+        isStreaming
+      />,
+    );
+
+    expect(screen.getAllByRole('status', { name: 'Running' })).toHaveLength(2);
+
+    rerender(
+      <StagesPanel
+        stages={[
+          { ...stageRunning, status: StageStatus.Completed },
+          stageCompleted,
+          stageRunningSecond,
+        ]}
         isStreaming
       />,
     );
@@ -230,5 +250,66 @@ describe('StagesPanel', () => {
     expect(screen.getByText('Attempt 1')).toBeTruthy();
     expect(screen.getByText('Attempt 2')).toBeTruthy();
     expect(screen.getByText('Attempt 3')).toBeTruthy();
+  });
+
+  it('keeps a repeated-stage group running while any attempt is unresolved', () => {
+    const completedAttempt = {
+      index: 0,
+      name: 'Search weather forecast',
+      status: StageStatus.Completed,
+    };
+    const runningAttempt = {
+      index: 1,
+      name: 'Search weather forecast',
+      status: null,
+    };
+    const { rerender } = render(
+      <StagesPanel stages={[completedAttempt, runningAttempt]} isStreaming />,
+    );
+
+    expect(
+      within(screen.getByRole('button')).getByRole('status', {
+        name: 'Running',
+      }),
+    ).toBeTruthy();
+
+    rerender(
+      <StagesPanel
+        stages={[
+          completedAttempt,
+          { ...runningAttempt, status: StageStatus.Completed },
+        ]}
+        isStreaming
+      />,
+    );
+
+    expect(
+      within(screen.getByRole('button')).queryByRole('status', {
+        name: 'Running',
+      }),
+    ).toBeNull();
+  });
+
+  it('does not double-count overlapping attempts in a collapsed stage row', () => {
+    render(
+      <StagesPanel
+        stages={[
+          {
+            index: 0,
+            name: 'Search (40s, Start: 11:21:00, End: 11:21:40)',
+            status: StageStatus.Completed,
+          },
+          {
+            index: 1,
+            name: 'Search (40s, Start: 11:21:00, End: 11:21:40)',
+            status: StageStatus.Completed,
+          },
+        ]}
+        isStreaming={false}
+      />,
+    );
+
+    expect(screen.getByText('40.0s')).toBeTruthy();
+    expect(screen.queryByText('1m 20s')).toBeNull();
   });
 });

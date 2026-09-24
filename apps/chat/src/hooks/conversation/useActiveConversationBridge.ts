@@ -1,10 +1,12 @@
 import type { ConversationResponseDto } from '@epam/ai-dial-chat-api-client';
+import {
+  getConversationPath,
+  toOverlayMessages,
+} from '@epam/ai-dial-chat-hooks';
 import type { Conversation } from '@epam/ai-dial-chat-shared';
 import { type MutableRefObject, useEffect } from 'react';
 import { useOptionalOverlay } from '../../context/overlay/OverlayContext';
 import { saveConversation } from '../../server-api/conversations.api';
-import { getConversationPath } from '../../utils/conversation-path';
-import { toOverlayMessages } from '../../utils/overlay-messages';
 
 interface Params {
   conversation: Conversation | null;

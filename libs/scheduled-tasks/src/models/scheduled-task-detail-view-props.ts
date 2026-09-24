@@ -8,6 +8,10 @@ export interface ScheduledTaskDetailViewLabels {
   backAriaLabel: string;
   /** Label for the header's Edit action. Shown only when `onEdit` is supplied. */
   editButtonLabel: string;
+  /** Label for the header's destructive Delete action. Shown only when `onDelete` is supplied. */
+  deleteButtonLabel: string;
+  /** Label of the read-only indicator shown next to the title when `isDeleted` is `true`. */
+  deletedStateLabel: string;
   /** Message shown alongside the page-level retry action when `error` is set. */
   errorLabel: string;
   /** Title of the Details section. */
@@ -36,6 +40,8 @@ export interface ScheduledTaskDetailViewLabels {
   historyEmptyLabel: string;
   /** Message shown alongside the retry action when `runsError` is set. */
   historyErrorLabel: string;
+  /** Next-page failure message; falls back to historyErrorLabel. */
+  historyLoadMoreErrorLabel?: string;
   /** Label for the History retry action. */
   historyRetryLabel: string;
   /** Announced via `aria-live` while a load-more runs fetch is in flight. */
@@ -44,6 +50,10 @@ export interface ScheduledTaskDetailViewLabels {
   historyShowMoreLabel?: string;
   /** Per-status label used to build each run row's accessible name, e.g. `{ success: 'Succeeded', ... }`. */
   runStatusLabels: Record<ScheduledTaskRunStatus, string>;
+  /** `sr-only` label announced alongside the unread-dot indicator on a run row whose `isUnread` is `true`. Defaults to `'Unread'`. */
+  unreadIndicatorLabel?: string;
+  /** Accessible name for the mobile/tablet body's tab row. Defaults to `'Scheduled task sections'`. */
+  tabsAriaLabel?: string;
 }
 
 /**
@@ -53,7 +63,7 @@ export interface ScheduledTaskDetailViewLabels {
 export interface ScheduledTaskDetailViewColors {
   /** Root container background. Fallback: `--bg-layer-base`. */
   background?: string;
-  /** Header bottom border. Fallback: `--stroke-tertiary`. */
+  /** Header divider: below the header at desktop, above it at mobile/tablet. Fallback: `--stroke-tertiary`. */
   headerBorder?: string;
   /** Details/Configuration column end border. Fallback: `--stroke-tertiary`. */
   detailsColumnBorder?: string;
@@ -67,17 +77,19 @@ export interface ScheduledTaskDetailViewColors {
   missedIconColor?: string;
   /** History card background. Fallback: `--bg-layer-raised`. */
   historyCardBackground?: string;
+  /** Unread-dot indicator fill color. Fallback: `--text-accent`. */
+  unreadDotColor?: string;
 }
 
 /** Typography overrides for the {@link ScheduledTaskDetailView} component. */
 export interface ScheduledTaskDetailViewTypography {
-  /** CSS class applied to the header title. Defaults to `'dial-h1-text'`. */
+  /** CSS class applied to the header title. Defaults to `'dial-h2-text'`. */
   titleClassName?: string;
   /** CSS class applied to section titles. Defaults to `'dial-body-semi-text'`. */
   sectionTitleClassName?: string;
   /** CSS class applied to field labels. Defaults to `'dial-tiny-text'`. */
   fieldLabelClassName?: string;
-  /** CSS class applied to field values. Defaults to `'dial-body-text'`. */
+  /** CSS class applied to field values. Defaults to `'dial-small-text'`. */
   fieldValueClassName?: string;
   /** CSS class applied to each run row's timestamp text. Defaults to `'dial-small-text'`. */
   runTimestampClassName?: string;
@@ -91,15 +103,28 @@ export interface ScheduledTaskDetailViewStyles {
   typography?: ScheduledTaskDetailViewTypography;
 }
 
+export interface ScheduledTaskDetailViewLayout {
+  detailsWidth?: string;
+  historyWidth?: string;
+  historyMaxHeight?: string;
+  configurationMinWidth?: string;
+}
+
 /** Props for the {@link ScheduledTaskDetailView} component. */
 export interface ScheduledTaskDetailViewProps {
   /** Localized labels. */
   labels: ScheduledTaskDetailViewLabels;
   /** Called when the user activates the back-navigation control. */
   onBack: () => void;
-  /** Called when the user activates the header's Edit action. When omitted, no Edit action renders. */
+  /** Called when the user activates the header's Edit action. When omitted, no Edit action renders. Suppressed while `isDeleted` is `true`. */
   onEdit?: () => void;
-  /** Whether the schedule is currently active (resumed) or paused. When `undefined`, the Active switch does not render. */
+  /** Called when the user activates the header's destructive Delete action. When omitted, no Delete action renders. Suppressed while `isDeleted` is `true`. The component opens no dialog and performs no network call itself. */
+  onDelete?: () => void;
+  /** When `true`, the Delete action, Edit action, and Active switch render disabled rather than being removed. Defaults to `false`. */
+  isDeleting?: boolean;
+  /** When `true`, the header renders a read-only deleted-state indicator instead of the Delete, Edit, and Active controls, regardless of whether `onDelete`/`onEdit`/`isActive` are supplied. Defaults to `false`. */
+  isDeleted?: boolean;
+  /** Whether the schedule is currently active (resumed) or paused. When `undefined`, the Active switch does not render. Suppressed while `isDeleted` is `true`. */
   isActive?: boolean;
   /** When `true`, the Active switch renders disabled while a pause/resume request is in flight. Defaults to `false`. */
   isActiveUpdating?: boolean;
@@ -141,12 +166,24 @@ export interface ScheduledTaskDetailViewProps {
   runsError?: Error | null;
   /** Called when the user activates the History retry action shown alongside `runsError`. */
   onRunsRetry?: () => void;
+  /** Next-page failure, displayed beneath existing runs. */
+  runsLoadMoreError?: Error | null;
+  /** Retries the failed history page. */
+  onRunsRetryLoadMore?: () => void;
   /** Whether another page of `runs` is available beyond what has been loaded so far. Defaults to `false`. */
   runsHasMore?: boolean;
   /** Called when the user activates the "Show more" button, rendered below the loaded runs while `runsHasMore` is `true`. Omit to hide the button entirely. */
   onRunsLoadMore?: () => void;
-  /** Called with a run's id when the user clicks its row. Omit to render rows with no added interactive semantics. */
-  onRunClick?: (id: string) => void;
+  /** Called with the run when the user clicks a row whose `conversationId` is set. Rows without a `conversationId` never invoke this, regardless of whether it is supplied. */
+  onRunClick?: (run: ScheduledTaskRunItem) => void;
   /** Style overrides. */
   styles?: ScheduledTaskDetailViewStyles;
+  /** Additional class names on the view root. */
+  className?: string;
+  /** Replacement for the directional default back icon. `null` hides it. */
+  backIcon?: ReactNode | null;
+  /** Desktop column and history sizing. */
+  layout?: ScheduledTaskDetailViewLayout;
+  /** Forwarded history presentation settings. */
+  historyStyles?: import('./scheduled-task-history-section-props').ScheduledTaskHistorySectionStyles;
 }

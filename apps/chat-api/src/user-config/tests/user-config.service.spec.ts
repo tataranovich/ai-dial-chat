@@ -29,7 +29,7 @@ const makeDownloadSpy = (
 ) => {
   let callIndex = 0;
   return vi
-    .spyOn(service['dialClient'].client, 'downloadFile')
+    .spyOn((service['dialClient'] as DialClientService).client, 'downloadFile')
     .mockImplementation(async (_bucket: unknown, path: unknown) => {
       const pathStr = path as string;
       // Find a matching response by path, or use the current call index
@@ -57,29 +57,35 @@ const makeSingleDownloadSpy = (
   service: UserConfigService,
   options: { ok: boolean; body?: string },
 ) =>
-  vi.spyOn(service['dialClient'].client, 'downloadFile').mockResolvedValue({
-    response: {
-      ok: options.ok,
-      text: async () => options.body ?? '',
-    },
-  } as never);
+  vi
+    .spyOn((service['dialClient'] as DialClientService).client, 'downloadFile')
+    .mockResolvedValue({
+      response: {
+        ok: options.ok,
+        text: async () => options.body ?? '',
+      },
+    } as never);
 
 const makeUploadSpy = (
   service: UserConfigService,
   options: { error?: unknown; status?: number } = {},
 ) =>
-  vi.spyOn(service['dialClient'].client, 'uploadFile').mockResolvedValue({
-    error: options.error,
-    response: {
-      status: options.status ?? 200,
-      text: async () => (options.error ? 'error body' : ''),
-    },
-  } as never);
+  vi
+    .spyOn((service['dialClient'] as DialClientService).client, 'uploadFile')
+    .mockResolvedValue({
+      error: options.error,
+      response: {
+        status: options.status ?? 200,
+        text: async () => (options.error ? 'error body' : ''),
+      },
+    } as never);
 
 const makeDeleteSpy = (service: UserConfigService) =>
-  vi.spyOn(service['dialClient'].client, 'deleteFile').mockResolvedValue({
-    response: { ok: true },
-  } as never);
+  vi
+    .spyOn((service['dialClient'] as DialClientService).client, 'deleteFile')
+    .mockResolvedValue({
+      response: { ok: true },
+    } as never);
 
 const getUploadedConfig = async (uploadSpy: ReturnType<typeof vi.spyOn>) => {
   const formData = (uploadSpy.mock.calls[0] as unknown[])[2] as {
@@ -89,10 +95,10 @@ const getUploadedConfig = async (uploadSpy: ReturnType<typeof vi.spyOn>) => {
   return JSON.parse(await file.text()) as unknown;
 };
 
-/* Stored v2 shape — predates the `prompts` section entirely. */
+/* Stored v2 shape — predates the `prompts` and `skills` sections entirely. */
 const v2Config = (
   overrides?: Partial<UserConfig>,
-): Omit<UserConfig, 'prompts'> => ({
+): Omit<UserConfig, 'prompts' | 'skills'> => ({
   version: 2,
   conversations: { pinnedIds: [] },
   toolsets: { installed: [] },
@@ -100,108 +106,191 @@ const v2Config = (
   ...overrides,
 });
 
-const v4Config = (overrides?: Partial<UserConfig>): UserConfig => ({
-  version: 4,
+const v6Config = (overrides?: Partial<UserConfig>): UserConfig => ({
+  version: 6,
   conversations: { pinnedIds: [] },
   toolsets: { installed: [] },
   deployments: { installed: [], selectedId: null },
   prompts: { installed: [] },
+  skills: { installed: [] },
   legacyMigrationDone: true,
   ...overrides,
 });
 
 describe('migrateConfig', () => {
   it('returns the default config for null input', () => {
-    expect(migrateConfig(null)).toEqual(DEFAULT_USER_CONFIG);
+    expect(migrateConfig(null, 'bucket')).toEqual(DEFAULT_USER_CONFIG);
   });
 
   it('returns the default config for non-object input', () => {
-    expect(migrateConfig('string')).toEqual(DEFAULT_USER_CONFIG);
-    expect(migrateConfig(42)).toEqual(DEFAULT_USER_CONFIG);
+    expect(migrateConfig('string', 'bucket')).toEqual(DEFAULT_USER_CONFIG);
+    expect(migrateConfig(42, 'bucket')).toEqual(DEFAULT_USER_CONFIG);
   });
 
-  it('lifts v1 flat shape into v4 with selectedId null', () => {
+  it('lifts v1 flat shape into v6 with selectedId null', () => {
     const v1 = { version: 1, pinnedConversationIds: ['conv-1', 'conv-2'] };
-    expect(migrateConfig(v1)).toEqual({
-      version: 4,
+    expect(migrateConfig(v1, 'bucket')).toEqual({
+      version: 6,
       conversations: { pinnedIds: ['conv-1', 'conv-2'] },
       toolsets: { installed: [] },
       deployments: { installed: [], selectedId: null },
       prompts: { installed: [] },
+      skills: { installed: [] },
     });
   });
 
   it('lifts v1 shape without version field', () => {
     const v1 = { pinnedConversationIds: ['conv-1'] };
-    expect(migrateConfig(v1)).toEqual({
-      version: 4,
+    expect(migrateConfig(v1, 'bucket')).toEqual({
+      version: 6,
       conversations: { pinnedIds: ['conv-1'] },
       toolsets: { installed: [] },
       deployments: { installed: [], selectedId: null },
       prompts: { installed: [] },
+      skills: { installed: [] },
     });
   });
 
-  it('filters non-string entries in pinnedConversationIds during v1→v4 lift', () => {
+  it('filters non-string entries in pinnedConversationIds during v1→v6 lift', () => {
     const v1 = { pinnedConversationIds: ['valid', 42, null, 'also-valid'] };
-    const result = migrateConfig(v1);
+    const result = migrateConfig(v1, 'bucket');
     expect(result.conversations.pinnedIds).toEqual(['valid', 'also-valid']);
   });
 
-  it('migrates v2 shape to v4 adding selectedId null and empty prompts', () => {
+  it('migrates v2 shape to v6 adding selectedId null and empty prompts and skills', () => {
     const stored = v2Config({ conversations: { pinnedIds: ['conv-1'] } });
-    expect(migrateConfig(stored)).toEqual({
-      version: 4,
+    expect(migrateConfig(stored, 'bucket')).toEqual({
+      version: 6,
       conversations: { pinnedIds: ['conv-1'] },
       toolsets: { installed: [] },
       deployments: { installed: [], selectedId: null },
       prompts: { installed: [] },
+      skills: { installed: [] },
     });
   });
 
-  it('passes through v4 shape with selectedId preserved', () => {
-    const stored = v4Config({
+  it('passes through v6 shape with selectedId preserved', () => {
+    const stored = v6Config({
       conversations: { pinnedIds: ['conv-1'] },
       deployments: { installed: ['dep-a'], selectedId: 'gpt-4o' },
     });
-    expect(migrateConfig(stored)).toEqual(stored);
+    expect(migrateConfig(stored, 'bucket')).toEqual(stored);
   });
 
-  it('preserves favorited prompt paths', () => {
-    const stored = v4Config({
-      prompts: { installed: ['Work/AI/summarize', 'tone of voice'] },
+  it('preserves already-qualified favorited prompt ids', () => {
+    const stored = v6Config({
+      prompts: {
+        installed: [
+          'prompts/bucket/Work/AI/summarize',
+          'prompts/bucket/tone of voice',
+        ],
+      },
     });
-    expect(migrateConfig(stored).prompts.installed).toEqual([
-      'Work/AI/summarize',
-      'tone of voice',
+    expect(migrateConfig(stored, 'bucket').prompts.installed).toEqual([
+      'prompts/bucket/Work/AI/summarize',
+      'prompts/bucket/tone of voice',
+    ]);
+  });
+
+  it('v5→v6: qualifies a bare prompts.installed path with the caller bucket', () => {
+    const v5 = v6Config({
+      version: 5,
+      prompts: { installed: ['Work/AI/summarize'] },
+    });
+    expect(migrateConfig(v5, 'my-bucket').prompts.installed).toEqual([
+      'prompts/my-bucket/Work/AI/summarize',
+    ]);
+  });
+
+  it('v5→v6: leaves an already-qualified prompts.installed entry untouched', () => {
+    const v5 = v6Config({
+      version: 5,
+      prompts: { installed: ['prompts/owner-bucket/Work/AI/summarize'] },
+    });
+    expect(migrateConfig(v5, 'my-bucket').prompts.installed).toEqual([
+      'prompts/owner-bucket/Work/AI/summarize',
+    ]);
+  });
+
+  it('v5→v6: qualifies a mix of bare and already-qualified prompt entries', () => {
+    const v5 = v6Config({
+      version: 5,
+      prompts: {
+        installed: ['Work/AI/summarize', 'prompts/owner-bucket/shared'],
+      },
+    });
+    expect(migrateConfig(v5, 'my-bucket').prompts.installed).toEqual([
+      'prompts/my-bucket/Work/AI/summarize',
+      'prompts/owner-bucket/shared',
     ]);
   });
 
   it('sanitises non-string entries in prompts.installed', () => {
     const corrupt = { version: 3, prompts: { installed: ['ok', 7, null] } };
-    expect(migrateConfig(corrupt).prompts.installed).toEqual(['ok']);
+    expect(migrateConfig(corrupt, 'bucket').prompts.installed).toEqual([
+      'prompts/bucket/ok',
+    ]);
   });
 
-  it('sanitises non-string entries in v2 arrays and migrates to v4', () => {
+  it('adds an empty skills section when reading a v4 document', () => {
+    const v4 = {
+      version: 4,
+      conversations: { pinnedIds: [] },
+      toolsets: { installed: [] },
+      deployments: { installed: [], selectedId: null },
+      prompts: { installed: ['Work/AI/summarize'] },
+    };
+    const result = migrateConfig(v4, 'bucket');
+    expect(result.version).toBe(6);
+    expect(result.skills.installed).toEqual([]);
+    expect(result.prompts.installed).toEqual([
+      'prompts/bucket/Work/AI/summarize',
+    ]);
+  });
+
+  it('preserves favorited skill resource URLs', () => {
+    const stored = v6Config({
+      skills: {
+        installed: ['skills/my-bucket/revenue-skill', 'skills/public/shared'],
+      },
+    });
+    expect(migrateConfig(stored, 'bucket').skills.installed).toEqual([
+      'skills/my-bucket/revenue-skill',
+      'skills/public/shared',
+    ]);
+  });
+
+  it('sanitises non-string entries in skills.installed', () => {
+    const corrupt = {
+      version: 4,
+      skills: { installed: ['skills/b/ok', 7, null] },
+    };
+    expect(migrateConfig(corrupt, 'bucket').skills.installed).toEqual([
+      'skills/b/ok',
+    ]);
+  });
+
+  it('sanitises non-string entries in v2 arrays and migrates to v6', () => {
     const corrupt = {
       version: 2,
       conversations: { pinnedIds: ['valid', 42, null] },
       toolsets: { installed: [] },
       deployments: { installed: [] },
     };
-    const result = migrateConfig(corrupt);
+    const result = migrateConfig(corrupt, 'bucket');
     expect(result.conversations.pinnedIds).toEqual(['valid']);
-    expect(result.version).toBe(4);
+    expect(result.version).toBe(6);
     expect(result.deployments.selectedId).toBeNull();
   });
 
   it('fills missing sections with empty arrays for v2+ shape', () => {
     const partial = { version: 2, conversations: { pinnedIds: ['x'] } };
-    const result = migrateConfig(partial);
+    const result = migrateConfig(partial, 'bucket');
     expect(result.toolsets.installed).toEqual([]);
     expect(result.deployments.installed).toEqual([]);
     expect(result.deployments.selectedId).toBeNull();
     expect(result.prompts.installed).toEqual([]);
+    expect(result.skills.installed).toEqual([]);
   });
 });
 
@@ -215,7 +304,10 @@ describe('UserConfigService', () => {
 
   describe('readConfig', () => {
     it('returns the default config when both paths return non-ok', async () => {
-      vi.spyOn(service['dialClient'].client, 'downloadFile').mockResolvedValue({
+      vi.spyOn(
+        (service['dialClient'] as DialClientService).client,
+        'downloadFile',
+      ).mockResolvedValue({
         response: { ok: false, text: async () => '' },
       } as never);
       makeDeleteSpy(service);
@@ -223,7 +315,7 @@ describe('UserConfigService', () => {
       expect(result).toEqual(DEFAULT_USER_CONFIG);
     });
 
-    it('migrates stored v2 config to v4 when reading from new path', async () => {
+    it('migrates stored v2 config to v6 when reading from new path', async () => {
       const stored = v2Config({ conversations: { pinnedIds: ['conv-1'] } });
       makeDownloadSpy(service, [
         {
@@ -237,7 +329,7 @@ describe('UserConfigService', () => {
       makeUploadSpy(service);
       const result = await service.readConfig('token', 'bucket');
       expect(result).toEqual(
-        v4Config({ conversations: { pinnedIds: ['conv-1'] } }),
+        v6Config({ conversations: { pinnedIds: ['conv-1'] } }),
       );
     });
 
@@ -254,7 +346,7 @@ describe('UserConfigService', () => {
 
       const result = await service.readConfig('token', 'bucket');
       expect(result.conversations.pinnedIds).toEqual(['conv-1']);
-      expect(result.version).toBe(4);
+      expect(result.version).toBe(6);
       expect(uploadSpy).toHaveBeenCalled();
     });
 
@@ -274,9 +366,10 @@ describe('UserConfigService', () => {
     });
 
     it('returns default config when downloadFile throws', async () => {
-      vi.spyOn(service['dialClient'].client, 'downloadFile').mockRejectedValue(
-        new Error('network'),
-      );
+      vi.spyOn(
+        (service['dialClient'] as DialClientService).client,
+        'downloadFile',
+      ).mockRejectedValue(new Error('network'));
       const result = await service.readConfig('token', 'bucket');
       expect(result).toEqual(DEFAULT_USER_CONFIG);
     });
@@ -608,9 +701,10 @@ describe('UserConfigService', () => {
           { path: 'clientdata/installed_deployments.json', ok: false },
         ]);
         const uploadSpy = makeUploadSpy(service);
-        vi.spyOn(service['dialClient'].client, 'deleteFile').mockRejectedValue(
-          new Error('delete failed'),
-        );
+        vi.spyOn(
+          (service['dialClient'] as DialClientService).client,
+          'deleteFile',
+        ).mockRejectedValue(new Error('delete failed'));
 
         /*
          * ts-a is already in base, legacy file also has ts-a → no new IDs merged,
@@ -640,7 +734,10 @@ describe('UserConfigService', () => {
           { path: 'clientdata/installed_deployments.json', ok: false },
         ]);
         const uploadSpy = makeUploadSpy(service);
-        vi.spyOn(service['dialClient'].client, 'deleteFile').mockResolvedValue({
+        vi.spyOn(
+          (service['dialClient'] as DialClientService).client,
+          'deleteFile',
+        ).mockResolvedValue({
           error: 'Forbidden',
           response: { status: 403, ok: false },
         } as never);
@@ -682,7 +779,7 @@ describe('UserConfigService', () => {
   describe('writeConfig', () => {
     it('uploads the config as multipart FormData', async () => {
       const uploadSpy = makeUploadSpy(service);
-      const config = v2Config({ conversations: { pinnedIds: ['id-1'] } });
+      const config = v6Config({ conversations: { pinnedIds: ['id-1'] } });
       await service.writeConfig(config, 'token', 'bucket');
       expect(uploadSpy).toHaveBeenCalledWith(
         'bucket',
@@ -705,9 +802,10 @@ describe('UserConfigService', () => {
     });
 
     it('re-throws when uploadFile itself throws', async () => {
-      vi.spyOn(service['dialClient'].client, 'uploadFile').mockRejectedValue(
-        new Error('network'),
-      );
+      vi.spyOn(
+        (service['dialClient'] as DialClientService).client,
+        'uploadFile',
+      ).mockRejectedValue(new Error('network'));
       await expect(
         service.writeConfig(DEFAULT_USER_CONFIG, 'token', 'bucket'),
       ).rejects.toThrow('network');
@@ -718,7 +816,7 @@ describe('UserConfigService', () => {
     it('adds a new id when pinning', async () => {
       makeSingleDownloadSpy(service, {
         ok: true,
-        body: JSON.stringify(v4Config()),
+        body: JSON.stringify(v6Config()),
       });
       const uploadSpy = makeUploadSpy(service);
       await service.updatePin(
@@ -760,7 +858,7 @@ describe('UserConfigService', () => {
       makeSingleDownloadSpy(service, {
         ok: true,
         body: JSON.stringify(
-          v4Config({
+          v6Config({
             conversations: { pinnedIds: ['conversations/bucket/id'] },
           }),
         ),
@@ -799,7 +897,7 @@ describe('UserConfigService', () => {
     it('adds a toolset id when installing', async () => {
       makeSingleDownloadSpy(service, {
         ok: true,
-        body: JSON.stringify(v4Config()),
+        body: JSON.stringify(v6Config()),
       });
       const uploadSpy = makeUploadSpy(service);
       await service.updateInstalledToolset(
@@ -837,7 +935,7 @@ describe('UserConfigService', () => {
       makeSingleDownloadSpy(service, {
         ok: true,
         body: JSON.stringify(
-          v4Config({ toolsets: { installed: ['toolset-abc'] } }),
+          v6Config({ toolsets: { installed: ['toolset-abc'] } }),
         ),
       });
       const uploadSpy = makeUploadSpy(service);
@@ -874,7 +972,7 @@ describe('UserConfigService', () => {
     it('adds a deployment id when installing', async () => {
       makeSingleDownloadSpy(service, {
         ok: true,
-        body: JSON.stringify(v4Config()),
+        body: JSON.stringify(v6Config()),
       });
       const uploadSpy = makeUploadSpy(service);
       await service.updateInstalledDeployment(
@@ -893,7 +991,9 @@ describe('UserConfigService', () => {
       makeSingleDownloadSpy(service, {
         ok: true,
         body: JSON.stringify(
-          v2Config({ deployments: { installed: ['dep-xyz'] } }),
+          v2Config({
+            deployments: { installed: ['dep-xyz'], selectedId: null },
+          }),
         ),
       });
       const uploadSpy = makeUploadSpy(service);
@@ -912,7 +1012,7 @@ describe('UserConfigService', () => {
       makeSingleDownloadSpy(service, {
         ok: true,
         body: JSON.stringify(
-          v4Config({
+          v6Config({
             deployments: { installed: ['dep-xyz'], selectedId: null },
           }),
         ),
@@ -948,56 +1048,37 @@ describe('UserConfigService', () => {
   });
 
   describe('updateInstalledPrompt', () => {
-    it('adds a prompt path when favoriting', async () => {
+    const PROMPT_ID = 'prompts/bucket/Work/AI/summarize';
+
+    it('adds a prompt resource id when favoriting', async () => {
       makeSingleDownloadSpy(service, {
         ok: true,
-        body: JSON.stringify(v4Config()),
+        body: JSON.stringify(v6Config()),
       });
       const uploadSpy = makeUploadSpy(service);
-      await service.updateInstalledPrompt(
-        'Work/AI/summarize',
-        true,
-        'token',
-        'bucket',
-      );
+      await service.updateInstalledPrompt(PROMPT_ID, true, 'token', 'bucket');
       const uploaded = await getUploadedConfig(uploadSpy);
-      expect((uploaded as UserConfig).prompts.installed).toEqual([
-        'Work/AI/summarize',
-      ]);
+      expect((uploaded as UserConfig).prompts.installed).toEqual([PROMPT_ID]);
     });
 
-    it('removes a prompt path when unfavoriting', async () => {
+    it('removes a prompt resource id when unfavoriting', async () => {
       makeSingleDownloadSpy(service, {
         ok: true,
-        body: JSON.stringify(
-          v4Config({ prompts: { installed: ['Work/AI/summarize'] } }),
-        ),
+        body: JSON.stringify(v6Config({ prompts: { installed: [PROMPT_ID] } })),
       });
       const uploadSpy = makeUploadSpy(service);
-      await service.updateInstalledPrompt(
-        'Work/AI/summarize',
-        false,
-        'token',
-        'bucket',
-      );
+      await service.updateInstalledPrompt(PROMPT_ID, false, 'token', 'bucket');
       const uploaded = await getUploadedConfig(uploadSpy);
       expect((uploaded as UserConfig).prompts.installed).toHaveLength(0);
     });
 
-    it('does not duplicate an already favorited prompt path', async () => {
+    it('does not duplicate an already favorited prompt resource id', async () => {
       makeSingleDownloadSpy(service, {
         ok: true,
-        body: JSON.stringify(
-          v4Config({ prompts: { installed: ['Work/AI/summarize'] } }),
-        ),
+        body: JSON.stringify(v6Config({ prompts: { installed: [PROMPT_ID] } })),
       });
       const uploadSpy = makeUploadSpy(service);
-      await service.updateInstalledPrompt(
-        'Work/AI/summarize',
-        true,
-        'token',
-        'bucket',
-      );
+      await service.updateInstalledPrompt(PROMPT_ID, true, 'token', 'bucket');
       const uploaded = await getUploadedConfig(uploadSpy);
       expect((uploaded as UserConfig).prompts.installed).toHaveLength(1);
     });
@@ -1006,14 +1087,14 @@ describe('UserConfigService', () => {
       makeSingleDownloadSpy(service, {
         ok: true,
         body: JSON.stringify(
-          v4Config({
+          v6Config({
             deployments: { installed: ['dep-a'], selectedId: 'gpt-4o' },
             conversations: { pinnedIds: ['conv-1'] },
           }),
         ),
       });
       const uploadSpy = makeUploadSpy(service);
-      await service.updateInstalledPrompt('summarize', true, 'token', 'bucket');
+      await service.updateInstalledPrompt(PROMPT_ID, true, 'token', 'bucket');
       const uploaded = (await getUploadedConfig(uploadSpy)) as UserConfig;
       expect(uploaded.deployments).toEqual({
         installed: ['dep-a'],
@@ -1023,11 +1104,70 @@ describe('UserConfigService', () => {
     });
   });
 
+  describe('updateInstalledSkill', () => {
+    const SKILL_URL = 'skills/my-bucket/analysis/revenue-skill';
+
+    it('adds a skill resource URL when favoriting', async () => {
+      makeSingleDownloadSpy(service, {
+        ok: true,
+        body: JSON.stringify(v6Config()),
+      });
+      const uploadSpy = makeUploadSpy(service);
+      await service.updateInstalledSkill(SKILL_URL, true, 'token', 'bucket');
+      const uploaded = await getUploadedConfig(uploadSpy);
+      expect((uploaded as UserConfig).skills.installed).toEqual([SKILL_URL]);
+    });
+
+    it('removes a skill resource URL when unfavoriting', async () => {
+      makeSingleDownloadSpy(service, {
+        ok: true,
+        body: JSON.stringify(v6Config({ skills: { installed: [SKILL_URL] } })),
+      });
+      const uploadSpy = makeUploadSpy(service);
+      await service.updateInstalledSkill(SKILL_URL, false, 'token', 'bucket');
+      const uploaded = await getUploadedConfig(uploadSpy);
+      expect((uploaded as UserConfig).skills.installed).toHaveLength(0);
+    });
+
+    it('does not duplicate an already favorited skill', async () => {
+      makeSingleDownloadSpy(service, {
+        ok: true,
+        body: JSON.stringify(v6Config({ skills: { installed: [SKILL_URL] } })),
+      });
+      const uploadSpy = makeUploadSpy(service);
+      await service.updateInstalledSkill(SKILL_URL, true, 'token', 'bucket');
+      const uploaded = await getUploadedConfig(uploadSpy);
+      expect((uploaded as UserConfig).skills.installed).toHaveLength(1);
+    });
+
+    it('leaves the prompts and deployments sections untouched', async () => {
+      makeSingleDownloadSpy(service, {
+        ok: true,
+        body: JSON.stringify(
+          v6Config({
+            deployments: { installed: ['dep-a'], selectedId: 'gpt-4o' },
+            prompts: { installed: ['prompts/bucket/Work/AI/summarize'] },
+          }),
+        ),
+      });
+      const uploadSpy = makeUploadSpy(service);
+      await service.updateInstalledSkill(SKILL_URL, true, 'token', 'bucket');
+      const uploaded = (await getUploadedConfig(uploadSpy)) as UserConfig;
+      expect(uploaded.deployments).toEqual({
+        installed: ['dep-a'],
+        selectedId: 'gpt-4o',
+      });
+      expect(uploaded.prompts.installed).toEqual([
+        'prompts/bucket/Work/AI/summarize',
+      ]);
+    });
+  });
+
   describe('updateSelectedDeployment', () => {
     it('sets selectedId to the given id', async () => {
       makeSingleDownloadSpy(service, {
         ok: true,
-        body: JSON.stringify(v4Config()),
+        body: JSON.stringify(v6Config()),
       });
       const uploadSpy = makeUploadSpy(service);
       await service.updateSelectedDeployment('gpt-4o', 'token', 'bucket');
@@ -1039,7 +1179,7 @@ describe('UserConfigService', () => {
       makeSingleDownloadSpy(service, {
         ok: true,
         body: JSON.stringify(
-          v4Config({ deployments: { installed: [], selectedId: 'old-dep' } }),
+          v6Config({ deployments: { installed: [], selectedId: 'old-dep' } }),
         ),
       });
       const uploadSpy = makeUploadSpy(service);
@@ -1052,7 +1192,7 @@ describe('UserConfigService', () => {
       makeSingleDownloadSpy(service, {
         ok: true,
         body: JSON.stringify(
-          v4Config({
+          v6Config({
             deployments: { installed: ['dep-a', 'dep-b'], selectedId: null },
           }),
         ),

@@ -14,6 +14,7 @@
 
 import * as runtime from '../runtime';
 import type {
+  AttachGenerationDto,
   ConversationDeletionResultDto,
   ConversationListResponseDto,
   ConversationMetadataDto,
@@ -30,8 +31,14 @@ import type {
   SaveConversationBodyDto,
   SendCompletionDto,
   StopCompletionDto,
+  UnpublishConversationDto,
+  UnpublishConversationResultDto,
   WatchConversationBodyDto,
 } from '../models/index';
+
+export interface AttachToGenerationRequest {
+  attachGenerationDto: AttachGenerationDto;
+}
 
 export interface CreateConversationRequest {
   createConversationDto: CreateConversationDto;
@@ -100,6 +107,12 @@ export interface StopCompletionRequest {
 
 export interface StreamCompletionRequest {
   sendCompletionDto: SendCompletionDto;
+  xTimezone?: string;
+}
+
+export interface UnpublishConversationRequest {
+  path: string;
+  unpublishConversationDto: UnpublishConversationDto;
 }
 
 export interface WatchConversationRequest {
@@ -110,6 +123,54 @@ export interface WatchConversationRequest {
  *
  */
 export class ConversationsApi extends runtime.BaseAPI {
+  /**
+   * Opens an SSE stream for the active generation on this conversation path: one `snapshot` event carrying the assistant message as assembled so far, then a `chunk` event for every subsequent delta, then exactly one terminal event (`done`/`error`/`stopped`). Used by the frontend to show progressive content when reopening a conversation mid-generation instead of only a typing indicator. Principal-scoped — only the principal that could stop the generation can attach to it.
+   * Attach to an active generation and replay it live
+   */
+  async attachToGenerationRaw(
+    requestParameters: AttachToGenerationRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<runtime.ApiResponse<void>> {
+    if (requestParameters['attachGenerationDto'] == null) {
+      throw new runtime.RequiredError(
+        'attachGenerationDto',
+        'Required parameter "attachGenerationDto" was null or undefined when calling attachToGeneration().',
+      );
+    }
+
+    const queryParameters: runtime.HTTPQuery = {};
+
+    const headerParameters: runtime.HTTPHeaders = {};
+
+    headerParameters['Content-Type'] = 'application/json';
+
+    let urlPath = `/api/v1/conversations/completions/attach`;
+
+    const response = await this.request(
+      {
+        path: urlPath,
+        method: 'POST',
+        headers: headerParameters,
+        query: queryParameters,
+        body: requestParameters['attachGenerationDto'],
+      },
+      initOverrides,
+    );
+
+    return new runtime.VoidApiResponse(response);
+  }
+
+  /**
+   * Opens an SSE stream for the active generation on this conversation path: one `snapshot` event carrying the assistant message as assembled so far, then a `chunk` event for every subsequent delta, then exactly one terminal event (`done`/`error`/`stopped`). Used by the frontend to show progressive content when reopening a conversation mid-generation instead of only a typing indicator. Principal-scoped — only the principal that could stop the generation can attach to it.
+   * Attach to an active generation and replay it live
+   */
+  async attachToGeneration(
+    requestParameters: AttachToGenerationRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<void> {
+    await this.attachToGenerationRaw(requestParameters, initOverrides);
+  }
+
   /**
    * Creates a new conversation with an initial user message and returns it with a server-assigned ID.
    * Create a new conversation
@@ -581,7 +642,7 @@ export class ConversationsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Returns a flat, paginated list of all conversations for the authenticated user by calling the DIAL Core metadata endpoint with `recursive=true` on the root path.
+   * Returns a flat conversation list for the authenticated user. Without limit or nextToken, follows all personal and public DIAL Core metadata pages with recursive=true, merges shared conversations, and sorts the complete result by latest activity. Explicit pagination parameters request one page per bucket.
    * List conversations
    */
   async listConversationsRaw(
@@ -616,7 +677,7 @@ export class ConversationsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Returns a flat, paginated list of all conversations for the authenticated user by calling the DIAL Core metadata endpoint with `recursive=true` on the root path.
+   * Returns a flat conversation list for the authenticated user. Without limit or nextToken, follows all personal and public DIAL Core metadata pages with recursive=true, merges shared conversations, and sorts the complete result by latest activity. Explicit pagination parameters request one page per bucket.
    * List conversations
    */
   async listConversations(
@@ -680,7 +741,7 @@ export class ConversationsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Publishes an owned conversation to a folder under the Organization/public bucket by proxying DIAL Core\'s Publication API (`createPublication`). This endpoint keeps no publish records of its own — DIAL Core is the sole source of truth. The conversation title is re-fetched server-side and used as the publication name.
+   * Publishes an owned conversation to a folder under the Organization/public bucket by proxying DIAL Core\'s Publication API (`createPublication`). This endpoint keeps no publish records of its own — DIAL Core is the sole source of truth. The conversation title is re-fetched server-side and used as the publication name. The optional `author` sets the publication’s displayed author; when it is omitted or blank the caller\'s own session display name is used, as it always was.
    * Publish a conversation to an Organization folder
    */
   async publishConversationRaw(
@@ -728,7 +789,7 @@ export class ConversationsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Publishes an owned conversation to a folder under the Organization/public bucket by proxying DIAL Core\'s Publication API (`createPublication`). This endpoint keeps no publish records of its own — DIAL Core is the sole source of truth. The conversation title is re-fetched server-side and used as the publication name.
+   * Publishes an owned conversation to a folder under the Organization/public bucket by proxying DIAL Core\'s Publication API (`createPublication`). This endpoint keeps no publish records of its own — DIAL Core is the sole source of truth. The conversation title is re-fetched server-side and used as the publication name. The optional `author` sets the publication’s displayed author; when it is omitted or blank the caller\'s own session display name is used, as it always was.
    * Publish a conversation to an Organization folder
    */
   async publishConversation(
@@ -931,6 +992,10 @@ export class ConversationsApi extends runtime.BaseAPI {
 
     headerParameters['Content-Type'] = 'application/json';
 
+    if (requestParameters['xTimezone'] != null) {
+      headerParameters['X-Timezone'] = String(requestParameters['xTimezone']);
+    }
+
     let urlPath = `/api/v1/conversations/completions`;
 
     const response = await this.request(
@@ -956,6 +1021,71 @@ export class ConversationsApi extends runtime.BaseAPI {
     initOverrides?: RequestInit | runtime.InitOverrideFunction,
   ): Promise<void> {
     await this.streamCompletionRaw(requestParameters, initOverrides);
+  }
+
+  /**
+   * Submits a removal request for one already-published folder of an owned conversation by proxying DIAL Core\'s Publication API (`createPublication`) with a single `DELETE`-action resource. **The removal takes effect only after an administrator approves the request.** Until then the published copy stays visible to everyone who could already see it, and the folder continues to appear in the conversation’s publish history. The conversation title is re-fetched server-side and used as the publication name, so the request is legible in the admin queue.
+   * Request removal of a published conversation from a folder
+   */
+  async unpublishConversationRaw(
+    requestParameters: UnpublishConversationRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<runtime.ApiResponse<UnpublishConversationResultDto>> {
+    if (requestParameters['path'] == null) {
+      throw new runtime.RequiredError(
+        'path',
+        'Required parameter "path" was null or undefined when calling unpublishConversation().',
+      );
+    }
+
+    if (requestParameters['unpublishConversationDto'] == null) {
+      throw new runtime.RequiredError(
+        'unpublishConversationDto',
+        'Required parameter "unpublishConversationDto" was null or undefined when calling unpublishConversation().',
+      );
+    }
+
+    const queryParameters: runtime.HTTPQuery = {};
+
+    if (requestParameters['path'] != null) {
+      queryParameters['path'] = requestParameters['path'];
+    }
+
+    const headerParameters: runtime.HTTPHeaders = {};
+
+    headerParameters['Content-Type'] = 'application/json';
+
+    let urlPath = `/api/v1/conversations/unpublish`;
+
+    const response = await this.request(
+      {
+        path: urlPath,
+        method: 'POST',
+        headers: headerParameters,
+        query: queryParameters,
+        body: requestParameters['unpublishConversationDto'],
+      },
+      initOverrides,
+    );
+
+    return new runtime.JSONApiResponse<UnpublishConversationResultDto>(
+      response,
+    );
+  }
+
+  /**
+   * Submits a removal request for one already-published folder of an owned conversation by proxying DIAL Core\'s Publication API (`createPublication`) with a single `DELETE`-action resource. **The removal takes effect only after an administrator approves the request.** Until then the published copy stays visible to everyone who could already see it, and the folder continues to appear in the conversation’s publish history. The conversation title is re-fetched server-side and used as the publication name, so the request is legible in the admin queue.
+   * Request removal of a published conversation from a folder
+   */
+  async unpublishConversation(
+    requestParameters: UnpublishConversationRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<UnpublishConversationResultDto> {
+    const response = await this.unpublishConversationRaw(
+      requestParameters,
+      initOverrides,
+    );
+    return await response.value();
   }
 
   /**

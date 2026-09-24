@@ -1,3 +1,4 @@
+export { CONVERSATION_INPUT_CLASS } from './constants/public-class-names';
 export { BottomSheetShell } from './components/BottomSheetShell/BottomSheetShell';
 export type { BottomSheetShellProps } from './components/BottomSheetShell/BottomSheetShell';
 export { ConversationInput } from './components/ConversationInput/ConversationInput';
@@ -10,25 +11,24 @@ export type {
   ConversationInputTypography,
   EditMessageInputProps,
 } from './models/ConversationInput';
-export { SendOnEnter } from './models/Input';
+export { ActionRowLayout, SendOnEnter } from './models/Input';
+export type { TranscribeAudio } from './models/Voice';
 export type {
   ChatSettingsValues,
+  CommandMenuConfig,
+  CommandMenuContext,
   InputColors,
   InputProps,
   InputTypography,
+  MenuOverlayConfig,
+  TextInsertion,
   ToolsChipLabels,
 } from './models/Input';
 
-// Re-exports from @epam/ai-dial-attachment-input for backwards compatibility
-export {
-  AttachmentCard,
-  AttachmentTray,
-  AttachmentGroup,
-  FileDndOverlay,
-  getAttachmentIcon,
-} from '@epam/ai-dial-attachment-input';
-export type { AttachmentGroupProps } from '@epam/ai-dial-attachment-input';
-export type { BottomSheetItem } from './components/BottomSheet/BottomSheet';
+export type {
+  BottomSheetColors,
+  BottomSheetItem,
+} from './components/BottomSheet/BottomSheet';
 export {
   ChatSettingsModal,
   type ChatSettingsModalProps,

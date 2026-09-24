@@ -1,14 +1,23 @@
-import { CatalogEntityType, type CatalogItem } from '@epam/ai-dial-catalog';
-import { DeploymentIcon, mergeClasses } from '@epam/ai-dial-chat-shared';
-import { SearchBar } from '@epam/ai-dial-kit';
+import { type CatalogItem } from '@epam/ai-dial-catalog';
+import {
+  CatalogEntityType,
+  DeploymentIcon,
+  mergeClasses,
+  SELECT_LIST_MAX_HEIGHT_CLASS_NAME,
+  SELECT_LIST_MAX_HEIGHT_PX,
+} from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  EllipsisTooltip,
   GhostButton,
-  GhostIconButton,
-  DialEllipsisTooltip,
   Highlight,
+  MenuItem,
+  MenuItemMark,
+  Search,
+  ToggleIconButton,
 } from '@epam/ai-dial-ui-kit';
-import { IconCheck, IconStar, IconStarFilled } from '@tabler/icons-react';
+import { IconStar, IconStarFilled } from '@tabler/icons-react';
 import {
   memo,
   useEffect,
@@ -17,20 +26,22 @@ import {
   useRef,
   useState,
   type FC,
-  type KeyboardEvent,
   type ReactNode,
 } from 'react';
+import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
 import styles from './DeploymentSelectorPanel.module.scss';
 
 /** Localizable string labels for `DeploymentSelectorPanel`. */
 export interface DeploymentSelectorLabels {
   /** Placeholder and accessible label for the search input. Default: `'Search models, agents…'`. */
   searchPlaceholder?: string;
+  /** Accessible label for the clear-search button. Default: `'Clear search'`. */
+  clearSearchLabel?: string;
   /** Heading above the favorites list. Default: `'Favorites'`. */
   favoritesLabel?: string;
   /** Hint shown when Favorites is empty. Default: `'Star a model or agent to pin it here.'`. */
   emptyHint?: string;
-  /** Label for the footer action button. Default: `'Browse'`. */
+  /** Label for the footer action button. Default: `'Catalog'`. */
   browseCatalogLabel?: string;
   /** Accessible label for the remove-from-favorites button. Default: `'Remove from favorites'`. */
   removeFromFavoritesLabel?: string;
@@ -38,11 +49,33 @@ export interface DeploymentSelectorLabels {
   currentlySelectedLabel?: string;
   /** Accessible label for the add-to-favorites button on the currently-selected row. Default: `'Add to favorites'`. */
   addToFavoritesLabel?: string;
+  /** Accessible label for the list of selectable deployments. Default: `'Select model'`. */
+  listAriaLabel?: string;
+}
+
+/**
+ * A row that is not a deployment: a sentinel/mode choice the host pins above
+ * every catalog section (e.g. the "Default agent" / "Last used agent" modes of
+ * the default-agent preference). It carries no icon and no favourite toggle, so
+ * it reads as a mode rather than as an agent.
+ */
+export interface DeploymentSelectorExtraOption {
+  /** Value handed to `onSelect` when the row is picked. */
+  id: string;
+  /** Row text; also what the search box filters the row on. */
+  label: string;
 }
 
 interface Props {
   /** Starred catalog items to display in the Favorites list. */
   favorites: CatalogItem[];
+  /**
+   * Non-deployment rows rendered above every catalog section. Defaults to none,
+   * which is the plain deployment picker.
+   */
+  extraOptions?: DeploymentSelectorExtraOption[];
+  /** Operator-default item pinned ahead of favorites, whether starred or not. */
+  pinnedItem?: CatalogItem;
   /** ID of the currently selected deployment. */
   selectedId?: string | null;
   /**
@@ -61,16 +94,15 @@ interface Props {
   onClose: () => void;
   /** Optional i18n string overrides. */
   labels?: DeploymentSelectorLabels;
+  /** Additional classes merged over the panel root's defaults. */
+  className?: string;
 }
 
 const SECTION_HEADING_CLASS_NAME =
-  'dial-tiny-semi-text px-3 pb-0.5 pt-2 uppercase text-tertiary';
+  'dial-tiny-lead-semi-text px-3 pb-2 pt-2 text-tertiary';
 
 // Must match the .rowLeaving exit-animation duration in DeploymentSelectorPanel.module.scss.
 const ROW_LEAVE_ANIMATION_MS = 180;
-
-// Matches the previous max-h-72 cap on the scrollable list.
-const LIST_MAX_HEIGHT_PX = 288;
 
 const matchesQuery = (item: CatalogItem, query: string): boolean => {
   const q = query.toLowerCase();
@@ -81,8 +113,13 @@ const matchesQuery = (item: CatalogItem, query: string): boolean => {
   );
 };
 
+/* Module-level so the default never changes identity between renders. */
+const NO_EXTRA_OPTIONS: DeploymentSelectorExtraOption[] = [];
+
 const DeploymentSelectorPanel: FC<Props> = ({
   favorites,
+  extraOptions = NO_EXTRA_OPTIONS,
+  pinnedItem,
   selectedId,
   selectedItem,
   onSelect,
@@ -90,18 +127,24 @@ const DeploymentSelectorPanel: FC<Props> = ({
   onBrowseCatalog,
   onClose,
   labels = {},
+  className,
 }) => {
   const {
     searchPlaceholder = 'Search models, agents…',
+    clearSearchLabel = 'Clear search',
     favoritesLabel = 'Favorites',
     emptyHint = 'Star a model or agent to pin it here.',
-    browseCatalogLabel = 'Browse',
+    browseCatalogLabel = 'Catalog',
     removeFromFavoritesLabel = 'Remove from favorites',
     currentlySelectedLabel = 'Currently selected',
     addToFavoritesLabel = 'Add to favorites',
+    listAriaLabel = 'Select model',
   } = labels;
 
   const [query, setQuery] = useState('');
+  const handleSearchChange = (value?: string) => {
+    setQuery(value ?? '');
+  };
   const [leavingIds, setLeavingIds] = useState<Set<string>>(new Set());
   const leaveTimeoutsRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>(),
@@ -115,13 +158,23 @@ const DeploymentSelectorPanel: FC<Props> = ({
     };
   }, []);
 
-  const talkableItems = useMemo(
-    () =>
-      favorites.filter(
-        (f) =>
-          f.type === CatalogEntityType.Model ||
-          f.type === CatalogEntityType.Agent,
-      ),
+  const talkableItems = useMemo(() => {
+    const quickItems =
+      pinnedItem == null
+        ? favorites
+        : [
+            pinnedItem,
+            ...favorites.filter((item) => item.id !== pinnedItem.id),
+          ];
+    return quickItems.filter(
+      (f) =>
+        f.type === CatalogEntityType.Model ||
+        f.type === CatalogEntityType.Agent,
+    );
+  }, [favorites, pinnedItem]);
+
+  const favoriteIds = useMemo(
+    () => new Set(favorites.map((item) => item.id)),
     [favorites],
   );
 
@@ -129,6 +182,12 @@ const DeploymentSelectorPanel: FC<Props> = ({
     if (!query.trim()) return talkableItems;
     return talkableItems.filter((f) => matchesQuery(f, query));
   }, [talkableItems, query]);
+
+  const filteredExtraOptions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return extraOptions;
+    return extraOptions.filter((o) => o.label.toLowerCase().includes(q));
+  }, [extraOptions, query]);
 
   const isSelectedInFavorites = talkableItems.some(
     (f) => f.id === selectedItem?.id,
@@ -150,10 +209,13 @@ const DeploymentSelectorPanel: FC<Props> = ({
   useLayoutEffect(() => {
     if (listContentRef.current) {
       setListHeight(
-        Math.min(listContentRef.current.scrollHeight, LIST_MAX_HEIGHT_PX),
+        Math.min(
+          listContentRef.current.scrollHeight,
+          SELECT_LIST_MAX_HEIGHT_PX,
+        ),
       );
     }
-  }, [filteredFavorites, showCurrentlySelected]);
+  }, [filteredFavorites, filteredExtraOptions, showCurrentlySelected]);
 
   /*
    * Panel is remounted fresh each time the popover opens, so without this the
@@ -166,20 +228,28 @@ const DeploymentSelectorPanel: FC<Props> = ({
     selectedRowRef.current?.scrollIntoView({ block: 'nearest' });
   }, []);
 
-  const handleSelect = (item: CatalogItem) => {
-    onSelect(item.id);
+  const isMobile = useIsMobile();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  /*
+   * The kit's 2.0 `Dropdown` mounts its overlay with `initialFocus={-1}`, so
+   * it never moves focus off the trigger — a keyboard user would open the
+   * panel and stay parked outside it. Claiming focus here is what makes the
+   * panel keyboard-operable. Skipped on mobile, where the same panel renders
+   * inside a bottom sheet and focusing the field would raise the on-screen
+   * keyboard over the list the user came to read.
+   */
+  useEffect(() => {
+    if (isMobile) return;
+    searchInputRef.current?.focus();
+  }, [isMobile]);
+
+  const handleSelectId = (id: string) => {
+    onSelect(id);
     onClose();
   };
 
-  const handleItemKeyDown = (
-    e: KeyboardEvent<HTMLDivElement>,
-    item: CatalogItem,
-  ) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      handleSelect(item);
-    }
-  };
+  const handleSelect = (item: CatalogItem) => handleSelectId(item.id);
 
   const handleBrowse = () => {
     onBrowseCatalog?.();
@@ -205,129 +275,205 @@ const DeploymentSelectorPanel: FC<Props> = ({
     leaveTimeoutsRef.current.set(id, timeout);
   };
 
+  /*
+   * Same row chrome as a deployment row — tinted when chosen, `menuitemradio`
+   * in the same menu — minus the icon and the favourite toggle, neither of
+   * which a mode has.
+   */
+  const renderExtraRow = (option: DeploymentSelectorExtraOption): ReactNode => {
+    const isSelected = option.id === selectedId;
+    return (
+      <li
+        key={option.id}
+        role="none"
+        ref={isSelected ? selectedRowRef : undefined}
+      >
+        <MenuItem
+          role="menuitemradio"
+          aria-checked={isSelected}
+          mark={MenuItemMark.Tint}
+          selected={isSelected}
+          className="h-auto py-1.5"
+          label={
+            query.trim() ? (
+              <Highlight
+                text={option.label}
+                query={query}
+                className="dial-small-text min-w-0 !flex-initial"
+              />
+            ) : (
+              <EllipsisTooltip
+                text={option.label}
+                className="dial-small-text min-w-0 !flex-initial"
+              />
+            )
+          }
+          onClick={() => handleSelectId(option.id)}
+        />
+      </li>
+    );
+  };
+
   const renderRow = (item: CatalogItem, isFavoriteRow: boolean): ReactNode => {
     const isSelected = item.id === selectedId;
     const isLeaving = leavingIds.has(item.id);
     return (
       <li
         key={item.id}
+        role="none"
         ref={isSelected ? selectedRowRef : undefined}
         className={isLeaving ? styles.rowLeaving : styles.rowEnter}
       >
-        <div
-          role="button"
-          tabIndex={0}
-          className={mergeClasses(
-            'flex cursor-pointer items-center gap-2 rounded-lg border px-2 py-1.5',
-            'transition-colors hover:bg-layer-sunken',
-            isSelected
-              ? 'border-info bg-accent-primary-alpha'
-              : 'border-transparent',
-          )}
-          onClick={() => handleSelect(item)}
-          onKeyDown={(e) => handleItemKeyDown(e, item)}
-        >
-          <DeploymentIcon
-            src={item.iconUrl}
-            size={DIAL_ICON_SIZE.MD}
-            initialsName={item.name}
-          />
-          <div className="flex min-w-0 flex-1 items-start gap-1.5">
-            {query.trim() ? (
-              <Highlight
-                text={item.name}
-                query={query}
-                className="dial-small-text !flex-initial"
-              />
-            ) : (
-              <DialEllipsisTooltip
-                text={item.name}
-                className="dial-small-text !flex-initial"
-              />
-            )}
-            {item.version != null && (
-              <span className="dial-tiny-text shrink-0 whitespace-nowrap text-secondary">
-                {item.version}
-              </span>
-            )}
-          </div>
-          {isSelected && (
-            <IconCheck
-              size={DIAL_ICON_SIZE.SM}
-              className="shrink-0 text-accent"
-              aria-hidden
+        {/*
+          Picking a deployment is choosing a value, so the design tints the
+          chosen row instead of checking it. The favourite toggle goes through
+          `rightControl`: it is a button, and a button nested inside the row's
+          own button would be invalid markup, swallow the row's click, and land
+          inside the row's accessible name.
+        */}
+        <MenuItem
+          role="menuitemradio"
+          aria-checked={isSelected}
+          mark={MenuItemMark.Tint}
+          selected={isSelected}
+          className="h-auto py-1.5"
+          icon={
+            <DeploymentIcon
+              src={item.iconUrl}
+              size={DIAL_ICON_SIZE.MD}
+              initialsName={item.name}
             />
-          )}
-          {isFavoriteRow ? (
-            <GhostIconButton
+          }
+          label={
+            <span className="flex min-w-0 flex-1 flex-wrap items-start gap-x-1.5 whitespace-normal">
+              {query.trim() ? (
+                <Highlight
+                  text={item.name}
+                  query={query}
+                  className="dial-small-text min-w-0 !flex-initial"
+                />
+              ) : (
+                <EllipsisTooltip
+                  text={item.name}
+                  className="dial-small-text min-w-0 !flex-initial"
+                />
+              )}
+              {item.version && (
+                <span className="dial-tiny-text min-w-0 break-words text-secondary">
+                  {item.version}
+                </span>
+              )}
+            </span>
+          }
+          onClick={() => handleSelect(item)}
+          rightControl={
+            <ToggleIconButton
               icon={
+                <IconStar
+                  size={DIAL_ICON_SIZE.SM}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              }
+              selectedIcon={
                 <IconStarFilled
                   size={DIAL_ICON_SIZE.SM}
                   className="text-warning-icon"
+                  aria-hidden
                 />
               }
-              aria-label={removeFromFavoritesLabel}
+              isSelected={isFavoriteRow}
+              aria-label={
+                isFavoriteRow ? removeFromFavoritesLabel : addToFavoritesLabel
+              }
               onClick={(e) => {
                 e.stopPropagation();
-                handleToggleFavorite(item.id, false);
+                handleToggleFavorite(item.id, !isFavoriteRow);
               }}
             />
-          ) : (
-            <GhostIconButton
-              icon={<IconStar size={DIAL_ICON_SIZE.SM} />}
-              aria-label={addToFavoritesLabel}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleToggleFavorite(item.id, true);
-              }}
-            />
-          )}
-        </div>
+          }
+        />
       </li>
     );
   };
 
   return (
-    <div className="flex min-w-[240px] flex-col">
+    <div
+      className={mergeClasses('flex min-w-[360px] flex-col', className)}
+      /*
+       * Bound to the kit Dropdown's own live available-height var (set by
+       * floating-ui) so the list, not the outer popup wrapper, absorbs any
+       * height constraint — the wrapper's overflow-auto would otherwise clip
+       * the footer instead of letting the list shrink. The -8px accounts for
+       * the wrapper's own p-1 (4px top + 4px bottom) padding.
+       */
+      style={{
+        maxHeight: 'calc(var(--fui-available-height, 9999px) - 8px)',
+      }}
+    >
       {/* Sticky search header */}
-      <div className="sticky top-0 z-10 bg-layer-raised px-1 pb-3 pt-2">
-        <SearchBar
+      <div
+        role="search"
+        className={mergeClasses(
+          'sticky top-0 z-10 bg-layer-raised pb-3 pt-2',
+          styles.searchHeader,
+        )}
+      >
+        <Search
+          inputRef={searchInputRef}
           value={query}
-          labels={{
-            placeholder: searchPlaceholder,
-            ariaLabel: searchPlaceholder,
-          }}
-          onChange={setQuery}
-          styles={{
-            containerClassName: mergeClasses(
-              styles.searchBar,
-              '!bg-transparent !rounded-full !shadow-none',
-            ),
-          }}
+          onChange={handleSearchChange}
+          placeholder={searchPlaceholder}
+          clearLabel={clearSearchLabel}
+          aria-label={searchPlaceholder}
         />
       </div>
 
       <div
-        className={mergeClasses('max-h-72 overflow-y-auto', styles.listContent)}
-        style={{ height: listHeight }}
+        className={mergeClasses(
+          SELECT_LIST_MAX_HEIGHT_CLASS_NAME,
+          'min-h-0 flex-1 overflow-y-auto',
+          styles.listContent,
+        )}
+        style={{ maxHeight: listHeight }}
       >
-        <div ref={listContentRef}>
+        {/* The radio rows below are grouped per section, so the scroll body is
+            the menu that owns them. */}
+        <div role="menu" aria-label={listAriaLabel} ref={listContentRef}>
+          {filteredExtraOptions.length > 0 && (
+            <ul role="group" className="flex flex-col gap-1 px-1 pb-1 pt-1">
+              {filteredExtraOptions.map(renderExtraRow)}
+            </ul>
+          )}
+
           {showCurrentlySelected && selectedItem && (
             <>
               <p className={SECTION_HEADING_CLASS_NAME}>
                 {currentlySelectedLabel}
               </p>
-              <ul className="px-1 pb-1">{renderRow(selectedItem, false)}</ul>
+              <ul role="group" className="flex flex-col gap-1 px-1 pb-1">
+                {renderRow(selectedItem, false)}
+              </ul>
             </>
           )}
 
           {(showCurrentlySelected || filteredFavorites.length > 0) && (
-            <p className={SECTION_HEADING_CLASS_NAME}>{favoritesLabel}</p>
+            <p
+              className={mergeClasses(
+                SECTION_HEADING_CLASS_NAME,
+                'sticky top-0 z-10 bg-layer-raised will-change-transform',
+                styles.stickyLabelSeamFix,
+              )}
+            >
+              {favoritesLabel}
+            </p>
           )}
 
           {filteredFavorites.length > 0 ? (
-            <ul className="flex flex-col gap-1 px-1 pb-1">
-              {filteredFavorites.map((item) => renderRow(item, true))}
+            <ul role="group" className="flex flex-col gap-1 px-1 pb-1">
+              {filteredFavorites.map((item) =>
+                renderRow(item, favoriteIds.has(item.id)),
+              )}
             </ul>
           ) : (
             <p className="dial-small-text px-4 py-4 text-center text-secondary">
@@ -337,7 +483,7 @@ const DeploymentSelectorPanel: FC<Props> = ({
         </div>
       </div>
 
-      <div className="border-t border-tertiary px-2 py-1">
+      <div className="border-t border-tertiary bg-layer-raised px-2 py-3">
         <GhostButton
           label={browseCatalogLabel}
           className="w-full justify-center"

@@ -1,5 +1,11 @@
 # Spec: file-manager-rename-api
 
+## Purpose
+
+`POST /api/v1/files/rename`, folder rename via paginated expansion, and the observability around both.
+
+## Requirements
+
 ### Requirement: POST /api/v1/files/rename endpoint
 
 The BFF SHALL expose `POST /api/v1/files/rename` that accepts a batch of file/folder items, renames (moves) each via DIAL Core `moveResource`, and returns a per-item result array.
@@ -7,8 +13,6 @@ The BFF SHALL expose `POST /api/v1/files/rename` that accepts a batch of file/fo
 **State ownership**: `FilesBatchOperationsService` (`apps/chat-api/src/files/batch/files-batch-operations.service.ts`) owns all rename logic, sharing its per-child dispatch/fan-out/aggregate-partial-failure control flow with delete, copy, and move through one internal generic helper. `FilesController` delegates through the `FilesService` facade, following the thin-controller pattern. All backend implementation follows `apps/chat-api/AGENTS.md` (URI versioning, `Logger` + `ConfigService`, validated DTOs, typed HTTP exceptions).
 
 **Authorization**: session cookie → `req.user.at` (bearer token forwarded to DIAL Core). Same as all other files endpoints.
-
-**Rate limit**: `@Throttle({ default: { limit: 10, ttl: 60000 } })` — 10 requests/minute per user (same as delete; folder rename fans out many Core calls).
 
 #### Request DTO
 
@@ -56,12 +60,10 @@ Folder = 'folder'
 ```typescript
 @Post('rename')
 @HttpCode(200)
-@Throttle({ default: { limit: 10, ttl: 60000 } })
 @ApiOperation({ summary: 'Rename files and folders' })
 @ApiResponse({ status: 200, type: RenameFilesResponseDto })
 @ApiResponse({ status: 400, description: 'Invalid request body' })
 @ApiResponse({ status: 401, description: 'Not authenticated' })
-@ApiResponse({ status: 429, description: 'Rate limit exceeded' })
 @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
 @ApiResponse({ status: 503, description: 'DIAL Core unreachable or timed out' })
 async renameFiles(
@@ -76,6 +78,21 @@ async renameFiles(
 - **Request DTO**: `RenameFilesDto` (sent as JSON body).
 - **Response DTO**: `RenameFilesResponseDto` (JSON).
 - **Frontend caller**: `apps/chat/src/server-api/files.api.ts` exposes `renameFiles(items: RenameItemDto[]): Promise<RenameFilesResponseDto>`. Uses the normal (non-Raw) generated method.
+
+#### Upstream error mapping
+
+`FilesBatchOperationsService.resolveTransferErrorMessage` turns a failed `moveResource` call into the per-item `error` string:
+
+| DIAL Core response | `results[].error` |
+|--------------------|--------------------|
+| `403` | `"Forbidden"` |
+| `404` | `"Not found"` |
+| `400` and the destination path exists | `"Conflict"` |
+| `400` and the destination path is free | `"Rename failed"` |
+| `409` (not part of the current DIAL Core contract; mapped defensively) | `"Conflict"` |
+| anything else, including timeouts and an unreachable Core | `"Rename failed"` |
+
+**Destination-taken detection**: DIAL Core's transfer contract (`POST /v1/ops/resource/move` and `/copy`) declares `200`/`400`/`401`/`403`/`404`/`500` and **never** `409`, so a destination that is already taken while `overwrite` is `false` arrives as a plain `400`. The service SHALL therefore probe the destination with `getFileMetadata` after — and only after — a non-overwriting transfer has already failed with `400`, and SHALL report `"Conflict"` when that probe returns `200` with metadata whose `url` matches the requested destination (`fileMetadataMatchesPath`, `apps/chat-api/src/files/file-metadata-match.ts`). A probe that returns `404`, resolves to a different resource (a parent folder listing, most often), or fails keeps the generic fallback. The probe never runs on the success path, so a successful rename stays at one upstream call per item.
 
 **Example request**:
 ```json
@@ -111,10 +128,15 @@ POST /api/v1/files/rename
 - **WHEN** `POST /api/v1/files/rename` is called with a single `nodeType: "item"` item and DIAL Core returns 200 for `moveResource`
 - **THEN** the response contains `results[0].success = true`
 
-#### Scenario: Single file rename returns conflict
+#### Scenario: Single file rename onto an existing name returns conflict
 
-- **WHEN** `POST /api/v1/files/rename` is called and DIAL Core returns 409 for `moveResource`
-- **THEN** `results[0].success = false` and `results[0].error = "Conflict"`
+- **WHEN** `POST /api/v1/files/rename` is called with a `destinationPath` that is already taken and DIAL Core returns 400 for `moveResource`
+- **THEN** the BFF probes `getFileMetadata` for that destination, and `results[0].success = false` with `results[0].error = "Conflict"`
+
+#### Scenario: Single file rename returns the generic failure for a non-conflict 400
+
+- **WHEN** DIAL Core returns 400 for `moveResource` and the destination probe finds nothing at `destinationPath`
+- **THEN** `results[0].success = false` and `results[0].error = "Rename failed"`
 
 #### Scenario: Single file rename returns forbidden
 

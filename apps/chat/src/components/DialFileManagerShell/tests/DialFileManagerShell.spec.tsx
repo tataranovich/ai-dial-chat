@@ -1,22 +1,27 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
+  DialFileManagerActionProfile,
+  DialFileManagerVariant,
+  type UseDialFileManagerResult,
+} from '@epam/ai-dial-chat-hooks';
+import { FileUploadStatus } from '@epam/ai-dial-chat-shared';
+import type { DialFileManagerShellLabels } from '@epam/ai-dial-chat-shared';
+import {
   DialFileManagerActions,
   DialFileManagerTabs,
 } from '@epam/ai-dial-react-file-manager';
 import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { UseDialFileManagerResult } from '../../../hooks/files/useDialFileManager';
-import {
-  DialFileManagerActionProfile,
-  DialFileManagerVariant,
-} from '../../../types/file-manager-variant';
-import { FileUploadStatus } from '../../DialFileManagerModal/types/upload';
 import DialFileManagerShell from '../DialFileManagerShell';
-import type { DialFileManagerShellLabels } from '../types/labels';
 
 interface CapturedActionLabels {
   actionLabels?: Partial<Record<DialFileManagerActions, string>>;
+}
+
+interface CapturedTreeOptions extends CapturedActionLabels {
+  loadedPaths?: Set<string>;
+  loadingPaths?: Set<string>;
 }
 
 const capturedDialFileManagerProps: {
@@ -26,7 +31,7 @@ const capturedDialFileManagerProps: {
     autoSelectUploadedItems?: boolean;
     onGetInfo?: unknown;
     gridOptions?: CapturedActionLabels;
-    treeOptions?: CapturedActionLabels;
+    treeOptions?: CapturedTreeOptions;
     bulkActionsToolbarOptions?: CapturedActionLabels;
     toolbarOptions?: {
       newActions?: { uploadArchive?: { label?: string } };
@@ -77,7 +82,7 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
       onGetInfo?: unknown;
       autoSelectUploadedItems?: boolean;
       gridOptions?: CapturedActionLabels;
-      treeOptions?: CapturedActionLabels;
+      treeOptions?: CapturedTreeOptions;
       bulkActionsToolbarOptions?: CapturedActionLabels;
       toolbarOptions?: {
         newActions?: { uploadArchive?: { label?: string } };
@@ -265,7 +270,7 @@ const renderShell = (
       hookResult={{ ...baseHookResult, ...hookResultOverrides }}
       labels={baseLabels}
       activeTab={options.activeTab ?? DialFileManagerTabs.MyFiles}
-      tabs={[{ id: DialFileManagerTabs.MyFiles, label: 'My Files' }]}
+      tabs={[{ value: DialFileManagerTabs.MyFiles, label: 'My Files' }]}
       onTabChange={vi.fn()}
       selectedPaths={selectedPaths}
       onSelectedPathsChange={vi.fn()}
@@ -343,7 +348,7 @@ describe('DialFileManagerShell', () => {
 
   it('disables destination-folder confirmation while the selected popup folder is loading', () => {
     renderShell({
-      folderPopupLoadingPaths: new Set(['/My files/reports']),
+      folderPopupLoadingPaths: new Set(['/My files/reports/']),
     });
 
     act(() => {
@@ -376,6 +381,20 @@ describe('DialFileManagerShell', () => {
     expect(capturedDialFileManagerProps.current?.onFolderPopupPathChange).toBe(
       onFolderPopupPathChange,
     );
+  });
+
+  it('passes loaded and popup-loading paths through the tree options', () => {
+    const loadedPaths = new Set(['/My files/Loaded folder/']);
+    const folderPopupLoadingPaths = new Set(['/My files/Loading folder/']);
+
+    renderShell({ loadedPaths, folderPopupLoadingPaths });
+
+    expect(capturedDialFileManagerProps.current?.treeOptions?.loadedPaths).toBe(
+      loadedPaths,
+    );
+    expect(
+      capturedDialFileManagerProps.current?.treeOptions?.loadingPaths,
+    ).toBe(folderPopupLoadingPaths);
   });
 
   it('does not set onGridApiChange on destinationFolderPopupOptions', () => {

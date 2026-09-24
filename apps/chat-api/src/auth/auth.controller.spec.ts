@@ -67,6 +67,8 @@ const MOCK_CLIENT = {
     .mockReturnValue('https://keycloak.example.com/auth?state=s&nonce=n'),
   callbackParams: vi.fn(),
   callback: vi.fn(),
+  refresh: vi.fn(),
+  userinfo: vi.fn(),
   revoke: vi.fn().mockResolvedValue(undefined),
   endSessionUrl: vi
     .fn()
@@ -166,6 +168,7 @@ async function buildApp(): Promise<INestApplication> {
     get: (key: string) => {
       const map: Partial<EnvironmentVariables> = {
         AUTH_CALLBACK_BASE_URL: CALLBACK_BASE,
+        AUTH_SESSION_MAX_AGE_SECONDS: 2592000,
         AUTH_SESSION_COOKIE_NAME: COOKIE_NAME,
         CORS_ORIGIN: APP_BASE,
         AUTH_HEADER_TOKEN_ENABLED: true,
@@ -219,7 +222,7 @@ async function buildApp(): Promise<INestApplication> {
   return app;
 }
 
-async function makeSessionCookie(payload: SessionPayload): Promise<string> {
+async function makeSessionCookie(payload: object): Promise<string> {
   const plaintext = new TextEncoder().encode(JSON.stringify(payload));
   return new CompactEncrypt(plaintext)
     .setProtectedHeader({ alg: 'dir', enc: 'A256GCM' })
@@ -228,13 +231,14 @@ async function makeSessionCookie(payload: SessionPayload): Promise<string> {
 
 async function makeTxCookie(txData: object): Promise<string> {
   const inner: SessionPayload = {
-    v: 1,
+    v: 2,
     sid: randomUUID(),
     providerId: 'keycloak',
     sub: '',
     at: JSON.stringify(txData),
     rt: '',
     at_exp: 9999999999,
+    session_exp: 9999999999,
     rt_exp: 9999999999,
     iat: Math.floor(Date.now() / 1000),
     csrf: randomUUID(),
@@ -245,13 +249,14 @@ async function makeTxCookie(txData: object): Promise<string> {
 }
 
 const sampleSession: SessionPayload = {
-  v: 1,
+  v: 2,
   sid: randomUUID(),
   providerId: 'keycloak',
   sub: 'user-1',
   at: 'access-token',
   rt: 'refresh-token',
   at_exp: 9999999999,
+  session_exp: 9999999999,
   rt_exp: 9999999999,
   iat: Math.floor(Date.now() / 1000),
   csrf: randomUUID(),
@@ -265,10 +270,14 @@ describe('AuthController (integration)', () => {
   beforeEach(async () => {
     providerConfigOverride = {};
     configOverride = {};
+    MOCK_CLIENT.userinfo.mockReset().mockResolvedValue({ sub: 'user-1' });
+    MOCK_CLIENT.issuer.metadata['userinfo_endpoint'] =
+      `${PROVIDER_ISSUER}/protocol/openid-connect/userinfo`;
     app = await buildApp();
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     MOCK_REFRESH_SERVICE.refresh.mockReset();
     await app?.close();
@@ -347,6 +356,102 @@ describe('AuthController (integration)', () => {
   });
 
   describe('GET /api/v1/auth/callback/:providerId', () => {
+    it.each([
+      {
+        scope: 'openid profile',
+        refresh_token: 'rt',
+        refresh_expires_in: undefined,
+        lifetime: 120,
+      },
+      {
+        scope: 'openid profile offline_access',
+        refresh_token: 'rt',
+        refresh_expires_in: undefined,
+        lifetime: 120,
+      },
+      {
+        scope: 'openid profile offline_access',
+        refresh_token: 'rt',
+        refresh_expires_in: 0,
+        lifetime: 120,
+      },
+      {
+        scope: 'openid profile',
+        refresh_token: 'rt',
+        refresh_expires_in: 60,
+        lifetime: 60,
+      },
+      {
+        scope: 'openid profile',
+        refresh_token: 'rt',
+        refresh_expires_in: 600,
+        lifetime: 120,
+      },
+      {
+        scope: 'openid profile offline_access',
+        refresh_token: undefined,
+        refresh_expires_in: undefined,
+        lifetime: 90,
+      },
+    ])(
+      'issues a scope-independent session with the effective lifetime: %j',
+      async ({ scope, refresh_token, refresh_expires_in, lifetime }) => {
+        configOverride = { AUTH_SESSION_MAX_AGE_SECONDS: 120 };
+        providerConfigOverride = { scope };
+        const now = Math.floor(Date.now() / 1000);
+        const state = 'lifetime-state';
+        /* Finish a pre-upgrade transaction to verify the migration boundary. */
+        const txCookie = await makeSessionCookie({
+          v: 1,
+          sub: '',
+          rt: '',
+          at_exp: now + 600,
+          at: JSON.stringify({
+            state,
+            nonce: 'nonce',
+            codeVerifier: 'verifier',
+            providerId: 'keycloak',
+            callbackUrl: APP_BASE,
+          }),
+        });
+        MOCK_CLIENT.callbackParams.mockReturnValue({ code: 'code', state });
+        MOCK_CLIENT.callback.mockResolvedValue({
+          access_token: 'at',
+          refresh_token,
+          refresh_expires_in,
+          expires_at: now + 90,
+          claims: () => ({ sub: 'user-1' }),
+        });
+
+        const res = await request(app.getHttpServer())
+          .get(`/api/v1/auth/callback/keycloak?code=code&state=${state}`)
+          .set('Cookie', `${TX_COOKIE}=${txCookie}`)
+          .expect(302);
+        const cookies = res.headers['set-cookie'] as unknown as string[];
+        const cookie = cookies.find((value) =>
+          value.startsWith(`${COOKIE_NAME}=`),
+        );
+        if (!cookie) throw new Error('Expected a session cookie');
+        const token = cookie.split(';')[0].slice(COOKIE_NAME.length + 1);
+        const session = await app.get(SessionService).decrypt(token);
+        expect(session.v).toBe(2);
+        expect(session.session_exp - session.iat).toBe(120);
+        const maxAge = Number(cookie.match(/Max-Age=(\d+)/)?.[1]);
+        expect(maxAge).toBeGreaterThanOrEqual(lifetime - 2);
+        expect(maxAge).toBeLessThanOrEqual(lifetime);
+        if (refresh_expires_in) {
+          expect(session.rt_exp).toBeGreaterThanOrEqual(
+            now + refresh_expires_in,
+          );
+          expect(session.rt_exp).toBeLessThanOrEqual(
+            Math.floor(Date.now() / 1000) + refresh_expires_in,
+          );
+        } else {
+          expect(session.rt_exp).toBeUndefined();
+        }
+      },
+    );
+
     it('sets session cookie and redirects to callbackUrl with valid code+state', async () => {
       const state = 'valid-state';
       const txCookieValue = await makeTxCookie({
@@ -655,6 +760,7 @@ describe('AuthController (integration)', () => {
       const cookieValue = sessCookieHeader.split(';')[0].split('=')[1];
       const payload = await app.get(SessionService).decrypt(cookieValue);
 
+      expect(payload.session_exp - payload.iat).toBe(2592000);
       expect(payload.claims['email']).toBe('u@example.com');
       expect(payload.claims['name']).toBe('Test User');
       expect(payload.claims['roles']).toEqual(['admin']);
@@ -663,7 +769,190 @@ describe('AuthController (integration)', () => {
     });
   });
 
+  describe('job title from Keycloak UserInfo', () => {
+    const loginAndGetClaims = async (
+      idTokenClaims: Record<string, unknown> = {},
+    ): Promise<Record<string, unknown>> => {
+      const state = 'job-title-state';
+      const txCookieValue = await makeTxCookie({
+        state,
+        nonce: 'nonce',
+        codeVerifier: 'verifier',
+        providerId: 'keycloak',
+        callbackUrl: APP_BASE,
+      });
+      MOCK_CLIENT.callbackParams.mockReturnValue({ code: 'code', state });
+      MOCK_CLIENT.callback.mockResolvedValue({
+        access_token: 'at',
+        refresh_token: 'rt',
+        expires_at: 9999999999,
+        claims: () => ({ sub: 'user-1', ...idTokenClaims }),
+      });
+
+      const callback = await request(app.getHttpServer())
+        .get(`/api/v1/auth/callback/keycloak?code=code&state=${state}`)
+        .set('Cookie', `${TX_COOKIE}=${txCookieValue}`)
+        .expect(302);
+      const cookies = [callback.headers['set-cookie']].flat() as string[];
+      const sessionCookies = cookies
+        .filter((cookie) => cookie.startsWith(COOKIE_NAME))
+        .map((cookie) => cookie.split(';')[0])
+        .join('; ');
+      const profile = await request(app.getHttpServer())
+        .get('/api/v1/auth/me')
+        .set('Cookie', sessionCookies)
+        .expect(200);
+      return profile.body.claims;
+    };
+
+    it('persists a UserInfo-only job title without copying other profile claims', async () => {
+      MOCK_CLIENT.userinfo.mockResolvedValue({
+        sub: 'user-1',
+        job_title: 'Lead Engineer',
+        roles: ['admin'],
+        phone_number: '+1234567890',
+      });
+
+      const claims = await loginAndGetClaims();
+
+      expect(claims).toEqual({ sub: 'user-1', job_title: 'Lead Engineer' });
+      expect(MOCK_CLIENT.userinfo).toHaveBeenCalledWith('at');
+    });
+
+    it('keeps the ID-token job title without requesting UserInfo', async () => {
+      const claims = await loginAndGetClaims({ job_title: 'Engineer' });
+
+      expect(claims['job_title']).toBe('Engineer');
+      expect(MOCK_CLIENT.userinfo).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, null, '', 42, ['Engineer']])(
+      'allows login without forwarding an unusable UserInfo job title (%j)',
+      async (jobTitle) => {
+        MOCK_CLIENT.userinfo.mockResolvedValue({
+          sub: 'user-1',
+          job_title: jobTitle,
+        });
+
+        expect(await loginAndGetClaims()).toEqual({ sub: 'user-1' });
+      },
+    );
+
+    it.each(['another-user', undefined])(
+      'ignores UserInfo when its subject does not match the ID token (%j)',
+      async (sub) => {
+        MOCK_CLIENT.userinfo.mockResolvedValue({
+          sub,
+          job_title: 'Another user job title',
+        });
+
+        expect(await loginAndGetClaims()).toEqual({ sub: 'user-1' });
+      },
+    );
+
+    it('keeps login available when the optional UserInfo request fails', async () => {
+      MOCK_CLIENT.userinfo.mockRejectedValue(new Error('UserInfo unavailable'));
+
+      expect(await loginAndGetClaims()).toEqual({ sub: 'user-1' });
+    });
+
+    it('skips UserInfo when the provider does not advertise its endpoint', async () => {
+      delete MOCK_CLIENT.issuer.metadata['userinfo_endpoint'];
+
+      expect(await loginAndGetClaims()).toEqual({ sub: 'user-1' });
+      expect(MOCK_CLIENT.userinfo).not.toHaveBeenCalled();
+    });
+
+    it('keeps other providers on their existing ID-token claim path', async () => {
+      providerConfigOverride = { id: 'auth0' };
+
+      expect(await loginAndGetClaims()).toEqual({ sub: 'user-1' });
+      expect(MOCK_CLIENT.userinfo).not.toHaveBeenCalled();
+    });
+  });
+
   describe('GET /api/v1/auth/me', () => {
+    it('renews the configured lifetime and rejects replay of the expired original cookie', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(now * 1000);
+      configOverride.AUTH_SESSION_MAX_AGE_SECONDS = 120;
+      const payload = {
+        ...sampleSession,
+        session_exp: now + 120,
+        at_exp: now + 3600,
+        rt_exp: undefined,
+        bucket: 'test-bucket',
+      };
+      const originalCookie = await makeSessionCookie(payload);
+      const refresh = new RefreshService(
+        app.get(ProviderRegistryService),
+        app.get(ConfigService),
+      );
+      MOCK_REFRESH_SERVICE.refresh.mockImplementation((session) =>
+        refresh.refresh(session),
+      );
+      MOCK_CLIENT.refresh.mockResolvedValue({
+        access_token: 'renewed-at',
+        expires_at: now + 7200,
+        refresh_token: 'renewed-rt',
+      });
+
+      clock.mockReturnValue((now + 100) * 1000);
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/auth/me')
+        .set('Cookie', `${COOKIE_NAME}=${originalCookie}`)
+        .expect(200);
+      const cookies = [response.headers['set-cookie']].flat() as string[];
+      const cookie = cookies.find((value) =>
+        value.startsWith(`${COOKIE_NAME}=`),
+      );
+      if (!cookie) throw new Error('Expected renewed session cookie');
+      const cookiePair = cookie.split(';')[0];
+      const renewed = await app
+        .get(SessionService)
+        .decrypt(cookiePair.slice(COOKIE_NAME.length + 1));
+      expect(renewed.session_exp).toBe(now + 220);
+      expect(renewed.iat).toBe(now + 100);
+      expect(renewed.csrf).toBe(payload.csrf);
+      expect(cookie).toContain('Max-Age=120');
+
+      clock.mockReturnValue((now + 121) * 1000);
+      await request(app.getHttpServer())
+        .get('/api/v1/auth/me')
+        .set('Cookie', cookiePair)
+        .expect(200);
+      await request(app.getHttpServer())
+        .get('/api/v1/auth/me')
+        .set('Cookie', `${COOKIE_NAME}=${originalCookie}`)
+        .expect(401);
+      expect(MOCK_CLIENT.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      { v: 1, session_exp: undefined },
+      { session_exp: 0 },
+      { session_exp: '9999999999' },
+      { rt_exp: 0 },
+    ])(
+      'rejects replayed legacy or expired session %j despite a valid access token',
+      async (overrides) => {
+        const token = await makeSessionCookie({
+          ...sampleSession,
+          ...overrides,
+        });
+        const res = await request(app.getHttpServer())
+          .get('/api/v1/auth/me')
+          .set('Cookie', `${COOKIE_NAME}=${token}`)
+          .expect(401);
+        expect(res.headers['set-cookie']).toEqual(
+          expect.arrayContaining([
+            expect.stringMatching(/__Host-chat\.sess=; Max-Age=0/),
+          ]),
+        );
+        expect(MOCK_REFRESH_SERVICE.refresh).not.toHaveBeenCalled();
+        expect(MOCK_BUCKET_SERVICE.getUserBucket).not.toHaveBeenCalled();
+      },
+    );
     it('returns UserProfile with valid session cookie', async () => {
       const sessCookie = await makeSessionCookie(sampleSession);
       const res = await request(app.getHttpServer())
@@ -908,7 +1197,10 @@ describe('AuthController (integration)', () => {
         at_exp: now + 3600,
         csrf: randomUUID(),
       };
-      MOCK_REFRESH_SERVICE.refresh.mockResolvedValue(refreshedSession);
+      MOCK_REFRESH_SERVICE.refresh.mockResolvedValue({
+        payload: refreshedSession,
+        refreshed: true,
+      });
 
       const sessCookie = await makeSessionCookie(nearExpiredSession);
       const res = await request(app.getHttpServer())

@@ -1,9 +1,10 @@
-# Spec: generated-api-client-integration
+# generated-api-client-integration Specification
 
+## Purpose
+Defines how frontend domain modules consume the generated `@epam/chat-api-client` OpenAPI client — factory-created, same-origin, cookie-forwarding API instances with CSRF/unauthorized/telemetry middleware — instead of hand-rolled `fetch` calls, keeping app-side API wrappers thin adapters over generated methods.
 ## Requirements
-
 ### Requirement: Client configuration factory
-`apps/chat/src/server-api/api-client.ts` SHALL export a `createApiConfiguration()` factory function that returns a `Configuration` instance configured with `basePath: ''`, `credentials: 'include'`, and the CSRF, unauthorized, and telemetry middlewares. It SHALL also export pre-built module-level singleton instances: `modelsApi`, `deploymentsApi`, `conversationsApi`.
+`apps/chat/src/server-api/api-client.ts` SHALL export a `createApiConfiguration()` factory function that returns a `Configuration` instance configured with `basePath: ''`, `credentials: 'include'`, and the CSRF, unauthorized, and telemetry middlewares. It SHALL also export pre-built module-level singleton instances: `deploymentsApi`, `conversationsApi`.
 
 #### Scenario: Same-origin requests
 - **WHEN** a generated API class is instantiated via the factory
@@ -16,11 +17,11 @@
 ---
 
 ### Requirement: CSRF middleware
-The CSRF middleware SHALL inject an `X-CSRF-Token` header on every non-GET request when a CSRF token has been set via `setCsrfToken()`.
+`apps/chat/src/server-api/api-client.ts` SHALL obtain its CSRF middleware by calling `@epam/ai-dial-chat-hooks`'s `createCsrfMiddleware({ getCsrfToken, setCsrfToken })` with `apps/chat/src/server-api/base.ts`'s existing `getCsrfToken`/`setCsrfToken`, instead of defining `csrfMiddleware` inline. The middleware SHALL inject an `X-CSRF-Token` header on every non-GET request when a CSRF token has been set via `setCsrfToken()`.
 
 #### Scenario: CSRF token present, mutating request
 - **WHEN** `setCsrfToken('abc123')` has been called
-- **AND** a POST/PUT/DELETE request is made via a generated API class
+- **AND** a POST/PUT/DELETE request is made via a generated API class configured with `api-client.ts`'s `Configuration`
 - **THEN** the request SHALL include the header `X-CSRF-Token: abc123`
 
 #### Scenario: CSRF token absent
@@ -32,10 +33,14 @@ The CSRF middleware SHALL inject an `X-CSRF-Token` header on every non-GET reque
 - **WHEN** a GET request is made regardless of CSRF token state
 - **THEN** no `X-CSRF-Token` header SHALL be added
 
+#### Scenario: Middleware is produced by the shared factory
+- **WHEN** `apps/chat/src/server-api/api-client.ts` is inspected
+- **THEN** its CSRF middleware is the return value of `createCsrfMiddleware` imported from `@epam/ai-dial-chat-hooks`, with no locally re-implemented CSRF-header-injection logic
+
 ---
 
 ### Requirement: Unauthorized (401) middleware
-The unauthorized middleware SHALL intercept HTTP 401 responses, notify all registered `onUnauthorized` listeners, and throw `UnauthorizedError` with the request URL. The error SHALL propagate to the original caller.
+`apps/chat/src/server-api/api-client.ts` SHALL obtain its unauthorized middleware by calling `@epam/ai-dial-chat-hooks`'s `createUnauthorizedMiddleware({ notifyUnauthorized, refreshCsrfToken, isInvalidCsrfErrorBody })` with `apps/chat/src/server-api/base.ts`'s existing implementations, instead of defining `unauthorizedMiddleware` inline. The middleware SHALL intercept HTTP 401 responses, notify all registered `onUnauthorized` listeners, throw `UnauthorizedError` with the request URL, and refresh-and-retry exactly once on a classified invalid-CSRF response.
 
 #### Scenario: 401 response received
 - **WHEN** the backend returns HTTP 401 for any request made via a generated API class
@@ -51,6 +56,14 @@ The unauthorized middleware SHALL intercept HTTP 401 responses, notify all regis
 - **WHEN** a listener was registered via `onUnauthorized()` and then its returned cleanup function was called
 - **THEN** that listener SHALL NOT be called on subsequent 401 responses
 
+#### Scenario: Invalid-CSRF response refreshes and retries once
+- **WHEN** a response is classified invalid-CSRF by `isInvalidCsrfErrorBody`
+- **THEN** the middleware refreshes the CSRF token via `refreshCsrfToken` and retries the original request exactly once
+
+#### Scenario: Middleware is produced by the shared factory
+- **WHEN** `apps/chat/src/server-api/api-client.ts` is inspected
+- **THEN** its unauthorized middleware is the return value of `createUnauthorizedMiddleware` imported from `@epam/ai-dial-chat-hooks`, with no locally re-implemented 401/invalid-CSRF-retry logic
+
 ---
 
 ### Requirement: Telemetry middleware
@@ -63,19 +76,6 @@ The telemetry middleware SHALL record the HTTP method, URL, response status, and
 #### Scenario: Failed request telemetry
 - **WHEN** a generated API method receives a non-2xx response
 - **THEN** the telemetry middleware SHALL still execute (post-hook fires before the client throws)
-
----
-
-### Requirement: Models domain module uses generated client
-`apps/chat/src/server-api/models.ts` SHALL delegate to `ModelsApi` from `@epam/chat-api-client` instead of calling `get()` from `base.ts`. The exported function signatures (`getModels`, `getModel`) SHALL remain identical.
-
-#### Scenario: List models
-- **WHEN** `getModels()` is called
-- **THEN** it SHALL return a `DialModelListResponse`-compatible value via `ModelsApi.listModels()`
-
-#### Scenario: Get single model
-- **WHEN** `getModel(modelName)` is called
-- **THEN** it SHALL return a `DialModel`-compatible value via `ModelsApi.getModel({ modelName })`
 
 ---
 
@@ -137,3 +137,29 @@ The telemetry middleware SHALL record the HTTP method, URL, response status, and
 #### Scenario: Dependency graph edge
 - **WHEN** `npm exec nx graph` is run after the migration
 - **THEN** `apps/chat` SHALL show an explicit dependency on `libs/chat-api-client`
+
+### Requirement: Skills domain module uses generated client
+`apps/chat/src/server-api/api-client.ts` SHALL export a `skillsApi` singleton, built from `SkillsApi` in `@epam/chat-api-client` using the shared `createApiConfiguration()` factory, alongside the existing `deploymentsApi`/`conversationsApi`/`filesApi` singletons.
+
+`apps/chat/src/server-api/skills.api.ts` SHALL provide thin wrapper functions for all 10 skill operations, delegating to `skillsApi`, following the exact pattern `apps/chat/src/server-api/files.api.ts` already establishes for its own domain.
+
+#### Scenario: skillsApi singleton is exported
+- **WHEN** `apps/chat/src/server-api/api-client.ts` is inspected
+- **THEN** it exports `export const skillsApi = new SkillsApi(config);` alongside the other domain singletons
+
+#### Scenario: Binary skill downloads use Raw generated methods
+- **WHEN** `downloadSkill`/`downloadSkillFile` are called from `apps/chat/src/server-api/skills.api.ts`
+- **THEN** they call `skillsApi.downloadSkillRaw(...)`/`skillsApi.downloadSkillFileRaw(...)` to obtain the raw `fetch` `Response` (whose `.body` is a `ReadableStream`), documenting the same generator gap `files.api.ts:downloadFile` already documents for `application/octet-stream`/`application/zip` responses
+
+#### Scenario: ETag-returning mutations use Raw generated methods
+- **WHEN** `uploadSkill`, `uploadSkillFile`, `deleteSkillFile`, or `createSkillGroupingFolder` are called from `skills.api.ts` and the caller needs the returned `ETag` header
+- **THEN** the wrapper calls the corresponding `*Raw` generated method to read `response.headers.get('etag')`, since the generator does not surface response headers on the non-`Raw` method's parsed return value
+
+#### Scenario: Non-binary, non-ETag operations use normal generated methods
+- **WHEN** `listSkills`, `listSkillFiles`, `deleteSkill`, or `deleteSkillGroupingFolder` are called from `skills.api.ts`
+- **THEN** they use the normal (non-`Raw`) generated method, since their response is a small JSON body with no header the caller needs
+
+#### Scenario: No hand-edited generated files
+- **WHEN** the skills OpenAPI contract changes
+- **THEN** `npm run openapi` and `npm run openapi:check` regenerate `libs/chat-api-client`'s `SkillsApi` and model classes — no file under `libs/chat-api-client/` is hand-edited
+

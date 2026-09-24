@@ -1,4 +1,9 @@
-import { GhostButton, Skeleton, SkeletonVariant } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_KIT_ICON_STROKE,
+  GhostButton,
+  Skeleton,
+  SkeletonVariant,
+} from '@epam/ai-dial-ui-kit';
 import { IconChevronRight } from '@tabler/icons-react';
 import { FC, memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -39,7 +44,7 @@ const ScheduledTaskConversationBanner: FC = () => {
   const timestampLabel = useMemo(() => {
     const currentRun = history.items.find((run) => run.id === runId);
     if (currentRun) {
-      return mapScheduledTaskRunDtoToItem(currentRun, t).timestampLabel;
+      return mapScheduledTaskRunDtoToItem(currentRun, t, []).timestampLabel;
     }
     /*
      * The run that just created this conversation is often not yet present
@@ -119,10 +124,15 @@ const ScheduledTaskConversationBanner: FC = () => {
           ScheduledTasksI18nKeys.ConversationBannerTaskDetailsAriaLabel,
           { taskName: displayName },
         )}
-        className="dial-tiny-semi-text flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-accent hover:bg-control-accent-alpha-hover focus-visible:outline focus-visible:-outline-offset-1 focus-visible:outline-focus-black"
+        className="dial-tiny-semi-text flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-accent hover:bg-control-accent-alpha-hover focus-visible:outline focus-visible:-outline-offset-1 focus-visible:outline-focus"
       >
         {t(ScheduledTasksI18nKeys.ConversationBannerTaskDetailsLabel)}
-        <IconChevronRight size={16} className="rtl:scale-x-[-1]" aria-hidden />
+        <IconChevronRight
+          size={16}
+          className="rtl:scale-x-[-1]"
+          aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
+        />
       </Link>
     </div>
   );

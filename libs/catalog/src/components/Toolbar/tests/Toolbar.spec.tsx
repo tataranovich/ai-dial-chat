@@ -1,12 +1,12 @@
 import { render, screen } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CATALOG_CLASS } from '../../../constants/public-class-names';
 import { CatalogViewMode } from '../../../types/view-mode';
 import { Toolbar } from '../Toolbar';
 
-vi.mock('@epam/ai-dial-ui-kit', () => ({
-  DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
-  ElementSize: { Small: 'small', Regular: 'regular' },
+vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@epam/ai-dial-ui-kit')>()),
   DialSearch: ({
     value,
     onChange,
@@ -22,7 +22,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       onChange={(e) => onChange(e.target.value)}
     />
   ),
-  DialEllipsisTooltip: ({
+  EllipsisTooltip: ({
     text,
     className,
   }: {
@@ -69,15 +69,6 @@ vi.mock('@tabler/icons-react', () => ({
   IconSearch: () => null,
 }));
 
-vi.mock('@epam/ai-dial-chat-shared', () => ({
-  mergeClasses: (...args: (string | undefined)[]) =>
-    args.filter(Boolean).join(' '),
-  buildCssVars: (vars: Record<string, string | undefined>) =>
-    Object.fromEntries(
-      Object.entries(vars).filter(([, v]) => v !== undefined),
-    ) as React.CSSProperties,
-}));
-
 const renderToolbar = (props?: Partial<React.ComponentProps<typeof Toolbar>>) =>
   render(
     <Toolbar
@@ -97,5 +88,37 @@ describe('Toolbar', () => {
   it('renders the section title', () => {
     renderToolbar({ title: 'Browse' });
     expect(screen.getByText('Browse')).toBeTruthy();
+  });
+
+  it('renders browseHeaderRenderer instead of the title/count when provided', () => {
+    renderToolbar({
+      title: 'Browse',
+      totalCount: 5,
+      browseHeaderRenderer: (
+        <nav aria-label="breadcrumb">All entities &gt; Org</nav>
+      ),
+    });
+
+    expect(screen.getByLabelText('breadcrumb')).toBeTruthy();
+    expect(screen.queryByText('Browse')).toBeNull();
+  });
+});
+
+/*
+ * Walking up to an unlabeled container is the only way to assert a class on it:
+ * the element has no role or text of its own, and querying *by* the class would
+ * still pass with the class on the wrong node.
+ */
+const closestWithClass = (from: Element, className: string): Element | null =>
+  // eslint-disable-next-line testing-library/no-node-access -- see above
+  from.closest(`.${className}`);
+
+describe('Toolbar — public class names', () => {
+  it('stamps the toolbar root', () => {
+    renderToolbar();
+
+    expect(
+      closestWithClass(screen.getByText('Browse'), CATALOG_CLASS.toolbar),
+    ).toBeTruthy();
   });
 });

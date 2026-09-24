@@ -2,23 +2,26 @@ import {
   DeploymentItemDto,
   DialToolsetDto,
 } from '@epam/ai-dial-chat-api-client';
+import * as chatHooksModule from '@epam/ai-dial-chat-hooks';
 import type { DeploymentConfigurationSchema } from '@epam/ai-dial-chat-shared';
 import { SendOnEnter } from '@epam/ai-dial-conversation-input';
 import { NotificationVariant } from '@epam/ai-dial-ui-kit';
 import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ReactNode, useEffect, useState, type Context } from 'react';
-import { MemoryRouter, useNavigate } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as UserContextModule from '../../context/auth/UserContext';
 import * as DeploymentsContextModule from '../../context/DeploymentsContext';
+import * as IsolatedModelViewContextModule from '../../context/IsolatedModelViewContext';
 import * as NotificationContextModule from '../../context/NotificationContext';
 import * as OverlayContextMock from '../../context/overlay/OverlayContext';
-import * as ToolsMenuModule from '../../hooks/conversation/useToolsMenu';
+import { useAppConfig as mockUseAppConfig } from '../../context/tests/app-config-context-mock';
+import { createNotificationContextValue } from '../../context/tests/notification-context-mock';
 import * as KeyboardShortcutModule from '../../hooks/keyboard-shortcut/useKeyboardShortcutPreference';
+import * as apiClient from '../../server-api/api-client';
 import * as conversationsApi from '../../server-api/conversations.api';
-import * as filesApi from '../../server-api/files.api';
 import { AuthStatus } from '../../types/auth-status';
-import * as attachmentToDtoModule from '../../utils/attachment-to-dto';
 import ConversationRoute from './ConversationRoute';
 
 const OverlayTestCtx = (
@@ -31,13 +34,21 @@ const OverlayTestCtx = (
 
 const overlayMocks = vi.hoisted(() => ({
   current: undefined as
-    | { notifyConversationLoaded: ReturnType<typeof vi.fn> }
-    | undefined,
+    { notifyConversationLoaded: ReturnType<typeof vi.fn> } | undefined,
   notifyConversationLoaded: vi.fn(),
 }));
 
-vi.mock('../../hooks/attachment/useOpenAttachmentCanvas', () => ({
-  useOpenAttachmentCanvas: () => ({ openAttachmentCanvas: vi.fn() }),
+vi.mock('@epam/ai-dial-attachment-canvas', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-attachment-canvas')>();
+  return {
+    ...actual,
+    useOpenAttachmentCanvas: () => ({ openAttachmentCanvas: vi.fn() }),
+  };
+});
+
+vi.mock('../../hooks/attachment/useAttachmentCanvasResolvers', () => ({
+  useAttachmentCanvasResolvers: () => ({ resolvers: {}, options: {} }),
 }));
 vi.mock(
   '../../components/DeploymentSelector/useDeploymentSelectorOverlay',
@@ -48,16 +59,53 @@ vi.mock(
     }),
   }),
 );
-vi.mock('../../context/AppConfigContext', () => ({
-  default: ({ children }: { children: ReactNode }) => children,
-  useAppConfig: () => ({
-    status: 'ready',
-    features: {},
-    config: { asrModelId: null, transcribeSizeLimitBytes: 5 * 1024 * 1024 },
-  }),
-  useFeatureFlag: () => false,
+const mockOpenParametersPopup = vi.fn();
+/* Captured so a test can play the role of the prompt picker and hand text back
+   through the route's own `onInsertText`. */
+let capturedOnInsertText: ((text: string) => void) | undefined;
+vi.mock('../../components/PromptSelector/usePromptSelectorOverlay', () => ({
+  usePromptSelectorOverlay: ({
+    onInsertText,
+  }: {
+    onInsertText: (text: string) => void;
+  }) => {
+    capturedOnInsertText = onInsertText;
+    return {
+      renderOverlay: vi.fn(),
+      promptCatalogModal: null,
+      parametersPopup: null,
+      openParametersPopup: mockOpenParametersPopup,
+    };
+  },
 }));
+/* The real hook needs SkillsProvider/FavoriteApplicationsContext, which this
+ * harness does not mount; the stub mirrors its flag-off shape. */
+vi.mock('../../components/SkillSelector/useSkillSelectorOverlay', () => ({
+  useSkillSelectorOverlay: () => ({
+    skillMenuOverlay: undefined,
+    commandMenu: undefined,
+    skillCatalogModal: null,
+    skillDetailsPanel: null,
+    selectedSkillElement: null,
+    selectedSkillPath: null,
+    selectedSkills: undefined,
+    selectSkill: vi.fn(),
+    removeSelectedSkill: vi.fn(),
+    renderHistorySkills: () => null,
+  }),
+}));
+vi.mock(
+  '../../context/AppConfigContext',
+  async () => import('../../context/tests/app-config-context-mock'),
+);
 vi.mock('../../context/DeploymentsContext');
+vi.mock('../../context/IsolatedModelViewContext', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../context/IsolatedModelViewContext')
+    >();
+  return { ...actual, useIsolatedModelView: vi.fn() };
+});
 vi.mock('../../context/auth/UserContext');
 vi.mock('../../context/NotificationContext');
 vi.mock('../../context/overlay/OverlayContext', async () => {
@@ -79,15 +127,17 @@ vi.mock('../../hooks/useUiFeature', async () => {
     useUiFeature: (feature: any) => DEFAULT_ENABLED_UI_FEATURES.has(feature),
   };
 });
-vi.mock('../../hooks/conversation/useToolsMenu', () => ({
-  useToolsMenu: vi.fn(),
-}));
 vi.mock('../../server-api/conversations.api');
-vi.mock('../../server-api/files.api');
-vi.mock('../../utils/attachment-to-dto');
-vi.mock('../../utils/build-upload-path', () => ({
-  buildUploadPath: vi.fn((fileName: string) => `uploads/${fileName}`),
-}));
+vi.mock('../../server-api/api-client', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../server-api/api-client')>();
+  return { ...actual, filesApi: { ...actual.filesApi, uploadFile: vi.fn() } };
+});
+vi.mock('@epam/ai-dial-chat-hooks', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-chat-hooks')>();
+  return { ...actual, attachmentsToDtos: vi.fn(), useToolsMenu: vi.fn() };
+});
 vi.mock('../../components/StarterButtons/StarterButtons', () => ({
   default: ({
     starters,
@@ -137,6 +187,7 @@ vi.mock('@epam/ai-dial-conversation-input', async (importOriginal) => {
       selectedDeploymentId,
       isInputDisabled,
       message,
+      textInsertion,
       sendOnEnter,
     }: {
       onSend?: (msg: string, att: never[]) => Promise<void> | void;
@@ -148,6 +199,7 @@ vi.mock('@epam/ai-dial-conversation-input', async (importOriginal) => {
       selectedDeploymentId?: string | null;
       isInputDisabled?: boolean;
       message?: string;
+      textInsertion?: { text: string; revision: number };
       sendOnEnter?: string;
     }) => (
       <div>
@@ -161,6 +213,12 @@ vi.mock('@epam/ai-dial-conversation-input', async (importOriginal) => {
           {String(isInputDisabled ?? false)}
         </output>
         <output aria-label="Input message">{message ?? ''}</output>
+        <output aria-label="Input insertion">
+          {textInsertion?.revision ? textInsertion.text : ''}
+        </output>
+        <output aria-label="Input insertion revision">
+          {textInsertion?.revision ?? 'none'}
+        </output>
         <output aria-label="Send on enter">{sendOnEnter ?? 'none'}</output>
         <button
           type="button"
@@ -213,6 +271,14 @@ const RouteStateDriver = ({ deploymentId }: { deploymentId: string }) => {
   return null;
 };
 
+/* `<output>` carries an implicit role="status", so the probe needs no test id. */
+const LocationStateProbe = () => {
+  const { state } = useLocation();
+  return (
+    <output aria-label="Location state">{JSON.stringify(state ?? null)}</output>
+  );
+};
+
 const renderRouteWithDeploymentState = (deploymentId: string) =>
   render(
     <MemoryRouter>
@@ -227,14 +293,16 @@ describe('ConversationRoute', () => {
   const mockUseKeyboardShortcutPreference = vi.mocked(
     KeyboardShortcutModule.useKeyboardShortcutPreference,
   );
-  const mockUseToolsMenu = vi.mocked(ToolsMenuModule.useToolsMenu);
+  const mockUseToolsMenu = vi.mocked(chatHooksModule.useToolsMenu);
   const mockUseNotification = vi.mocked(
     NotificationContextModule.useNotification,
   );
   const mockCreateConversation = vi.mocked(conversationsApi.createConversation);
-  const mockUploadFile = vi.mocked(filesApi.uploadFile);
-  const mockAttachmentsToDtos = vi.mocked(
-    attachmentToDtoModule.attachmentsToDtos,
+  const mockRenameConversation = vi.mocked(conversationsApi.renameConversation);
+  const mockUploadFile = vi.mocked(apiClient.filesApi.uploadFile);
+  const mockAttachmentsToDtos = vi.mocked(chatHooksModule.attachmentsToDtos);
+  const mockUseIsolatedModelView = vi.mocked(
+    IsolatedModelViewContextModule.useIsolatedModelView,
   );
   const mockShowNotification = vi.fn();
   const mockRestoreSelectedItemId = vi.fn();
@@ -242,6 +310,18 @@ describe('ConversationRoute', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    /* Re-armed here because one test's `vi.restoreAllMocks()` wipes the
+       implementation set on the shared spy. */
+    mockUseAppConfig.mockReturnValue({
+      status: 'ready',
+      features: {},
+      config: { asrModelId: null, transcribeSizeLimitBytes: 5 * 1024 * 1024 },
+    });
+    mockUseIsolatedModelView.mockReturnValue({
+      isActive: false,
+      isNotFound: false,
+      resolvedDeploymentId: null,
+    });
     mockUseDeployments.mockReturnValue({
       items: mockItems,
       selectedItemId: 'gpt-4o',
@@ -255,6 +335,8 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
     mockUseUser.mockReturnValue({
@@ -282,12 +364,11 @@ describe('ConversationRoute', () => {
       toolsMenuItems: [],
       onToolToggle: vi.fn(),
       toolConfigurationValue: {},
+      restoreToolConfiguration: vi.fn(),
     });
-    mockUseNotification.mockReturnValue({
-      notifications: [],
-      showNotification: mockShowNotification,
-      dismissNotification: vi.fn(),
-    });
+    mockUseNotification.mockReturnValue(
+      createNotificationContextValue(mockShowNotification),
+    );
   });
 
   it('passes catalog items and selectedItemId into ConversationInput', async () => {
@@ -344,6 +425,35 @@ describe('ConversationRoute', () => {
     await waitFor(() => {
       expect(mockRestoreSelectedItemId).toHaveBeenCalledWith('gpt-4o-mini');
     });
+    expect(mockRestoreDefaultSelection).not.toHaveBeenCalled();
+  });
+
+  /*
+   * `history.state` survives a reload, so a route-state deployment that is not
+   * consumed would keep overriding the configured default on every refresh.
+   */
+  it('clears the router-state deploymentId once consumed, so a reload resolves the default instead', async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: '/', state: { deploymentId: 'gpt-4o-mini' } },
+        ]}
+      >
+        <LocationStateProbe />
+        <ConversationRoute />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(mockRestoreSelectedItemId).toHaveBeenCalledWith('gpt-4o-mini');
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('status', { name: 'Location state' }).textContent,
+      ).toBe('null');
+    });
+    /* The clearing navigation must not undo the selection it just applied. */
     expect(mockRestoreDefaultSelection).not.toHaveBeenCalled();
   });
 
@@ -419,6 +529,8 @@ describe('ConversationRoute', () => {
         'gpt-4o',
         undefined,
         undefined,
+        undefined,
+        undefined,
       );
     });
   });
@@ -462,9 +574,10 @@ describe('ConversationRoute', () => {
 
     await waitFor(() => {
       expect(mockUploadFile).toHaveBeenCalledWith(
-        'user-bucket',
-        'uploads/file.pdf',
-        expect.any(File),
+        expect.objectContaining({
+          bucket: 'user-bucket',
+          file: expect.any(File),
+        }),
       );
     });
   });
@@ -483,6 +596,8 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
 
@@ -512,6 +627,8 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
     renderRoute();
@@ -541,6 +658,8 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
     renderRoute();
@@ -573,8 +692,10 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: function (
-        item: DeploymentItemDto | DialToolsetDto,
+        _item: DeploymentItemDto | DialToolsetDto,
       ): void {
         throw new Error('Function not implemented.');
       },
@@ -585,9 +706,7 @@ describe('ConversationRoute', () => {
     expect(await screen.findByText('Choose how to start')).toBeTruthy();
     expect(screen.getByLabelText('Input disabled').textContent).toBe('true');
 
-    await act(async () => {
-      screen.getByText('Draft').click();
-    });
+    await userEvent.click(screen.getByText('Draft'));
 
     expect(screen.getByLabelText('Input message').textContent).toBe(
       'Write a draft',
@@ -639,6 +758,8 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
 
@@ -646,9 +767,7 @@ describe('ConversationRoute', () => {
 
     expect(screen.getByLabelText('Input disabled').textContent).toBe('false');
 
-    await act(async () => {
-      screen.getByText('Draft').click();
-    });
+    await userEvent.click(screen.getByText('Draft'));
 
     expect(screen.getByLabelText('Input message').textContent).toBe(
       'Write a draft',
@@ -679,8 +798,10 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: function (
-        item: DeploymentItemDto | DialToolsetDto,
+        _item: DeploymentItemDto | DialToolsetDto,
       ): void {
         throw new Error('Function not implemented.');
       },
@@ -688,9 +809,7 @@ describe('ConversationRoute', () => {
 
     renderRoute();
 
-    await act(async () => {
-      screen.getByText('Summarize').click();
-    });
+    await userEvent.click(screen.getByText('Summarize'));
 
     await waitFor(() => {
       expect(mockCreateConversation).toHaveBeenCalledWith(
@@ -734,14 +853,14 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
 
     renderRoute();
 
-    await act(async () => {
-      screen.getByText('OCR image').click();
-    });
+    await userEvent.click(screen.getByText('OCR image'));
 
     await waitFor(() => {
       expect(mockCreateConversation).toHaveBeenCalledWith(
@@ -758,6 +877,7 @@ describe('ConversationRoute', () => {
       toolsMenuItems: [],
       onToolToggle: vi.fn(),
       toolConfigurationValue: { starter: true },
+      restoreToolConfiguration: vi.fn(),
     });
     const selectedDeploymentConfiguration: DeploymentConfigurationSchema = {
       type: 'object',
@@ -790,14 +910,14 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
 
     renderRoute();
 
-    await act(async () => {
-      screen.getByText('Starter override').click();
-    });
+    await userEvent.click(screen.getByText('Starter override'));
 
     await waitFor(() => {
       expect(mockCreateConversation).toHaveBeenCalledWith(
@@ -851,14 +971,14 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
 
     renderRoute();
 
-    await act(async () => {
-      screen.getByText('Summarize').click();
-    });
+    await userEvent.click(screen.getByText('Summarize'));
 
     await waitFor(() => {
       expect(mockCreateConversation).toHaveBeenCalledWith(
@@ -903,14 +1023,14 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
 
     renderRoute();
 
-    await act(async () => {
-      screen.getByText('2').click();
-    });
+    await userEvent.click(screen.getByText('2'));
 
     await waitFor(() => {
       expect(mockCreateConversation).toHaveBeenCalledWith(
@@ -954,6 +1074,8 @@ describe('ConversationRoute', () => {
       toolsets: [],
       refetchToolsets: vi.fn(),
       refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
       mergeSharedItem: vi.fn(),
     });
     mockCreateConversation.mockRejectedValueOnce({
@@ -968,9 +1090,7 @@ describe('ConversationRoute', () => {
 
     renderRoute();
 
-    await act(async () => {
-      screen.getByText('OCR image').click();
-    });
+    await userEvent.click(screen.getByText('OCR image'));
 
     await waitFor(() => {
       expect(mockShowNotification).toHaveBeenCalledWith({
@@ -1062,7 +1182,53 @@ describe('ConversationRoute', () => {
         'gpt-4o',
         undefined,
         undefined,
+        undefined,
+        undefined,
       );
+    });
+  });
+
+  /* Issue #8754: a picked prompt arrived on the composer's `message` channel,
+   * which replaces the whole textarea value, so a draft typed before opening the
+   * picker was destroyed with no way to get it back. The caret-insert mechanics
+   * themselves live in the Input component's own suite. */
+  describe('inserting a picked prompt', () => {
+    const renderAndWaitForPicker = async () => {
+      renderRoute();
+      await waitFor(() => expect(capturedOnInsertText).toBeDefined());
+    };
+
+    it('hands the prompt to the composer on the insert channel', async () => {
+      await renderAndWaitForPicker();
+
+      act(() => capturedOnInsertText?.('Prompt body'));
+
+      expect(screen.getByLabelText('Input insertion').textContent).toBe(
+        'Prompt body',
+      );
+    });
+
+    it('does not write the prompt to the channel that replaces the draft', async () => {
+      await renderAndWaitForPicker();
+
+      act(() => capturedOnInsertText?.('Prompt body'));
+
+      expect(screen.getByLabelText('Input message').textContent).toBe('');
+    });
+
+    it('re-inserts the same prompt when it is picked twice', async () => {
+      await renderAndWaitForPicker();
+
+      act(() => capturedOnInsertText?.('Prompt body'));
+      expect(
+        screen.getByLabelText('Input insertion revision').textContent,
+      ).toBe('1');
+
+      act(() => capturedOnInsertText?.('Prompt body'));
+
+      expect(
+        screen.getByLabelText('Input insertion revision').textContent,
+      ).toBe('2');
     });
   });
 
@@ -1111,6 +1277,163 @@ describe('ConversationRoute', () => {
         );
       });
       expect(mockRestoreSelectedItemId).not.toHaveBeenCalled();
+    });
+  });
+
+  /* TODO: remove in next release */
+  describe('isolated model view', () => {
+    it('preselects the resolved deployment without persisting it as the default', async () => {
+      mockUseIsolatedModelView.mockReturnValue({
+        isActive: true,
+        isNotFound: false,
+        resolvedDeploymentId: 'gpt-4o',
+      });
+
+      renderRoute();
+
+      await waitFor(() => {
+        expect(mockRestoreSelectedItemId).toHaveBeenCalledWith('gpt-4o');
+      });
+      expect(mockRestoreDefaultSelection).not.toHaveBeenCalled();
+    });
+
+    it('does not call restoreDefaultSelection while the deployment is still resolving', async () => {
+      mockUseIsolatedModelView.mockReturnValue({
+        isActive: true,
+        isNotFound: false,
+        resolvedDeploymentId: null,
+      });
+
+      renderRoute();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('Catalog items count').textContent).toBe(
+          '1',
+        );
+      });
+      expect(mockRestoreDefaultSelection).not.toHaveBeenCalled();
+      expect(mockRestoreSelectedItemId).not.toHaveBeenCalled();
+    });
+
+    it('renders NoDataContent instead of the composer when the model is not found', async () => {
+      mockUseIsolatedModelView.mockReturnValue({
+        isActive: true,
+        isNotFound: true,
+        resolvedDeploymentId: null,
+      });
+
+      renderRoute();
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('chat.isolatedModelNotFoundTitle'),
+        ).toBeTruthy();
+      });
+      expect(screen.queryByLabelText('Catalog items count')).toBeNull();
+    });
+
+    it('renames the conversation to isolated_<modelId> after the first message creates it', async () => {
+      mockUseIsolatedModelView.mockReturnValue({
+        isActive: true,
+        isNotFound: false,
+        resolvedDeploymentId: 'gpt 4!',
+      });
+
+      renderRoute();
+      const sendButton = await screen.findByRole('button', { name: 'Send' });
+
+      await act(async () => {
+        sendButton.click();
+      });
+
+      await waitFor(() => {
+        expect(mockRenameConversation).toHaveBeenCalledWith(
+          'path__Hello',
+          'isolated_gpt4',
+        );
+      });
+    });
+
+    it('renames the conversation after a submit starter creates it', async () => {
+      mockUseIsolatedModelView.mockReturnValue({
+        isActive: true,
+        isNotFound: false,
+        resolvedDeploymentId: 'gpt-4o',
+      });
+      mockUseDeployments.mockReturnValue({
+        items: [
+          {
+            ...mockItems[0],
+            conversationStarters: {
+              autoSubmit: true,
+              starters: [{ title: 'Summarize', text: 'Summarize this' }],
+            },
+          },
+        ],
+        selectedItemId: 'gpt-4o',
+        setSelectedItemId: vi.fn(),
+        restoreSelectedItemId: mockRestoreSelectedItemId,
+        restoreDefaultSelection: mockRestoreDefaultSelection,
+        selectedDeploymentConfiguration: null,
+        isLoading: false,
+        error: null,
+        schemas: [],
+        toolsets: [],
+        refetchToolsets: vi.fn(),
+        refetchDeployments: vi.fn(),
+        selectedDeploymentDetails: null,
+        isDeploymentDetailsLoading: false,
+        mergeSharedItem: vi.fn(),
+      });
+
+      renderRoute();
+
+      await userEvent.click(screen.getByText('Summarize'));
+
+      await waitFor(() => {
+        expect(mockRenameConversation).toHaveBeenCalledWith(
+          'path__Hello',
+          'isolated_gpt-4o',
+        );
+      });
+    });
+
+    it('does not rename the conversation when isolated view is not active', async () => {
+      renderRoute();
+      const sendButton = await screen.findByRole('button', { name: 'Send' });
+
+      await act(async () => {
+        sendButton.click();
+      });
+
+      await waitFor(() => {
+        expect(mockCreateConversation).toHaveBeenCalledOnce();
+      });
+      expect(mockRenameConversation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pending parameterized prompt from router state', () => {
+    it('opens the parameters popup for a pendingPrompt passed as router state', async () => {
+      const pendingPrompt = {
+        id: 'prompts/my-bucket/Work/AI/summarize',
+        name: 'summarize',
+        content: 'Summarize {{text}}',
+        description: 'A summarizer prompt',
+      };
+
+      render(
+        <MemoryRouter
+          initialEntries={[{ pathname: '/', state: { pendingPrompt } }]}
+        >
+          <ConversationRoute />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => {
+        expect(mockOpenParametersPopup).toHaveBeenCalledWith(pendingPrompt);
+      });
+      expect(screen.getByLabelText('Input message').textContent).toBe('');
     });
   });
 });

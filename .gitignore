@@ -45,6 +45,7 @@ Thumbs.db
 .github/instructions/nx.instructions.md
 
 .claude/worktrees
+.worktrees
 .claude/settings.local.json
 .playwright-mcp
 responsive-screenshots
@@ -58,3 +59,5 @@ vitest.config.*.timestamp*
 .env*.local
 
 .nx/self-healing
+
+.nx/migrate-runs

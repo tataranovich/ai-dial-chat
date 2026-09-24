@@ -1,14 +1,18 @@
-import { DeploymentItem, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  DeploymentItem,
+  mergeClasses,
+  SELECT_LIST_MAX_HEIGHT_PX,
+} from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   Dropdown,
-  DialDropdownIcon,
-  DialTooltip,
-  ElementSize,
   GhostIconButton,
+  Tooltip,
 } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown } from '@tabler/icons-react';
 import { type CSSProperties, type FC, ReactNode, useState } from 'react';
+import { CONVERSATION_INPUT_CLASS } from '../../constants/public-class-names';
 import { useModelSelector } from '../../hooks/useModelSelector';
 import type { ModelSelectorLabels } from '../../models/Input';
 import { BottomSheetShell } from '../BottomSheetShell/BottomSheetShell';
@@ -60,6 +64,7 @@ export const ModelSelectorControl: FC<Props> = ({
     selectorIcon,
     selectorAriaLabel,
     selectedLabel,
+    selectedVersion,
     menuItems,
     menuHeader,
     onOpenChange: handleModelSelectorOpenChange,
@@ -82,19 +87,39 @@ export const ModelSelectorControl: FC<Props> = ({
   const caretIcon = (
     <IconChevronDown
       size={DIAL_ICON_SIZE.SM}
-      className={styles.modelSelectorCaret}
+      className={mergeClasses(
+        styles.modelSelectorCaret,
+        CONVERSATION_INPUT_CLASS.modelSelectorCaret,
+      )}
       aria-hidden
+      stroke={DIAL_KIT_ICON_STROKE}
     />
+  );
+
+  /*
+   * The icon comes from `DeploymentIcon`, which takes no class of its own, so
+   * the host styling hook needs a wrap. It is layout-neutral: the icon is a
+   * fixed-size, non-shrinking box in all three presentations.
+   */
+  const iconNode = (
+    <span
+      className={mergeClasses(
+        'flex shrink-0 items-center',
+        CONVERSATION_INPUT_CLASS.modelSelectorIcon,
+      )}
+    >
+      {selectorIcon}
+    </span>
   );
 
   if (isMobile) {
     return (
       <>
-        <DialTooltip tooltip={selectedLabel}>
+        <Tooltip tooltip={selectedLabel}>
           <GhostIconButton
             icon={
               <div className="flex items-center gap-1">
-                {selectorIcon}
+                {iconNode}
                 {caretIcon}
               </div>
             }
@@ -106,9 +131,10 @@ export const ModelSelectorControl: FC<Props> = ({
               'w-[50px]',
               styles.modelSelectorButton,
               disabledIconClassName,
+              CONVERSATION_INPUT_CLASS.modelSelectorButton,
             )}
           />
-        </DialTooltip>
+        </Tooltip>
         {modelPickerOverlay ? (
           <BottomSheetShell
             isOpen={isModelSheetOpen}
@@ -116,6 +142,7 @@ export const ModelSelectorControl: FC<Props> = ({
             closeLabel={modelSelectorLabels?.closeLabel ?? 'Close'}
             onClose={() => setIsModelSheetOpen(false)}
             style={style}
+            className={CONVERSATION_INPUT_CLASS.modelMenu}
           >
             {modelPickerOverlay(() => setIsModelSheetOpen(false))}
           </BottomSheetShell>
@@ -142,6 +169,10 @@ export const ModelSelectorControl: FC<Props> = ({
   }
 
   if (modelPickerOverlay) {
+    const chipTooltip = selectedVersion
+      ? `${selectedLabel} · ${selectedVersion}`
+      : selectedLabel;
+
     return (
       <Dropdown
         placement="top-end"
@@ -153,18 +184,22 @@ export const ModelSelectorControl: FC<Props> = ({
         renderOverlay={() =>
           modelPickerOverlay(() => onPickerOpenChange?.(false))
         }
-        listClassName="cp-dropdown-overlay !w-[320px]"
+        listClassName={mergeClasses(
+          '!w-[368px] !bg-layer-raised',
+          CONVERSATION_INPUT_CLASS.modelMenu,
+        )}
       >
-        <DialTooltip tooltip={selectedLabel}>
+        <Tooltip tooltip={chipTooltip}>
           <button
             type="button"
             aria-label={selectorAriaLabel}
             aria-disabled={isDisabled || undefined}
             className={mergeClasses(
-              'flex items-center justify-center gap-1 rounded-full p-2',
+              'flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pe-2 ps-1.5',
               styles.modelSelectorButton,
               disabledIconClassName,
               isDisabled && styles.modelSelectorButtonDisabled,
+              CONVERSATION_INPUT_CLASS.modelSelectorButton,
             )}
             onClick={() => {
               if (!isStreaming && !isDisabled) {
@@ -172,10 +207,30 @@ export const ModelSelectorControl: FC<Props> = ({
               }
             }}
           >
-            {selectorIcon}
+            {iconNode}
+            <span className="flex min-w-0 max-w-[180px] items-baseline gap-1">
+              <span
+                className={mergeClasses(
+                  'dial-small-text max-w-[180px] shrink-0 truncate',
+                  styles.modelSelectorName,
+                )}
+              >
+                {selectedLabel}
+              </span>
+              {selectedVersion && (
+                <span
+                  className={mergeClasses(
+                    'dial-tiny-text min-w-0 truncate',
+                    styles.modelSelectorVersion,
+                  )}
+                >
+                  {selectedVersion}
+                </span>
+              )}
+            </span>
             {caretIcon}
           </button>
-        </DialTooltip>
+        </Tooltip>
       </Dropdown>
     );
   }
@@ -185,26 +240,40 @@ export const ModelSelectorControl: FC<Props> = ({
       className={mergeClasses(isDisabled && disabledIconClassName)}
       aria-disabled={isDisabled || undefined}
     >
-      <DialTooltip tooltip={selectedLabel}>
-        <DialDropdownIcon
-          icon={selectorIcon}
-          ariaLabel={selectorAriaLabel}
-          items={menuItems}
-          menuHeader={menuHeader}
-          placement="bottom-end"
-          matchReferenceWidth={false}
-          listClassName="cp-dropdown-overlay !w-[240px] !max-h-80"
-          onOpenChange={isDisabled ? undefined : handleModelSelectorOpenChange}
-          size={ElementSize.Standard}
-          caretIcon={caretIcon}
-          iconClassName={isDisabled ? disabledIconClassName : undefined}
-          buttonClassName={mergeClasses(
-            'bg-transparent',
-            styles.modelSelectorButton,
-            isDisabled && styles.modelSelectorButtonDisabled,
-          )}
-        />
-      </DialTooltip>
+      <Dropdown
+        items={menuItems}
+        menuHeader={menuHeader}
+        placement="bottom-end"
+        matchReferenceWidth={false}
+        /* The design's maximum list length. `Dropdown` caps the whole panel
+           rather than the options alone, so the sticky search row eats into
+           it — unlike the kit's own `Select`, which scrolls the options
+           inside a header that stays put. */
+        maxDropdownHeight={SELECT_LIST_MAX_HEIGHT_PX}
+        listClassName={mergeClasses(
+          '!w-[240px]',
+          CONVERSATION_INPUT_CLASS.modelMenu,
+        )}
+        disabled={isDisabled}
+        onOpenChange={isDisabled ? undefined : handleModelSelectorOpenChange}
+      >
+        <Tooltip tooltip={selectedLabel}>
+          <button
+            type="button"
+            aria-label={selectorAriaLabel}
+            aria-disabled={isDisabled || undefined}
+            className={mergeClasses(
+              'flex items-center gap-1 rounded-full p-1.5',
+              styles.modelSelectorButton,
+              isDisabled && styles.modelSelectorButtonDisabled,
+              CONVERSATION_INPUT_CLASS.modelSelectorButton,
+            )}
+          >
+            {iconNode}
+            {caretIcon}
+          </button>
+        </Tooltip>
+      </Dropdown>
     </div>
   );
 };

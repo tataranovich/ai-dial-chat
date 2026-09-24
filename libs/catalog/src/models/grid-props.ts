@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import type { CatalogItem } from './catalog-item';
 
 /** Text overrides for `CardGrid` empty state. */
@@ -10,7 +11,7 @@ export interface CardGridTitles {
   addToFavoritesAriaLabel?: string;
   /** Accessible label for the star button when the item is already starred. Default: `'Remove from favorites'`. */
   removeFromFavoritesAriaLabel?: string;
-  /** Credentials-status badge label shown on cards when signed out. Default: `'LOGGED OUT'`. */
+  /** Accessible label for the logged-out warning icon on card avatars, and the text shown in its hover tooltip. Default: `'Authorize to use this toolset.'`. */
   credentialsBadgeLoggedOutLabel?: string;
 }
 
@@ -22,6 +23,12 @@ export interface CardGridProps {
   query?: string;
   /** Called when a card's star is toggled. */
   onToggleFavorite?: (id: string, isStarred: boolean) => void;
+  /**
+   * Additional caller-supplied rule for whether the favorite star is shown on a
+   * card. Returning `false` hides the star and makes the item non-favoritable.
+   * Defaults to **visible** when omitted.
+   */
+  isFavoriteVisible?: (item: CatalogItem) => boolean;
   /** Grouped empty-state text overrides. */
   titles?: CardGridTitles;
   /** Called when a card body is clicked. */
@@ -34,4 +41,15 @@ export interface CardGridProps {
   skeletonColor?: string;
   /** Background color of a skeleton placeholder card. Fallback: `--bg-layer-raised`. */
   skeletonCardBackground?: string;
+  /** Featured chip style override, merged over its default per-entity-type colors for every card, e.g. `{ backgroundColor, color, border }`. */
+  featuredChipStyle?: CSSProperties;
+  /** Renders every card read-only: no favorite star, no footer divider, and no "Featured" tag. Default: false. */
+  isReadonly?: boolean;
+  /**
+   * Set when the host renders the grid without the `CONTENT_MAX_WIDTH` column
+   * cap, so the first-paint column-count guess matches the real container
+   * width. Purely an estimate hint — the observed width always wins once the
+   * grid is measured. Default: false.
+   */
+  isFullWidth?: boolean;
 }

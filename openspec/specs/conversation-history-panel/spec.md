@@ -1,5 +1,9 @@
 # Spec: conversation-history-panel
 
+## Purpose
+
+The `conversation-panel` library: grouped, searchable, filterable conversation history with per-item actions, persistent on desktop and a drawer on mobile.
+
 ## Requirements
 
 ### Requirement: `libs/conversation-panel` library exposes `ConversationPanel`
@@ -185,6 +189,31 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 ---
 
+### Requirement: `hiddenSources` fully excludes matching conversations, not just their tab
+
+`ConversationPanel` SHALL accept an optional `hiddenSources?: FilterTab[]` prop. When non-empty, any conversation whose `source` is included in `hiddenSources` SHALL be dropped before tab filtering, search filtering, and grouping — so it never appears under any tab (including `All`), never contributes to a group heading (e.g. "Organization"), and is excluded from drag-and-drop's allowed-groups computation. The corresponding tab pill(s) in `FilterTabs` SHALL also be omitted from the row entirely. This differs from `isFilterTabsHidden`, which only hides the tab row while every source's conversations remain visible under `All`.
+
+`FilterTabs` (the tab-row sub-component) accepts the same `hiddenSources?: FilterTab[]` prop and filters its rendered tabs by it; `ConversationPanel` forwards its own `hiddenSources` prop unchanged.
+
+#### Scenario: A conversation with a hidden source is absent everywhere
+
+- **GIVEN** `hiddenSources={[FilterTab.Organization]}` and a conversation with `source: FilterTab.Organization`
+- **WHEN** the panel renders with the `All` tab active
+- **THEN** that conversation is not shown, and no "Organization" group heading appears
+
+#### Scenario: The hidden source's tab pill is omitted
+
+- **GIVEN** `hiddenSources={[FilterTab.Organization]}`
+- **WHEN** the filter tab row renders
+- **THEN** the "Organization" pill is not rendered, while the other tabs render normally
+
+#### Scenario: hiddenSources absent or empty changes nothing
+
+- **WHEN** `hiddenSources` is omitted or `[]`
+- **THEN** all four tabs render and every source's conversations are shown exactly as before this prop existed
+
+---
+
 ### Requirement: Panel rows expose per-item actions (pin, rename, delete, share)
 
 `ConversationPanel` SHALL accept `getActions?: (item: ConversationHistoryItem) => DropdownItem[]` and `actionsLabel?: string` (English default: `"More actions"`). When `getActions` returns a non-empty array for a row, an ellipsis trigger button is rendered on that row; activating it opens a dropdown built from the returned `DropdownItem[]`. When `getActions` is omitted or returns an empty array, no trigger is rendered.
@@ -225,9 +254,20 @@ For owned, non-readonly conversations (`isReadonly: false`, `sharedWithMe: false
 
 ### Requirement: Panel is responsive — persistent on desktop, drawer on mobile
 
-`ConversationPanel` renders the same markup regardless of viewport. On desktop it is a persistent `w-[325px]` panel that pushes `<main>` via flex row. On mobile `ConversationPanelView` passes `className="inset-y-0 start-0 z-50"` plus `onToggle={onClose}` so `SidebarPanel` renders a close button inside the panel header; the parent manages `isOpen` state.
+`ConversationPanel` SHALL render the same markup regardless of viewport. On desktop it is a persistent `w-[325px]` panel that pushes `<main>` via flex row. On mobile `ConversationPanelView` passes `className="inset-y-0 start-0 z-50"` plus `onToggle={onClose}` so `SidebarPanel` renders a close button inside the panel header; the parent manages `isOpen` state.
 
 Mobile close is handled exclusively via the close button inside the panel header (via `onToggle` → `SidebarPanel.onClose`). There is no backdrop overlay.
+
+#### Scenario: Desktop renders a persistent panel
+
+- **WHEN** the app is rendered at a desktop viewport
+- **THEN** the panel occupies a persistent `w-[325px]` column beside `<main>` and renders no close button
+
+#### Scenario: Mobile renders a closable drawer
+
+- **WHEN** the app is rendered at a mobile viewport and the panel is open
+- **THEN** the panel is positioned with `inset-y-0 start-0 z-50` and its header carries a close button
+- **AND** no backdrop overlay is rendered
 
 ---
 
@@ -486,6 +526,57 @@ After `deleteConversation` resolves successfully, `ConversationPanelView` SHALL 
 
 - **WHEN** the API call throws
 - **THEN** no success notification is shown and the inline delete error state is set instead
+
+---
+
+### Requirement: A conversation the backend no longer has leaves the panel
+
+A conversation can disappear upstream while the panel still lists it — most commonly because deleting its last message deleted the conversation itself (see `chat-hooks-conversation-handlers`), but also when another tab or session removed it. Such a row is unusable: opening it fails and deleting it fails, so it SHALL NOT be left in the list.
+
+`ConversationsContext` SHALL therefore expose `removeConversationFromList(id)`,
+which drops a conversation from the local list without issuing a delete
+request, matching ids with the same encoding-safe comparison the panel uses.
+The conversation view SHALL call it both from `useConversationHandlers`'
+`onConversationDeleted` and when loading a conversation fails with a
+not-found error.
+
+`deleteConversation` SHALL treat a not-found response as success: the row
+stays removed and no error is raised, mirroring the bulk deletion endpoint's
+already-absent accounting. Any other failure SHALL still restore the row and
+rethrow. Both removal paths SHALL match ids with `conversationIdsMatch`, so a
+differently-encoded id clears the same row either way.
+
+Reporting an already-absent deletion as success is deliberate: every consumer
+of a resolved `deleteConversation` — the panel's and header menu's
+`notifyOperationSuccess`, `useConversationListBridge`, the overlay bridge —
+then reports the deletion as done. From the user's side that is accurate: the
+conversation they asked to delete is gone. Distinguishing "was already gone"
+would raise a failure or a caveat for an outcome the user asked for and got.
+
+#### Scenario: Deleting the last message removes the row
+
+- **WHEN** the user deletes the only message pair of the open conversation, which deletes the conversation itself
+- **THEN** the conversation is removed from the panel list and the view navigates to `ROUTES.Root`
+
+#### Scenario: Opening a conversation the backend no longer has removes the row
+
+- **WHEN** loading a conversation fails with a not-found error
+- **THEN** the conversation is removed from the panel list in addition to the existing error notification and navigation to `ROUTES.Root`
+
+#### Scenario: Deleting an already-absent conversation succeeds
+
+- **WHEN** the user confirms deletion of a row whose conversation the backend no longer has
+- **THEN** the delete resolves successfully, the row stays removed, no inline delete error is shown, and the caller's usual deletion-success notification is raised
+
+#### Scenario: A differently-encoded id clears the same row
+
+- **WHEN** `deleteConversation` is called with an id whose encoding differs from the listed id (e.g. `folder%2Fchat%20one` for `folder/chat one`)
+- **THEN** that row is the one removed from the list
+
+#### Scenario: Any other delete failure still restores the row
+
+- **WHEN** the delete request fails with anything other than a not-found response
+- **THEN** the row is restored to the list and the error is rethrown for the inline error state
 
 ---
 

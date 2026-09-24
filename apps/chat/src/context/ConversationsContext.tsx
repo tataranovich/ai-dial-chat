@@ -4,6 +4,12 @@ import type {
   ConversationResponseDto,
 } from '@epam/ai-dial-chat-api-client';
 import {
+  getConversationPath,
+  isConversationNotFoundError,
+  safeDecodeURIComponent,
+} from '@epam/ai-dial-chat-hooks';
+import { generateUUID } from '@epam/ai-dial-chat-shared';
+import {
   createContext,
   type ReactNode,
   useCallback,
@@ -26,8 +32,6 @@ import {
   watchConversation,
 } from '../server-api/conversations.api';
 import { conversationIdsMatch } from '../utils/conversation-id-match';
-import { getConversationPath } from '../utils/conversation-path';
-import { safeDecodeURIComponent } from '../utils/string-utils';
 import { useUser } from './auth/UserContext';
 import { useOptionalOverlay } from './overlay/OverlayContext';
 import { useUserConfig } from './UserConfigContext';
@@ -52,6 +56,12 @@ interface ConversationsContextType {
   markConversationViewed: (id: string) => Promise<void>;
   /** Delete a conversation by id, removing it from the local list on success. */
   deleteConversation: (id: string) => Promise<void>;
+  /**
+   * Removes a conversation from the local list without calling the delete
+   * API. Use when the conversation was already deleted server-side by
+   * another flow (e.g. deleting its last message empties it out).
+   */
+  removeConversationFromList: (id: string) => void;
   /** Rename a conversation; optimistically updates title, reverts on failure. The conversation id never changes. */
   renameConversation: (id: string, newTitle: string) => Promise<void>;
   /**
@@ -61,10 +71,20 @@ interface ConversationsContextType {
   generateConversationTitle: (id: string) => Promise<string>;
   /** Duplicate a conversation into the user's own bucket; returns the new conversation id. */
   duplicateConversation: (id: string) => Promise<string>;
-  /** Re-fetch the full conversation list from the server. */
+  /**
+   * Re-fetch the full conversation list in the background without hiding
+   * loaded items.
+   */
   refreshConversations: () => Promise<void>;
   /** Updates the sidebar title for a conversation without changing its id. */
   updateConversationTitle: (id: string, title: string) => void;
+  /**
+   * Stamps a conversation as just-updated and lifts it to the top of the
+   * list, matching the listing endpoint's `updatedAt`-descending order.
+   * Call it when a generation starts so the chat reorders immediately
+   * instead of only after the next full re-fetch. No-op for unknown ids.
+   */
+  bumpConversationActivity: (id: string) => void;
   /**
    * Polls GET conversation until the display name changes or LLM naming completes.
    * Returns a cleanup function that cancels polling.
@@ -114,15 +134,12 @@ export const ConversationsProvider = ({
   }, [conversations]);
 
   const refreshConversations = useCallback(async () => {
-    setIsLoading(true);
     setError(null);
     try {
       const response = await listConversations();
       setConversations(response.items);
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      setIsLoading(false);
     }
   }, []);
 
@@ -141,6 +158,28 @@ export const ConversationsProvider = ({
         conversationIdsMatch(item.id, id) ? { ...item, title } : item,
       ),
     );
+  }, []);
+
+  const bumpConversationActivity = useCallback((id: string) => {
+    /* Read the clock outside the updater so it stays a pure reducer — React
+       may invoke it more than once for a single call. */
+    const bumpedAt = Date.now();
+
+    setConversations((prev) => {
+      const index = prev.findIndex((c) => conversationIdsMatch(c.id, id));
+      if (index === -1) return prev;
+
+      const bumped = { ...prev[index], updatedAt: bumpedAt };
+      const rest = prev.filter((_, i) => i !== index);
+      /*
+       * The listing endpoint already returns items sorted by `updatedAt`
+       * descending, so re-sorting locally leaves the rest of the list
+       * untouched (Array#sort is stable) and only lifts the bumped item.
+       * Prepending first keeps it ahead of any entry carrying the very same
+       * timestamp.
+       */
+      return [bumped, ...rest].sort((a, b) => b.updatedAt - a.updatedAt);
+    });
   }, []);
 
   const watchForDisplayNameUpdate = useCallback(
@@ -309,15 +348,37 @@ export const ConversationsProvider = ({
     let snapshot: ConversationListItemDto[] | undefined;
     setConversations((prev) => {
       snapshot = prev;
-      return prev.filter((c) => c.id !== id);
+      /*
+       * Matched the same way as removeConversationFromList: a caller passing a
+       * differently-encoded id would otherwise keep its stale row on a 404 —
+       * the exact staleness this path exists to clear.
+       */
+      return prev.filter((c) => !conversationIdsMatch(c.id, id));
     });
     const conversationPath = getConversationPath(normalizeConversationId(id));
     try {
       await apiDeleteConversation(conversationPath);
     } catch (err) {
+      /*
+       * Already gone upstream: the row was stale, so removing it is the
+       * intended outcome. Restoring it would leave the user with an entry
+       * that neither opens nor deletes.
+       */
+      if (isConversationNotFoundError(err)) return;
       if (snapshot) setConversations(snapshot);
       throw err;
     }
+  }, []);
+
+  /**
+   * Removes a conversation from the local list without calling the delete
+   * API. Use when the conversation was already deleted server-side by
+   * another flow (e.g. deleting its last message empties it out).
+   */
+  const removeConversationFromList = useCallback((id: string) => {
+    setConversations((prev) =>
+      prev.filter((c) => !conversationIdsMatch(c.id, id)),
+    );
   }, []);
 
   const renameConversation = useCallback(
@@ -363,7 +424,7 @@ export const ConversationsProvider = ({
   const duplicateConversation = useCallback(
     async (id: string) => {
       const source = conversationsRef.current.find((c) => c.id === id);
-      const tempId = crypto.randomUUID();
+      const tempId = generateUUID();
       setConversations((prev) => [
         {
           id: tempId,
@@ -416,11 +477,13 @@ export const ConversationsProvider = ({
       pinConversation,
       markConversationViewed,
       deleteConversation,
+      removeConversationFromList,
       renameConversation,
       generateConversationTitle,
       duplicateConversation,
       refreshConversations,
       updateConversationTitle,
+      bumpConversationActivity,
       watchForDisplayNameUpdate,
       deleteAllConversations,
     }),
@@ -431,11 +494,13 @@ export const ConversationsProvider = ({
       pinConversation,
       markConversationViewed,
       deleteConversation,
+      removeConversationFromList,
       renameConversation,
       generateConversationTitle,
       duplicateConversation,
       refreshConversations,
       updateConversationTitle,
+      bumpConversationActivity,
       watchForDisplayNameUpdate,
       deleteAllConversations,
     ],

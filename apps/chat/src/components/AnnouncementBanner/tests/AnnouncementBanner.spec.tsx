@@ -1,43 +1,47 @@
+import type { AnnouncementListItem } from '@epam/ai-dial-chat-hooks';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnnouncementItem } from '../../../models/announcement';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAppConfig as mockUseAppConfig } from '../../../context/tests/app-config-context-mock';
 import { UserConfigStatus } from '../../../types/user-config-status';
 import AnnouncementBanner from '../AnnouncementBanner';
 
-const { mockAppConfigState, mockDismiss } = vi.hoisted(() => ({
-  mockAppConfigState: {
-    status: 'ready' as UserConfigStatus,
-    announcementHtml: null as string | null,
-    announcementTitle: null as string | null,
-    announcementDescription: null as string | null,
-    announcements: [] as AnnouncementItem[],
-    isDismissed: false,
-  },
-  mockDismiss: vi.fn(),
-}));
-
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({
-    status: mockAppConfigState.status,
-    config: {
-      announcementHtml: mockAppConfigState.announcementHtml,
-      announcementTitle: mockAppConfigState.announcementTitle,
-      announcementDescription: mockAppConfigState.announcementDescription,
-      announcements: mockAppConfigState.announcements,
+const { mockAppConfigState, mockDismiss, mockUseAnnouncementDismissal } =
+  vi.hoisted(() => ({
+    mockAppConfigState: {
+      status: 'ready' as UserConfigStatus,
+      announcementHtml: null as string | null,
+      announcementTitle: null as string | null,
+      announcementDescription: null as string | null,
+      announcements: [] as AnnouncementListItem[],
+      isDismissed: false,
     },
-  }),
+    mockDismiss: vi.fn(),
+    mockUseAnnouncementDismissal: vi.fn(),
+  }));
+
+vi.mock(
+  '../../../context/AppConfigContext',
+  async () => import('../../../context/tests/app-config-context-mock'),
+);
+mockUseAppConfig.mockImplementation(() => ({
+  status: mockAppConfigState.status,
+  config: {
+    announcementHtml: mockAppConfigState.announcementHtml,
+    announcementTitle: mockAppConfigState.announcementTitle,
+    announcementDescription: mockAppConfigState.announcementDescription,
+    announcements: mockAppConfigState.announcements,
+  },
 }));
 
 vi.mock(
   '../../../hooks/useAnnouncementDismissal/useAnnouncementDismissal',
-  () => ({
-    useAnnouncementDismissal: () => ({
-      isDismissed: mockAppConfigState.isDismissed,
-      dismiss: mockDismiss,
-    }),
-  }),
+  () => ({ useAnnouncementDismissal: mockUseAnnouncementDismissal }),
 );
+mockUseAnnouncementDismissal.mockImplementation(() => ({
+  isDismissed: mockAppConfigState.isDismissed,
+  dismiss: mockDismiss,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -56,7 +60,7 @@ const resetState = () => {
   mockAppConfigState.isDismissed = false;
 };
 
-const makeAnnouncement = (title: string): AnnouncementItem => ({
+const makeAnnouncement = (title: string): AnnouncementListItem => ({
   title,
   description: null,
   link: { label: 'Register', href: 'https://dialx.ai' },
@@ -200,9 +204,9 @@ describe('AnnouncementBanner — structured layout', () => {
     expect(title.className).toContain('truncate');
     expect(title.className).toContain('min-w-0');
 
-    const paragraph = title.parentElement;
-    expect(paragraph?.className).toContain('min-w-0');
-    expect(paragraph?.textContent).toContain(
+    const paragraph = screen.getByRole('paragraph');
+    expect(paragraph.className).toContain('min-w-0');
+    expect(paragraph.textContent).toContain(
       'A description long enough that it would overrun the banner width.',
     );
   });
@@ -220,6 +224,24 @@ describe('AnnouncementBanner — structured layout', () => {
     expect(title.className).toContain('min-w-0');
   });
 
+  it('renders description links in the accent colour with an underline', () => {
+    mockAppConfigState.announcementTitle = 'Welcome to DIAL';
+    mockAppConfigState.announcementDescription =
+      'A cleaner UI. <a href="https://example.com">Learn more</a>';
+    render(<AnnouncementBanner />);
+
+    /* Both sanitizers strip `style` and `class`, so nothing in the operator's
+       HTML can make a link look like one — the wrapper has to. The styling
+       lives on the wrapper around the injected markup, which is CSS-level
+       behavior with no semantic query equivalent. */
+    const link = screen.getByRole('link', { name: 'Learn more' });
+    // eslint-disable-next-line testing-library/no-node-access
+    const description = link.parentElement;
+
+    expect(description?.className).toContain('[&_a]:text-accent');
+    expect(description?.className).toContain('[&_a]:underline');
+  });
+
   it('keeps the close control outside the truncating container', () => {
     mockAppConfigState.announcementTitle = 'Welcome to DIAL';
     render(<AnnouncementBanner />);
@@ -227,17 +249,124 @@ describe('AnnouncementBanner — structured layout', () => {
     const closeButton = screen.getByRole('button', {
       name: 'announcementBanner.closeLabel',
     });
-    const paragraph = screen.getByText('Welcome to DIAL').parentElement;
-    expect(paragraph?.contains(closeButton)).toBe(false);
+    const paragraph = screen.getByRole('paragraph');
+    expect(paragraph.contains(closeButton)).toBe(false);
   });
 
   it('starts the text at the leading edge rather than centering it', () => {
     mockAppConfigState.announcementTitle = 'Welcome to DIAL';
     render(<AnnouncementBanner />);
 
-    const paragraph = screen.getByText('Welcome to DIAL').parentElement;
-    expect(paragraph?.className).toContain('text-start');
-    expect(paragraph?.className).not.toContain('text-center');
+    const paragraph = screen.getByRole('paragraph');
+    expect(paragraph.className).toContain('text-start');
+    expect(paragraph.className).not.toContain('text-center');
+  });
+});
+
+describe('AnnouncementBanner — expanding clipped text', () => {
+  const VISIBLE_WIDTH = 100;
+  const EXPAND_NAME = 'announcementBanner.expandLabel';
+  const COLLAPSE_NAME = 'announcementBanner.collapseLabel';
+
+  /* jsdom lays nothing out, so every element reports zero for both widths and
+     the banner would never consider its text clipped. Stubbing the pair on the
+     prototype is the only way to reach the disclosure control from a unit
+     test. */
+  const stubWidths = (scrollWidth: number) => {
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get: () => VISIBLE_WIDTH,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+      configurable: true,
+      get: () => scrollWidth,
+    });
+  };
+
+  beforeEach(() => {
+    resetState();
+    mockAppConfigState.announcementTitle = 'Welcome to the new DIAL Chat';
+    mockAppConfigState.announcementDescription =
+      'Our first release — a cleaner UI and faster answers.';
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
+    Reflect.deleteProperty(HTMLElement.prototype, 'scrollWidth');
+  });
+
+  it('offers no disclosure control while the whole text is visible', () => {
+    stubWidths(VISIBLE_WIDTH);
+    render(<AnnouncementBanner />);
+
+    expect(screen.queryByRole('button', { name: EXPAND_NAME })).toBeNull();
+  });
+
+  it('offers a disclosure control once the text is clipped', () => {
+    stubWidths(VISIBLE_WIDTH * 3);
+    render(<AnnouncementBanner />);
+
+    const toggle = screen.getByRole('button', { name: EXPAND_NAME });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe(
+      screen.getByRole('paragraph').id,
+    );
+  });
+
+  it('reveals the full text when the control is used', async () => {
+    stubWidths(VISIBLE_WIDTH * 3);
+    render(<AnnouncementBanner />);
+
+    await userEvent.click(screen.getByRole('button', { name: EXPAND_NAME }));
+
+    /* Clipping is what hides the text, so the fix is the absence of the class
+       that clips — there is no semantic query for "no longer truncated". */
+    expect(
+      screen.getByText('Welcome to the new DIAL Chat').className,
+    ).not.toContain('truncate');
+    expect(
+      screen.getByText('Our first release — a cleaner UI and faster answers.')
+        .className,
+    ).not.toContain('truncate');
+  });
+
+  it('reports the expanded state and offers the way back', async () => {
+    stubWidths(VISIBLE_WIDTH * 3);
+    render(<AnnouncementBanner />);
+
+    await userEvent.click(screen.getByRole('button', { name: EXPAND_NAME }));
+
+    const toggle = screen.getByRole('button', { name: COLLAPSE_NAME });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+    await userEvent.click(toggle);
+
+    expect(
+      screen.getByText('Welcome to the new DIAL Chat').className,
+    ).toContain('truncate');
+  });
+
+  /* Expanded text no longer overflows, so a fresh measurement would report
+     nothing hidden and take the control away mid-interaction — leaving the
+     banner stuck open. */
+  it('keeps the control available after expanding', async () => {
+    stubWidths(VISIBLE_WIDTH * 3);
+    render(<AnnouncementBanner />);
+
+    await userEvent.click(screen.getByRole('button', { name: EXPAND_NAME }));
+    stubWidths(VISIBLE_WIDTH);
+
+    expect(screen.getByRole('button', { name: COLLAPSE_NAME })).toBeTruthy();
+  });
+
+  it('renders no disclosure control in the legacy layout, which wraps', () => {
+    stubWidths(VISIBLE_WIDTH * 3);
+    mockAppConfigState.announcementTitle = null;
+    mockAppConfigState.announcementDescription = null;
+    mockAppConfigState.announcementHtml = 'A long legacy announcement message';
+    render(<AnnouncementBanner />);
+
+    expect(screen.queryByRole('button', { name: EXPAND_NAME })).toBeNull();
   });
 });
 
@@ -269,20 +398,23 @@ describe('AnnouncementBanner — announcements pill', () => {
     mockAppConfigState.announcements = [makeAnnouncement('Upgraded to 1.43')];
     render(<AnnouncementBanner />);
 
-    const region = screen.getByRole('region');
-    const paragraph = screen.getByText('Welcome to DIAL').closest('p');
+    const paragraph = screen.getByRole('paragraph');
     const pill = screen.getByRole('button', { name: PILL_NAME });
     const closeButton = screen.getByRole('button', {
       name: 'announcementBanner.closeLabel',
     });
 
-    const order = Array.from(region.children);
-    expect(order.indexOf(paragraph as Element)).toBeLessThan(
-      order.findIndex((child) => child.contains(pill)),
-    );
-    expect(order.findIndex((child) => child.contains(pill))).toBeLessThan(
-      order.findIndex((child) => child.contains(closeButton)),
-    );
+    /* `compareDocumentPosition` reports document order without walking the
+       DOM tree, so it establishes the pill sits between the text and the
+       close control regardless of intermediate wrapper markup. */
+    expect(
+      paragraph.compareDocumentPosition(pill) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      pill.compareDocumentPosition(closeButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('keeps the pill outside the truncating text container', () => {
@@ -290,9 +422,9 @@ describe('AnnouncementBanner — announcements pill', () => {
     mockAppConfigState.announcements = [makeAnnouncement('Upgraded to 1.43')];
     render(<AnnouncementBanner />);
 
-    const paragraph = screen.getByText('Welcome to DIAL').closest('p');
+    const paragraph = screen.getByRole('paragraph');
     const pill = screen.getByRole('button', { name: PILL_NAME });
-    expect(paragraph?.contains(pill)).toBe(false);
+    expect(paragraph.contains(pill)).toBe(false);
   });
 
   it('renders no pill in the legacy layout', () => {
@@ -301,6 +433,21 @@ describe('AnnouncementBanner — announcements pill', () => {
     render(<AnnouncementBanner />);
 
     expect(screen.queryByRole('button', { name: PILL_NAME })).toBeNull();
+  });
+
+  /* The popover is hidden along with the banner, so the entries behind the pill
+     have to key the dismissal too — otherwise publishing a new announcement
+     leaves the banner closed for everyone who dismissed the previous one
+     (issue #8827). */
+  it('keys dismissal on the announcements behind the pill', () => {
+    const announcements = [makeAnnouncement('Upgraded to 1.43')];
+    mockAppConfigState.announcementTitle = 'Welcome to DIAL';
+    mockAppConfigState.announcements = announcements;
+    render(<AnnouncementBanner />);
+
+    expect(mockUseAnnouncementDismissal).toHaveBeenCalledWith(
+      expect.objectContaining({ items: announcements }),
+    );
   });
 });
 
@@ -311,8 +458,50 @@ describe('AnnouncementBanner — legacy layout', () => {
     mockAppConfigState.announcementHtml = 'Welcome!';
     render(<AnnouncementBanner />);
 
-    expect(screen.getByText('Welcome!').className).toContain('text-center');
+    const content = screen.getByText('Welcome!');
+    expect(content.className).toContain('dial-small-paragraph-semi-text');
+    /* Links are underlined here, not by operator-authored style attributes,
+       which the sanitizer strips. */
+    expect(content.className).toContain('[&_a]:underline');
     expect(screen.getByRole('region').className).toContain('justify-center');
+  });
+
+  it('keeps each <p> of a multi-paragraph message as its own line', () => {
+    mockAppConfigState.announcementHtml =
+      '<p>Upgraded to 1.47</p> <p>Prefer the old interface?</p>';
+    render(<AnnouncementBanner />);
+
+    const paragraphs = screen.getAllByRole('paragraph');
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0].textContent).toBe('Upgraded to 1.47');
+    expect(paragraphs[1].textContent).toBe('Prefer the old interface?');
+  });
+
+  it('keeps <u> in the legacy message', () => {
+    mockAppConfigState.announcementHtml = '<p><u>Read this</u></p>';
+    render(<AnnouncementBanner />);
+
+    expect(screen.getByText('Read this').tagName).toBe('U');
+  });
+
+  it('strips operator-authored style attributes from the legacy message', () => {
+    mockAppConfigState.announcementHtml =
+      '<a href="https://dialx.ai" style="text-decoration: underline;">ChangeLog</a>';
+    render(<AnnouncementBanner />);
+
+    const link = screen.getByText('ChangeLog');
+
+    expect(link.getAttribute('style')).toBeNull();
+  });
+
+  it('keeps a legacy link opening in a new tab with the opener severed', () => {
+    mockAppConfigState.announcementHtml =
+      '<a href="https://dialx.ai" target="_blank" rel="noreferrer">ChangeLog</a>';
+    render(<AnnouncementBanner />);
+
+    const link = screen.getByText('ChangeLog');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 });
 
@@ -367,6 +556,10 @@ describe('AnnouncementBanner — RTL', () => {
     mockAppConfigState.announcementDescription = 'Explore our AI offerings.';
     const { container } = render(<AnnouncementBanner />);
 
+    /* Scanning every rendered element's className for a physical-direction
+       Tailwind utility is CSS-level behavior with no semantic query
+       equivalent (this repo's spec conventions carve out this exact case). */
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
     const classNames = Array.from(container.querySelectorAll('*'))
       .map((element) => element.className)
       .filter((name): name is string => typeof name === 'string');
@@ -436,6 +629,17 @@ describe('AnnouncementBanner — sanitization', () => {
     expect(link.getAttribute('href')).toBeNull();
   });
 
+  it('strips block-level markup from the description, which is one line', () => {
+    mockAppConfigState.announcementTitle = 'DIAL 1.47';
+    mockAppConfigState.announcementDescription = '<p>Check the changelog</p>';
+    render(<AnnouncementBanner />);
+
+    /* The structured layout truncates to a single line, so <p> stays out of
+       its allowlist even though the legacy banner accepts it. */
+    expect(screen.getAllByRole('paragraph')).toHaveLength(1);
+    expect(screen.getByText('Check the changelog').tagName).toBe('SPAN');
+  });
+
   it('preserves an allowed description link with a safe href', () => {
     mockAppConfigState.announcementDescription =
       'Explore <a href="https://dialx.ai">DIAL</a>!';
@@ -458,7 +662,8 @@ describe('AnnouncementBanner — sanitization', () => {
     mockAppConfigState.announcementHtml = '<a href="javascript:alert(1)">x</a>';
     render(<AnnouncementBanner />);
 
-    expect(screen.getByText('x').getAttribute('href')).toBeNull();
+    const link = screen.getByText('x');
+    expect(link.getAttribute('href')).toBeNull();
   });
 
   it('renders nothing when the legacy message sanitizes away entirely', () => {

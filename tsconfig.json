@@ -16,6 +16,9 @@
       "path": "./libs/chat-shared"
     },
     {
+      "path": "./libs/chat-hooks"
+    },
+    {
       "path": "./libs/conversation-messages"
     },
     {
@@ -43,13 +46,10 @@
       "path": "./libs/attachment-canvas"
     },
     {
+      "path": "./libs/mcp-apps"
+    },
+    {
       "path": "./libs/attachment-input"
-    },
-    {
-      "path": "./libs/ai-dial-kit"
-    },
-    {
-      "path": "./libs/deployment-creation-form"
     },
     {
       "path": "./libs/share"
@@ -73,7 +73,34 @@
       "path": "./libs/builder-form"
     },
     {
+      "path": "./apps/mcp-app-sandbox"
+    },
+    {
       "path": "./libs/prompt-editor"
+    },
+    {
+      "path": "./libs/skill-editor"
+    },
+    {
+      "path": "./libs/toolset-editor"
+    },
+    {
+      "path": "./libs/prompts"
+    },
+    {
+      "path": "./libs/settings-panel"
+    },
+    {
+      "path": "./libs/navigation-panel"
+    },
+    {
+      "path": "./libs/usage-dashboard"
+    },
+    {
+      "path": "./libs/skills"
     }
-  ]
+  ],
+  "compilerOptions": {
+    "ignoreDeprecations": "6.0"
+  }
 }

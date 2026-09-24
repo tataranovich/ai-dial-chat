@@ -1,16 +1,21 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as DeploymentsContextModule from '../../../context/DeploymentsContext';
+import { useAppConfig as mockUseAppConfig } from '../../../context/tests/app-config-context-mock';
+import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
 import * as conversationsApi from '../../../server-api/conversations.api';
+import * as deploymentsServerApi from '../../../server-api/deployments';
 import AppPreviewChat from '../AppPreviewChat';
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({
-    config: { asrModelId: null, transcribeSizeLimitBytes: 5 * 1024 * 1024 },
-  }),
-}));
+vi.mock(
+  '../../../context/AppConfigContext',
+  async () => import('../../../context/tests/app-config-context-mock'),
+);
+mockUseAppConfig.mockReturnValue({
+  config: { asrModelId: null, transcribeSizeLimitBytes: 5 * 1024 * 1024 },
+});
 
 vi.mock('../../../context/auth/UserContext', () => ({
   useUser: () => ({
@@ -19,44 +24,87 @@ vi.mock('../../../context/auth/UserContext', () => ({
 }));
 
 vi.mock('../../../context/NotificationContext', () => ({
-  useNotification: () => ({
-    showNotification: vi.fn(),
-  }),
+  useNotification: () => createNotificationContextValue(vi.fn()),
 }));
 
 vi.mock('../../../context/DeploymentsContext');
 
+/* The real hook needs SkillsProvider/FavoriteApplicationsContext, which this
+ * harness does not mount; the stub mirrors its flag-off shape. */
+vi.mock('../../../components/SkillSelector/useSkillSelectorOverlay', () => ({
+  useSkillSelectorOverlay: () => ({
+    skillMenuOverlay: undefined,
+    commandMenu: undefined,
+    skillCatalogModal: null,
+    skillDetailsPanel: null,
+    selectedSkillElement: null,
+    selectedSkillPath: null,
+    selectedSkills: undefined,
+    selectSkill: vi.fn(),
+    removeSelectedSkill: vi.fn(),
+    renderHistorySkills: () => null,
+  }),
+}));
+
+const clientChannelMocks = vi.hoisted(() => ({
+  ensureConnected: vi.fn(),
+  waitForChannel: vi.fn(),
+}));
+
+vi.mock('../../../context/ClientChannelContext', () => ({
+  useClientChannel: () => ({
+    channelId: null,
+    pendingEvents: [],
+    reportEvent: vi.fn(),
+    ensureConnected: clientChannelMocks.ensureConnected,
+    waitForChannel: clientChannelMocks.waitForChannel,
+    notifyGenerationSettled: vi.fn(),
+  }),
+}));
+
 vi.mock('../../../hooks/conversation/useAudioTranscription', () => ({
   useAudioTranscription: () => ({
-    handleUploadAudio: vi.fn(),
+    isAudioMessageSupported: false,
+    isVoiceRecordingSupported: false,
     handleTranscribeAudio: vi.fn(),
-    isTranscriptionSupported: false,
   }),
 }));
 
-vi.mock('../../../hooks/conversation/useConversationStream', () => ({
-  useConversationStream: () => ({
-    startStream: vi.fn(),
-    handleStop: vi.fn(),
-    isStreaming: false,
-    canStopStreaming: false,
-  }),
-}));
+const streamMocks = vi.hoisted(() => ({ startStream: vi.fn() }));
 
-vi.mock('../../../hooks/conversation/useConversationHandlers', () => ({
-  useConversationHandlers: () => ({
-    handleSend: vi.fn(),
-    handleUploadAttachment: vi.fn(),
-    handleRegenerateMessage: vi.fn(),
-    handleDeleteMessage: vi.fn(),
-    handleConfirmDelete: vi.fn(),
-    handleRateMessage: vi.fn(),
-    handleStartEdit: vi.fn(),
-    handleCancelEdit: vi.fn(),
-    handleEditMessage: vi.fn(),
-    editingMessageIndexes: new Set<number>(),
-    pendingDeleteIndex: null,
-    setPendingDeleteIndex: vi.fn(),
+vi.mock('@epam/ai-dial-chat-hooks', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-chat-hooks')>();
+  return {
+    ...actual,
+    useConversationStream: () => ({
+      startStream: streamMocks.startStream,
+      handleStop: vi.fn(),
+      isStreaming: false,
+      canStopStreaming: false,
+    }),
+    useConversationHandlers: () => ({
+      handleSend: vi.fn(),
+      handleUploadAttachment: vi.fn(),
+      handleRegenerateMessage: vi.fn(),
+      handleDeleteMessage: vi.fn(),
+      handleConfirmDelete: vi.fn(),
+      handleRateMessage: vi.fn(),
+      handleStartEdit: vi.fn(),
+      handleCancelEdit: vi.fn(),
+      handleEditMessage: vi.fn(),
+      editingMessageIndexes: new Set<number>(),
+      pendingDeleteIndex: null,
+      setPendingDeleteIndex: vi.fn(),
+    }),
+  };
+});
+
+vi.mock('../../../context/GenerationContext', () => ({
+  useGeneration: () => ({
+    startGeneration: vi.fn(() => new AbortController()),
+    completeGeneration: vi.fn(),
+    getGeneration: vi.fn(),
   }),
 }));
 
@@ -64,6 +112,16 @@ vi.mock('../../../server-api/conversations.api', () => ({
   createConversation: vi.fn(),
   deleteConversation: vi.fn(),
   saveConversation: vi.fn(),
+}));
+
+vi.mock('../../../server-api/deployments', () => ({
+  getDeploymentDetails: vi.fn(),
+}));
+
+vi.mock('../../../server-api/api-client', () => ({
+  conversationsApi: {},
+  filesApi: {},
+  rateApi: {},
 }));
 
 vi.mock('../../../components/ConversationView/ConversationView', () => ({
@@ -137,9 +195,18 @@ vi.mock('../../../components/StarterButtons/StarterButtons', () => ({
 describe('AppPreviewChat', () => {
   const mockUseDeployments = vi.mocked(DeploymentsContextModule.useDeployments);
   const mockCreateConversation = vi.mocked(conversationsApi.createConversation);
+  const mockDeleteConversation = vi.mocked(conversationsApi.deleteConversation);
+  const mockGetDeploymentDetails = vi.mocked(
+    deploymentsServerApi.getDeploymentDetails,
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDeleteConversation.mockResolvedValue(undefined as never);
+    mockGetDeploymentDetails.mockResolvedValue({
+      id: 'applications/bucket/My App',
+      type: 'application',
+    } as never);
     mockUseDeployments.mockReturnValue({
       items: [
         {
@@ -154,6 +221,7 @@ describe('AppPreviewChat', () => {
           },
         },
       ],
+      isLoading: false,
     } as unknown as ReturnType<typeof DeploymentsContextModule.useDeployments>);
   });
 
@@ -172,7 +240,41 @@ describe('AppPreviewChat', () => {
     );
   });
 
-  it('creates the conversation with the raw, unencoded app id', async () => {
+  it('opening AppsEditor without running a preview completion makes zero subscribe calls', () => {
+    render(<AppPreviewChat appId="applications/bucket/My App" />);
+
+    expect(clientChannelMocks.ensureConnected).not.toHaveBeenCalled();
+    expect(clientChannelMocks.waitForChannel).not.toHaveBeenCalled();
+    expect(streamMocks.startStream).not.toHaveBeenCalled();
+  });
+
+  it('a preview send (autoSubmit starter) subscribes exactly once and carries the channel id', async () => {
+    mockUseDeployments.mockReturnValue({
+      items: [
+        {
+          id: 'applications/bucket/My App',
+          displayName: 'My App',
+          type: 'application',
+          conversationStarters: {
+            introText: 'Choose how to start',
+            autoSubmit: true,
+            starters: [{ title: 'Draft', text: 'Write a draft' }],
+          },
+        },
+      ],
+    } as unknown as ReturnType<typeof DeploymentsContextModule.useDeployments>);
+    mockCreateConversation.mockResolvedValue({
+      id: 'bucket/applications/bucket/My App__1.0__Write a draft__uuid',
+      messages: [],
+    } as never);
+
+    render(<AppPreviewChat appId="applications/bucket/My App" />);
+    await userEvent.click(screen.getByRole('button', { name: 'Draft' }));
+
+    await waitFor(() => expect(streamMocks.startStream).toHaveBeenCalledOnce());
+  });
+
+  it('creates the conversation with the URL-encoded app id', async () => {
     mockUseDeployments.mockReturnValue({
       items: [
         {
@@ -193,16 +295,53 @@ describe('AppPreviewChat', () => {
 
     render(<AppPreviewChat appId="applications/bucket/My App" />);
 
-    await act(async () => {
-      screen.getByRole('button', { name: 'Draft' }).click();
-    });
+    await userEvent.click(screen.getByRole('button', { name: 'Draft' }));
 
     await waitFor(() => {
       expect(mockCreateConversation).toHaveBeenCalledWith(
         'Write a draft',
-        'applications/bucket/My App',
+        'applications/bucket/My%20App',
+        undefined,
+        undefined,
+        undefined,
         undefined,
       );
     });
+  });
+
+  it('shows a loading spinner until the app resolves from either source', async () => {
+    mockUseDeployments.mockReturnValue({
+      items: [],
+      isLoading: true,
+    } as unknown as ReturnType<typeof DeploymentsContextModule.useDeployments>);
+    let resolveDetails: (value: unknown) => void = () => undefined;
+    mockGetDeploymentDetails.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveDetails = resolve;
+      }) as never,
+    );
+
+    render(<AppPreviewChat appId="applications/bucket/My App" />);
+
+    expect(screen.getByRole('img', { name: 'Loading' })).toBeTruthy();
+    expect(screen.queryByLabelText('Intro text')).toBeNull();
+
+    resolveDetails({
+      id: 'applications/bucket/My App',
+      type: 'application',
+      applicationDetails: { features: { skillsSupported: true } },
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole('img', { name: 'Loading' })).toBeNull(),
+    );
+    expect(screen.getByLabelText('Intro text')).toBeTruthy();
+  });
+
+  it('does not show a loading spinner once the deployments list already resolves the app', () => {
+    render(<AppPreviewChat appId="applications/bucket/My App" />);
+
+    expect(screen.queryByRole('img', { name: 'Loading' })).toBeNull();
+    expect(screen.getByLabelText('Intro text')).toBeTruthy();
   });
 });

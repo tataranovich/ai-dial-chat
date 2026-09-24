@@ -1,12 +1,16 @@
 # Spec: file-manager-sharing
 
+## Purpose
+
+The revoke-access, discard-shared, and shared-by-me endpoints, and their wiring into the file manager.
+
+## Requirements
+
 ### Requirement: POST /api/v1/files/revoke-access endpoint
 
 The BFF SHALL expose `POST /api/v1/files/revoke-access` that accepts a batch of file/folder paths owned and previously shared by the caller, and revokes access for **all** users the resources were shared with, via DIAL Core `revokeSharedResources`. This is distinct from `discard-shared` below: revoke is an owner action affecting every recipient; it does not accept or require a permission level (revoking removes all granted permissions).
 
 **Authorization**: session cookie → `req.user.at` (bearer token forwarded to DIAL Core), identical to `/copy` and `/move`.
-
-**Rate limit**: `@Throttle({ default: { limit: 10, ttl: 60000 } })` — matching `/copy`, `/move`, `/rename`, `/delete`.
 
 **Caching**: no NestJS cache read/write.
 
@@ -27,14 +31,13 @@ The BFF SHALL expose `POST /api/v1/files/revoke-access` that accepts a batch of 
 ```typescript
 @Post('revoke-access')
 @HttpCode(200)
-@Throttle({ default: { limit: 10, ttl: 60000 } })
 @ApiOperation({ summary: 'Revoke all shared access to files and folders' })
 @ApiResponse({ status: 200, type: RevokeAccessResponseDto })
 @ApiResponse({ status: 400, description: 'Invalid request body' })
 @ApiResponse({ status: 401, description: 'Not authenticated' })
 @ApiResponse({ status: 403, description: 'Caller does not own one or more resources' })
 @ApiResponse({ status: 404, description: 'A resource does not exist' })
-@ApiResponse({ status: 429, description: 'Rate limit exceeded' })
+@ApiResponse({ status: 429, description: 'DIAL Core rate limit exceeded' })
 @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
 @ApiResponse({ status: 503, description: 'DIAL Core unreachable or timed out' })
 async revokeAccess(
@@ -83,7 +86,7 @@ POST /api/v1/files/revoke-access
 
 The BFF SHALL expose `POST /api/v1/files/discard-shared` that accepts a batch of file/folder paths shared **with** the caller, and removes them from the caller's own shared-with-me view via DIAL Core `discardSharedResources`. This does not affect the owner's access or any other recipient's access.
 
-**Authorization**, **rate limit** (`@Throttle({ default: { limit: 10, ttl: 60000 } })`), and **caching** posture are identical to `/revoke-access` above, except authorization requires only that the resource currently appears in the caller's shared-with-me listing (enforced by Core, surfaced as 403/404 on mismatch).
+**Authorization** and **caching** posture are identical to `/revoke-access` above, except authorization requires only that the resource currently appears in the caller's shared-with-me listing (enforced by Core, surfaced as 403/404 on mismatch).
 
 #### Request/Response DTOs
 
@@ -102,14 +105,13 @@ The BFF SHALL expose `POST /api/v1/files/discard-shared` that accepts a batch of
 ```typescript
 @Post('discard-shared')
 @HttpCode(200)
-@Throttle({ default: { limit: 10, ttl: 60000 } })
 @ApiOperation({ summary: 'Discard resources shared with the caller' })
 @ApiResponse({ status: 200, type: DiscardSharedResponseDto })
 @ApiResponse({ status: 400, description: 'Invalid request body' })
 @ApiResponse({ status: 401, description: 'Not authenticated' })
 @ApiResponse({ status: 403, description: 'Resource is not shared with the caller' })
 @ApiResponse({ status: 404, description: 'A resource does not exist' })
-@ApiResponse({ status: 429, description: 'Rate limit exceeded' })
+@ApiResponse({ status: 429, description: 'DIAL Core rate limit exceeded' })
 @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
 @ApiResponse({ status: 503, description: 'DIAL Core unreachable or timed out' })
 async discardShared(
@@ -144,20 +146,17 @@ async discardShared(
 
 The BFF SHALL expose `GET /api/v1/files/shared-by-me?bucket=` that lists resources the caller has shared with others, via DIAL Core `getSharedResources` called with `{ resourceTypes: ['FILE'], with: 'others', includeUserInfo: false }` — the owner-side counterpart of the existing `GET /api/v1/files/shared` (`with: 'me'`). Reuses `ListFilesResponseDto`/`ListFilesItemDto` unchanged; no new response DTO is introduced.
 
-**Rate limit**: `@Throttle({ default: { limit: 60, ttl: 60000 } })`, matching `/shared` and `/list`.
-
 **Caching**: no NestJS cache read/write (matches `/shared`).
 
 #### Controller signature
 
 ```typescript
 @Get('shared-by-me')
-@Throttle({ default: { limit: 60, ttl: 60000 } })
 @ApiOperation({ summary: 'List files and folders shared by the caller with others' })
 @ApiResponse({ status: 200, type: ListFilesResponseDto })
 @ApiResponse({ status: 400, description: 'Invalid query parameters' })
 @ApiResponse({ status: 401, description: 'Not authenticated' })
-@ApiResponse({ status: 429, description: 'Rate limit exceeded' })
+@ApiResponse({ status: 429, description: 'DIAL Core rate limit exceeded' })
 @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
 @ApiResponse({ status: 503, description: 'DIAL Core unreachable or timed out' })
 async listSharedByMe(
@@ -198,7 +197,7 @@ async listSharedByMe(
 
 ### Requirement: sharedByMePaths wired on useDialFileManager
 
-`useDialFileManager` (`apps/chat/src/hooks/files/useDialFileManager.ts`) SHALL fetch `listSharedByMe` alongside the existing `my_files` tab load and expose the result as `sharedByMePaths: Set<string>`, passed to ui-kit's `DialFileManager.sharedByMePaths` prop. Each entry SHALL use ui-kit's virtual `DialFile.path` format (e.g. `/My files/reports/q1.pdf`), not the DIAL Core resource path (`files/{bucket}/reports/q1.pdf`) returned by the BFF — built via `buildSharedItemVirtualPath` (see design D9), since ui-kit's row/tree/bulk gating compares against the virtual path. On all other tabs, `sharedByMePaths` SHALL be an empty `Set`.
+`useDialFileManager` (`libs/chat-hooks/src/files/useDialFileManager/useDialFileManager.ts (@epam/ai-dial-chat-hooks)`) SHALL fetch `listSharedByMe` alongside the existing `my_files` tab load and expose the result as `sharedByMePaths: Set<string>`, passed to ui-kit's `DialFileManager.sharedByMePaths` prop. Each entry SHALL use ui-kit's virtual `DialFile.path` format (e.g. `/My files/reports/q1.pdf`), not the DIAL Core resource path (`files/{bucket}/reports/q1.pdf`) returned by the BFF — built via `buildSharedItemVirtualPath` (see design D9), since ui-kit's row/tree/bulk gating compares against the virtual path. On all other tabs, `sharedByMePaths` SHALL be an empty `Set`.
 
 **State ownership**: `useDialFileManager` owns `sharedByMePaths`; no new context is introduced.
 
@@ -273,6 +272,12 @@ The following keys SHALL be added to `apps/chat/src/i18n/locales/en.json` with m
 | `dialFileManager.removeAccessError` | `Failed to remove access` |
 
 No raw string literal keys are passed to `t()` anywhere in this change — every key above is referenced through its `DialFileManagerI18nKeys` enum member.
+
+#### Scenario: Sharing labels resolve through the key enum
+
+- **WHEN** the Unshare and Remove access actions are rendered and their failures surface
+- **THEN** every label and error message resolves through a `DialFileManagerI18nKeys` member
+- **AND** no `t()` call in the sharing code passes a raw string literal
 
 ---
 

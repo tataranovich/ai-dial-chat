@@ -281,17 +281,21 @@ When `validateAttachment` is not provided, existing behaviour is unchanged.
 
 ---
 
-### Requirement: Input suppresses text-to-attachment paste conversion when attachments are disabled
+### Requirement: Input suppresses text-to-attachment paste conversion when a text attachment would be rejected
 
-`ConversationInputProps`, `InputProps`, and `EditMessageInputProps` SHALL accept an optional `isAttachmentsEnabled?: boolean` prop. When absent the value defaults to `true` (no change in behaviour).
+`ConversationInputProps`, `InputProps`, and `EditMessageInputProps` SHALL accept optional `isAttachmentsEnabled?: boolean` and `isTextAttachmentsAllowed?: boolean` props. When absent each defaults to `true` (no change in behaviour).
 
-When `isAttachmentsEnabled` is `false`, the `useClipboardPaste` handler SHALL NOT convert long pasted plain text into a `text/plain` attachment. The text SHALL be inserted inline into the textarea as if no threshold existed. Image clipboard items (pasted screenshots) are unaffected — they still convert to `AttachmentType.Image` attachments and proceed through the normal `validateAttachment` path.
+The `useClipboardPaste` handler SHALL convert long pasted plain text into a `text/plain` attachment only when both `isAttachmentsEnabled` and `isTextAttachmentsAllowed` are `true`. When either is `false`, the text SHALL be inserted inline into the textarea as if no threshold existed. Image clipboard items (pasted screenshots) are unaffected by either flag — they still convert to `AttachmentType.Image` attachments and proceed through the normal `validateAttachment` path.
 
-The host app is responsible for setting `isAttachmentsEnabled` based on whether the selected deployment supports attachments:
-- When no deployment is selected, the prop is omitted (undefined → `true`), allowing conversion.
-- When a deployment is selected, the host passes `isAttachmentsEnabled={isAttachmentsAllowed}` where `isAttachmentsAllowed` is derived from `selectedDeployment.inputAttachmentTypes` being non-empty.
+The host app is responsible for resolving both props from the selected deployment:
+- When no deployment is selected, both props are omitted (undefined → `true`), allowing conversion.
+- When a deployment is selected, the host passes `isAttachmentsEnabled={isAttachmentsAllowed}` where `isAttachmentsAllowed` is derived from `selectedDeployment.inputAttachmentTypes` being non-empty, and `isTextAttachmentsAllowed={isMimeTypeAllowed('text/plain', inputAttachmentTypes)}` — `true` when the list accepts `text/plain` (an explicit `text/plain` entry, the `text/*` wildcard, or a global `*` / `*/*` entry), `false` when the model accepts only other kinds of attachments (e.g. images only).
 
-This prevents the erroneous "Attachments not supported" error banner that appeared when a user pasted a long prompt into the input while a model with no attachment support was selected.
+`selectedDeployment` here is the BFF's `DeploymentItemDto`, so the field is
+`inputAttachmentTypes`. In a raw DIAL Core payload the same field is
+`input_attachment_types` — see the note in `attachment-unsupported-type-error`.
+
+This prevents two erroneous banners: the "Attachments not supported" notification when a user pasted a long prompt while a model with no attachment support was selected, and the "File extension not supported" notification when a model that accepts only non-text attachments (e.g. images only) auto-converted a long paste into a `text/plain` attachment that the model's own validation rejects.
 
 #### Scenario: Long pasted text on a model without attachment support stays inline
 
@@ -301,25 +305,159 @@ This prevents the erroneous "Attachments not supported" error banner that appear
 - **AND** no attachment card is created
 - **AND** no "Attachments not supported" notification appears
 
-#### Scenario: Long pasted text on a model with attachment support is converted normally
+#### Scenario: Long pasted text on a model that accepts only non-text attachments stays inline
 
-- **WHEN** `isAttachmentsEnabled` is `true` (default)
+- **WHEN** `isAttachmentsEnabled` is `true` and `isTextAttachmentsAllowed` is `false` (e.g. `inputAttachmentTypes: ['image/png']`)
+- **AND** the user pastes plain text longer than `pasteTextThreshold` characters
+- **THEN** the text is inserted into the textarea normally
+- **AND** no attachment card is created
+- **AND** no "File extension not supported" notification appears
+
+#### Scenario: Long pasted text on a model that accepts text attachments is converted normally
+
+- **WHEN** `isAttachmentsEnabled` and `isTextAttachmentsAllowed` are both `true` (the default, or an explicit `text/plain` / `text/*` / all-types entry in `inputAttachmentTypes`)
 - **AND** the user pastes plain text longer than `pasteTextThreshold` characters
 - **THEN** the text is converted to a `text/plain` attachment and shown as an attachment card
 - **AND** the textarea receives no text (paste is intercepted)
 
-#### Scenario: Pasted image is unaffected by isAttachmentsEnabled
+#### Scenario: Pasted image is unaffected by the suppression flags
 
-- **WHEN** `isAttachmentsEnabled` is `false`
+- **WHEN** either `isAttachmentsEnabled` or `isTextAttachmentsAllowed` is `false`
 - **AND** the user pastes an image from the clipboard (no plain text in the clipboard)
 - **THEN** the image is still converted to an `AttachmentType.Image` attachment
 - **AND** the normal `validateAttachment` path runs for the image attachment
 
 #### Scenario: No deployment selected — conversion is not suppressed
 
-- **WHEN** `isAttachmentsEnabled` is `undefined` (no deployment selected)
+- **WHEN** `isAttachmentsEnabled` and `isTextAttachmentsAllowed` are both `undefined` (no deployment selected)
 - **AND** the user pastes plain text longer than `pasteTextThreshold` characters
 - **THEN** the text is converted to a `text/plain` attachment (default behaviour)
+
+---
+
+### Requirement: Message length validation
+
+The `Input` component SHALL refuse to send a message whose text length is ≥
+`maxMessageLength` (default `50000`), regardless of whether attachments are supported, and
+SHALL call `onMessageTooLong(length, maxMessageLength)` instead. The textarea retains its
+content so the user can shorten it. `maxMessageLength` is the cap on message text and is a
+separate rule from `pasteTextThreshold`, which only decides when pasted text becomes an
+attachment.
+
+When the paste-to-attachment conversion is disabled (`isAttachmentsEnabled` or
+`isTextAttachmentsAllowed` is `false`) and the user pastes plain text whose length is ≥
+`maxMessageLength`, the `Input` component SHALL additionally call
+`onMessageTooLong(length, maxMessageLength)` at paste time. The pasted text is still
+inserted inline — the component does NOT call `preventDefault`. The host app is responsible
+for surfacing the error to the user (e.g. via a notification).
+
+The paste-time warning is deliberately limited to configurations where the paste cannot
+become an attachment. When the conversion is enabled, an over-threshold paste becomes an
+attachment and leaves the inline text untouched, and an under-threshold paste is at most
+`pasteTextThreshold` characters and so cannot reach the cap on its own. Text already in the
+textarea plus a below-threshold paste can exceed the cap; that case is caught by the
+send-time gate, not at paste time.
+
+This applies to every surface that embeds `Input`:
+
+- `ConversationInput` (used in `ConversationView` and `NewConversationComposer`)
+- `EditMessageInput` (used in `ConversationMessageItem`)
+
+#### Scenario: Send blocked when message reaches the cap and attachments are disabled
+
+- **GIVEN** `isAttachmentsEnabled` is `false` and the textarea contains text of length ≥ `maxMessageLength`
+- **WHEN** the user clicks the send button or presses the send key
+- **THEN** `onMessageTooLong(length, maxMessageLength)` is called and the message is NOT sent
+- **AND** the textarea retains its current content
+
+#### Scenario: Send blocked when message reaches the cap and attachments are enabled
+
+- **GIVEN** `isAttachmentsEnabled` is `true` and the user has typed text of length ≥ `maxMessageLength`
+- **WHEN** the user clicks the send button or presses the send key
+- **THEN** `onMessageTooLong(length, maxMessageLength)` is called and the message is NOT sent
+- **AND** the textarea retains its current content
+
+#### Scenario: Send allowed below the cap
+
+- **GIVEN** the textarea contains text of length < `maxMessageLength`
+- **WHEN** the user clicks the send button or presses the send key
+- **THEN** `onMessageTooLong` is NOT called and the message is sent, whatever the value of `isAttachmentsEnabled`
+- **AND** a length at or above `pasteTextThreshold` but below `maxMessageLength` does NOT block the send
+
+#### Scenario: EditMessageInput Save & Submit blocked when message reaches the cap
+
+- **GIVEN** the edit textarea contains text of length ≥ `maxMessageLength`
+- **WHEN** the user clicks Save & Submit
+- **THEN** `onMessageTooLong(length, maxMessageLength)` is called and the edit is NOT submitted, whatever the value of `isAttachmentsEnabled`
+
+#### Scenario: Paste reaches the cap while attachments are disabled
+
+- **GIVEN** `isAttachmentsEnabled` is `false`
+- **WHEN** the user pastes text of length ≥ `maxMessageLength`
+- **THEN** `onMessageTooLong(length, maxMessageLength)` is called and the text is inserted inline
+
+#### Scenario: Paste reaches the cap while text attachments are not allowed
+
+- **GIVEN** `isAttachmentsEnabled` is `true` and `isTextAttachmentsAllowed` is `false`
+- **WHEN** the user pastes text of length ≥ `maxMessageLength`
+- **THEN** `onMessageTooLong(length, maxMessageLength)` is called and the text is inserted inline
+
+#### Scenario: Paste below the cap while attachments are disabled
+
+- **GIVEN** `isAttachmentsEnabled` is `false`
+- **WHEN** the user pastes text of length < `maxMessageLength`
+- **THEN** `onMessageTooLong` is NOT called at paste time and the text is inserted inline normally
+- **AND** this holds even when the pasted length is at or above `pasteTextThreshold`
+
+#### Scenario: Paste over the attachment threshold while the conversion is enabled
+
+- **GIVEN** the paste-to-attachment conversion is enabled (`isAttachmentsEnabled` and `isTextAttachmentsAllowed` both `true`)
+- **WHEN** the user pastes text longer than `pasteTextThreshold`
+- **THEN** the pasted text is converted to an attachment as usual and `onMessageTooLong` is NOT called at paste time
+
+---
+
+### Requirement: Rate-limited upload dispatching
+
+When `addAttachments` is called with multiple files, the `Input` component SHALL dispatch uploads at a steady rate of `MAX_UPLOADS_PER_MINUTE` (100) starts per minute rather than firing all requests simultaneously. Uploads run concurrently — the rate limit controls when each upload **starts**, not how many are in flight at once.
+
+The dispatcher fires one upload every `60000 / MAX_UPLOADS_PER_MINUTE` ms (600 ms). All started uploads run in parallel; the next dispatch slot opens after each interval regardless of whether prior uploads have completed.
+
+The rate limiter is implemented via `runAtRate` from `libs/conversation-input/src/utils/concurrency.ts`. The constant `MAX_UPLOADS_PER_MINUTE` is defined in `libs/conversation-input/src/constants/upload.ts`.
+
+This is client-side upload pacing; the BFF does not enforce a matching request-rate limit. A `429` that does reach the client SHALL surface as `RequestStatus.Error` on the affected attachment card, consistent with other upload failures.
+
+Attachments that fail `validateAttachment` are marked `RequestStatus.Error` synchronously before the dispatcher starts.
+
+#### Scenario: Uploads are dispatched at a steady rate
+
+- **WHEN** more than 100 files are added at once
+- **THEN** uploads start one every 600 ms; at most 100 upload requests are started within any 60-second window
+
+#### Scenario: Small batches are unaffected
+
+- **WHEN** 100 or fewer files are added at once
+- **THEN** all uploads start within 60 seconds with 600 ms spacing between each dispatch
+
+#### Scenario: Uploads run concurrently
+
+- **WHEN** multiple uploads are in flight
+- **THEN** each upload proceeds independently without waiting for others to complete
+
+#### Scenario: Invalid attachments are marked immediately
+
+- **WHEN** a batch contains files that fail `validateAttachment` alongside valid files
+- **THEN** invalid ones are immediately set to `RequestStatus.Error` and valid ones enter the rate-limited dispatch queue
+
+#### Scenario: All uploads complete after the last dispatch
+
+- **WHEN** the dispatcher has started all items
+- **THEN** the process waits for all in-flight uploads to settle before resolving
+
+#### Scenario: A 429 from the backend sets the attachment to error state
+
+- **WHEN** the backend returns `429 Too Many Requests` for an upload request
+- **THEN** the corresponding `AttachmentCard` transitions to `RequestStatus.Error` and the user can retry
 
 ---
 
@@ -435,23 +573,6 @@ When the total attachment count (prefix + new) reaches 7 or more, the `Input` wr
 
 ---
 
-### Requirement: Action bar stays inline when attachments are present
-
-The action bar layout (textarea, + button, model selector) SHALL remain on a single row on desktop even when the `AttachmentTray` is visible. Attachments are displayed in `AttachmentTray` above the action bar and MUST NOT trigger the stacked layout. The stacked layout (textarea above buttons) is only used when the caller explicitly opts in (`isStacked` prop) or when the message contains multiple visual lines.
-
-#### Scenario: Placeholder stays inline with buttons when files are attached
-
-- **WHEN** one or more files are attached and the message text is empty
-- **THEN** the placeholder text is on the same row as the + button and model selector on desktop
-- **AND** the `AttachmentTray` is rendered above the action bar
-
-#### Scenario: Stacked layout still activates for multi-line messages
-
-- **WHEN** the message text spans multiple lines (explicit newline or word-wrap)
-- **THEN** the textarea is on its own row above the action buttons
-
----
-
 ### Requirement: Retry button is suppressed for non-retryable error reasons
 
 `AttachmentCard` SHALL NOT render the retry button when `attachment.errorReason === AttachmentErrorReason.UnsupportedType`, even if an `onRetry` prop is provided.
@@ -505,3 +626,42 @@ Because the browser `accept` attribute is only a selection hint (the user can st
 
 - **WHEN** `fileAccept` is provided and the user overrides the OS dialog to pick an unsupported file
 - **THEN** `validateAttachment` is still invoked for that file and rejects it as before
+
+### Requirement: Input always uses the stacked two-row layout
+
+The `Input` component SHALL always render the textarea on its own full-width row above the action bar (`+` button, tools chips when present, model selector, send/stop, mic). There SHALL be no compact single-row layout: no prop, message length, visual line count, tool list, attachment count, or viewport width SHALL place the textarea on the same row as the action controls.
+
+The input wrapper SHALL NOT declare a minimum height; its height SHALL follow its content.
+
+Consequently `Input` SHALL NOT reorder or re-wrap its children per breakpoint. DOM order SHALL be the visual order — textarea container, `+` button, tools chips, trailing actions — with no `order-*` or `desktop:flex-nowrap` overrides.
+
+#### Scenario: Empty input renders two rows
+
+- **WHEN** `Input` is rendered with an empty message, no attachments, and no tools
+- **THEN** the textarea occupies its own row above the row holding the `+` button and model selector
+- **AND** the same layout is rendered at a mobile viewport and at a desktop viewport
+
+#### Scenario: Layout does not change as the message grows
+
+- **WHEN** the user types text that wraps onto a second visual line, or inserts an explicit newline
+- **THEN** the layout is unchanged — the textarea was already on its own row and stays there
+- **AND** the action controls do not move
+
+#### Scenario: Attachments do not change the layout
+
+- **WHEN** one or more files are attached
+- **THEN** the `AttachmentTray` is rendered above the textarea row
+- **AND** the textarea remains on its own row above the action bar
+
+#### Scenario: Tools chips render on their own row
+
+- **WHEN** the deployment exposes tools and at least one chip is visible
+- **THEN** the chips render in a row between the textarea row and the trailing action controls
+- **AND** the trailing action controls stay at the end of the action row
+
+#### Scenario: Textarea renders when the action bar is hidden
+
+- **WHEN** `Input` is rendered with `hideActionBar` and an empty message
+- **THEN** the textarea is rendered inside the bordered box
+- **AND** the action bar row is not rendered
+

@@ -12,6 +12,7 @@ import {
   useMemo,
 } from 'react';
 import { ATTACHMENT_TILE_BASE_CLASS } from '../../../constants/attachment-group';
+import { ATTACHMENT_INPUT_CLASS } from '../../../constants/public-class-names';
 import type { FileAttachmentProps } from '../../../models/attachment-file-row';
 import {
   getAttachmentCardState,
@@ -29,6 +30,7 @@ const DEFAULT_ERROR_REASON_TEXT: Record<AttachmentErrorReason, string> = {
   [AttachmentErrorReason.Network]: 'Upload failed · network error',
   [AttachmentErrorReason.UnsupportedType]:
     'Upload failed · unsupported file type',
+  [AttachmentErrorReason.FileTooLarge]: 'Upload failed · file too large',
 };
 
 /** Non-previewable attachment tile showing a file type glyph, extension label, and filename with upload-state feedback. */
@@ -51,6 +53,8 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
   const {
     clickLabel = 'Download attachment',
     retryLabel = 'Retry upload',
+    removeLabel = 'Remove attachment',
+    openInNewTabLabel = 'Open in new tab',
     sizeLabel,
     uploadingLabel = 'Uploading',
     errorReasonLabels,
@@ -77,11 +81,29 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
   const canRetry =
     isError &&
     !!onRetry &&
-    errorReason !== AttachmentErrorReason.UnsupportedType;
+    errorReason !== AttachmentErrorReason.UnsupportedType &&
+    errorReason !== AttachmentErrorReason.FileTooLarge;
 
-  const cornerIconSpacing = canDownload || canRetry ? 'pe-5' : undefined;
+  const cornerActionCount =
+    Number(!!canDownload) +
+    Number(!!canRetry) +
+    Number(!!isLink) +
+    Number(!!onRemove);
+  const cornerIconSpacing =
+    cornerActionCount > 1
+      ? 'pe-11'
+      : cornerActionCount === 1
+        ? 'pe-5'
+        : undefined;
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    /*
+     * Only the tile itself activates on Enter/Space. Without this guard the
+     * preventDefault() below cancels the native activation of the corner
+     * action buttons whose key events bubble through here, leaving retry and
+     * remove dead to the keyboard.
+     */
+    if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       onClick?.(attachment.id);
@@ -103,6 +125,8 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
     !isError && styles.hovered,
     isSelected && styles.selected,
     isError && styles.tileError,
+    ATTACHMENT_INPUT_CLASS.tile,
+    isSelected && ATTACHMENT_INPUT_CLASS.tileSelected,
   );
 
   const nameEl = (
@@ -110,9 +134,19 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
       title={displayName}
       className={mergeClasses(
         typography?.nameClassName ?? 'dial-caption-text',
-        'line-clamp-2 min-w-0 break-all',
+        /*
+         * `w-full` is load-bearing here: the tile is a fixed-width (84px)
+         * column flex container with `items-start`, so the name div is sized to
+         * its min-content width. `break-words` (overflow-wrap: break-word) does
+         * not shrink min-content, so a filename with one long unbreakable run
+         * made the div wider than the tile — the text was then clipped by the
+         * tile's `overflow-hidden` instead of wrapping and clamping with an
+         * ellipsis.
+         */
+        'line-clamp-2 w-full min-w-0 break-words',
         styles.nameText,
         !isError && cornerIconSpacing,
+        ATTACHMENT_INPUT_CLASS.tileName,
       )}
     >
       {searchQuery ? (
@@ -128,6 +162,7 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
       className={mergeClasses(
         'flex w-full items-center gap-1',
         isError && cornerIconSpacing,
+        ATTACHMENT_INPUT_CLASS.tileType,
       )}
     >
       <Glyph size={16} className={styles.typeText} aria-hidden />
@@ -158,10 +193,17 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
       {typeRow}
 
       {isLoading && (
+        /*
+         * An aria-label on a plain div names nothing — a generic element has no
+         * role to hang a name on, so the upload was invisible to assistive tech.
+         * An indeterminate progressbar (a role, a name, no aria-valuenow) is the
+         * standard way to say "this is working and there is no percentage".
+         */
         <div
+          role="progressbar"
           aria-label={uploadingLabel}
           className={mergeClasses(
-            'absolute left-[-1px] top-[-1px] flex size-full items-center justify-center rounded',
+            'absolute start-[-1px] top-[-1px] flex size-full items-center justify-center rounded',
             styles.track,
           )}
         >
@@ -169,7 +211,7 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
         </div>
       )}
 
-      <div className={mergeClasses('absolute right-0 top-0 flex gap-1')}>
+      <div className="absolute end-1 top-1 flex gap-1">
         {canDownload && (
           <DownloadAction
             ariaLabel={clickLabel}
@@ -190,7 +232,7 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
         )}
         {isLink && (
           <OpenLinkAction
-            ariaLabel={retryLabel}
+            ariaLabel={openInNewTabLabel}
             errorTitle={errorTitle}
             errorDescId={errorDescId}
             onClick={onOpenInNewTab}
@@ -198,7 +240,7 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
         )}
         {onRemove && (
           <RemoveAction
-            ariaLabel={retryLabel}
+            ariaLabel={removeLabel}
             errorTitle={errorTitle}
             errorDescId={errorDescId}
             onClick={onRemove}
@@ -226,6 +268,7 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
         role="button"
         tabIndex={0}
         aria-label={clickLabel}
+        aria-busy={isLoading}
         onClick={handleClick}
         onKeyDown={handleKeyDown}
         style={cssVars}

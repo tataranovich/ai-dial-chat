@@ -1,20 +1,32 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  HttpException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Cache } from 'cache-manager';
 import {
+  extractDialErrorMessage,
   handleDialFetchError,
   mapDialHttpStatus,
 } from '../../common/dial/dial-error.mapper';
 import { getBearerAuthHeaders } from '../../common/utils/auth-header';
 import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
+import { resolveLocalizedValue } from '../../common/utils/localized-value';
 import { DialClientService } from '../../dial/dial-client.service';
-import type { DeploymentLimitsResponseDto } from '../../openapi/openapi-response.dto';
+import type {
+  DeploymentLimitsResponseDto,
+  UserLimitStatsResponseDto,
+} from '../../openapi/openapi-response.dto';
 import type { DeploymentConfigurationDto } from '../dto/deployment-configuration.dto';
 import type { DeploymentDetailsDto } from '../dto/deployment-details.dto';
 import { DeploymentItemType } from '../dto/deployment-item.dto';
 import {
   getNumber,
   isRecord,
+  mapCatalogProperties,
   mapDeploymentFeatures,
   mapToolsetAuthSettings,
   redactToolsetAuthSettings,
@@ -33,6 +45,8 @@ export class DeploymentsDetailsService {
     string,
     Promise<DeploymentDetailsDto>
   >();
+  /** Per-cache-key generation, bumped on invalidation — see `deployment-details-api` spec, "in flight when a logout invalidates its key" scenario. */
+  private readonly cacheGenerations = new Map<string, number>();
 
   constructor(
     private readonly dialClient: DialClientService,
@@ -43,13 +57,20 @@ export class DeploymentsDetailsService {
    * Evicts a user's cached details for one deployment — e.g. right after a
    * toolset login/logout, so the details panel's next `getDeploymentDetails`
    * call re-reads the updated `userLevelAuthStatus` instead of the snapshot
-   * cached before the credentials changed.
+   * cached before the credentials changed. Also bumps the key's generation
+   * and drops any in-flight request for it (see `deployment-details-api` spec).
    */
   async invalidateDetailsCache(
     userSub: string,
     deployment: string,
   ): Promise<void> {
-    await this.cacheManager.del(`deployments:details:${userSub}:${deployment}`);
+    const cacheKey = `deployments:details:${userSub}:${deployment}`;
+    await this.cacheManager.del(cacheKey);
+    this.cacheGenerations.set(
+      cacheKey,
+      (this.cacheGenerations.get(cacheKey) ?? 0) + 1,
+    );
+    this.pendingDetailsRequests.delete(cacheKey);
   }
 
   async getDeploymentConfiguration(
@@ -73,6 +94,9 @@ export class DeploymentsDetailsService {
         {
           headers: getBearerAuthHeaders(accessToken),
         },
+      );
+      this.logger.debug(
+        `DIAL Core configurationDeployment for "${name}": ${JSON.stringify(result)}`,
       );
       if (result.error) {
         return mapDialHttpStatus(
@@ -134,7 +158,10 @@ export class DeploymentsDetailsService {
     try {
       return await request;
     } finally {
-      this.pendingDetailsRequests.delete(cacheKey);
+      /* Only clear this request's own slot — see `deployment-details-api` spec. */
+      if (this.pendingDetailsRequests.get(cacheKey) === request) {
+        this.pendingDetailsRequests.delete(cacheKey);
+      }
     }
   }
 
@@ -153,6 +180,7 @@ export class DeploymentsDetailsService {
     accessToken: string,
     cacheKey: string,
   ): Promise<DeploymentDetailsDto> {
+    const generationAtStart = this.cacheGenerations.get(cacheKey) ?? 0;
     let data: DeploymentDetailsDto;
     try {
       if (deployment.startsWith('toolsets/')) {
@@ -174,7 +202,10 @@ export class DeploymentsDetailsService {
       );
     }
 
-    await this.cacheManager.set(cacheKey, data, 60 * 1000);
+    /* Skip a stale write — see `deployment-details-api` spec. */
+    if ((this.cacheGenerations.get(cacheKey) ?? 0) === generationAtStart) {
+      await this.cacheManager.set(cacheKey, data, 60 * 1000);
+    }
     return data;
   }
 
@@ -221,6 +252,9 @@ export class DeploymentsDetailsService {
       throw new NotFoundException('Resource not found');
     }
     const raw = result.data;
+    this.logger.debug(
+      `DIAL Core model details for "${deployment}": ${JSON.stringify(raw)}`,
+    );
     const limits = raw.limits;
 
     const data: DeploymentDetailsDto = {
@@ -255,14 +289,9 @@ export class DeploymentsDetailsService {
                   : undefined,
             }
           : undefined,
-        pricing: raw.pricing
-          ? {
-              unit: raw.pricing.unit,
-              prompt: raw.pricing.prompt,
-              completion: raw.pricing.completion,
-            }
-          : undefined,
+        pricing: raw.pricing,
         features: mapDeploymentFeatures(raw.features),
+        catalogProperties: mapCatalogProperties(raw.catalog_properties),
         owner: raw.owner,
         inputAttachmentTypes: Array.isArray(raw.input_attachment_types)
           ? raw.input_attachment_types
@@ -273,6 +302,10 @@ export class DeploymentsDetailsService {
         createdAt: raw.created_at,
       },
     };
+
+    this.logger.debug(
+      `Model details sent to frontend for "${deployment}": ${JSON.stringify(data)}`,
+    );
 
     return data;
   }
@@ -307,8 +340,8 @@ export class DeploymentsDetailsService {
     const rawRecord = raw as unknown as Record<string, unknown>;
 
     /* For applications with an `applications/{bucket}/{path}` ID, fetch the
-     * full config via getCustomApplication to get endpoint —
-     * getApplication (model listing) does not expose that field. */
+     * full config via getCustomApplication for endpoint and stored properties.
+     * getApplication is list-shaped and may omit or return empty properties. */
     let customAppRaw: Record<string, unknown> | undefined;
     const appParts = deployment.startsWith('applications/')
       ? deployment.slice('applications/'.length).split('/')
@@ -330,22 +363,22 @@ export class DeploymentsDetailsService {
       id: deployment,
       type: DeploymentItemType.Application,
       applicationDetails: {
-        displayName: raw.display_name,
-        applicationProperties: (() => {
-          const base = isRecord(raw.application_properties)
+        displayName: resolveLocalizedValue(raw.display_name),
+        applicationProperties: isRecord(customAppRaw?.application_properties)
+          ? customAppRaw.application_properties
+          : isRecord(raw.application_properties)
             ? raw.application_properties
-            : {};
-          /* Include raw features from the custom-app config so the editor
-           * textarea can display them. DIAL Core expands stored features with
-           * all defaults, so the user may see more keys than they originally
-           * entered — this is the most accurate representation available. */
-          const storedFeatures = customAppRaw?.features as unknown;
-          const merged =
-            storedFeatures != null
-              ? { ...base, features: storedFeatures }
-              : base;
-          return Object.keys(merged).length > 0 ? merged : undefined;
-        })(),
+            : undefined,
+        /* The Custom App editor's Features textarea reads/writes the
+         * top-level DIAL Core `features` JSON (via updateApplication's
+         * `features` field) — distinct from application_properties.features,
+         * a schema-specific key some applications (e.g. Quick Apps) store as
+         * part of their own config. DIAL Core expands stored features with
+         * all defaults, so the user may see more keys than they originally
+         * entered — this is the most accurate representation available. */
+        customAppFeatures: isRecord(customAppRaw?.features)
+          ? customAppRaw.features
+          : undefined,
         functionRuntime: raw.function?.runtime,
         functionStatus: raw.function?.status,
         routes: raw.routes ? Object.keys(raw.routes) : undefined,
@@ -354,6 +387,7 @@ export class DeploymentsDetailsService {
         inputAttachmentTypes: Array.isArray(raw.input_attachment_types)
           ? raw.input_attachment_types
           : undefined,
+        catalogProperties: mapCatalogProperties(raw.catalog_properties),
         applicationTypeSchemaId: raw.application_type_schema_id,
         endpoint:
           typeof customAppRaw?.endpoint === 'string'
@@ -422,6 +456,7 @@ export class DeploymentsDetailsService {
         authSettings: mapToolsetAuthSettings(raw.auth_settings),
         owner: raw.owner,
         features: mapDeploymentFeatures(raw.features),
+        catalogProperties: mapCatalogProperties(raw.catalog_properties),
         createdAt: raw.created_at,
       },
     };
@@ -493,6 +528,81 @@ export class DeploymentsDetailsService {
         this.logger,
         0,
       );
+    }
+  }
+
+  async getUserLimits(accessToken: string): Promise<UserLimitStatsResponseDto> {
+    this.logger.debug('Fetching user limits from DIAL Core');
+    try {
+      const result = await this.dialClient.client.getUserLimits({
+        headers: getBearerAuthHeaders(accessToken),
+      });
+      if (result.error) {
+        this.logger.debug(
+          `DIAL Core get user limits error: status=${result.response.status} body=${JSON.stringify(result.error)}`,
+        );
+        return mapDialHttpStatus(
+          result.response.status,
+          'get user limits',
+          this.logger,
+          result.error,
+          extractDialErrorMessage(result.error),
+        );
+      }
+      this.logger.debug(
+        `DIAL Core user limits raw response: ${JSON.stringify(result.data)}`,
+      );
+      return result.data as unknown as UserLimitStatsResponseDto;
+    } catch (err) {
+      /* mapDialHttpStatus above throws on a non-2xx DIAL Core response, so it
+       * lands here too — only a non-HttpException means no response was
+       * actually received (network error, timeout, unexpected throw). */
+      if (err instanceof HttpException) {
+        this.logger.debug(
+          `get user limits: re-throwing mapped DIAL Core error: ${err.message}`,
+        );
+      } else {
+        this.logger.debug(
+          `get user limits threw before a response was received: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return handleDialFetchError(err, 'get user limits', this.logger, 0);
+    }
+  }
+
+  async getUserUsage(accessToken: string): Promise<UserLimitStatsResponseDto> {
+    this.logger.debug('Fetching user usage from DIAL Core');
+    try {
+      const result = await this.dialClient.client.getUserUsage({
+        headers: getBearerAuthHeaders(accessToken),
+      });
+      if (result.error) {
+        this.logger.debug(
+          `DIAL Core get user usage error: status=${result.response.status} body=${JSON.stringify(result.error)}`,
+        );
+        return mapDialHttpStatus(
+          result.response.status,
+          'get user usage',
+          this.logger,
+          result.error,
+          extractDialErrorMessage(result.error),
+        );
+      }
+      this.logger.debug(
+        `DIAL Core user usage raw response: ${JSON.stringify(result.data)}`,
+      );
+      return result.data as unknown as UserLimitStatsResponseDto;
+    } catch (err) {
+      if (err instanceof HttpException) {
+        this.logger.debug(
+          `get user usage: re-throwing mapped DIAL Core error: ${err.message}`,
+        );
+      } else {
+        this.logger.debug(
+          `get user usage threw before a response was received: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return handleDialFetchError(err, 'get user usage', this.logger, 0);
     }
   }
 }

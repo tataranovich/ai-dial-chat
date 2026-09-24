@@ -7,6 +7,8 @@ import {
   PublishHistoryEntry,
   PublishResourceSummary,
 } from '../../models/publish';
+import type { PublishPanelStyles } from '../../models/publish-panel-styles';
+import { getFocusableElements } from '../../utils/focus';
 import { derivePublishState } from '../../utils/publish-state';
 import { PublishFooter, PublishFooterLabels } from './PublishFooter';
 import { PublishPanel, PublishPanelLabels } from './PublishPanel';
@@ -70,6 +72,13 @@ export interface StandalonePublishPanelProps {
    * allowed (catalog default) or blocked (conversations). Default `true`.
    */
   allowReplace?: boolean;
+  /**
+   * Display author recorded on the publication. Forwarded to
+   * {@link PublishPanel} unmodified; an empty value never blocks submission.
+   */
+  author: string;
+  /** Called with the next author value on every edit. */
+  onAuthorChange: (author: string) => void;
   /** Current access rules, combined with AND. */
   rules: PublicationRule[];
   /** Called with the full next rules array on add, remove, or clear. */
@@ -88,6 +97,8 @@ export interface StandalonePublishPanelProps {
   onSubmit: () => void;
   /** Text overrides for the panel body. */
   panelLabels?: PublishPanelLabels;
+  /** Style overrides for the panel body. */
+  panelStyles?: PublishPanelStyles;
   /** Text overrides for the pinned footer. */
   footerLabels?: PublishFooterLabels;
   /** Text overrides for the header/shell. */
@@ -134,6 +145,8 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
   isSubmitting,
   hasSubmitError = false,
   allowReplace = true,
+  author,
+  onAuthorChange,
   rules,
   onRulesChange,
   ruleSourceOptions,
@@ -143,6 +156,7 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
   returnFocusRef,
   onSubmit,
   panelLabels,
+  panelStyles,
   footerLabels,
   labels = {},
   titleClassName = 'dial-body-semi-text',
@@ -229,6 +243,42 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const panel = panelRef.current;
+      if (!panel) return;
+
+      /*
+       * Only wrap while focus is genuinely inside the panel. The panel renders
+       * folder-row menus and the rule source picker through portals that live
+       * outside this subtree; pulling focus back from those would make them
+       * unusable by keyboard.
+       */
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || !panel.contains(active)) return;
+
+      const focusable = getFocusableElements(panel);
+      if (focusable.length === 0) {
+        /* Nothing to cycle through — hold focus on the dialog itself rather
+         * than letting Tab walk out into the page behind the modal. */
+        event.preventDefault();
+        panel.focus({ preventScroll: true });
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+        return;
+      }
+      if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
 
@@ -315,12 +365,15 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
               isSubmitting={isSubmitting}
               hasSubmitError={hasSubmitError}
               allowReplace={allowReplace}
+              author={author}
+              onAuthorChange={onAuthorChange}
               rules={rules}
               onRulesChange={onRulesChange}
               ruleSourceOptions={ruleSourceOptions}
               isRulesLoading={isRulesLoading}
               hasRulesLoadError={hasRulesLoadError}
               labels={panelLabels}
+              styles={panelStyles}
             />
           </div>
         </div>

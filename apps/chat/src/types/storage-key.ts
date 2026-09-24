@@ -3,9 +3,11 @@ export enum StorageKey {
   ConversationSourcesWidth = 'conversationSourcesWidth',
   Theme = 'theme',
   KeyboardShortcut = 'keyboardShortcut',
+  DefaultAgent = 'defaultAgent',
   CatalogSortKey = 'catalogSortKey',
   CatalogFilterTopics = 'catalogFilterTopics',
   CatalogIsMyAppsActive = 'catalogIsMyAppsActive',
+  CatalogActiveTab = 'catalogActiveTab',
   TextOfClosedAnnouncement = 'textOfClosedAnnouncement',
   PublishDestinationFolders = 'publishDestinationFolders',
 }

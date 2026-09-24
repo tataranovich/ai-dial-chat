@@ -33,14 +33,20 @@ export interface BuilderFormContainerProps {
   labels: BuilderFormHeaderLabels;
   /** Called when the user activates the header's back control. */
   onBack: () => void;
-  /** Called when the user activates the header's cancel action. */
+  /** Called when the user activates the form's cancel action (header on desktop, sticky footer on mobile). */
   onCancel: () => void;
-  /** Called when the user activates the header's submit action. */
+  /** Called when the user activates the form's submit action (header on desktop, sticky footer on mobile). */
   onSubmit: () => void;
-  /** When `true`, the header's cancel action is disabled. Defaults to `false`. */
+  /** When `true`, the cancel action is disabled on both surfaces. Defaults to `false`. */
   isCancelDisabled?: boolean;
-  /** When `true`, the header's submit action is disabled. Defaults to `false`. */
+  /** When `true`, the submit action is disabled on both surfaces. Defaults to `false`. */
   isSubmitDisabled?: boolean;
+  /** When `true`, the submit action shows a spinner and reports `aria-busy` on both surfaces. Defaults to `false`. */
+  isSubmitting?: boolean;
+  /** Optional replacement for the header's default back icon. */
+  backIcon?: ReactNode;
+  /** Additional class name for the container root. */
+  className?: string;
   /** Body's start-edge column. Full width on mobile, a fixed-width column on desktop. */
   left?: ReactNode;
   /** Body's main column, filling the space left by `left` and `metadata`. */
@@ -49,4 +55,6 @@ export interface BuilderFormContainerProps {
   metadata?: ReactNode;
   /** Style overrides. */
   styles?: BuilderFormContainerStyles;
+  /** Optional container-responsive body sizing. */
+  layout?: import('./builder-form-body-props').BuilderFormBodyProps['layout'];
 }

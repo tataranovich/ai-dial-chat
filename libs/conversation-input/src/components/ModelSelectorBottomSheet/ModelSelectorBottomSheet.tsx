@@ -6,13 +6,15 @@ import {
 import {
   Button,
   DIAL_ICON_SIZE,
-  DialSearch,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
   Highlight,
+  Search,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck } from '@tabler/icons-react';
 import { type CSSProperties, type FC, useEffect, useState } from 'react';
 import { List, type RowComponentProps } from 'react-window';
+import { CONVERSATION_INPUT_CLASS } from '../../constants/public-class-names';
 import { buildDeploymentIcon, filterDeployments } from '../../utils/deployment';
 import type { BottomSheetShellColors } from '../BottomSheetShell/BottomSheetShell';
 import { BottomSheetShell } from '../BottomSheetShell/BottomSheetShell';
@@ -20,14 +22,14 @@ import { ModelSelectorSkeletonRows } from '../ModelSelectorSkeleton/ModelSelecto
 import styles from './ModelSelectorBottomSheet.module.scss';
 
 /** Color overrides for the `ModelSelectorBottomSheet` component, applied as CSS custom properties. */
-export interface ModelSelectorBottomSheetColors {
-  /** Divider color between the search field and the deployment list. Defaults to `--bg-layer-4`. */
+interface ModelSelectorBottomSheetColors {
+  /** Divider color between the search field and the deployment list. Defaults to `--stroke-secondary`. */
   divider?: string;
   /** Item label and state-label text color. Defaults to `--text-primary`/`--text-secondary`. */
   itemText?: string;
   /** Item hover background. Defaults to `--bg-layer-raised`. */
   itemHoverBg?: string;
-  /** Item active/pressed background. Defaults to `--bg-layer-4`. */
+  /** Item active/pressed background. Defaults to `--bg-control-neutral-active`. */
   itemActiveBg?: string;
   /** Item leading-icon color. Defaults to `--text-secondary`. */
   itemIcon?: string;
@@ -80,6 +82,9 @@ const ModelRow = ({
     <div style={style} {...ariaAttributes}>
       <Button
         type="button"
+        /* The check icon alone is invisible to assistive tech, so the row that
+           holds the applied deployment reports itself as the current one. */
+        aria-current={isSelected ? 'true' : undefined}
         className={mergeClasses(styles.item, 'h-full w-full gap-3 px-4')}
         iconBefore={<span className={styles.itemIcon}>{modelIcon}</span>}
         label={
@@ -98,6 +103,7 @@ const ModelRow = ({
                 size={DIAL_ICON_SIZE.SM}
                 className={styles.checkIcon}
                 aria-hidden
+                stroke={DIAL_KIT_ICON_STROKE}
               />
             )}
           </span>
@@ -134,7 +140,7 @@ export interface ModelSelectorBottomSheetProps {
   emptyLabel?: string;
   /** Inline CSS custom properties forwarded to the sheet root for theming. */
   style?: CSSProperties;
-  /** CSS class applied to the sheet title. Defaults to `'dial-body-semi-bold-text'`. */
+  /** CSS class applied to the sheet title. Defaults to `'dial-body-semi-text'`. */
   titleClassName?: string;
   /** CSS class applied to each item label and the state label. Defaults to `'dial-small-text'`. */
   labelClassName?: string;
@@ -197,7 +203,10 @@ export const ModelSelectorBottomSheet: FC<ModelSelectorBottomSheetProps> = ({
       onClose={onClose}
       style={style}
       titleClassName={titleClassName}
-      className="max-h-[80dvh]"
+      className={mergeClasses(
+        'max-h-[80dvh]',
+        CONVERSATION_INPUT_CLASS.modelMenu,
+      )}
       colors={colors?.shell}
     >
       <div className="contents" style={cssVars}>
@@ -205,11 +214,11 @@ export const ModelSelectorBottomSheet: FC<ModelSelectorBottomSheetProps> = ({
         {hasDeployments && !isLoading && (
           <>
             <div className="flex-shrink-0 px-4 py-[10px]">
-              <DialSearch
+              <Search
                 value={query}
                 placeholder={searchPlaceholder}
                 size={ElementSize.Standard}
-                onChange={setQuery}
+                onChange={(value) => setQuery(value ?? '')}
               />
             </div>
             <div

@@ -1,23 +1,38 @@
 import type { DialToolsetDto } from '@epam/ai-dial-chat-api-client';
+import {
+  emitToolsetLoginSuccess,
+  getToolsetOAuthChannelName,
+  TOOLSET_REDIRECT_STATE_KEY,
+  ToolsetCredentialsLevel,
+} from '@epam/ai-dial-chat-hooks';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps, Ref } from 'react';
 import { createRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  TOOLSET_REDIRECT_STATE_KEY,
-  ToolsetCredentialsLevel,
-} from '../../../constants/toolsets';
+import * as AppConfigContextModule from '../../../context/AppConfigContext';
 import * as UserContextModule from '../../../context/auth/UserContext';
 import * as ThemeContextModule from '../../../context/ThemeContext';
 import * as deploymentsApi from '../../../server-api/deployments';
 import * as toolsetsApi from '../../../server-api/toolsets';
 import { AppsEditorEvent } from '../../../types/apps-editor';
 import { AuthStatus } from '../../../types/auth-status';
-import { emitToolsetLoginSuccess } from '../../../utils/toolset-login-events';
-import { getToolsetOAuthChannelName } from '../../../utils/toolsets';
 import type { AppEditorIframeHandle } from '../AppEditorIframe';
 import AppEditorIframe from '../AppEditorIframe';
 
+vi.mock('../../../context/AppConfigContext', () => ({
+  useFeatureFlag: vi.fn(() => true),
+}));
+vi.mock('../../../hooks/useUiFeature', () => ({
+  useUiFeature: vi.fn(() => true),
+}));
+vi.mock(
+  '../../../components/ApplicationCredentials/ApplicationCredentials',
+  () => ({
+    ApplicationCredentials: ({ appId }: { appId: string }) => (
+      <div>Credentials for {appId}</div>
+    ),
+  }),
+);
 vi.mock('../../../context/auth/UserContext');
 vi.mock('../../../context/ThemeContext');
 vi.mock('../../../server-api/toolsets', () => ({
@@ -29,6 +44,19 @@ vi.mock('../../../server-api/deployments', () => ({
 }));
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  Popup: ({
+    children,
+    onClose,
+  }: {
+    children: React.ReactNode;
+    onClose: () => void;
+  }) => (
+    <div role="dialog">
+      {children}
+      <button onClick={onClose}>Close credentials</button>
+    </div>
+  ),
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
     <div role="status" aria-label={ariaLabel ?? 'Loading'} />
@@ -79,6 +107,12 @@ describe('AppEditorIframe', () => {
     expect(url.searchParams.get('authProvider')).toBe('local');
     expect(url.searchParams.get('id')).toBe('abc');
     expect(url.searchParams.get('theme')).toBe('dark');
+  });
+
+  it('delegates local-network-access to the embedded iframe', () => {
+    renderIframe();
+    const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
+    expect(iframe.getAttribute('allow')).toBe('local-network-access=*');
   });
 
   it('shows spinner on mount', () => {
@@ -472,7 +506,7 @@ describe('AppEditorIframe — toolset login request', () => {
     );
   });
 
-  const renderAndSpyOnIframe = () => {
+  const mountIframeAndSpyOnPostMessage = () => {
     renderIframe();
     const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
     return vi.spyOn(iframe.contentWindow as Window, 'postMessage');
@@ -483,7 +517,7 @@ describe('AppEditorIframe — toolset login request', () => {
       configurable: true,
       value: vi.fn(() => null),
     });
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/my__1.0.0');
 
@@ -507,7 +541,7 @@ describe('AppEditorIframe — toolset login request', () => {
       toolset: 't',
       authSettings: { authenticationType: 'API_KEY' },
     } as DialToolsetDto);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/my__1.0.0');
 
@@ -530,7 +564,7 @@ describe('AppEditorIframe — toolset login request', () => {
       toolset: 't',
       authSettings: { authenticationType: 'API_KEY' },
     } as DialToolsetDto);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/My Toolset__1.0.0');
 
@@ -553,7 +587,7 @@ describe('AppEditorIframe — toolset login request', () => {
 
   it('closes the popup and posts toolset-fetch-failed when getToolset rejects', async () => {
     vi.mocked(toolsetsApi.getToolset).mockRejectedValue(new Error('boom'));
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/my__1.0.0');
 
@@ -579,7 +613,7 @@ describe('AppEditorIframe — toolset login request', () => {
         authorizationEndpoint: 'https://auth.example.com/authorize',
       },
     } as DialToolsetDto);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/my__1.0.0');
 
@@ -624,7 +658,7 @@ describe('AppEditorIframe — toolset login request', () => {
         authSettings: { userLevelAuthStatus: 'SIGNED_IN' },
       },
     } as never);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/my__1.0.0');
 
@@ -667,7 +701,7 @@ describe('AppEditorIframe — toolset login request', () => {
         authorizationEndpoint: 'https://auth.example.com/authorize',
       },
     } as DialToolsetDto);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/my__1.0.0');
 
@@ -708,7 +742,7 @@ describe('AppEditorIframe — toolset login request', () => {
         toolset: 't',
         authSettings: { userLevelAuthStatus: 'SIGNED_IN' },
       } as DialToolsetDto);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/my__1.0.0');
 
@@ -745,7 +779,7 @@ describe('AppEditorIframe — toolset login request', () => {
         toolset: 't',
         authSettings: { userLevelAuthStatus: 'SIGNED_OUT' },
       } as DialToolsetDto);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLoginRequest('toolsets/b/my__1.0.0');
 
@@ -778,7 +812,7 @@ describe('AppEditorIframe — toolset logout request', () => {
     );
   };
 
-  const renderAndSpyOnIframe = () => {
+  const mountIframeAndSpyOnPostMessage = () => {
     renderIframe();
     const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
     return vi.spyOn(iframe.contentWindow as Window, 'postMessage');
@@ -805,7 +839,7 @@ describe('AppEditorIframe — toolset logout request', () => {
 
   it('percent-encodes the raw toolsetId, calls logoutToolset without authenticationType, and posts a success result echoing the raw id', async () => {
     vi.mocked(toolsetsApi.logoutToolset).mockResolvedValue({ success: true });
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLogoutRequest('toolsets/b/My Toolset__1.0.0');
 
@@ -840,7 +874,7 @@ describe('AppEditorIframe — toolset logout request', () => {
         authSettings: { userLevelAuthStatus: 'SIGNED_OUT' },
       },
     } as never);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLogoutRequest('toolsets/b/my__1.0.0');
 
@@ -861,7 +895,7 @@ describe('AppEditorIframe — toolset logout request', () => {
     vi.mocked(toolsetsApi.logoutToolset).mockRejectedValue(
       new Error('network error'),
     );
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     sendLogoutRequest('toolsets/b/my__1.0.0');
 
@@ -895,7 +929,7 @@ describe('AppEditorIframe — toolset logout request', () => {
 });
 
 describe('AppEditorIframe — toolset login broadcast', () => {
-  const renderAndSpyOnIframe = () => {
+  const mountIframeAndSpyOnPostMessage = () => {
     renderIframe();
     const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
     return vi.spyOn(iframe.contentWindow as Window, 'postMessage');
@@ -928,7 +962,7 @@ describe('AppEditorIframe — toolset login broadcast', () => {
         authSettings: { userLevelAuthStatus: 'SIGNED_IN' },
       },
     } as never);
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     emitToolsetLoginSuccess({
       toolsetId: 'toolsets/b/My%20Toolset__1.0.0',
@@ -955,7 +989,7 @@ describe('AppEditorIframe — toolset login broadcast', () => {
   });
 
   it('still posts a success result when the credentials refresh fails', async () => {
-    const postMessageSpy = renderAndSpyOnIframe();
+    const postMessageSpy = mountIframeAndSpyOnPostMessage();
 
     emitToolsetLoginSuccess({
       toolsetId: 'toolsets/b/my__1.0.0',
@@ -992,5 +1026,90 @@ describe('AppEditorIframe — toolset login broadcast', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(postMessageSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('application credential requests from Quick apps', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(AppConfigContextModule.useFeatureFlag).mockReturnValue(true);
+    mockUseUser.mockReturnValue({
+      status: AuthStatus.Authenticated,
+      user: { sub: 'u1', providerId: 'local', claims: {}, isAdmin: false },
+      refresh: vi.fn(),
+      reset: vi.fn(),
+    });
+    mockUseTheme.mockReturnValue({
+      currentTheme: 'dark',
+      selectedTheme: 'dark',
+      setTheme: vi.fn(),
+      isLoading: false,
+    });
+  });
+
+  it('does not advertise or open credential forms when the feature is disabled', () => {
+    vi.mocked(AppConfigContextModule.useFeatureFlag).mockReturnValue(false);
+    renderIframe();
+    const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
+    expect(new URL(iframe.src).searchParams.get('applicationCredentials')).toBe(
+      'false',
+    );
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        origin: SCHEMA.editorUrl,
+        source: iframe.contentWindow,
+        data: {
+          type: AppsEditorEvent.RequestApplicationCredentials,
+          appId: 'agent',
+        },
+      }),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('opens the shared forms only for a message from the embedded editor window', () => {
+    renderIframe();
+    const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
+    expect(new URL(iframe.src).searchParams.get('applicationCredentials')).toBe(
+      'true',
+    );
+    const data = {
+      type: AppsEditorEvent.RequestApplicationCredentials,
+      appId: 'applications/public/agent with space',
+    };
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data,
+        origin: SCHEMA.editorUrl,
+        source: window,
+      }),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data,
+        origin: 'https://untrusted.example',
+        source: iframe.contentWindow,
+      }),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data,
+        origin: SCHEMA.editorUrl,
+        source: iframe.contentWindow,
+      }),
+    );
+    expect(
+      screen.getByText(
+        'Credentials for applications/public/agent%20with%20space',
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByText('Close credentials'));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

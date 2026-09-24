@@ -1,4 +1,16 @@
-## ADDED Requirements
+# model-lookup Specification
+
+## Purpose
+
+The authenticated model lookup endpoint and its path-parameter validation.
+
+`apps/chat` has no caller for this endpoint today — the frontend reads model
+metadata through the deployments endpoints (`deploymentsApi`) instead. The
+endpoint is still served and still covered by the requirements below; the
+`apps/chat/src/server-api/models.ts` helper that used to front it was removed
+once it had zero call sites.
+
+## Requirements
 
 ### Requirement: Authenticated model lookup endpoint
 
@@ -11,7 +23,6 @@ The endpoint:
 - MUST NOT forward the `DIAL_API_KEY` to the client or use it as the upstream credential on this route
 - SHALL return `200 OK` with a `DialModel` object body on success
 - SHALL return `404 Not Found` when DIAL Core responds with `404`
-- SHALL apply per-route rate limiting of **60 req/min per IP** via `@Throttle`
 - SHALL cache the upstream response server-side for **60 seconds** using cache key `models:single:<user.sub>:<modelName>`; a cache hit MUST NOT re-call DIAL Core
 - MUST set `Cache-Control: private, max-age=60` on the HTTP response
 
@@ -55,11 +66,6 @@ The endpoint:
 - **WHEN** DIAL Core responds with a 5xx error
 - **THEN** the BFF returns `502 Bad Gateway`
 
-#### Scenario: Rate limit exceeded
-
-- **WHEN** a caller sends more than 60 requests per minute to this endpoint
-- **THEN** the BFF returns `429 Too Many Requests`
-
 #### Scenario: Cache hit avoids upstream call
 
 - **WHEN** `GET /api/v1/models/gpt-4o` is called twice within 60 seconds for the same user
@@ -84,20 +90,3 @@ Any character outside the allowlist SHALL cause the BFF to return `400 Bad Reque
 
 - **WHEN** the path param contains `../`, `%2F`, whitespace, or other disallowed characters
 - **THEN** the BFF returns `400 Bad Request` without calling DIAL Core
-
----
-
-### Requirement: Frontend server-api helper for model lookup
-
-`apps/chat/src/server-api/models.ts` SHALL export a typed async function `getModel` that:
-
-- Accepts `modelName: string`
-- Calls `GET /api/v1/models/${modelName}` using the existing `get<DialModel>` helper from `server-api/base.ts`
-- Returns `Promise<DialModel>`
-
-No direct `fetch` calls are permitted in this helper.
-
-#### Scenario: Helper returns typed single model
-
-- **WHEN** `getModel('gpt-4o')` is called
-- **THEN** the return type is `Promise<DialModel>` and TypeScript infers all `DialModel` fields

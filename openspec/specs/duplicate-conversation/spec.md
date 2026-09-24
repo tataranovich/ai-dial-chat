@@ -17,15 +17,13 @@ The system SHALL expose `POST /api/v1/conversations/duplicate?path=<sourcePath>`
 
 The returned `newPath` is the encoded full DIAL Core resource path and SHALL be treated as an opaque conversation identifier by callers.
 
-The duplicated conversation SHALL keep the source conversation's stored display name, sanitised via `prepareEntityName`, without adding a numeric title suffix. Its destination storage path SHALL always end with a fresh `crypto.randomUUID()` segment:
+The duplicated conversation SHALL keep the source conversation's stored display name, sanitised via `prepareEntityName`, without adding a numeric title suffix. Its destination storage path SHALL always end with a fresh `generateUUID()` segment:
 
 ```
 {deploymentId}__{displayName}__{uuid}
 ```
 
 The UUID is unconditional, including when the corresponding unsuffixed destination path is free. `duplicateConversation` SHALL NOT perform a destination path-existence check. A trailing UUID from the source path SHALL NOT be reused. Existing legacy source paths without a UUID remain valid inputs.
-
-Rate limiting: `@Throttle({ default: { limit: 20, ttl: 60000 } })`.
 
 Generated-client impact:
 - OpenAPI operationId: `duplicateConversation`

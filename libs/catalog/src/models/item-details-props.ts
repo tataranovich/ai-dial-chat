@@ -5,9 +5,13 @@ import type {
   PublishHistoryEntry,
   PublishPanelLabels,
 } from '@epam/ai-dial-publish-panel';
-import type { ReactNode } from 'react';
-import type { CredentialsLevel } from '../types/toolset-auth';
+import type { CSSProperties, ReactNode } from 'react';
+import type {
+  CredentialsLevel,
+  ToolsetAuthenticationType,
+} from '../types/toolset-auth';
 import type { CatalogItem } from './catalog-item';
+import type { CatalogContentFilePreview } from './item-details-data';
 
 /** Text overrides for all user-visible strings in `DetailsPanel`. */
 export interface ItemDetailsTexts {
@@ -41,8 +45,22 @@ export interface ItemDetailsTexts {
   overviewNoLabel?: string;
   /** "Tools" tab label. Default: `'Tools'`. */
   tabToolsLabel?: string;
+  /** Accessible label for the Content tab's file picker. Default: `'Select file'`. */
+  contentFileSelectorAriaLabel?: string;
+  /** Returns the file-count text shown beside the picker. Default: ``(count) => `${count} files` ``. */
+  contentFileCountLabel?: (count: number) => string;
+  /** Status text announced while a picked file's content loads. Default: `'Loading file'`. */
+  contentFileLoadingLabel?: string;
+  /** Body text shown when a picked file cannot be read. Default: `'Failed to load this file.'`. */
+  contentFileErrorLabel?: string;
+  /** Body text shown when a picked file's preview type is `unsupported`. Default: `'Preview is not supported for this file'`. */
+  contentFileUnsupportedLabel?: string;
   /** Label on the "Featured" tag chip shown when the entity is featured. Default: `'Featured'`. */
   featuredLabel?: string;
+  /** Label on the header badge shown when `item.details?.limits?.status` is `CatalogLimitStatus.RunningLow`. Default: `'Running low'`. */
+  limitRunningLowLabel?: string;
+  /** Label on the header badge shown when `item.details?.limits?.status` is `CatalogLimitStatus.LimitReached`. Default: `'Limit reached'`. */
+  limitReachedLabel?: string;
   /** Primary action button label. Default: `'Use in chat'`. */
   primaryActionLabel?: string;
   /** "Publish" action button label. Default: `'Publish'`. */
@@ -55,6 +73,8 @@ export interface ItemDetailsTexts {
   hasPrimaryAction?: boolean;
   /** "Edit" action button label. Default: `'Edit'`. */
   editActionLabel?: string;
+  /** "Download" action button label. Default: `'Download'`. */
+  downloadActionLabel?: string;
   /** "Resource" section heading in the API tab. Default: `'Resource'`. */
   apiResourceSectionLabel?: string;
   /** "Code snippet" section heading in the API tab. Default: `'Code snippet'`. */
@@ -71,6 +91,8 @@ export interface ItemDetailsTexts {
   apiResponseSchemaLabel?: string;
   /** Accessible label for the copy-to-clipboard button. Default: `'Copy'`. */
   copyCodeAriaLabel?: string;
+  /** Message announced through the code block's live region once a copy completes. Default: `'Copied!'`. */
+  copiedCodeStatusLabel?: string;
   /** "Token pricing" section heading in the Pricing tab. Default: `'Token pricing'`. */
   pricingPricesSectionLabel?: string;
   /** "Usage limits" section heading in the Pricing tab. Default: `'Usage limits'`. */
@@ -82,35 +104,115 @@ export interface ItemDetailsTexts {
   /** "Log out" action button label, shown when the item's credentials are signed in. Default: `'Log out'`. */
   logoutActionLabel?: string;
   /**
-   * "Login with my creds" action button label, shown to a non-admin user on
-   * a public item they are not personally signed into (organization-wide
-   * credentials may already be active). Default: `'Login with my creds'`.
+   * Returns the "Manage credentials"/"Manage API keys" action button label
+   * for an admin managing a public item, given its authentication type.
+   * Default: `(type) => type === ToolsetAuthenticationType.ApiKey ? 'Manage API keys' : 'Manage credentials'`.
    */
-  loginWithMyCredsActionLabel?: string;
-  /**
-   * "Manage credentials" action button label, shown to an admin on a public
-   * item — expands both the `USER` and `GLOBAL` sections. Default: `'Manage credentials'`.
-   */
-  manageCredentialsActionLabel?: string;
-  /** Heading for the personal-credentials section when both levels are shown. Default: `'My credentials'`. */
-  myCredentialsSectionLabel?: string;
-  /** Heading for the organization-wide-credentials section when both levels are shown. Default: `'Entire organization credentials'`. */
-  organizationCredentialsSectionLabel?: string;
-  /** Status label shown in the credentials section when signed in. Default: `'Signed in'`. */
+  manageCredentialsActionLabel?: (
+    authenticationType: ToolsetAuthenticationType,
+  ) => string;
+  /** Status label shown next to a signed-in row, and as the accessible name of its checkmark indicator. Default: `'Signed in'`. */
   credentialsSignedInLabel?: string;
-  /** Status label shown in the credentials section when signed out. Default: `'Signed out'`. */
+  /** Status label shown next to a signed-out row. Default: `'Signed out'`. */
   credentialsSignedOutLabel?: string;
   /** Confirmation dialog message shown before logging out. Default: `'Are you sure you want to log out?'`. */
   logoutConfirmMessage?: string;
-  /** Label for the API key input field in the credentials section. Default: `'API key'`. */
-  apiKeyFieldLabel?: string;
   /**
-   * Returns the API-key field hint naming the required header. Default:
-   * `(header) => \`Enter your API key value for "${header}" header\``.
+   * Returns the confirmation dialog message shown before deleting an API
+   * key, given which level's key is being deleted. Default:
+   * `(level) => level === CredentialsLevel.Global ? 'Are you sure you want to delete the organization API key?' : 'Are you sure you want to delete your personal API key?'`.
    */
-  apiKeyFieldHint?: (apiKeyHeader: string) => string;
-  /** Credentials-status badge label shown on catalog cards when signed out. Default: `'LOGGED OUT'`. */
+  deleteApiKeyConfirmMessage?: (level: CredentialsLevel) => string;
+  /** Label for the API key input field. Default: `'API key'`. */
+  apiKeyFieldLabel?: string;
+  /** Validation error shown under the API key input when "Add" is submitted with an empty value. Default: `'API key is required.'`. */
+  apiKeyRequiredErrorMessage?: string;
+  /** Accessible label for the logged-out warning icon on catalog card avatars, and the text shown in its hover tooltip. Default: `'Authorize to use this toolset.'`. */
   credentialsBadgeLoggedOutLabel?: string;
+  /**
+   * Top action button label when the item requires an API key and the
+   * current user has not added their personal key yet. Default: `'API key'`.
+   */
+  apiKeyActionLabel?: string;
+  /**
+   * Top action button label when the item requires an API key and the
+   * current user already has a personal key on file. Default: `'Change API key'`.
+   */
+  changeApiKeyActionLabel?: string;
+  /** Title of the personal API-key popover opened from the top action button. Default: `'Personal API key'`. */
+  personalApiKeyPanelTitle?: string;
+  /** Confirmation line shown in the personal API-key popover once a key is on file. Default: `'Personal key has been added'`. */
+  personalApiKeyAddedMessage?: string;
+  /** Confirmation line shown in the admin credentials-management row once that level's API key is on file. Default: `'Key has been configured'`. */
+  apiKeyConfiguredMessage?: string;
+  /** "Add" action label for submitting a new API key. Default: `'Add'`. */
+  addApiKeyActionLabel?: string;
+  /** Status text announced to assistive tech while an API key is being added. Default: `'Adding'`. */
+  addingApiKeyStatusLabel?: string;
+  /**
+   * Returns the caption shown under an on-file API key, given an
+   * already-formatted relative time. Default: `(when) => \`Added ${when}\``.
+   */
+  apiKeyAddedLabel?: (when: string) => string;
+  /**
+   * Returns the banner title shown when the current user is not signed in
+   * personally but organization-wide credentials keep the item usable,
+   * given the item's authentication type. Default:
+   * `(type) => type === ToolsetAuthenticationType.ApiKey ? 'You are currently using organization API key to access this toolset.' : 'You are currently using organization credentials to access this toolset.'`.
+   */
+  orgFallbackBannerTitle?: (
+    authenticationType: ToolsetAuthenticationType,
+  ) => string;
+  /**
+   * Returns the banner description paired with `orgFallbackBannerTitle`,
+   * given the item's authentication type. Default:
+   * `(type) => type === ToolsetAuthenticationType.ApiKey ? 'Configure your personal API key to have access to your data.' : 'Login using personal account to have access to your data.'`.
+   */
+  orgFallbackBannerDescription?: (
+    authenticationType: ToolsetAuthenticationType,
+  ) => string;
+  /**
+   * Returns the banner title shown to an admin when organization-wide
+   * credentials are active, given the item's authentication type. Default:
+   * `(type) => type === ToolsetAuthenticationType.ApiKey ? 'Signed in with organization API key.' : 'Signed in with organization credentials.'`.
+   */
+  orgCredentialsActiveBannerTitle?: (
+    authenticationType: ToolsetAuthenticationType,
+  ) => string;
+  /**
+   * Returns the banner title shown to an admin when their own personal
+   * credentials are active (and take precedence over any organization-wide
+   * credentials), given the item's authentication type. Default:
+   * `(type) => type === ToolsetAuthenticationType.ApiKey ? 'Signed in with personal API key.' : 'Signed in with personal credentials.'`.
+   */
+  personalCredentialsActiveBannerTitle?: (
+    authenticationType: ToolsetAuthenticationType,
+  ) => string;
+  /**
+   * Returns the title of the admin credentials-management sub-screen, given
+   * the item's authentication type. Default:
+   * `(type) => type === ToolsetAuthenticationType.ApiKey ? 'Toolset API keys' : 'Toolset credentials'`.
+   */
+  credentialsManagementTitle?: (
+    authenticationType: ToolsetAuthenticationType,
+  ) => string;
+  /**
+   * Returns the description shown under the identity chip in the admin
+   * credentials-management sub-screen, given the item's authentication
+   * type. Default:
+   * `(type) => 'Select which account to use with this toolset — personal or organization. If both are configured, personal credentials will be used by default' + (type === ToolsetAuthenticationType.ApiKey ? ' for toolset access.' : '.')`.
+   */
+  credentialsManagementDescription?: (
+    authenticationType: ToolsetAuthenticationType,
+  ) => string;
+  /** Row label for the current user's own credentials in the admin management sub-screen. Default: `'Personal credentials'`. */
+  personalCredentialsLabel?: string;
+  /** Row description for the current user's own credentials in the admin management sub-screen. Default: `'These credentials apply only to your account.'`. */
+  personalCredentialsDescription?: string;
+  /** Row label for organization-wide credentials in the admin management sub-screen. Default: `'Organization credentials'`. */
+  organizationCredentialsLabel?: string;
+  /** Row description for organization-wide credentials in the admin management sub-screen. Default: `'Once added, these credentials will grant all users in your organization access to this toolset.'`. */
+  organizationCredentialsDescription?: string;
   /** "Delete" action button label. Default: `'Delete'`. */
   deleteActionLabel?: string;
   /** Status text announced to assistive tech while a delete is in progress. Default: `'Deleting'`. */
@@ -172,22 +274,56 @@ export interface ItemDetailsTexts {
   revokeShareConfirmConsequences?: string[];
   /** Status text announced to assistive tech while a revoke is in progress. Default: `'Revoking access'`. */
   revokingShareStatusLabel?: string;
+  /** Owner-side "Unpublish" action and confirmation label. Default: `'Unpublish'`. */
+  unpublishLabel?: string;
+  /** Title of the confirmation step shown before requesting removal of a published copy. Default: `'Unpublish'`. */
+  unpublishConfirmTitle?: string;
+  /**
+   * Returns the unpublish confirmation's body copy when the item is published
+   * to exactly one folder, given the item's display name and that folder's
+   * path. Default:
+   * `(name, folder) => \`Unpublish ${name} from "${folder}"? The request is submitted for admin approval.\`` (with the name emphasized).
+   */
+  unpublishConfirmMessage?: (name: string, folder: string) => ReactNode;
+  /**
+   * Returns the unpublish confirmation's body copy when the item is published
+   * to more than one folder and the user must pick one, given the item's
+   * display name. Default:
+   * `(name) => \`Choose which folder to unpublish ${name} from. The request is submitted for admin approval.\`` (with the name emphasized).
+   */
+  unpublishSelectFolderMessage?: (name: string) => ReactNode;
+  /** Accessible name of the published-folder radio group shown when the item is published to more than one folder. Default: `'Published folders'`. */
+  unpublishFolderGroupAriaLabel?: string;
+  /**
+   * Consequences listed as bullets in the unpublish confirmation. Default:
+   * `['Everyone loses access to the published copy', 'Your own copy is not deleted', 'You can publish it again later']`.
+   * Pass `[]` to render no list.
+   */
+  unpublishConfirmConsequences?: string[];
+  /** Status text announced to assistive tech while an unpublish request is in flight. Default: `'Requesting unpublish'`. */
+  unpublishingStatusLabel?: string;
   /** Status text announced to assistive tech while a logout is in progress. Default: `'Logging out'`. */
   loggingOutStatusLabel?: string;
   /** Generic "Cancel" label, used by every confirmation step. Default: `'Cancel'`. */
   cancelLabel?: string;
+  /** Status text announced to assistive tech while the primary Download action is in progress. Default: `'Downloading'`. */
+  downloadingStatusLabel?: string;
 }
 
 /** Typography class overrides for `DetailsPanel` text elements. */
 export interface ItemDetailsTypography {
   /** Typography class for the entity name. Default: `'dial-body-semi-text'`. */
   nameClassName?: string;
+  /** Typography class for a sub-view header title (publish, share, credentials). Default: `'dial-body-semi-text'`. */
+  subViewTitleClassName?: string;
   /** Typography class for the version string. Default: `'dial-tiny-text'`. */
   versionClassName?: string;
   /** Typography class for section headings inside the description content. Default: `'dial-small-semi-text'`. */
   contentHeadingClassName?: string;
   /** Typography class for the description body text. Default: `'dial-small-text'`. */
   contentClassName?: string;
+  /** Typography class for the file-count text beside the Content tab's file picker. Default: `'dial-tiny-text'`. */
+  contentFileCountClassName?: string;
   /** Typography class for Overview section headings. Default: `'dial-caption-text'`. */
   overviewSectionClassName?: string;
   /** Typography class for spec row labels (left column). Default: `'dial-small-semi-text'`. */
@@ -200,10 +336,20 @@ export interface ItemDetailsTypography {
   folderLabelClassName?: string;
   /** Typography class applied to the leaf (last) folder path segment. Default: `'dial-tiny-semi-text'`. */
   folderLeafClassName?: string;
-  /** Typography class for the credentials section's signed-in/signed-out status label. Default: `'dial-small-semi-text'`. */
-  credentialsStatusLabelClassName?: string;
   /** Typography class for a confirmation step's body copy and consequence bullets. Default: `'dial-small-text'`. */
   confirmMessageClassName?: string;
+  /** Typography class for the credentials-management sub-screen's description. Default: `'dial-body-paragraph-text'`. */
+  credentialsDescriptionClassName?: string;
+  /** Typography class for a credentials row's title. Default: `'dial-small-semi-text'`. */
+  credentialsRowLabelClassName?: string;
+  /** Typography class for a credentials row's description. Default: `'dial-small-text'`. */
+  credentialsRowDescriptionClassName?: string;
+  /** Typography class for the empty-API-key validation message. Default: `'dial-caption-text'`. */
+  credentialsErrorClassName?: string;
+  /** Typography class for the configured-API-key card's title. Default: `'dial-tiny-semi-text'`. */
+  credentialsKeyCardTitleClassName?: string;
+  /** Typography class for the configured-API-key card's description. Default: `'dial-tiny-text'`. */
+  credentialsKeyCardDescriptionClassName?: string;
 }
 
 /**
@@ -222,7 +368,7 @@ export interface ItemDetailsColors {
   divider?: string;
   /** Scrollbar thumb color of the scrollable content area. Fallback: `--stroke-secondary`. */
   scrollbar?: string;
-  /** Shimmer color of the tab-row loading skeleton. Fallback: `--bg-layer-4`. */
+  /** Shimmer color of the tab-row loading skeleton. Fallback: `--bg-control-disable-primary`. */
   skeleton?: string;
   /** Entity name text color in the header. Fallback: `--text-primary`. */
   nameText?: string;
@@ -230,14 +376,16 @@ export interface ItemDetailsColors {
   publishTitleText?: string;
   /** Border color of the "current version" tag. Fallback: `--stroke-tertiary`. */
   versionTagBorder?: string;
-  /** Background color of the "current version" tag. Fallback: `--bg-accent-primary-alpha`. */
+  /** Background color of the "current version" tag. Fallback: `--bg-control-accent-alpha`. */
   versionTagBackground?: string;
   /** Text color of the "current version" tag. Fallback: `--text-accent`. */
   versionTagText?: string;
-  /** Credentials signed-in/signed-out status label color. Fallback: `--text-primary`. */
-  credentialsStatusText?: string;
   /** Body text color of the Content tab. Fallback: `--text-primary`. */
   contentText?: string;
+  /** Text color of a `{{placeholder}}` token in the Content tab's body. Fallback: `--text-prompt-parameter`. */
+  variableText?: string;
+  /** File-count text color beside the Content tab's file picker. Fallback: `--text-secondary`. */
+  contentFileCountText?: string;
   /** Heading color of the API section. Fallback: `--text-secondary`. */
   apiHeadingText?: string;
   /** Divider color between tool entries. Fallback: `--stroke-tertiary`. */
@@ -248,13 +396,13 @@ export interface ItemDetailsColors {
   gridBorder?: string;
   /** Spec-grid header text color. Fallback: `--text-secondary`. */
   gridHeaderText?: string;
-  /** Spec-grid header background. Fallback: `--bg-layer-1`. */
+  /** Spec-grid header background. Fallback: `--bg-layer-sunken`. */
   gridHeaderBackground?: string;
   /** Spec-grid cell text color. Fallback: `--text-primary`. */
   gridCellText?: string;
   /** Spec-grid cell top-border color. Fallback: `--stroke-secondary`. */
   gridCellDivider?: string;
-  /** Spec-grid even-row background. Fallback: `--bg-layer-7`. */
+  /** Spec-grid even-row background. Fallback: `--bg-layer-base`. */
   gridRowEvenBackground?: string;
   /** `InfoCard` surface color in its `Info` variant. Fallback: `--bg-info`. */
   infoCardBackground?: string;
@@ -266,6 +414,28 @@ export interface ItemDetailsColors {
   confirmConsequenceText?: string;
   /** Top border color of the confirmation action row. Fallback: `--stroke-tertiary`. */
   confirmFooterBorder?: string;
+  /** Background of the credentials sub-screen's identity card and its rows' icon chips. Fallback: `--bg-layer-sunken`. */
+  credentialsSurfaceBackground?: string;
+  /** Color of the checkmark marking the credentials level currently in effect. Fallback: `--text-success`. */
+  credentialsActiveIcon?: string;
+  /** Background of the credentials banner's icon chip, which sits on the already-tinted status card rather than on the panel. Fallback: `--bg-layer-raised`. */
+  credentialsBannerIconBackground?: string;
+  /** Text color of the credentials sub-screen's description. Fallback: `--text-primary`. */
+  credentialsDescriptionText?: string;
+  /** Text color of a credentials row's description. Fallback: `--text-tertiary`. */
+  credentialsRowDescriptionText?: string;
+  /** Text color of the empty-API-key validation message. Fallback: `--text-error`. */
+  credentialsErrorText?: string;
+  /** Surface color of the credentials status card used by the banner, the configured-key card, and the personal API-key popover. Fallback: `--bg-layer-base`. */
+  credentialsCardBackground?: string;
+  /** Color of the credentials status card's leading icon. Fallback: `--text-secondary`. */
+  credentialsCardIcon?: string;
+  /** Title text color of the credentials status card. Fallback: `--text-primary`. */
+  credentialsCardTitleText?: string;
+  /** Description text color of the credentials status card. Fallback: `--text-secondary`. */
+  credentialsCardDescriptionText?: string;
+  /** Featured chip style override in the header, merged over its default per-entity-type colors, e.g. `{ backgroundColor, color, border }`. */
+  featuredChipStyle?: CSSProperties;
 }
 
 /** Grouped style overrides for `DetailsPanel`. */
@@ -278,6 +448,8 @@ export interface ItemDetailsStyles {
 
 /** Props for `DetailsPanel`. */
 export interface DetailsPanelProps {
+  /** Renders host-owned credential controls below the header. Omitted in read-only mode. */
+  renderCredentials?: (item: CatalogItem) => ReactNode;
   /** The catalog item to display in the panel. */
   item: CatalogItem;
   /** Controls whether the panel is visible. */
@@ -291,8 +463,23 @@ export interface DetailsPanelProps {
   isDetailsLoading?: boolean;
   /** Called when the panel should close (close button or backdrop click). */
   onClose: () => void;
+  /**
+   * Renders the panel read-only: the favorite star and every action that
+   * mutates the item or the caller's relationship to it — Share,
+   * Publish/Unpublish, Edit, Delete, "Remove from My List", "Revoke access",
+   * and the credentials Log in / Log out / manage button — are withheld. The
+   * non-mutating actions (the primary "Use in chat" and Download) still
+   * render. Default: false.
+   */
+  isReadonly?: boolean;
   /** Called when the star/favorite button is toggled. */
   onToggleFavorite?: (id: string, isStarred: boolean) => void;
+  /**
+   * Additional caller-supplied rule for whether the favorite star is shown in
+   * the panel header. Returning `false` hides the star and makes the item
+   * non-favoritable from the panel. Defaults to **visible** when omitted.
+   */
+  isFavoriteVisible?: (item: CatalogItem) => boolean;
   /**
    * Additional caller-supplied rule for whether the "Remove from My List"
    * action is shown, combined (AND) with the built-in
@@ -307,6 +494,12 @@ export interface DetailsPanelProps {
   onShare?: (item: CatalogItem) => void;
   /** Controls whether the "Publish" action is shown for the item. */
   isPublishVisible?: (item: CatalogItem) => boolean;
+  /**
+   * Resolves whether whichever of "Publish"/"Unpublish" applies renders as its
+   * own button in the details header rather than an entry in its "Manage"
+   * menu. Defaults to `false` — the menu entry.
+   */
+  isPublishPrimary?: (item: CatalogItem) => boolean;
   /** Resolves previously published versions for an item, most recent first. */
   getPublishHistory?: (item: CatalogItem) => Promise<PublishHistoryEntry[]>;
   /** Root-level destination folder nodes offered by the publish flow. */
@@ -323,11 +516,24 @@ export interface DetailsPanelProps {
   publishLoadingPaths?: Set<string>;
   /** Resolves whether the current user can publish to a given folder path. */
   hasPublishWriteAccess?: (folderPath: string[]) => boolean;
-  /** Called with the destination folder path and current access rules when the user confirms publish/update. */
+  /**
+   * Initial value for the publish flow's display-author field, and the value
+   * it returns to on reset. Resolved by the host from the signed-in user's
+   * display name; the catalog library holds no notion of a session.
+   */
+  publishDefaultAuthor?: string;
+  /**
+   * Called with the destination folder path, current access rules, trimmed
+   * display author, and the credentials opt-in when the user confirms
+   * publish/update. The fifth argument is additive — a callback declaring only
+   * the first four parameters stays assignable.
+   */
   onPublish?: (
     item: CatalogItem,
     folderPath: string[],
     rules: PublicationRule[],
+    author: string,
+    publishCredentials: boolean,
   ) => Promise<void>;
   /** Called after a successful publish; use this to surface a success notification. */
   onPublishSuccess?: (item: CatalogItem, folderPath: string[]) => void;
@@ -350,8 +556,10 @@ export interface DetailsPanelProps {
    */
   onFetchExistingRules?: (folderPath: string[]) => Promise<PublicationRule[]>;
   /**
-   * Renders the Share popover content anchored to the Share button. When
-   * provided, clicking Share opens this popover instead of calling `onShare`.
+   * Renders the Share popover content, anchored to whichever surface carries
+   * Share — the header button, or the Manage trigger when `isSharePrimary`
+   * has moved the entry into that menu. When provided, choosing Share opens
+   * this popover instead of calling `onShare`.
    */
   shareOverlay?: (item: CatalogItem, onClose: () => void) => ReactNode;
   /**
@@ -360,8 +568,58 @@ export interface DetailsPanelProps {
    * Absent means the built-in rule alone decides.
    */
   isShareVisible?: (item: CatalogItem) => boolean;
+  /**
+   * Resolves whether "Share" renders as its own button in the details header
+   * rather than an entry in its "Manage" menu. Defaults to `true` — the
+   * button. Returning `false` moves it into the menu, beside "Delete".
+   */
+  isSharePrimary?: (item: CatalogItem) => boolean;
   /** Called when the "Edit" button is clicked. Shown only when the item's `isEditable` is `true`. */
   onEdit?: (item: CatalogItem) => void;
+  /**
+   * Called when the "Download" action is clicked, with no confirmation step.
+   * When "Download" renders in the Manage menu (see `isDownloadPrimary`), the
+   * panel does not await the result or show a pending state, so the host
+   * owns any progress and failure feedback. When "Download" is the primary
+   * action, the panel awaits this call and shows a pending/disabled state
+   * for its duration; the host still owns failure feedback either way.
+   */
+  onDownload?: (item: CatalogItem) => Promise<void> | void;
+  /**
+   * Narrows which items offer the "Download" action. Defaults to `true`
+   * (visible for every item) whenever `onDownload` is supplied.
+   */
+  isDownloadVisible?: (item: CatalogItem) => boolean;
+  /**
+   * Resolves whether an item's Download action renders as the primary action
+   * (in the same slot as "Use in chat") instead of a Manage-menu entry.
+   * Defaults to `item.type === CatalogEntityType.Skill`. An item whose
+   * Download is primary never also shows it in the Manage menu.
+   */
+  isDownloadPrimary?: (item: CatalogItem) => boolean;
+  /**
+   * Resolves the text of a file picked in the Content tab, given its opaque
+   * `id`. The panel shows a loading state while it is pending and renders the
+   * resolved text as the body; resolving `undefined` or rejecting leaves the
+   * body showing `texts.contentFileErrorLabel`. Superseded by
+   * `onLoadContentFilePreview` for a given pick when both are supplied.
+   */
+  onLoadContentFile?: (fileId: string) => Promise<string | undefined>;
+  /**
+   * Resolves a picked file's typed preview, given its opaque `id`. Takes
+   * precedence over `onLoadContentFile` when both are supplied. Resolving
+   * `undefined` or rejecting leaves the body showing
+   * `texts.contentFileErrorLabel`.
+   */
+  onLoadContentFilePreview?: (
+    fileId: string,
+  ) => Promise<CatalogContentFilePreview | undefined>;
+  /**
+   * Renders a picked file through a host-owned preview surface. Takes
+   * precedence over both loading callbacks. The file id is opaque to the
+   * panel; `fileName` is the basename resolved from the supplied tree.
+   */
+  renderContentFilePreview?: (fileId: string, fileName: string) => ReactNode;
   /**
    * Called immediately when the "Delete" button is clicked, with no
    * confirmation step. Shown only when the item's `isMyApp` is `true` and
@@ -384,6 +642,38 @@ export interface DetailsPanelProps {
    * catalog, so the panel returns to its details content on success.
    */
   onRevokeShare?: (item: CatalogItem) => Promise<void> | void;
+  /**
+   * Resolves how many users currently hold shared access to an owned item.
+   * Called when the owner opens the Manage menu, so "Revoke access" is gated
+   * and labelled on a count that is never stale. `0` hides the action;
+   * `undefined` (or a rejection) leaves it reachable without a count. Omit to
+   * offer the action for every owned item.
+   */
+  onFetchRecipientsCount?: (item: CatalogItem) => Promise<number | undefined>;
+  /**
+   * Additional caller-supplied rule for whether "Revoke access" is shown,
+   * combined (AND) with the built-in `isMyApp` rule and the recipient count.
+   * Defaults to `true` when absent.
+   */
+  isRevokeShareVisible?: (item: CatalogItem) => boolean;
+  /**
+   * Called when unpublish is confirmed, with the published folder's path
+   * segments — the same `string[]` shape `onPublish` receives. May return a
+   * promise; the confirmation shows a loading state and prevents duplicate
+   * submission while pending. The published copy survives until an
+   * administrator approves the request, so the panel stays open, the item
+   * stays visible, and cached publish history is left untouched on success.
+   */
+  onUnpublish?: (
+    item: CatalogItem,
+    folderPath: string[],
+  ) => Promise<void> | void;
+  /**
+   * Additional caller-supplied rule for whether "Unpublish" is shown,
+   * combined (AND) with the presence of `onUnpublish` and at least one
+   * resolved publish-history entry. Defaults to `true` when absent.
+   */
+  isUnpublishVisible?: (item: CatalogItem) => boolean;
   /**
    * Called when the credentials login form is submitted. `level` identifies
    * which credentials slot the call applies to (`USER` for the current
@@ -412,4 +702,9 @@ export interface DetailsPanelProps {
   texts?: ItemDetailsTexts;
   /** Grouped style overrides. */
   styles?: ItemDetailsStyles;
+  /**
+   * Footer note rendered below the Limits tab's rows, e.g. a link to a
+   * full usage-limits page. Omitted (the default) hides the footer entirely.
+   */
+  limitsFooterNote?: ReactNode;
 }

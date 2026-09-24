@@ -25,6 +25,8 @@ function makeService() {
   const dialClient = {
     client: {
       getExternalService: vi.fn(),
+      getApplication: vi.fn(),
+      getCustomApplication: vi.fn(),
       externalServiceSignIn: vi.fn(),
       externalServiceSignOut: vi.fn(),
     },
@@ -41,7 +43,131 @@ describe('ExternalServicesService', () => {
     vi.restoreAllMocks();
   });
 
+  describe('listExternalServices', () => {
+    it('lists readable inline services and strips secrets from OAuth metadata', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getApplication).mockResolvedValue(
+        okResponse({
+          external_services: {
+            finance: {
+              display_name: 'Finance',
+              auth_settings: {
+                authentication_type: 'OAUTH',
+                client_id: 'client',
+                client_secret: 'secret',
+                code_verifier: 'verifier',
+                user_level_auth_status: 'SIGNED_OUT',
+              },
+            },
+            public: { display_name: 'Public API' },
+          },
+        }),
+      );
+      const result = await service.listExternalServices('token', APP_ID);
+      expect(result).toEqual([
+        expect.objectContaining({
+          id: 'finance',
+          displayName: 'Finance',
+          authenticationType: 'OAUTH',
+          clientId: 'client',
+          userLevelAuthStatus: 'SIGNED_OUT',
+        }),
+        expect.objectContaining({ id: 'public', authenticationType: 'NONE' }),
+      ]);
+      expect(JSON.stringify(result)).not.toMatch(/secret|verifier/);
+      expect(dialClient.client.getApplication).toHaveBeenCalledWith(APP_ID, {
+        headers: { Authorization: 'Bearer token' },
+      });
+    });
+
+    it('returns an empty list for an application without external services', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getApplication).mockResolvedValue(
+        okResponse({}),
+      );
+      expect(
+        await service.listExternalServices('token', 'platform-agent'),
+      ).toEqual([]);
+    });
+
+    it('re-reads authentication statuses on every request', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getApplication)
+        .mockResolvedValueOnce(
+          okResponse({
+            external_services: {
+              finance: {
+                auth_settings: { user_level_auth_status: 'SIGNED_OUT' },
+              },
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          okResponse({
+            external_services: {
+              finance: {
+                auth_settings: { user_level_auth_status: 'SIGNED_IN' },
+              },
+            },
+          }),
+        );
+      expect(
+        (await service.listExternalServices('token', APP_ID))[0]
+          .userLevelAuthStatus,
+      ).toBe('SIGNED_OUT');
+      expect(
+        (await service.listExternalServices('token', APP_ID))[0]
+          .userLevelAuthStatus,
+      ).toBe('SIGNED_IN');
+    });
+
+    it('propagates missing applications instead of presenting an empty form', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getApplication).mockResolvedValue(
+        errResponse(404),
+      );
+      await expect(
+        service.listExternalServices('token', APP_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects an empty upstream response', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getApplication).mockResolvedValue(
+        okResponse(undefined),
+      );
+      await expect(
+        service.listExternalServices('token', APP_ID),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+    });
+  });
+
   describe('getExternalService', () => {
+    it('reads enriched public metadata when an ordinary user cannot manage an inline service', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getExternalService).mockResolvedValue(
+        errResponse(403),
+      );
+      vi.mocked(dialClient.client.getApplication).mockResolvedValue(
+        okResponse({
+          external_services: {
+            [SERVICE_ID]: {
+              display_name: 'Finance',
+              auth_settings: {
+                authentication_type: 'OAUTH',
+                user_level_auth_status: 'SIGNED_IN',
+              },
+            },
+          },
+        }),
+      );
+      expect(
+        await service.getExternalService('token', APP_ID, SERVICE_ID),
+      ).toMatchObject({
+        displayName: 'Finance',
+        userLevelAuthStatus: 'SIGNED_IN',
+      });
+    });
     it('returns mapped metadata on success', async () => {
       const { service, dialClient } = makeService();
       vi.mocked(dialClient.client.getExternalService).mockResolvedValue(
@@ -75,10 +201,87 @@ describe('ExternalServicesService', () => {
       vi.mocked(dialClient.client.getExternalService).mockResolvedValue(
         errResponse(404),
       );
+      // The application is unreadable too, so there is nothing to fall back to.
+      vi.mocked(dialClient.client.getCustomApplication).mockResolvedValue(
+        errResponse(403),
+      );
 
       await expect(
         service.getExternalService('token', APP_ID, 'missing-service'),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    /*
+     * The management route reveals the inline `client_secret`, so Core serves
+     * admin-declared services only to callers who can manage the application.
+     * A user signing in to one through the sign-in interrupt is not such a
+     * caller, and the OAuth settings the popup needs are public.
+     */
+    it('falls back to the application resource when the management route denies an inline service', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getExternalService).mockResolvedValue(
+        errResponse(404),
+      );
+      vi.mocked(dialClient.client.getCustomApplication).mockResolvedValue(
+        okResponse({
+          external_services: {
+            [SERVICE_ID]: {
+              display_name: 'GitLab',
+              auth_settings: {
+                authentication_type: 'OAUTH',
+                client_id: 'client-123',
+                authorization_endpoint: 'https://git.example/oauth/authorize',
+                scopes_supported: ['read_api'],
+              },
+            },
+          },
+        }),
+      );
+
+      const result = await service.getExternalService(
+        'token',
+        APP_ID,
+        SERVICE_ID,
+      );
+
+      expect(result).toMatchObject({
+        displayName: 'GitLab',
+        authenticationType: ExternalServiceAuthType.OAuth,
+        clientId: 'client-123',
+        authorizationEndpoint: 'https://git.example/oauth/authorize',
+        scopesSupported: ['read_api'],
+      });
+      expect(dialClient.client.getCustomApplication).toHaveBeenCalledWith(
+        'public',
+        'finhub-via-openapi__1.0.0',
+        expect.anything(),
+      );
+    });
+
+    it('reports the original 404 when the application declares no such service', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getExternalService).mockResolvedValue(
+        errResponse(404),
+      );
+      vi.mocked(dialClient.client.getCustomApplication).mockResolvedValue(
+        okResponse({ external_services: {} }),
+      );
+
+      await expect(
+        service.getExternalService('token', APP_ID, 'missing-service'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('does not reach for the application on a non-404 failure', async () => {
+      const { service, dialClient } = makeService();
+      vi.mocked(dialClient.client.getExternalService).mockResolvedValue(
+        errResponse(403),
+      );
+
+      await expect(
+        service.getExternalService('token', APP_ID, SERVICE_ID),
+      ).rejects.toBeTruthy();
+      expect(dialClient.client.getCustomApplication).not.toHaveBeenCalled();
     });
   });
 

@@ -1,22 +1,31 @@
 import {
+  DialFileManagerActionProfile,
+  DialFileManagerVariant,
+  type UseDialFileManagerResult,
+} from '@epam/ai-dial-chat-hooks';
+import * as chatHooksModule from '@epam/ai-dial-chat-hooks';
+import {
   DialFileManagerActions,
   DialFileManagerTabs,
   DialFileNodeType,
 } from '@epam/ai-dial-ui-kit';
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import * as useDialFileManagerModule from '../../../hooks/files/useDialFileManager';
-import type { UseDialFileManagerResult } from '../../../hooks/files/useDialFileManager';
-import {
-  DialFileManagerActionProfile,
-  DialFileManagerVariant,
-} from '../../../types/file-manager-variant';
+import { useAppConfig as mockUseAppConfig } from '../../../context/tests/app-config-context-mock';
+import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
 import DialFileManagerPage from '../DialFileManagerPage';
 
-vi.mock('../../../hooks/files/useDialFileManager');
+vi.mock('@epam/ai-dial-chat-hooks', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-chat-hooks')>();
+  return {
+    ...actual,
+    useDialFileManager: vi.fn(),
+  };
+});
 
 vi.mock('../../../context/NotificationContext', () => ({
-  useNotification: () => ({ showNotification: vi.fn() }),
+  useNotification: () => createNotificationContextValue(vi.fn()),
 }));
 
 vi.mock('../../../context/auth/UserContext', () => ({
@@ -33,47 +42,49 @@ const { mockActiveTab, mockHandleTabChange, mockFileManagerTabs } = vi.hoisted(
   }),
 );
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({
-    config: { fileManagerTabs: mockFileManagerTabs.value },
-  }),
+vi.mock(
+  '../../../context/AppConfigContext',
+  async () => import('../../../context/tests/app-config-context-mock'),
+);
+mockUseAppConfig.mockImplementation(() => ({
+  config: {
+    fileManagerTabs: mockFileManagerTabs.value,
+    maxAttachmentFileSizeBytes: 536_870_912,
+  },
 }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
+    i18n: { language: 'en' },
   }),
 }));
 
-vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
-  const { DialFileManagerTabs: Tabs } = actual;
+vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-react-file-manager')>();
+  const { DialFileManagerActions: Actions, DialFileManagerTabs: Tabs } = actual;
   return {
     ...actual,
     useDialFileManagerTabs: vi.fn().mockImplementation(() => ({
       activeTab: mockActiveTab.value ?? Tabs.MyFiles,
       handleTabChange: mockHandleTabChange,
       tabs: [
-        { id: Tabs.MyFiles, label: 'My Files' },
-        { id: Tabs.Shared, label: 'Shared with Me' },
-        { id: Tabs.Organization, label: 'Organization' },
+        { value: Tabs.MyFiles, label: 'My Files' },
+        { value: Tabs.Shared, label: 'Shared with Me' },
+        { value: Tabs.Organization, label: 'Organization' },
       ],
     })),
-  };
-});
-
-vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('@epam/ai-dial-react-file-manager')>();
-  const { DialFileManagerActions: Actions } = actual;
-  return {
-    ...actual,
     DialFileManager: ({
       items,
       gridOptions,
       bulkActionsToolbarOptions,
       toolbarOptions,
+      treeOptions,
       autoSelectUploadedItems,
+      maxSelectableFileSize,
+      maxFileSize,
+      uploadValidationMessages,
     }: {
       items?: { path: string }[];
       gridOptions?: {
@@ -83,15 +94,23 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
         actionLabels?: Partial<Record<DialFileManagerActions, string>>;
       };
       toolbarOptions?: {
-        tabs?: Array<{ id: string; label: string }>;
         newActions?: { uploadArchive?: { label?: string } };
       };
+      treeOptions?: {
+        tabs?: Array<{ value: string; label: string }>;
+      };
       autoSelectUploadedItems?: boolean;
+      maxSelectableFileSize?: number;
+      maxFileSize?: number;
+      uploadValidationMessages?: { oversizedFiles?: string };
     }) => (
       <div
         role="region"
         aria-label="file manager"
-        data-tab-count={toolbarOptions?.tabs?.length}
+        data-tab-count={treeOptions?.tabs?.length}
+        data-max-selectable-file-size={maxSelectableFileSize}
+        data-max-file-size={maxFileSize}
+        data-oversized-files-message={uploadValidationMessages?.oversizedFiles}
         data-has-download={String(
           Actions.Download in (gridOptions?.actionLabels ?? {}),
         )}
@@ -141,9 +160,7 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
   };
 });
 
-const mockUseDialFileManager = vi.mocked(
-  useDialFileManagerModule.useDialFileManager,
-);
+const mockUseDialFileManager = vi.mocked(chatHooksModule.useDialFileManager);
 
 const defaultHookResult: UseDialFileManagerResult = {
   items: [
@@ -264,6 +281,18 @@ describe('DialFileManagerPage', () => {
     render(<DialFileManagerPage />);
     const manager = screen.getByRole('region', { name: 'file manager' });
     expect(manager.getAttribute('data-tab-count')).toBe('2');
+  });
+
+  it('forwards the AppConfig-sourced size limit as both maxSelectableFileSize and the ui-kit maxFileSize prop, with a translated oversized-upload message', () => {
+    render(<DialFileManagerPage />);
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-max-selectable-file-size')).toBe(
+      '536870912',
+    );
+    expect(manager.getAttribute('data-max-file-size')).toBe('536870912');
+    expect(manager.getAttribute('data-oversized-files-message')).toBe(
+      'dialFileManager.uploadFileTooLarge',
+    );
   });
 });
 

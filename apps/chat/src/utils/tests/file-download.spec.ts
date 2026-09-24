@@ -1,9 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DownloadDestinationType,
   prepareDownloadDestination,
-  triggerBrowserDownload,
-} from '../file-download';
+} from '@epam/ai-dial-chat-hooks';
+import { triggerBlobDownload } from '@epam/ai-dial-chat-shared';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { triggerBrowserDownload } from '../file-download';
+
+vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@epam/ai-dial-chat-shared')>()),
+  triggerBlobDownload: vi.fn(),
+}));
 
 afterEach(() => {
   Reflect.deleteProperty(window, 'showSaveFilePicker');
@@ -42,24 +48,33 @@ describe('file download streaming', () => {
     expect(new TextDecoder().decode(chunks[0])).toBe('streamed archive');
   });
 
-  it('falls back to a blob when the file picker API is unavailable', async () => {
-    const destination = await prepareDownloadDestination('reports.zip');
+  it('uses the server-provided Content-Disposition filename when present', async () => {
+    vi.mocked(triggerBlobDownload).mockClear();
+    const response = new Response('zip-bytes', {
+      headers: {
+        'Content-Disposition': 'attachment; filename="custom-name.zip"',
+      },
+    });
 
-    expect(destination).toEqual({ type: DownloadDestinationType.Blob });
+    const savedName = await triggerBrowserDownload(response, 'fallback.zip');
+
+    expect(savedName).toBe('custom-name.zip');
+    expect(triggerBlobDownload).toHaveBeenCalledWith(
+      expect.anything(),
+      'custom-name.zip',
+    );
   });
 
-  it('reports a cancelled save dialog without starting a download', async () => {
-    Object.defineProperty(window, 'showSaveFilePicker', {
-      configurable: true,
-      value: vi
-        .fn()
-        .mockRejectedValue(new DOMException('Cancelled', 'AbortError')),
-    });
+  it('resolves the fallback filename when the response carries no Content-Disposition', async () => {
+    vi.mocked(triggerBlobDownload).mockClear();
+    const response = new Response('');
 
-    const destination = await prepareDownloadDestination('reports.zip');
+    const savedName = await triggerBrowserDownload(response, 'fallback.zip');
 
-    expect(destination).toEqual({
-      type: DownloadDestinationType.Cancelled,
-    });
+    expect(savedName).toBe('fallback.zip');
+    expect(triggerBlobDownload).toHaveBeenCalledWith(
+      expect.anything(),
+      'fallback.zip',
+    );
   });
 });

@@ -2,6 +2,7 @@ import type { Attachment, DisplayAttachment } from '@epam/ai-dial-chat-shared';
 import { RequestStatus, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   BASE_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   NeutralButton,
   PrimaryButton,
 } from '@epam/ai-dial-ui-kit';
@@ -22,6 +23,8 @@ import { Input } from '../Input/Input';
 /** Inline edit-message form: pre-populated textarea, existing attachment tray, and Save/Cancel actions. */
 export const EditMessageInput: FC<EditMessageInputProps> = ({
   message,
+  inlineStartSlot,
+  onInlineStartRemove,
   initialAttachments = [],
   onCancel,
   onSave,
@@ -31,6 +34,7 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
   ariaLabel,
   removeLabel,
   retryLabel,
+  uploadingLabel,
   addMenuTitle = 'Add',
   attachLabel = 'Attach file',
   menuTitle = 'Menu',
@@ -40,6 +44,7 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
   onDropFilesConsumed,
   validateAttachment,
   isAttachmentsEnabled,
+  isTextAttachmentsAllowed,
   hideAttachFile = false,
   fileAccept,
   maximumAttachmentsAmount,
@@ -50,6 +55,7 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
   onPendingAttachmentsConsumed,
   onAttachmentClick,
   pasteTextThreshold,
+  maxMessageLength = 50000,
   onMessageTooLong,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -92,11 +98,8 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
 
   const handleSaveClick = () => {
     if (!canSend) return;
-    if (
-      !isAttachmentsEnabled &&
-      currentText.length >= (pasteTextThreshold ?? 4000)
-    ) {
-      onMessageTooLong?.(currentText.length, pasteTextThreshold ?? 4000);
+    if (currentText.length >= maxMessageLength) {
+      onMessageTooLong?.(currentText.length, maxMessageLength);
       return;
     }
     handleSend(currentText, currentNewAttachments);
@@ -121,7 +124,13 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
             {
               key: 'dial-fs',
               label: dialFileSystemLabel ?? 'DIAL file system',
-              icon: <IconFile size={BASE_ICON_SIZE} aria-hidden />,
+              icon: (
+                <IconFile
+                  size={BASE_ICON_SIZE}
+                  aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              ),
               onClick: onDialFileSystemClick,
             },
           ]
@@ -134,8 +143,9 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
       {/* Bordered box — contains kept attachments, new attachments, and the textarea */}
       <Input
         message={message}
+        inlineStartSlot={inlineStartSlot}
+        onInlineStartRemove={onInlineStartRemove}
         ariaLabel={ariaLabel}
-        isStacked
         hideActionBar
         pendingDropFiles={pendingDropFiles}
         onDropFilesConsumed={handleDropFilesConsumed}
@@ -145,17 +155,20 @@ export const EditMessageInput: FC<EditMessageInputProps> = ({
         onAttachmentsChange={setCurrentNewAttachments}
         removeLabel={removeLabel}
         retryLabel={retryLabel}
+        uploadingLabel={uploadingLabel}
         className="max-w-full"
         prefixAttachments={keptAttachments}
         onRemovePrefixAttachment={handleRemovePreExisting}
         validateAttachment={validateAttachment}
         isAttachmentsEnabled={isAttachmentsEnabled}
+        isTextAttachmentsAllowed={isTextAttachmentsAllowed}
         maximumAttachmentsAmount={maximumAttachmentsAmount}
         onAttachmentsLimitExceeded={onAttachmentsLimitExceeded}
         pendingAttachments={pendingAttachments}
         onPendingAttachmentsConsumed={onPendingAttachmentsConsumed}
         onAttachmentClick={onAttachmentClick}
         pasteTextThreshold={pasteTextThreshold}
+        maxMessageLength={maxMessageLength}
         onMessageTooLong={onMessageTooLong}
       />
 

@@ -17,6 +17,7 @@ import { ShareAccess } from '../dto/create-share-link.dto';
 import type { DiscardSharedCatalogItemResponseDto } from '../dto/discard-shared-catalog-item.dto';
 import type { RevokeSharedAccessResponseDto } from '../dto/revoke-shared-access.dto';
 import { ShareLinkResponseDto } from '../dto/share-link-response.dto';
+import type { ShareRecipientsResponseDto } from '../dto/share-recipients.dto';
 import { ShareController } from '../share.controller';
 import { ShareService } from '../share.service';
 
@@ -75,6 +76,10 @@ const discardedSuccess: DiscardSharedCatalogItemResponseDto = {
 const revokedSuccess: RevokeSharedAccessResponseDto = {
   success: true,
 };
+const recipientsCount: ShareRecipientsResponseDto = {
+  itemId: 'applications/owner-bucket/my-app',
+  recipientsCount: 2,
+};
 
 describe('ShareController (integration)', () => {
   let app: INestApplication;
@@ -83,6 +88,7 @@ describe('ShareController (integration)', () => {
     acceptInvitation: ReturnType<typeof vi.fn>;
     discardShared: ReturnType<typeof vi.fn>;
     revokeShared: ReturnType<typeof vi.fn>;
+    getRecipientsCount: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -91,6 +97,7 @@ describe('ShareController (integration)', () => {
       acceptInvitation: vi.fn().mockResolvedValue(acceptedInvitation),
       discardShared: vi.fn().mockResolvedValue(discardedSuccess),
       revokeShared: vi.fn().mockResolvedValue(revokedSuccess),
+      getRecipientsCount: vi.fn().mockResolvedValue(recipientsCount),
     };
     app = await buildApp(service);
   });
@@ -117,13 +124,12 @@ describe('ShareController (integration)', () => {
       );
     });
 
-    it('forwards resourceKind for a bucket-relative prompt path', async () => {
+    it('accepts a full prompts/{bucket}/{path} itemId', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/share')
         .send({
-          itemId: 'Work/AI/summarize',
+          itemId: 'prompts/owner-bucket/Work/AI/summarize',
           access: [ShareAccess.View],
-          resourceKind: 'prompt',
         })
         .expect(201);
 
@@ -131,20 +137,19 @@ describe('ShareController (integration)', () => {
         TEST_USER.at,
         TEST_USER.bucket,
         {
-          itemId: 'Work/AI/summarize',
+          itemId: 'prompts/owner-bucket/Work/AI/summarize',
           access: [ShareAccess.View],
-          resourceKind: 'prompt',
         },
       );
     });
 
-    it('returns 400 for an unknown resourceKind', async () => {
+    it('returns 400 for an unknown resourceKind field', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/share')
         .send({
-          itemId: 'Work/AI/summarize',
+          itemId: 'prompts/owner-bucket/Work/AI/summarize',
           access: [ShareAccess.View],
-          resourceKind: 'conversation',
+          resourceKind: 'prompt',
         })
         .expect(400);
     });
@@ -281,6 +286,41 @@ describe('ShareController (integration)', () => {
         TEST_USER.at,
         TEST_USER.sub,
       );
+    });
+
+    it('accepts a full prompts/{bucket}/{path} itemId', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/share/discard')
+        .send({ itemId: 'prompts/owner-bucket/Work/AI/summarize' })
+        .expect(200);
+
+      expect(res.body).toEqual(discardedSuccess);
+      expect(service.discardShared).toHaveBeenCalledWith(
+        'prompts/owner-bucket/Work/AI/summarize',
+        TEST_USER.at,
+        TEST_USER.sub,
+      );
+    });
+
+    it('returns 400 for a bucket-relative prompt path with no prefix', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/share/discard')
+        .send({ itemId: 'Work/AI/summarize' })
+        .expect(400);
+
+      expect(service.discardShared).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for an unknown resourceKind field', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/share/discard')
+        .send({
+          itemId: 'prompts/owner-bucket/Work/AI/summarize',
+          resourceKind: 'prompt',
+        })
+        .expect(400);
+
+      expect(service.discardShared).not.toHaveBeenCalled();
     });
 
     it('returns 400 when itemId is missing', async () => {
@@ -427,6 +467,20 @@ describe('ShareController (integration)', () => {
       );
     });
 
+    it('accepts a full prompts/{bucket}/{path} itemId', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/share/revoke')
+        .send({ itemId: 'prompts/owner-bucket/Work/AI/summarize' })
+        .expect(200);
+
+      expect(res.body).toEqual(revokedSuccess);
+      expect(service.revokeShared).toHaveBeenCalledWith(
+        'prompts/owner-bucket/Work/AI/summarize',
+        TEST_USER.at,
+        TEST_USER.sub,
+      );
+    });
+
     it('returns 400 when itemId is missing', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/share/revoke')
@@ -456,7 +510,6 @@ describe('ShareController (integration)', () => {
 
     it.each([
       'files/owner-bucket/report.pdf',
-      'prompts/owner-bucket/my-prompt',
       'gpt-4o',
       'applications/owner-bucket',
     ])(
@@ -517,6 +570,30 @@ describe('ShareController (integration)', () => {
       );
     });
 
+    it('accepts a skills/{bucket}/{path} resource path', async () => {
+      const itemId = 'skills/owner-bucket/team-a/docs-helper';
+
+      await request(app.getHttpServer())
+        .post('/api/v1/share/revoke')
+        .send({ itemId })
+        .expect(200);
+
+      expect(service.revokeShared).toHaveBeenCalledWith(
+        itemId,
+        TEST_USER.at,
+        TEST_USER.sub,
+      );
+    });
+
+    it('returns 400 when a skills itemId is missing the item path segment', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/share/revoke')
+        .send({ itemId: 'skills/owner-bucket' })
+        .expect(400);
+
+      expect(service.revokeShared).not.toHaveBeenCalled();
+    });
+
     it('returns 401 when the service throws UnauthorizedException', async () => {
       service.revokeShared.mockRejectedValue(new UnauthorizedException());
       await request(app.getHttpServer())
@@ -564,6 +641,115 @@ describe('ShareController (integration)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/share/revoke')
         .send(validBody)
+        .expect(503);
+    });
+  });
+
+  describe('GET /api/v1/share/recipients', () => {
+    const validItemId = 'applications/owner-bucket/my-app';
+
+    it('delegates to the service and returns 200 with the count', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/share/recipients')
+        .query({ itemId: validItemId })
+        .expect(200);
+
+      expect(res.body).toEqual(recipientsCount);
+      expect(service.getRecipientsCount).toHaveBeenCalledWith(
+        validItemId,
+        TEST_USER.at,
+      );
+    });
+
+    it('accepts a full prompts/{bucket}/{path} itemId', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/share/recipients')
+        .query({ itemId: 'prompts/owner-bucket/Work/AI/summarize' })
+        .expect(200);
+
+      expect(service.getRecipientsCount).toHaveBeenCalledWith(
+        'prompts/owner-bucket/Work/AI/summarize',
+        TEST_USER.at,
+      );
+    });
+
+    it('returns 400 when itemId is missing', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/share/recipients')
+        .expect(400);
+
+      expect(service.getRecipientsCount).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'files/owner-bucket/report.pdf',
+      'gpt-4o',
+      'applications/owner-bucket',
+      '../etc/passwd',
+      'applications/owner-bucket/../../etc/passwd',
+    ])(
+      'returns 400 when itemId is not a revocable catalog or conversation resource: %s',
+      async (itemId) => {
+        await request(app.getHttpServer())
+          .get('/api/v1/share/recipients')
+          .query({ itemId })
+          .expect(400);
+
+        expect(service.getRecipientsCount).not.toHaveBeenCalled();
+      },
+    );
+
+    it('accepts a conversation resource path', async () => {
+      const itemId = 'conversations/owner-bucket/my-chat';
+
+      await request(app.getHttpServer())
+        .get('/api/v1/share/recipients')
+        .query({ itemId })
+        .expect(200);
+
+      expect(service.getRecipientsCount).toHaveBeenCalledWith(
+        itemId,
+        TEST_USER.at,
+      );
+    });
+
+    it('accepts a skills/{bucket}/{path} resource path', async () => {
+      const itemId = 'skills/owner-bucket/team-a/docs-helper';
+
+      await request(app.getHttpServer())
+        .get('/api/v1/share/recipients')
+        .query({ itemId })
+        .expect(200);
+
+      expect(service.getRecipientsCount).toHaveBeenCalledWith(
+        itemId,
+        TEST_USER.at,
+      );
+    });
+
+    it('returns 401 when the service throws UnauthorizedException', async () => {
+      service.getRecipientsCount.mockRejectedValue(new UnauthorizedException());
+      await request(app.getHttpServer())
+        .get('/api/v1/share/recipients')
+        .query({ itemId: validItemId })
+        .expect(401);
+    });
+
+    it('returns 502 when the service throws BadGatewayException', async () => {
+      service.getRecipientsCount.mockRejectedValue(new BadGatewayException());
+      await request(app.getHttpServer())
+        .get('/api/v1/share/recipients')
+        .query({ itemId: validItemId })
+        .expect(502);
+    });
+
+    it('returns 503 when the service throws ServiceUnavailableException', async () => {
+      service.getRecipientsCount.mockRejectedValue(
+        new ServiceUnavailableException(),
+      );
+      await request(app.getHttpServer())
+        .get('/api/v1/share/recipients')
+        .query({ itemId: validItemId })
         .expect(503);
     });
   });

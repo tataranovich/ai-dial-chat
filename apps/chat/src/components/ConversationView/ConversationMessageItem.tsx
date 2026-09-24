@@ -1,6 +1,28 @@
+import {
+  AttachmentContentType,
+  findVisualizerForApplication,
+  groupedVisualizerCanvasKey,
+  InlineGroupedVisualizer,
+  partitionAttachmentsForApplicationVisualizer,
+  useAttachmentCanvas,
+} from '@epam/ai-dial-attachment-canvas';
+import {
+  annotationToDisplayAttachment,
+  annotationToOoxmlCanvasContent,
+  annotationToPdfCanvasContent,
+  attachmentDtosToDisplayAttachments,
+  isDialFileId,
+  isExternalSourcePreviewable,
+  messageHasStages,
+  openAnnotationAttachment,
+  referenceAttachmentToPdfCanvasContent,
+  resolveGroupedVisualizerCanvasContent,
+  useAttachmentAction,
+} from '@epam/ai-dial-chat-hooks';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
   CodeBlockTheme,
+  COMPACT_MARKDOWN_CLASS_NAMES,
   isStatusMessage,
   mergeClasses,
   MessageRole,
@@ -10,7 +32,9 @@ import {
   type DisplayAttachment,
   type MessageRating,
   type Message as MessageType,
+  type RequestSkill,
   type StarterOption,
+  type UploadedAttachmentResult,
 } from '@epam/ai-dial-chat-shared';
 import {
   MessageBubble,
@@ -19,19 +43,42 @@ import {
 } from '@epam/ai-dial-conversation-messages';
 import { CollapsedGroup } from '@epam/ai-dial-conversation-stages';
 import {
+  McpAppInlinePreview,
+  findMcpAppForMessage,
+  mcpAppCanvasKey,
+  resolveMcpAppToolCallSeed,
+  type McpAppResponseCache,
+  type McpAppToolCallSeed,
+  type McpAppToolRef,
+} from '@epam/ai-dial-mcp-apps';
+import {
   CitationCardProvider,
   CitationDropdown,
   getReferenceAttachmentGroups,
-  groupAnnotationsBySource,
+  groupAnnotations,
   isReferenceOnlyAttachment,
   useAnnotations,
   useCitationCard,
+  useCitationMarkdownComponents,
+  type AnnotationGroup,
 } from '@epam/ai-dial-quotations';
-import { ErrorMessageNotification } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_KIT_ICON_STROKE,
+  ErrorMessageNotification,
+} from '@epam/ai-dial-ui-kit';
 import { IconLink } from '@tabler/icons-react';
-import { FC, lazy, memo, Suspense, useCallback, useMemo } from 'react';
+import {
+  FC,
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  AttachmentCanvasI18nKeys,
   AttachmentsI18nKeys,
   BasicI18nKeys,
   ButtonsI18nKeys,
@@ -39,14 +86,20 @@ import {
   CitationsI18nKeys,
 } from '../../constants/translation-keys';
 import { useTheme } from '../../context/ThemeContext';
-import { useAttachmentAction } from '../../hooks/attachment/useAttachmentAction';
-import { useCitationMarkdownComponents } from '../../hooks/citations/useCitationMarkdownComponents';
+import { useApplicationVisualizers } from '../../hooks/attachment/useApplicationVisualizers';
+import { useMcpAppHostAdapter } from '../../hooks/attachment/useMcpAppHostAdapter';
+import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
 import { useUiFeature } from '../../hooks/useUiFeature';
 import { ThemeId } from '../../types/theme-id';
-import { openAnnotationAttachment } from '../../utils/annotation';
-import { referenceAttachmentToPdfCanvasContent } from '../../utils/attachment-canvas';
-import { attachmentDtosToDisplayAttachments } from '../../utils/attachment-dto-to-display';
-import { messageHasStages } from '../../utils/message-utils';
+import {
+  attachmentCanvasUrlResolvers,
+  attachmentDisplayResolvers,
+} from '../../utils/attachment-display-resolvers';
+import {
+  resolveAbsoluteDialUrl,
+  resolveDialFileDownloadUrl,
+  resolveMarkdownUrl,
+} from '../../utils/dial-file';
 import { buildMessageActions } from './utils/build-message-actions';
 import {
   getMessageStarterProps,
@@ -61,8 +114,27 @@ const EditMessageInput = lazy(async () => {
 
 const preloadEditInput = () => void import('@epam/ai-dial-conversation-input');
 
-const USER_MESSAGE_TEXT_STYLES = {
+/* Fallback inline-frame height when the registry entry declares neither
+   `height` nor `mobileHeight`. */
+const DEFAULT_VISUALIZER_HEIGHT = 400;
+
+const MESSAGE_TEXT_STYLES = {
   typography: { fontClassName: 'dial-body-text' },
+};
+
+/* One type-scale step down for narrow viewports: the full-size body copy costs
+   too much vertical space on a phone. Desktop keeps the wider scale. */
+const COMPACT_MESSAGE_TEXT_STYLES = {
+  typography: { fontClassName: 'dial-small-paragraph-text' },
+};
+
+const isCitationPreviewable = (annotation: Annotation): boolean => {
+  const attachment = annotation.body?.source?.attachment;
+  return (
+    attachment != null &&
+    (isDialFileId(attachment.url) ||
+      isExternalSourcePreviewable(attachment.type, attachment.url))
+  );
 };
 
 interface Props {
@@ -88,7 +160,9 @@ interface Props {
     keptAttachments: DisplayAttachment[],
     newAttachments: Attachment[],
   ) => void;
-  onUploadAttachment?: (attachment: Attachment) => Promise<string>;
+  onUploadAttachment?: (
+    attachment: Attachment,
+  ) => Promise<UploadedAttachmentResult>;
   pendingDropFiles?: File[];
   onDropFilesConsumed?: () => void;
   deploymentLookup: Record<
@@ -112,12 +186,28 @@ interface Props {
   thinkingLabel: string;
   executedLabel: string;
   stepsLabel: (count: number) => string;
+  /** Called with the message's matched MCP App tool (its canvas key, and a toolInput/toolResult seed) when the user activates the inline preview's expand-to-canvas button. Omit to hide the inline preview entirely. */
+  onOpenApp?: (
+    match: McpAppToolRef,
+    canvasKey?: string,
+    toolCall?: McpAppToolCallSeed,
+  ) => void;
+  /** The active deployment's tools that declare an MCP Apps UI resource. */
+  mcpAppTools: McpAppToolRef[];
+  /** Shared with `useOpenMcpAppCanvas` so switching between the inline preview and the full canvas for the same message reuses one fetch. */
+  mcpAppCache: McpAppResponseCache;
+  /** Label shown instead of the inline MCP App preview when this message's canvas is the one currently open. */
+  openedInCanvasLabel?: string;
   /** Called when the user clicks the preview button on a PDF citation. */
   onPreviewReference?: (annotation: Annotation) => void;
   validateAttachment?: (
     attachment: Attachment,
   ) => AttachmentErrorReason | undefined;
   isAttachmentsEnabled?: boolean;
+  /** Forwarded to `EditMessageInput`: narrows the long-paste-to-attachment conversion to models whose attachment types accept `text/plain`. */
+  isTextAttachmentsAllowed?: boolean;
+  /** Renders message text one type-scale step down. The host sets it on narrow viewports. */
+  isCompactTypography?: boolean;
   maximumAttachmentsAmount?: number;
   onAttachmentsLimitExceeded?: (count: number, limit: number) => void;
   hideAttachFile?: boolean;
@@ -143,6 +233,27 @@ interface Props {
   selectedAttachmentKey?: string;
   /** Called when the user pastes text that exceeds the max length while attachments are disabled. */
   onMessageTooLong?: (length: number, max: number) => void;
+  /**
+   * Content rendered at the inline-start of the edit input's text area —
+   * the selected-skill `ChatSkill` element the host seeds from the edited
+   * message's `custom_content.skills`. Rendered only in the edit branch.
+   */
+  editInlineStartSlot?: ReactNode;
+  /**
+   * Called when Backspace is pressed with the caret collapsed at position 0
+   * while `editInlineStartSlot` content is shown — the host's
+   * remove-selected-skill gesture. Forwarded to `EditMessageInput`'s
+   * `onInlineStartRemove`.
+   */
+  onEditInlineStartRemove?: () => void;
+  /**
+   * Renders a message's `custom_content.skills` entries as `ChatSkill`
+   * history elements for the bubble's `beforeContent` slot — name and
+   * description resolution and the "View details" details panel are owned by
+   * the host's skill selector wiring. Returns `null` while the skill-usage
+   * flag is off or the message carries no skills.
+   */
+  renderHistorySkills?: (skills: RequestSkill[] | undefined) => ReactNode;
 }
 
 const ConversationMessageItem: FC<Props> = ({
@@ -180,9 +291,15 @@ const ConversationMessageItem: FC<Props> = ({
   thinkingLabel,
   executedLabel,
   stepsLabel,
+  onOpenApp,
+  mcpAppTools,
+  mcpAppCache,
+  openedInCanvasLabel,
   onPreviewReference,
   validateAttachment,
   isAttachmentsEnabled,
+  isTextAttachmentsAllowed,
+  isCompactTypography = false,
   maximumAttachmentsAmount,
   onAttachmentsLimitExceeded,
   hideAttachFile,
@@ -194,9 +311,15 @@ const ConversationMessageItem: FC<Props> = ({
   onPendingAttachmentsConsumed,
   selectedAttachmentKey,
   onMessageTooLong,
+  editInlineStartSlot,
+  onEditInlineStartRemove,
+  renderHistorySkills,
 }) => {
   const { t } = useTranslation();
   const { currentTheme } = useTheme();
+  const applicationVisualizers = useApplicationVisualizers();
+  const isMobile = useIsMobile();
+  const { openCanvas } = useAttachmentCanvas();
   const isLikesEnabled = useUiFeature(OverlayFeature.Likes);
   const isEditUserMessageHidden = useUiFeature(
     OverlayFeature.HideEditUserMessage,
@@ -209,7 +332,17 @@ const ConversationMessageItem: FC<Props> = ({
   );
   const codeBlockTheme =
     currentTheme === ThemeId.Light ? CodeBlockTheme.Light : CodeBlockTheme.Dark;
-  const { handleAttachmentClick: handleDownload } = useAttachmentAction();
+  const handleTableOpenInCanvas = useCallback(
+    (text: string) =>
+      openCanvas(
+        { type: AttachmentContentType.MarkdownTable, text },
+        t(ChatI18nKeys.MarkdownTableTitle),
+      ),
+    [openCanvas, t],
+  );
+  const { handleAttachmentClick: handleDownload } = useAttachmentAction({
+    resolveDownloadUrl: resolveDialFileDownloadUrl,
+  });
   const handleAttachmentClick = onAttachmentClickProp ?? handleDownload;
   const handleDownloadAll = useCallback(
     (attachmentsToDownload: DisplayAttachment[]) => {
@@ -228,22 +361,107 @@ const ConversationMessageItem: FC<Props> = ({
 
   const annotations = useAnnotations(msg, isStreaming);
   const citationGroups = useMemo(
-    () => groupAnnotationsBySource(annotations),
+    () => groupAnnotations(annotations),
     [annotations],
   );
   const citationCard = useCitationCard();
+  const messageTextStyles = isCompactTypography
+    ? COMPACT_MESSAGE_TEXT_STYLES
+    : MESSAGE_TEXT_STYLES;
+  const markdownClassNames = isCompactTypography
+    ? COMPACT_MARKDOWN_CLASS_NAMES
+    : undefined;
+  const handleCitationPreview = useCallback(
+    (annotation: Annotation) => {
+      const pdfContent = annotationToPdfCanvasContent(
+        annotation,
+        citationGroups,
+        attachmentCanvasUrlResolvers,
+      );
+      if (pdfContent != null) {
+        const attachment = annotation.body?.source?.attachment;
+        const rawSegment = attachment?.url?.split('/').pop() ?? '';
+        const fileName = attachment?.title ?? decodeURIComponent(rawSegment);
+        openCanvas(pdfContent, fileName);
+        return;
+      }
+      const ooxmlContent = annotationToOoxmlCanvasContent(
+        annotation,
+        annotations,
+        attachmentCanvasUrlResolvers,
+      );
+      if (ooxmlContent != null) {
+        const attachment = annotation.body?.source?.attachment;
+        const rawSegment = attachment?.url?.split('/').pop() ?? '';
+        const fileName = attachment?.title ?? decodeURIComponent(rawSegment);
+        openCanvas(ooxmlContent, fileName);
+        return;
+      }
+      const display = annotationToDisplayAttachment(annotation);
+      if (display) handleAttachmentClick(display);
+    },
+    [citationGroups, annotations, openCanvas, handleAttachmentClick],
+  );
+  const handleCitationOpenInBrowser = useCallback((annotation: Annotation) => {
+    const attachment = annotation.body?.source?.attachment;
+    if (attachment)
+      openAnnotationAttachment(attachment, resolveDialFileDownloadUrl);
+  }, []);
+  const buildCitationLabels = useCallback(
+    (group: AnnotationGroup) => {
+      const cardLabels = {
+        ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
+          source: group.sourceName,
+        }),
+        previousCitation: t(CitationsI18nKeys.PopupPreviousCitation),
+        nextCitation: t(CitationsI18nKeys.PopupNextCitation),
+        formatSwitcherText: (current: number, total: number) =>
+          t(CitationsI18nKeys.PopupSwitcher, { current, total }),
+        preview: t(BasicI18nKeys.Preview),
+        openInBrowser: t(CitationsI18nKeys.PopupOpenInBrowser),
+        download: t(ButtonsI18nKeys.Download),
+      };
+      const markerLabels = {
+        ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
+          source: group.sourceName,
+        }),
+        label: t(CitationsI18nKeys.MarkerLabel, { source: group.sourceName }),
+        labelWithOverflow: t(CitationsI18nKeys.MarkerLabelWithOverflow, {
+          source: group.sourceName,
+          count: group.annotations.length - 1,
+        }),
+      };
+      return { cardLabels, markerLabels };
+    },
+    [t],
+  );
+  const citationCallbacks = useMemo(
+    () => ({
+      onPreview: handleCitationPreview,
+      isPreviewable: isCitationPreviewable,
+      onOpenInBrowser: handleCitationOpenInBrowser,
+      buildLabels: buildCitationLabels,
+    }),
+    [handleCitationPreview, handleCitationOpenInBrowser, buildCitationLabels],
+  );
   const { processedContent, markdownComponents } =
     useCitationMarkdownComponents(
       msg.content,
       citationGroups,
-      handleAttachmentClick,
+      citationCallbacks,
+      isStreaming,
+      isCompactTypography,
     );
   const referenceGroups = useMemo(
     () => getReferenceAttachmentGroups(msg.custom_content?.attachments),
     [msg.custom_content?.attachments],
   );
   const allDisplayAttachments = useMemo(
-    () => attachmentDtosToDisplayAttachments(msg.custom_content?.attachments),
+    () =>
+      attachmentDtosToDisplayAttachments(
+        msg.custom_content?.attachments,
+        attachmentDisplayResolvers,
+      ),
     [msg.custom_content?.attachments],
   );
   const nonReferenceDisplayAttachments = useMemo(
@@ -252,13 +470,97 @@ const ConversationMessageItem: FC<Props> = ({
         msg.custom_content?.attachments?.filter(
           (a) => !isReferenceOnlyAttachment(a),
         ),
+        attachmentDisplayResolvers,
       ),
     [msg.custom_content?.attachments],
   );
+  /*
+   * An application visualizer claims some or all of this message's
+   * attachments and renders them together in one iframe. Resolved in a single
+   * memo so the entry lookup, the partition, and the payload object all share
+   * one identity per render — `VisualizerCanvasRenderer` keys its iframe on
+   * the payload's `url`/`visualizerName`/`requestTimeout`, but a fresh
+   * `content` object on every parent render would still churn its props.
+   */
+  const groupedVisualizer = useMemo(() => {
+    const entry = findVisualizerForApplication(
+      effectiveDeploymentId,
+      applicationVisualizers,
+    );
+    if (entry == null) return null;
+
+    const { claimed } = partitionAttachmentsForApplicationVisualizer(
+      nonReferenceDisplayAttachments,
+      entry,
+    );
+    if (claimed.length === 0) return null;
+
+    const { content, resolved } = resolveGroupedVisualizerCanvasContent(
+      claimed,
+      resolveAbsoluteDialUrl,
+      entry,
+      currentTheme,
+    );
+    if (content == null) return null;
+
+    /* Derived from the full list rather than the partition's `unclaimed`, so a
+     * claimed attachment the host could not resolve a URL for falls back to an
+     * ordinary tile instead of disappearing from the message entirely. */
+    const resolvedSet = new Set(resolved);
+
+    return {
+      content,
+      unclaimed: nonReferenceDisplayAttachments.filter(
+        (attachment) => !resolvedSet.has(attachment),
+      ),
+      /* The registry carries both heights; picking between them is the host's
+       * job, so the lib never reads a breakpoint. A mobile viewport prefers
+       * `mobileHeight` but falls back to `height` when the entry declares
+       * only the desktop one. */
+      height:
+        (isMobile ? (entry.mobileHeight ?? entry.height) : entry.height) ??
+        DEFAULT_VISUALIZER_HEIGHT,
+    };
+  }, [
+    effectiveDeploymentId,
+    applicationVisualizers,
+    nonReferenceDisplayAttachments,
+    currentTheme,
+    isMobile,
+  ]);
+
+  /* Claimed attachments are rendered by the visualizer, so they must not also
+   * appear as tray tiles. */
+  const bubbleAttachments =
+    groupedVisualizer?.unclaimed ?? nonReferenceDisplayAttachments;
+
+  /* Opens the canvas with the very object the inline frame was given, so
+   * expanding never rebuilds the grouped payload. */
+  const handleExpandGroupedVisualizer = useCallback(() => {
+    if (groupedVisualizer == null) return;
+    const panelTitle = groupedVisualizer.content.visualizerName.trim();
+    openCanvas(
+      groupedVisualizer.content,
+      panelTitle === '' ? undefined : panelTitle,
+      groupedVisualizerCanvasKey(index),
+    );
+  }, [groupedVisualizer, openCanvas, index]);
+
   const handleOpenReferenceInBrowser = useCallback((annotation: Annotation) => {
     const attachment = annotation.body?.source?.attachment;
-    if (attachment) openAnnotationAttachment(attachment);
+    if (attachment)
+      openAnnotationAttachment(attachment, resolveDialFileDownloadUrl);
   }, []);
+
+  const mcpAppMatch = findMcpAppForMessage(msg, mcpAppTools, isStreaming);
+  const mcpAppToolCallSeed = useMemo(
+    () =>
+      mcpAppMatch
+        ? resolveMcpAppToolCallSeed(msg, mcpAppMatch.toolName)
+        : undefined,
+    [msg, mcpAppMatch],
+  );
+  const mcpAppHostAdapter = useMcpAppHostAdapter('inline');
 
   const selectedAttachmentKeyPrefix = `${index}:`;
   const selectedAttachmentId = selectedAttachmentKey?.startsWith(
@@ -275,7 +577,8 @@ const ConversationMessageItem: FC<Props> = ({
             <MessageBubble
               role={msg.role}
               text={msg.content}
-              styles={{ ...USER_MESSAGE_TEXT_STYLES, className: 'justify-end' }}
+              beforeContent={renderHistorySkills?.(msg.custom_content?.skills)}
+              styles={{ ...messageTextStyles, className: 'justify-end' }}
               attachments={allDisplayAttachments}
               labels={{
                 showMoreLabel,
@@ -308,6 +611,7 @@ const ConversationMessageItem: FC<Props> = ({
             onDropFilesConsumed={onDropFilesConsumed}
             validateAttachment={validateAttachment}
             isAttachmentsEnabled={isAttachmentsEnabled}
+            isTextAttachmentsAllowed={isTextAttachmentsAllowed}
             maximumAttachmentsAmount={maximumAttachmentsAmount}
             onAttachmentsLimitExceeded={onAttachmentsLimitExceeded}
             hideAttachFile={hideAttachFile}
@@ -318,6 +622,8 @@ const ConversationMessageItem: FC<Props> = ({
             onPendingAttachmentsConsumed={onPendingAttachmentsConsumed}
             onAttachmentClick={handleAttachmentClick}
             onMessageTooLong={onMessageTooLong}
+            inlineStartSlot={editInlineStartSlot}
+            onInlineStartRemove={onEditInlineStartRemove}
           />
         </Suspense>
       </div>
@@ -325,6 +631,14 @@ const ConversationMessageItem: FC<Props> = ({
   }
 
   const hasStages = messageHasStages(msg);
+  const mcpAppKey = mcpAppMatch ? mcpAppCanvasKey(index) : undefined;
+  const isMcpAppOpenedInCanvas =
+    mcpAppKey != null && selectedAttachmentKey === mcpAppKey;
+  const groupedVisualizerKey =
+    groupedVisualizer != null ? groupedVisualizerCanvasKey(index) : undefined;
+  const isGroupedVisualizerOpenedInCanvas =
+    groupedVisualizerKey != null &&
+    selectedAttachmentKey === groupedVisualizerKey;
   const { starters: activeStarters, onSelectStarter: handleSelectStarter } =
     getMessageStarterProps(
       msg,
@@ -369,13 +683,16 @@ const ConversationMessageItem: FC<Props> = ({
 
   const isUserMessage = msg.role === MessageRole.User;
 
+  const beforeContent = renderHistorySkills?.(msg.custom_content?.skills);
+
   return (
     <CitationCardProvider value={citationCard}>
       <MessageBubble
         role={msg.role}
         text={messageText}
+        beforeContent={beforeContent}
         styles={{
-          ...(msg.role === MessageRole.User ? USER_MESSAGE_TEXT_STYLES : {}),
+          ...messageTextStyles,
           className: isUserMessage ? 'justify-end' : 'justify-start',
           bubbleClassName: mergeClasses(
             msg.streamErrorMessage != null ? 'w-full' : undefined,
@@ -384,34 +701,46 @@ const ConversationMessageItem: FC<Props> = ({
         markdownComponents={
           msg.role === MessageRole.Assistant ? markdownComponents : undefined
         }
-        attachments={nonReferenceDisplayAttachments}
+        markdownUrlTransform={
+          msg.role === MessageRole.Assistant ? resolveMarkdownUrl : undefined
+        }
+        markdownClassNames={markdownClassNames}
+        attachments={bubbleAttachments}
         isStreaming={isStreaming}
         hasAlwaysVisibleActions={!isStreaming}
-        actions={buildMessageActions(
-          msg,
-          index,
-          {
-            onEdit:
-              !isAssistantTyping && !isEditUserMessageHidden
-                ? onStartEdit
-                : undefined,
-            onHoverEdit: preloadEditInput,
-            onDelete:
-              !isAssistantTyping && !isDeleteUserMessageHidden
-                ? onDeleteMessage
-                : undefined,
-            onRegenerate: isRegenerateAssistantMessageHidden
-              ? undefined
-              : onRegenerateMessage,
-            onRate: isLikesEnabled ? onRateMessage : undefined,
-            onDislike: isLikesEnabled ? onDislikeMessage : undefined,
-          },
-          tooltips,
-          ariaLabels,
-        )}
+        actions={{
+          ...buildMessageActions(
+            msg,
+            index,
+            {
+              onEdit:
+                !isAssistantTyping && !isEditUserMessageHidden
+                  ? onStartEdit
+                  : undefined,
+              onHoverEdit: preloadEditInput,
+              onDelete:
+                !isAssistantTyping && !isDeleteUserMessageHidden
+                  ? onDeleteMessage
+                  : undefined,
+              onRegenerate: isRegenerateAssistantMessageHidden
+                ? undefined
+                : onRegenerateMessage,
+              onRate: isLikesEnabled ? onRateMessage : undefined,
+              onDislike: isLikesEnabled ? onDislikeMessage : undefined,
+            },
+            tooltips,
+            ariaLabels,
+          ),
+          /* Regenerate/copy/like/dislike stay mounted while a response streams,
+             so they have to be disabled — otherwise a second generation or a
+             rating can be triggered mid-stream. */
+          isDisabled: isAssistantTyping,
+        }}
         afterContent={
           referenceGroups.length > 0 ||
           hasStages ||
+          mcpAppMatch != null ||
+          groupedVisualizer != null ||
           msg.streamErrorMessage != null ? (
             <>
               {referenceGroups.length > 0 && (
@@ -422,16 +751,23 @@ const ConversationMessageItem: FC<Props> = ({
                         null &&
                       referenceAttachmentToPdfCanvasContent(
                         group.primaryAnnotation.body.source.attachment,
+                        attachmentCanvasUrlResolvers,
                       ) != null;
                     return (
                       <CitationDropdown
-                        key={group.sourceUrl}
+                        key={group.groupKey}
                         group={group}
                         onPreview={
                           isPdfPagePreviewable ? onPreviewReference : undefined
                         }
                         onOpenInBrowser={handleOpenReferenceInBrowser}
-                        icon={<IconLink size={14} aria-hidden />}
+                        icon={
+                          <IconLink
+                            size={14}
+                            aria-hidden
+                            stroke={DIAL_KIT_ICON_STROKE}
+                          />
+                        }
                         cardLabels={{
                           ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
                             source: group.sourceName,
@@ -478,6 +814,55 @@ const ConversationMessageItem: FC<Props> = ({
                   labels={{ executedLabel, stepsLabel }}
                 />
               )}
+              {groupedVisualizer != null &&
+                (isGroupedVisualizerOpenedInCanvas ? (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="bg-layer-2 flex h-[120px] w-[280px] items-center justify-center rounded"
+                  >
+                    <span className="dial-body-text text-primary">
+                      {openedInCanvasLabel}
+                    </span>
+                  </div>
+                ) : (
+                  <InlineGroupedVisualizer
+                    content={groupedVisualizer.content}
+                    height={groupedVisualizer.height}
+                    onExpand={handleExpandGroupedVisualizer}
+                    expandAriaLabel={t(AttachmentCanvasI18nKeys.ExpandAppLabel)}
+                    actionsGroupAriaLabel={t(
+                      AttachmentCanvasI18nKeys.VisualizerActionsAriaLabel,
+                    )}
+                    loadingLabel={t(
+                      AttachmentCanvasI18nKeys.VisualizerLoadingLabel,
+                    )}
+                    errorLabel={t(
+                      AttachmentCanvasI18nKeys.VisualizerLoadErrorLabel,
+                    )}
+                  />
+                ))}
+              {mcpAppMatch && onOpenApp && (
+                <McpAppInlinePreview
+                  match={mcpAppMatch}
+                  toolCall={mcpAppToolCallSeed}
+                  cache={mcpAppCache}
+                  cacheKey={mcpAppCanvasKey(index)}
+                  hostAdapter={mcpAppHostAdapter}
+                  onExpand={() =>
+                    onOpenApp(mcpAppMatch, mcpAppKey, mcpAppToolCallSeed)
+                  }
+                  expandAriaLabel={t(AttachmentCanvasI18nKeys.ExpandAppLabel)}
+                  reloadAriaLabel={t(ButtonsI18nKeys.Reload)}
+                  loadErrorLabel={t(
+                    AttachmentCanvasI18nKeys.McpAppLoadErrorLabel,
+                  )}
+                  isOpenedInCanvas={isMcpAppOpenedInCanvas}
+                  openedInCanvasLabel={
+                    openedInCanvasLabel ?? 'Opened in canvas'
+                  }
+                />
+              )}
               {msg.streamErrorMessage != null && (
                 <div className="w-full">
                   <ErrorMessageNotification
@@ -503,11 +888,17 @@ const ConversationMessageItem: FC<Props> = ({
           thinkingLabel,
           codeBlockCopyLabel: t(ButtonsI18nKeys.Copy),
           codeBlockCopiedLabel: t(ButtonsI18nKeys.Copied),
+          tableCopyLabel: t(ButtonsI18nKeys.Copy),
+          tableCopiedLabel: t(ButtonsI18nKeys.Copied),
+          tableDownloadCsvLabel: t(ButtonsI18nKeys.DownloadAsCsv),
+          tableOpenInCanvasLabel: t(ButtonsI18nKeys.OpenInCanvas),
+          tableScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableTable),
           ...statusProps,
         }}
         deploymentIconUrl={deploymentEntry?.iconUrl}
         deploymentDisplayName={deploymentEntry?.displayName}
         codeBlockTheme={codeBlockTheme}
+        tableOnOpenInCanvas={handleTableOpenInCanvas}
         onAttachmentClick={handleAttachmentClick}
         onDownloadAll={handleDownloadAll}
         selectedAttachmentId={selectedAttachmentId}

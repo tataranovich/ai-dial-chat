@@ -11,8 +11,13 @@ import {
   useRef,
   useState,
 } from 'react';
+import { SHARE_CLASS } from '../../constants/public-class-names';
 import type { SharePopoverProps } from '../../models/share-popover-props';
 import { ShareLinkAccess, SharePopoverView } from '../../types/share';
+import {
+  focusFirstInteractiveElement,
+  getInteractiveElements,
+} from '../../utils/focus';
 import { AccessControl } from '../AccessControl/AccessControl';
 import { LinkView } from '../LinkView/LinkView';
 import { QrCode } from '../QrCode/QrCode';
@@ -57,12 +62,9 @@ const SharePopover: FC<SharePopoverProps> = ({
     '--shp-anyone-title': colors?.anyoneTitle,
     '--shp-anyone-subtitle': colors?.anyoneSubtitle,
     '--shp-access-chevron': colors?.accessChevron,
-    '--shp-menu-item-hover': colors?.menuItemHover,
-    '--shp-menu-item-focus-shadow': colors?.menuItemFocusShadow,
-    '--shp-menu-item-checked-bg': colors?.menuItemCheckedBackground,
     '--shp-menu-item-label': colors?.menuItemLabel,
-    '--shp-menu-item-check': colors?.menuItemCheck,
-    '--shp-section-label': colors?.sectionLabel,
+    '--shp-link-row-bg': colors?.linkRowBackground,
+    '--shp-link-text': colors?.linkText,
     '--shp-error-text': colors?.errorText,
     '--shp-note-text': colors?.noteText,
     '--shp-divider': colors?.divider,
@@ -86,6 +88,7 @@ const SharePopover: FC<SharePopoverProps> = ({
     qrCodeAriaLabel = 'QR code for the share link',
     loadingLabel = 'Creating share link…',
     errorTitle = 'Couldn’t create the share link. Please try again.',
+    nestedItemsNote,
   } = labels ?? {};
 
   const [view, setView] = useState(SharePopoverView.Link);
@@ -110,12 +113,17 @@ const SharePopover: FC<SharePopoverProps> = ({
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  /* Moves focus into the popover as soon as it opens. */
+  /*
+   * Moves focus to the popover's first control as soon as it opens, so the
+   * keyboard user lands on a visibly focused element rather than on the
+   * outline-less popover root. The deferred pass re-runs only if the host's
+   * own focus management pulled focus back out in the same tick.
+   */
   useEffect(() => {
-    containerRef.current?.focus();
+    focusFirstInteractiveElement(containerRef.current);
     const timeoutId = setTimeout(() => {
       if (!containerRef.current?.contains(document.activeElement)) {
-        containerRef.current?.focus();
+        focusFirstInteractiveElement(containerRef.current);
       }
     }, 0);
     return () => clearTimeout(timeoutId);
@@ -145,11 +153,7 @@ const SharePopover: FC<SharePopoverProps> = ({
             '[role="menuitemradio"]',
           ) ?? [],
         )
-      : Array.from(
-          containerRef.current?.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
-          ) ?? [],
-        );
+      : getInteractiveElements(containerRef.current);
     if (scope.length === 0) return;
 
     e.preventDefault();
@@ -211,8 +215,9 @@ const SharePopover: FC<SharePopoverProps> = ({
       tabIndex={-1}
       style={cssVars}
       className={mergeClasses(
-        'flex w-[344px] flex-col outline-none',
+        'flex w-96 flex-col gap-3 rounded-xl bg-layer-raised px-6 pb-6 pt-4 shadow-lg outline-none',
         className,
+        SHARE_CLASS.popover,
       )}
       onKeyDownCapture={handleKeyDownCapture}
     >
@@ -224,88 +229,96 @@ const SharePopover: FC<SharePopoverProps> = ({
         onViewChange={setView}
       />
 
-      <div className={mergeClasses('mx-4 h-px', styles.divider)} />
+      <div className={mergeClasses('-mt-1.5 h-px w-full', styles.divider)} />
 
-      <div className="flex flex-col gap-3 px-4 py-3.5">
-        {isLoading && (
-          <LoadingSkeleton
-            ariaLabel={loadingLabel}
-            skeletonColor={colors?.skeletonColor}
+      {isLoading && (
+        <LoadingSkeleton
+          ariaLabel={loadingLabel}
+          skeletonColor={colors?.skeletonColor}
+        />
+      )}
+
+      {!isLoading && error != null && (
+        <p
+          role="alert"
+          className={mergeClasses(
+            typography?.errorClassName ?? 'dial-tiny-text',
+            'py-6 text-center',
+            styles.errorText,
+          )}
+        >
+          {errorTitle}
+        </p>
+      )}
+
+      {!isLoading && error == null && url != null && (
+        <>
+          <AccessControl
+            anyoneWithLinkTitle={anyoneWithLinkTitle}
+            anyoneWithLinkSubtitle={anyoneWithLinkSubtitle}
+            access={access}
+            canEditAccess={canEditAccess}
+            accessViewLabel={accessViewLabel}
+            accessEditLabel={accessEditLabel}
+            accessAriaLabel={accessAriaLabel}
+            isOpen={isAccessOpen}
+            onOpenChange={handleAccessOpenChange}
+            onAccessChange={onAccessChange}
+            onMenuKeyDown={handleAccessMenuKeyDown}
+            triggerRef={accessTriggerRef}
+            menuRef={accessMenuRef}
+            titleClassName={typography?.anyoneTitleClassName}
+            subtitleClassName={typography?.anyoneSubtitleClassName}
+            accessTriggerLabelClassName={
+              typography?.accessTriggerLabelClassName
+            }
           />
-        )}
-
-        {!isLoading && error != null && (
           <p
-            role="alert"
             className={mergeClasses(
-              typography?.errorClassName ?? 'dial-tiny-text',
-              'py-6 text-center',
-              styles.errorText,
+              typography?.noteClassName ?? 'dial-tiny-text',
+              styles.note,
             )}
           >
-            {errorTitle}
+            {canEditAccess && access.includes(ShareLinkAccess.Edit)
+              ? visibilityNoteEdit
+              : visibilityNote}
           </p>
-        )}
 
-        {!isLoading && error == null && url != null && (
-          <>
-            <AccessControl
-              anyoneWithLinkTitle={anyoneWithLinkTitle}
-              anyoneWithLinkSubtitle={anyoneWithLinkSubtitle}
-              access={access}
-              canEditAccess={canEditAccess}
-              accessViewLabel={accessViewLabel}
-              accessEditLabel={accessEditLabel}
-              accessAriaLabel={accessAriaLabel}
-              isOpen={isAccessOpen}
-              onOpenChange={handleAccessOpenChange}
-              onAccessChange={onAccessChange}
-              onMenuKeyDown={handleAccessMenuKeyDown}
-              triggerRef={accessTriggerRef}
-              menuRef={accessMenuRef}
-              titleClassName={typography?.anyoneTitleClassName}
-              subtitleClassName={typography?.anyoneSubtitleClassName}
-              accessTriggerLabelClassName={
-                typography?.accessTriggerLabelClassName
-              }
+          {nestedItemsNote != null && (
+            <p
+              className={mergeClasses(
+                typography?.nestedItemsNoteClassName ?? 'dial-tiny-semi-text',
+                styles.note,
+              )}
+            >
+              {nestedItemsNote}
+            </p>
+          )}
+
+          {view === SharePopoverView.Qr ? (
+            <QrCode value={url} labels={{ ariaLabel: qrCodeAriaLabel }} />
+          ) : (
+            <LinkView
+              url={url}
+              linkAriaLabel={linkAriaLabel}
+              isCopied={isCopied}
+              copyButtonLabel={copyButtonLabel}
+              copiedButtonLabel={copiedButtonLabel}
+              onCopy={copy}
             />
+          )}
+          {expiryNote != null && (
             <p
               className={mergeClasses(
                 typography?.noteClassName ?? 'dial-tiny-text',
                 styles.note,
               )}
             >
-              {canEditAccess && access.includes(ShareLinkAccess.Edit)
-                ? visibilityNoteEdit
-                : visibilityNote}
+              {expiryNote}
             </p>
-
-            {view === SharePopoverView.Qr ? (
-              <QrCode value={url} labels={{ ariaLabel: qrCodeAriaLabel }} />
-            ) : (
-              <LinkView
-                url={url}
-                linkLabel={linkLabel}
-                linkAriaLabel={linkAriaLabel}
-                isCopied={isCopied}
-                copyButtonLabel={copyButtonLabel}
-                copiedButtonLabel={copiedButtonLabel}
-                onCopy={copy}
-              />
-            )}
-            {expiryNote != null && (
-              <p
-                className={mergeClasses(
-                  typography?.noteClassName ?? 'dial-tiny-text',
-                  styles.note,
-                )}
-              >
-                {expiryNote}
-              </p>
-            )}
-          </>
-        )}
-      </div>
+          )}
+        </>
+      )}
     </div>
   );
 };

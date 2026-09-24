@@ -6,6 +6,7 @@ import {
   ActiveScheduledTaskProvider,
   useActiveScheduledTask,
 } from '../ActiveScheduledTaskContext';
+import { useFeatureFlag as mockUseFeatureFlag } from './app-config-context-mock';
 
 const contextMocks = vi.hoisted(() => ({
   pathname: '/conversations/conv1',
@@ -18,9 +19,7 @@ vi.mock('react-router', () => ({
   useLocation: () => ({ pathname: contextMocks.pathname }),
 }));
 
-vi.mock('../AppConfigContext', () => ({
-  useFeatureFlag: () => contextMocks.isFeatureEnabled,
-}));
+vi.mock('../AppConfigContext', async () => import('./app-config-context-mock'));
 
 vi.mock('../ConversationsContext', () => ({
   useConversations: () => ({
@@ -57,6 +56,7 @@ beforeEach(() => {
   contextMocks.isFeatureEnabled = true;
   contextMocks.conversations = [];
   contextMocks.isConversationsLoading = false;
+  mockUseFeatureFlag.mockImplementation(() => contextMocks.isFeatureEnabled);
   mockGetScheduledTask.mockResolvedValue(
     scheduledTask as Awaited<
       ReturnType<typeof scheduledTasksApi.getScheduledTask>
@@ -151,7 +151,7 @@ describe('ActiveScheduledTaskContext', () => {
 
   it('ignores a stale response after switching to a different scheduleId', async () => {
     contextMocks.conversations = [taskConversation()];
-    let resolveFirst: (value: typeof scheduledTask) => void;
+    let resolveFirst: ((value: typeof scheduledTask) => void) | undefined;
     const firstPromise = new Promise<typeof scheduledTask>((resolve) => {
       resolveFirst = resolve;
     });
@@ -181,7 +181,7 @@ describe('ActiveScheduledTaskContext', () => {
     await waitFor(() => expect(result.current.taskState).toBe('success'));
     expect(result.current.task).toEqual(secondTask);
 
-    resolveFirst!(scheduledTask);
+    resolveFirst?.(scheduledTask);
     await Promise.resolve();
     expect(result.current.task).toEqual(secondTask);
   });

@@ -26,6 +26,8 @@ function makeService() {
   const sdkClient = {
     configurationDeployment: vi.fn(),
     getDeploymentLimits: vi.fn(),
+    getUserLimits: vi.fn(),
+    getUserUsage: vi.fn(),
     getModel: vi.fn(),
     getApplication: vi.fn(),
     getCustomApplication: vi.fn().mockResolvedValue({
@@ -277,6 +279,100 @@ describe('DeploymentsDetailsService', () => {
     });
   });
 
+  describe('getUserLimits', () => {
+    const mockUserLimits = {
+      deployments: {
+        'gpt-4o': { dayTokenStats: { total: 10000, used: 4000 } },
+      },
+      dayCostStats: { total: 100, used: 10 },
+    };
+
+    it('returns aggregate limits from upstream', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getUserLimits.mockResolvedValue(okResponse(mockUserLimits));
+
+      const result = await service.getUserLimits('token');
+      expect(result).toEqual(mockUserLimits);
+    });
+
+    it('forwards Authorization header to DIAL Core', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getUserLimits.mockResolvedValue(okResponse(mockUserLimits));
+
+      await service.getUserLimits('my-token');
+      expect(sdkClient.getUserLimits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer my-token',
+          }),
+        }),
+      );
+    });
+
+    it('throws ServiceUnavailableException on network error', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getUserLimits.mockRejectedValue(new TypeError('fetch failed'));
+      await expect(service.getUserLimits('token')).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+    });
+
+    it('throws BadGatewayException on upstream 5xx', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getUserLimits.mockResolvedValue(errResponse(502));
+      await expect(service.getUserLimits('token')).rejects.toThrow(
+        BadGatewayException,
+      );
+    });
+  });
+
+  describe('getUserUsage', () => {
+    const mockUserUsage = {
+      deployments: {
+        'gpt-4o': { dayTokenStats: { total: 10000, used: 4000 } },
+      },
+      dayCostStats: { total: 100, used: 10 },
+    };
+
+    it('returns usage from upstream', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getUserUsage.mockResolvedValue(okResponse(mockUserUsage));
+
+      const result = await service.getUserUsage('token');
+      expect(result).toEqual(mockUserUsage);
+    });
+
+    it('forwards Authorization header to DIAL Core', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getUserUsage.mockResolvedValue(okResponse(mockUserUsage));
+
+      await service.getUserUsage('my-token');
+      expect(sdkClient.getUserUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer my-token',
+          }),
+        }),
+      );
+    });
+
+    it('throws ServiceUnavailableException on network error', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getUserUsage.mockRejectedValue(new TypeError('fetch failed'));
+      await expect(service.getUserUsage('token')).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+    });
+
+    it('throws BadGatewayException on upstream 5xx', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getUserUsage.mockResolvedValue(errResponse(502));
+      await expect(service.getUserUsage('token')).rejects.toThrow(
+        BadGatewayException,
+      );
+    });
+  });
+
   describe('getDeploymentDetails', () => {
     it('encodes each deployment path segment before calling DIAL Core', async () => {
       const { service, sdkClient } = makeService();
@@ -305,7 +401,20 @@ describe('DeploymentsDetailsService', () => {
           lifecycle_status: 'generally-available',
           tokenizer_model: 'gpt-4o',
           limits: { max_total_tokens: 128000 },
-          pricing: { unit: 'token', prompt: '0.01', completion: '0.03' },
+          pricing: {
+            unit: 'token',
+            prompt: '0.01',
+            completion: '0.03',
+            cache_read: { rate: '0.001' },
+          },
+          catalog_properties: {
+            provider: 'Provider',
+            vendor: 'Vendor',
+            license: 'License',
+            knowledgeCutoffDate: '2026-08-17',
+            parameters: '100B',
+            schemaSpecificExtra: 'not exposed',
+          },
         }),
       );
 
@@ -334,7 +443,19 @@ describe('DeploymentsDetailsService', () => {
             maxPromptTokens: undefined,
             maxCompletionTokens: undefined,
           },
-          pricing: { unit: 'token', prompt: '0.01', completion: '0.03' },
+          pricing: {
+            unit: 'token',
+            prompt: '0.01',
+            completion: '0.03',
+            cache_read: { rate: '0.001' },
+          },
+          catalogProperties: {
+            provider: 'Provider',
+            vendor: 'Vendor',
+            license: 'License',
+            knowledgeCutoffDate: '2026-08-17',
+            parameters: '100B',
+          },
         },
       });
       expect(sdkClient.getApplication).not.toHaveBeenCalled();
@@ -391,12 +512,242 @@ describe('DeploymentsDetailsService', () => {
       expect(JSON.stringify(result)).not.toContain('editor.example.com');
     });
 
+    it('maps skills_supported to features.skillsSupported in details', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getApplication.mockResolvedValue(
+        okResponse({
+          id: 'applications/my-app',
+          features: { skills_supported: true },
+        }),
+      );
+
+      const result = await service.getDeploymentDetails(
+        'user1',
+        'applications/my-app',
+        'token',
+      );
+
+      expect(result.applicationDetails?.features?.skillsSupported).toBe(true);
+    });
+
+    it('omits features.skillsSupported in details when skills_supported is absent or non-boolean', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getApplication
+        .mockResolvedValueOnce(
+          okResponse({
+            id: 'applications/my-app',
+            features: { tools: true },
+          }),
+        )
+        .mockResolvedValueOnce(
+          okResponse({
+            id: 'applications/my-app-2',
+            features: { skills_supported: 'yes' },
+          }),
+        );
+
+      /* Distinct deployment ids so the second call does not hit the
+       * details cache and actually exercises the non-boolean branch. */
+      const withoutFlag = await service.getDeploymentDetails(
+        'user1',
+        'applications/my-app',
+        'token',
+      );
+      const nonBooleanFlag = await service.getDeploymentDetails(
+        'user1',
+        'applications/my-app-2',
+        'token',
+      );
+
+      expect(
+        withoutFlag.applicationDetails?.features?.skillsSupported,
+      ).toBeUndefined();
+      expect(
+        nonBooleanFlag.applicationDetails?.features?.skillsSupported,
+      ).toBeUndefined();
+    });
+
+    it.each([undefined, {}, { stale: true }])(
+      'reads stored Quick App properties from the full application when deployment properties are %j',
+      async (deploymentProperties) => {
+        const { service, sdkClient } = makeService();
+        const id = 'applications/bucket/quick-app__1.0.0';
+        const stored = {
+          orchestrator: {
+            deployment: { deployment_id: 'model-a' },
+            system_prompt: { type: 'custom', content: 'Saved instructions' },
+          },
+          contexts: [{ type: 'file', url: 'files/bucket/data.txt' }],
+          skills: [{ type: 'dial-skill', url: 'skills/bucket/skill' }],
+          tool_sets: [
+            { type: 'dial-mcp', deployment_id: 'toolsets/bucket/toolset' },
+          ],
+          features: { timestamp: true },
+        };
+        sdkClient.getApplication.mockResolvedValue(
+          okResponse({
+            id,
+            application_properties: deploymentProperties,
+          }),
+        );
+        sdkClient.getCustomApplication.mockResolvedValue(
+          okResponse({
+            application_properties: stored,
+            features: { rate: true },
+          }),
+        );
+        const result = await service.getDeploymentDetails('user1', id, 'token');
+        expect(result.applicationDetails?.applicationProperties).toEqual(
+          stored,
+        );
+        expect(result.applicationDetails?.customAppFeatures).toEqual({
+          rate: true,
+        });
+        expect(sdkClient.getCustomApplication).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('preserves explicitly empty stored properties instead of reviving deployment properties', async () => {
+      const { service, sdkClient } = makeService();
+      const id = 'applications/bucket/empty-app__1.0.0';
+      sdkClient.getApplication.mockResolvedValue(
+        okResponse({ id, application_properties: { stale: true } }),
+      );
+      sdkClient.getCustomApplication.mockResolvedValue(
+        okResponse({ application_properties: {} }),
+      );
+      const result = await service.getDeploymentDetails('user1', id, 'token');
+      expect(result.applicationDetails?.applicationProperties).toEqual({});
+    });
+
+    it.each([undefined, null, [], 'invalid'])(
+      'retains deployment properties when full configuration has no object properties (%j)',
+      async (properties) => {
+        const { service, sdkClient } = makeService();
+        const id = 'applications/bucket/app__1.0.0';
+        sdkClient.getApplication.mockResolvedValue(
+          okResponse({ id, application_properties: { legacy: true } }),
+        );
+        sdkClient.getCustomApplication.mockResolvedValue(
+          okResponse({ application_properties: properties }),
+        );
+        const result = await service.getDeploymentDetails('user1', id, 'token');
+        expect(result.applicationDetails?.applicationProperties).toEqual({
+          legacy: true,
+        });
+      },
+    );
+
+    it("does not overwrite a Quick App's own application_properties.features with the top-level DIAL Core features JSON", async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getApplication.mockResolvedValue(
+        okResponse({
+          id: 'applications/bucket/quick-app__1.0.0',
+          application_properties: {
+            features: { timestamp: true },
+            orchestrator: { system_prompt: { type: 'custom' } },
+          },
+        }),
+      );
+      sdkClient.getCustomApplication.mockResolvedValue(
+        okResponse({
+          endpoint: 'https://quickapps.example/chat',
+          features: { rate: true, unrelatedTopLevelFlag: 'value' },
+        }),
+      );
+
+      const result = await service.getDeploymentDetails(
+        'user1',
+        'applications/bucket/quick-app__1.0.0',
+        'token',
+      );
+
+      expect(result.applicationDetails?.applicationProperties).toEqual({
+        features: { timestamp: true },
+        orchestrator: { system_prompt: { type: 'custom' } },
+      });
+      expect(result.applicationDetails?.customAppFeatures).toEqual({
+        rate: true,
+        unrelatedTopLevelFlag: 'value',
+      });
+    });
+
+    it('populates customAppFeatures from the top-level DIAL Core features JSON for a plain custom app with no application_properties', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getApplication.mockResolvedValue(
+        okResponse({ id: 'applications/bucket/plain-app__1.0.0' }),
+      );
+      sdkClient.getCustomApplication.mockResolvedValue(
+        okResponse({ features: { system_prompt: true } }),
+      );
+
+      const result = await service.getDeploymentDetails(
+        'user1',
+        'applications/bucket/plain-app__1.0.0',
+        'token',
+      );
+
+      expect(result.applicationDetails?.applicationProperties).toBeUndefined();
+      expect(result.applicationDetails?.customAppFeatures).toEqual({
+        system_prompt: true,
+      });
+    });
+
+    it('maps catalog_properties for an application, ignoring unknown/non-string keys', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getApplication.mockResolvedValue(
+        okResponse({
+          id: 'applications/als-test-catalog',
+          catalog_properties: {
+            provider: 'Provider',
+            vendor: 'Vendor',
+            license: 'License',
+            knowledgeCutoffDate: '2026-08-17',
+            parameters: '100B',
+            schemaSpecificExtra: 'not exposed',
+          },
+        }),
+      );
+
+      const result = await service.getDeploymentDetails(
+        'user1',
+        'applications/als-test-catalog',
+        'token',
+      );
+
+      expect(result.applicationDetails?.catalogProperties).toEqual({
+        provider: 'Provider',
+        vendor: 'Vendor',
+        license: 'License',
+        knowledgeCutoffDate: '2026-08-17',
+        parameters: '100B',
+      });
+    });
+
+    it('omits catalogProperties for an application when no recognized string value is present', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getApplication.mockResolvedValue(
+        okResponse({
+          id: 'applications/als-test-catalog',
+          catalog_properties: { schemaSpecificExtra: 'not exposed' },
+        }),
+      );
+
+      const result = await service.getDeploymentDetails(
+        'user1',
+        'applications/als-test-catalog',
+        'token',
+      );
+
+      expect(result.applicationDetails?.catalogProperties).toBeUndefined();
+    });
+
     it('maps display_name for an application', async () => {
       const { service, sdkClient } = makeService();
       sdkClient.getApplication.mockResolvedValue(
         okResponse({
           id: 'applications/public/finhub-via-openapi__1.0.0',
-          display_name: 'finhub-via-openapi',
+          display_name: { plainValue: 'finhub-via-openapi' },
         }),
       );
 
@@ -417,7 +768,7 @@ describe('DeploymentsDetailsService', () => {
       sdkClient.getApplication.mockResolvedValue(
         okResponse({
           id: 'applications/public/finhub-via-openapi__1.0.0',
-          display_name: 'finhub-via-openapi',
+          display_name: { plainValue: 'finhub-via-openapi' },
         }),
       );
 
@@ -516,6 +867,55 @@ describe('DeploymentsDetailsService', () => {
       });
       expect(JSON.stringify(result)).not.toContain('super-secret');
       expect(JSON.stringify(result)).toContain('public-client-id');
+    });
+
+    it('maps catalog_properties for a toolset, ignoring unknown/non-string keys', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getToolset.mockResolvedValue(
+        okResponse({
+          id: 'toolsets/ALS-OauthToolset-copy',
+          catalog_properties: {
+            provider: 'Provider',
+            vendor: 'Vendor',
+            license: 'License',
+            knowledgeCutoffDate: '2026-08-17',
+            parameters: '100B',
+            schemaSpecificExtra: 'not exposed',
+          },
+        }),
+      );
+
+      const result = await service.getDeploymentDetails(
+        'user1',
+        'toolsets/ALS-OauthToolset-copy',
+        'token',
+      );
+
+      expect(result.toolsetDetails?.catalogProperties).toEqual({
+        provider: 'Provider',
+        vendor: 'Vendor',
+        license: 'License',
+        knowledgeCutoffDate: '2026-08-17',
+        parameters: '100B',
+      });
+    });
+
+    it('omits catalogProperties for a toolset when no recognized string value is present', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getToolset.mockResolvedValue(
+        okResponse({
+          id: 'toolsets/ALS-OauthToolset-copy',
+          catalog_properties: { schemaSpecificExtra: 'not exposed' },
+        }),
+      );
+
+      const result = await service.getDeploymentDetails(
+        'user1',
+        'toolsets/ALS-OauthToolset-copy',
+        'token',
+      );
+
+      expect(result.toolsetDetails?.catalogProperties).toBeUndefined();
     });
 
     it('logs the raw DIAL Core toolset response and the mapped response, redacting client_secret/code_verifier from the raw-response log', async () => {
@@ -707,6 +1107,66 @@ describe('DeploymentsDetailsService', () => {
       await expect(
         service.getDeploymentDetails('user1', 'gpt-4o', 'token'),
       ).rejects.toThrow(ServiceUnavailableException);
+    });
+
+    it('does not cache a fetch that was invalidated (e.g. by a logout) while still in flight', async () => {
+      const { service, sdkClient, cacheManager } = makeService();
+      let resolveToolset: (value: unknown) => void = () => undefined;
+      sdkClient.getToolset.mockReturnValue(
+        new Promise((resolve) => {
+          resolveToolset = resolve;
+        }),
+      );
+      sdkClient.getToolSetTools.mockResolvedValue(okResponse({ tools: [] }));
+
+      /* Details fetch starts (e.g. panel opened) but DIAL Core hasn't replied yet. */
+      const staleRequest = service.getDeploymentDetails(
+        'user1',
+        'toolsets/search-tool',
+        'token',
+      );
+
+      /* Logout completes and invalidates the (not-yet-populated) cache entry. */
+      await service.invalidateDetailsCache('user1', 'toolsets/search-tool');
+
+      /* The post-logout refetch must not join the stale in-flight promise. */
+      sdkClient.getToolset.mockResolvedValueOnce(
+        okResponse({
+          id: 'toolsets/search-tool',
+          auth_settings: { user_level_auth_status: 'SIGNED_OUT' },
+        }),
+      );
+      const freshRequest = service.getDeploymentDetails(
+        'user1',
+        'toolsets/search-tool',
+        'token',
+      );
+
+      /* The stale upstream call finally resolves with the pre-logout state. */
+      resolveToolset(
+        okResponse({
+          id: 'toolsets/search-tool',
+          auth_settings: { user_level_auth_status: 'SIGNED_IN' },
+        }),
+      );
+
+      const [staleResult, freshResult] = await Promise.all([
+        staleRequest,
+        freshRequest,
+      ]);
+
+      expect(
+        staleResult.toolsetDetails?.authSettings?.userLevelAuthStatus,
+      ).toBe('SIGNED_IN');
+      expect(
+        freshResult.toolsetDetails?.authSettings?.userLevelAuthStatus,
+      ).toBe('SIGNED_OUT');
+      expect(sdkClient.getToolset).toHaveBeenCalledTimes(2);
+
+      const cached = await cacheManager.get(
+        'deployments:details:user1:toolsets/search-tool',
+      );
+      expect(cached).toEqual(freshResult);
     });
   });
 });

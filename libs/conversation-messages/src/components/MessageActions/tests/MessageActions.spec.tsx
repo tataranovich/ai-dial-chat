@@ -2,6 +2,7 @@ import { MessageRole } from '@epam/ai-dial-chat-shared';
 import { render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import type { MessageActionsProps } from '../../../models/message-actions';
 import { MessageActions } from '../MessageActions';
 
 describe('MessageActions', () => {
@@ -15,7 +16,7 @@ describe('MessageActions', () => {
     });
 
     it('does not render Agent action buttons', () => {
-      render(<MessageActions />);
+      render(<MessageActions onEdit={vi.fn()} />);
       expect(
         screen.queryByRole('button', { name: 'Regenerate response' }),
       ).toBeNull();
@@ -80,7 +81,9 @@ describe('MessageActions', () => {
     });
 
     it('does not render User action buttons', () => {
-      render(<MessageActions role={MessageRole.Assistant} />);
+      render(
+        <MessageActions role={MessageRole.Assistant} onRegenerate={vi.fn()} />,
+      );
       expect(screen.queryByRole('button', { name: 'Edit message' })).toBeNull();
       expect(
         screen.queryByRole('button', { name: 'Delete message' }),
@@ -146,20 +149,121 @@ describe('MessageActions', () => {
     });
   });
 
+  describe('isDisabled', () => {
+    const ASSISTANT_ACTION_NAMES = [
+      'Regenerate response',
+      'Copy response',
+      'Copy as markdown',
+      'Like response',
+      'Dislike response',
+    ];
+
+    const renderDisabledAssistantActions = (
+      props?: Partial<MessageActionsProps>,
+    ) =>
+      render(
+        <MessageActions
+          role={MessageRole.Assistant}
+          onRegenerate={vi.fn()}
+          onCopy={vi.fn()}
+          onCopyMarkdown={vi.fn()}
+          onLike={vi.fn()}
+          onDislike={vi.fn()}
+          isDisabled
+          {...props}
+        />,
+      );
+
+    it.each(ASSISTANT_ACTION_NAMES)('disables the %s button', (name) => {
+      renderDisabledAssistantActions();
+      expect(
+        screen.getByRole('button', { name }).hasAttribute('disabled'),
+      ).toBe(true);
+    });
+
+    it('does not call onRegenerate when the disabled Regenerate button is clicked', async () => {
+      const onRegenerate = vi.fn();
+      const user = userEvent.setup();
+      renderDisabledAssistantActions({ onRegenerate });
+      await user.click(
+        screen.getByRole('button', { name: 'Regenerate response' }),
+      );
+      expect(onRegenerate).not.toHaveBeenCalled();
+    });
+
+    it('does not call onLike when the disabled Like button is clicked', async () => {
+      const onLike = vi.fn();
+      const user = userEvent.setup();
+      renderDisabledAssistantActions({ onLike });
+      await user.click(screen.getByRole('button', { name: 'Like response' }));
+      expect(onLike).not.toHaveBeenCalled();
+    });
+
+    it('does not call onDislike when the disabled Dislike button is clicked', async () => {
+      const onDislike = vi.fn();
+      const user = userEvent.setup();
+      renderDisabledAssistantActions({ onDislike });
+      await user.click(
+        screen.getByRole('button', { name: 'Dislike response' }),
+      );
+      expect(onDislike).not.toHaveBeenCalled();
+    });
+
+    it('does not call onCopy when the disabled Copy button is clicked', async () => {
+      const onCopy = vi.fn();
+      const user = userEvent.setup();
+      renderDisabledAssistantActions({ onCopy });
+      await user.click(screen.getByRole('button', { name: 'Copy response' }));
+      expect(onCopy).not.toHaveBeenCalled();
+    });
+
+    it('leaves the assistant actions enabled by default', () => {
+      renderDisabledAssistantActions({ isDisabled: false });
+      ASSISTANT_ACTION_NAMES.forEach((name) => {
+        expect(
+          screen.getByRole('button', { name }).hasAttribute('disabled'),
+        ).toBe(false);
+      });
+    });
+
+    it('disables the user Edit and Delete buttons', () => {
+      render(<MessageActions onEdit={vi.fn()} onDelete={vi.fn()} isDisabled />);
+      expect(
+        screen
+          .getByRole('button', { name: 'Edit message' })
+          .hasAttribute('disabled'),
+      ).toBe(true);
+      expect(
+        screen
+          .getByRole('button', { name: 'Delete message' })
+          .hasAttribute('disabled'),
+      ).toBe(true);
+    });
+  });
+
+  it('renders nothing when no action handler is provided', () => {
+    const { container } = render(<MessageActions />);
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(container.firstElementChild).toBeNull();
+    expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
   it('merges additional className onto the wrapper element', () => {
     const { container } = render(
-      <MessageActions className="my-custom-class" />,
+      <MessageActions onEdit={vi.fn()} className="my-custom-class" />,
     );
     expect(container.firstElementChild?.className).toContain('my-custom-class');
   });
 
   it('hides actions by default (opacity-0)', () => {
-    const { container } = render(<MessageActions />);
+    const { container } = render(<MessageActions onEdit={vi.fn()} />);
     expect(container.firstElementChild?.className).toContain('opacity-0');
   });
 
   it('does not apply opacity-0 when isAlwaysVisible is true', () => {
-    const { container } = render(<MessageActions isAlwaysVisible />);
+    const { container } = render(
+      <MessageActions onEdit={vi.fn()} isAlwaysVisible />,
+    );
     expect(container.firstElementChild?.className).not.toContain('opacity-0');
   });
 });

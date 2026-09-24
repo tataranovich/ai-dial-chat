@@ -8,13 +8,13 @@ Define the versioned conversation REST API, DIAL Core persistence contract, path
 
 ### Requirement: POST /api/v1/conversations creates and persists a new conversation
 
-The backend SHALL expose `POST /api/v1/conversations` in `apps/chat-api/src/conversations/conversation.controller.ts`. The controller MUST be versioned (`version: '1'`), annotated with `@ApiTags('conversations')`, and delegate all logic to `ConversationService`. The endpoint accepts a JSON body validated by `CreateConversationDto`. On success it returns HTTP 201 with the created `Conversation`. The service generates a UUID via `crypto.randomUUID()`, constructs a `Conversation` object using the provided `deploymentId` for `model.id` and `assistantModelId`, and persists it to DIAL Core via the SDK client.
+The backend SHALL expose `POST /api/v1/conversations` in `apps/chat-api/src/conversations/conversation.controller.ts`. The controller MUST be versioned (`version: '1'`), annotated with `@ApiTags('conversations')`, and delegate all logic to `ConversationService`. The endpoint accepts a JSON body validated by `CreateConversationDto`. On success it returns HTTP 201 with the created `Conversation`. The service generates a UUID via `generateUUID()`, constructs a `Conversation` object using the provided `deploymentId` for `model.id` and `assistantModelId`, and persists it to DIAL Core via the SDK client.
 
 Request body (`CreateConversationDto`):
 
 ```
 {
-  "firstMessage": "<string, @IsString, @MaxLength(4000)>",
+  "firstMessage": "<string, @IsString, @MaxLength(50000)>",
   "deploymentId": "<string, @IsString, @MinLength(1), @MaxLength(256), @Matches(/^(?:[\w.\-:@/]|%[\dA-Fa-f]{2})+$/)>",
   "custom_content"?: "<MessageCustomContentDto, optional>"
 }
@@ -33,11 +33,9 @@ Response body (201 Created) — shape matches the `Conversation` type from `@epa
 }
 ```
 
-Rate limiting: `@Throttle({ default: { limit: 20, ttl: 60000 } })` on the handler — stricter than the global 100 req/min default.
-
 Error codes:
 
-- `400 Bad Request` — body fails DTO validation (both `firstMessage` and `custom_content` absent/empty, `firstMessage` exceeds 4000 chars, missing `deploymentId`, empty `deploymentId`, `deploymentId` exceeds 256 chars, `deploymentId` contains disallowed characters)
+- `400 Bad Request` — body fails DTO validation (both `firstMessage` and `custom_content` absent/empty, `firstMessage` exceeds 50000 chars, missing `deploymentId`, empty `deploymentId`, `deploymentId` exceeds 256 chars, `deploymentId` contains disallowed characters)
 - `401 Unauthorized` — missing or invalid bearer token
 - `500 Internal Server Error` — unexpected server-side failure
 
@@ -61,9 +59,9 @@ Error codes:
 - **WHEN** `POST /api/v1/conversations` is called with `{ "deploymentId": "dep-1" }` and no `custom_content`
 - **THEN** the response status is 400
 
-#### Scenario: firstMessage exceeding 4000 chars returns 400
+#### Scenario: firstMessage exceeding 50000 chars returns 400
 
-- **WHEN** `POST /api/v1/conversations` is called with `firstMessage` of length 4001 and a valid `deploymentId`
+- **WHEN** `POST /api/v1/conversations` is called with `firstMessage` of length 40001 and a valid `deploymentId`
 - **THEN** the response status is 400
 
 #### Scenario: Missing deploymentId returns 400
@@ -89,8 +87,8 @@ The `Conversation` and `Message` interfaces SHALL be declared in `libs/chat-shar
 
 #### Scenario: Shared types are importable in chat-api
 
-- **WHEN** `apps/chat-api` imports `Conversation` from `@epam/ai-dial-chat-shared`
-- **THEN** TypeScript resolves the type without error
+- **WHEN** `apps/chat-api` is type-checked
+- **THEN** `Conversation` imported from `@epam/ai-dial-chat-shared` resolves without error
 
 ---
 
@@ -177,20 +175,25 @@ DIAL Core's sharing mechanism grants READ access to the resource at its original
 
 `apps/chat-api/src/conversations/utils/parse-scheduled-task-conversation-path.ts` SHALL export a pure function `parseScheduledTaskConversationPath(resourceId: string): { scheduleId: string; runId: string } | null` with no dependency injection, logging, or DIAL Core client access.
 
-A conversation resource id matches the scheduler pattern **iff** the `/`-delimited segment immediately following the bucket segment is the literal `.scheduler`, followed by exactly one further `scheduleId` segment and then the conversation's own filename segment (`{deploymentId}__{title}__{runId}`) — no other segments may follow.
+A conversation resource id matches the scheduler pattern **iff** the `/`-delimited segment immediately following the bucket segment is the literal `.scheduler`, followed by a `scheduleId` segment and, after it, one or more further segments ending in the conversation's own filename segment (`{deploymentId}__{title}__{runId}`). A scheduled run of a custom-application deployment nests the filename under an extra `applications/{applicationId}/...` path (possibly with additional subfolders) between `scheduleId` and the filename; the pattern MUST match regardless of how many such intermediate segments are present, since the filename position is not fixed relative to `scheduleId`.
 
 The function SHALL:
 1. Split the id into `/`-delimited segments.
 2. Return `null` if the segment after the bucket is not exactly `.scheduler`.
-3. Return `null` unless exactly two further segments follow `.scheduler`: a candidate `scheduleId` and the conversation filename.
+3. Return `null` unless at least two further segments follow `.scheduler`: a candidate `scheduleId` and, at the end of the path, the conversation filename. Any segments between `scheduleId` and the filename (e.g. `applications/{applicationId}/...`) are permitted and are not otherwise validated by this function.
 4. Decode the candidate `scheduleId` with the existing `safeDecodeURIComponent` helper (`apps/chat-api` equivalent used elsewhere in this spec for path segments) and validate it against `^[A-Za-z0-9_-]{1,128}$` (the same allowlist used by the scheduled-tasks BFF routes — see the [scheduled-tasks-api spec](../scheduled-tasks-api/spec.md)).
-5. Decode the filename segment and extract `runId` as its trailing UUID suffix (`{deploymentId}__{title}__{runId}`), using the same UUID-suffix detection as `getConversationTitleFromName`.
-6. Return `{ scheduleId, runId }` only when `scheduleId` passes the allowlist and the filename has a trailing UUID `runId`; return `null` in every other case (missing/extra segments, empty segments, decode failure, validation failure, no UUID suffix). The function MUST NOT throw.
+5. Decode the filename segment (the last `/`-delimited segment) and extract `runId` as its trailing UUID suffix (`{deploymentId}__{title}__{runId}`), using the same UUID-suffix detection as `getConversationTitleFromName`. The segments between `scheduleId` and the filename are joined back into a folder path and passed through `isApplicationDeploymentPath` to determine whether the filename's `{deploymentId}` may carry a `{name}__{version}` suffix, exactly as `getConversationTitleFromName` requires for application-deployment filenames elsewhere in this spec.
+6. Return `{ scheduleId, runId }` only when `scheduleId` passes the allowlist and the filename has a trailing UUID `runId`; return `null` in every other case (missing segments, empty segments, decode failure, validation failure, no UUID suffix). The function MUST NOT throw.
 
 #### Scenario: Valid scheduler path returns scheduleId and runId
 
 - **WHEN** `parseScheduledTaskConversationPath("conversations/test-bucket/.scheduler/sched_abc/gpt-4o__Morning briefing__c7aeee4c-c01f-41f2-b0db-b8a1a39943f5")` is called
 - **THEN** it returns `{ scheduleId: "sched_abc", runId: "c7aeee4c-c01f-41f2-b0db-b8a1a39943f5" }`
+
+#### Scenario: Scheduled application-deployment path with a nested applications/{applicationId} folder returns scheduleId and runId
+
+- **WHEN** `parseScheduledTaskConversationPath("conversations/test-bucket/.scheduler/8433fe2f-2ac7-4880-9869-31ea70f2c822/applications/test-bucket/MY%20Outlook%20Agent__0.0.1__EPM-RTC%20Issue%20Tracker__73482c36-2ff1-40e6-a6bf-e38a63a83f2c")` is called
+- **THEN** it returns `{ scheduleId: "8433fe2f-2ac7-4880-9869-31ea70f2c822", runId: "73482c36-2ff1-40e6-a6bf-e38a63a83f2c" }`
 
 #### Scenario: Normal conversation path returns null
 
@@ -223,8 +226,10 @@ The function SHALL:
 
 The backend SHALL expose `GET /api/v1/conversations/list` in `apps/chat-api/src/conversations/conversation.controller.ts`. The endpoint is backed by DIAL Core metadata and the DIAL Core sharing API (not an in-memory store). It accepts the following query parameters validated by `ListConversationsQueryDto`:
 
-- `limit` — integer, default 100, max 1000 (`@IsInt @Min(1) @Max(1000) @IsOptional`)
+- `limit` — integer, min 1, max 1000, **no default** (`@IsInt @Min(1) @Max(1000) @IsOptional`)
 - `nextToken` — opaque pagination cursor from a previous response (`@IsString @MaxLength(512) @IsOptional`)
+
+**Two request modes.** When **both** `limit` and `nextToken` are omitted, the endpoint returns the **complete history**: the service follows DIAL Core's cursors itself, in pages of 1000 per bucket, until each bucket is exhausted, and the response carries no `nextToken`. This mirrors the file listing contract (see the [file-list spec](../file-list/spec.md)). When either parameter is present, the endpoint returns **one page per bucket** and a compound continuation cursor; the page size is `limit` when given and 100 when only `nextToken` is given.
 
 On success the endpoint returns HTTP 200 with `ConversationListResponseDto`:
 
@@ -250,11 +255,13 @@ class ConversationListResponseDto {
 ```
 
 **Four-way parallel fetch.** The service issues all of the following in a single `Promise.all`, always against the bucket root (recursive, no folder scoping):
-1. `getConversationMetadata(bucket, '', { recursive: true, limit, token: userCursor })` — user's own conversations
+1. `getConversationMetadata(bucket, '', { recursive: true, limit, permissions: true, token: userCursor })` — user's own conversations
 2. `getConversationMetadata('public', '', { recursive: true, limit, token: publicCursor })` — organisation-published conversations
 3. `getSharedResources({ body: { resourceTypes: ['CONVERSATION'], with: 'me' } })` — conversations shared directly with the user
 4. `UserConfigService.getPinnedIds(token, bucket)` — pinned conversation IDs
 5. `ScheduledTaskUnreadService.getViewedIds(token, bucket)` — viewed scheduler-created conversation IDs
+
+**Cursor following in complete-history mode.** The personal and public bucket walks are independent — each follows its own `nextToken` chain to exhaustion, so an empty intermediate page that still carries a cursor does not end that bucket's walk. Each bucket's walk keeps the set of cursors it has already requested; if DIAL Core returns a cursor that bucket has already followed, the service throws `BadGatewayException` rather than looping forever. In paged mode no cursor following happens: exactly one request per bucket is issued.
 
 Items from all three data sources are merged and sorted by `updatedAt` descending. `FOLDER` items are filtered out from bucket results. The `getSharedResources` response does not include `updatedAt`; shared items default to `updatedAt: 0`.
 
@@ -266,11 +273,9 @@ Items from all three data sources are merged and sorted by `updatedAt` descendin
 
 **Compound `nextToken`.** Pagination state is tracked independently for the user bucket and public bucket (the `getSharedResources` endpoint returns all results at once and has no cursor). The response `nextToken` format is `ct1.<base64url(JSON)>` where the JSON object has optional fields `u` (user-bucket cursor) and `p` (public-bucket cursor). An incoming token without the `ct1.` prefix is treated as a legacy user-only cursor. The response `nextToken` is omitted when neither paginated source has more results.
 
-**Resilience.** If the public bucket, shared resources, or viewed-ids call fails (throws or returns an error response), the endpoint logs a warning and continues — it still returns results from the other sources, with affected items falling back to `isUnread: true` for scheduler-created items when the viewed-ids fetch failed (fail open, so a transient error never silently hides a genuinely unread task). If the user bucket call fails, the endpoint returns the error to the client.
+**Resilience.** If the public bucket, shared resources, or viewed-ids call fails (throws or returns an error response), the endpoint logs a warning and continues — it still returns results from the other sources, with affected items falling back to `isUnread: true` for scheduler-created items when the viewed-ids fetch failed (fail open, so a transient error never silently hides a genuinely unread task). If the user bucket call fails, the endpoint returns the error to the client. In complete-history mode this applies to **every** page of the walk, not just the first: a failure on any personal-bucket page fails the whole request rather than returning a silently truncated history, and a failure on any public-bucket page drops the public contribution (including the pages already collected) while the request still succeeds.
 
 `isPinned` is populated by `UserConfigService.getPinnedIds` against the user's DIAL Core bucket. See the [user-config-api spec](../user-config-api/spec.md). `isUnread` is populated by `ScheduledTaskUnreadService.getViewedIds` against the user's DIAL Core bucket. See the `scheduled-task-unread-tracking` spec. Both fall back to `[]`/`isUnread: true` on error.
-
-Rate limiting: global default applies (no handler-level `@Throttle` override).
 
 Generated-client impact:
 - OpenAPI operationId: `listConversations`
@@ -281,7 +286,7 @@ Generated-client impact:
 Error codes:
 - `400 Bad Request` — invalid `limit` (out of range [1–1000] or non-integer) or `nextToken` exceeds 512 chars
 - `401 Unauthorized` — missing or invalid bearer token
-- `502 Bad Gateway` — user bucket DIAL Core returned an error response
+- `502 Bad Gateway` — user bucket DIAL Core returned an error response on any page of the walk, or DIAL Core repeated a cursor already followed for a bucket
 
 #### Scenario: Returns merged items from user bucket, public bucket, and shared resources
 
@@ -307,6 +312,26 @@ Error codes:
 
 - **WHEN** items from all three sources are merged
 - **THEN** the response `items` array is ordered by `updatedAt` descending (newest first)
+
+#### Scenario: Omitting limit and nextToken returns the complete history
+
+- **WHEN** `GET /api/v1/conversations/list` is called with neither `limit` nor `nextToken`, and the personal bucket holds more conversations than one 1000-item page
+- **THEN** the service follows the personal bucket's cursors until exhausted, the response `items` contain the conversations from every page, and the response `nextToken` is absent
+
+#### Scenario: Personal and public cursors are followed independently
+
+- **WHEN** complete-history mode is requested and the public bucket returns an empty page that still carries a `nextToken`
+- **THEN** the public walk continues to the next page rather than stopping, and the personal walk follows its own cursor chain unaffected
+
+#### Scenario: A failed later personal page fails the request
+
+- **WHEN** complete-history mode is requested and the personal bucket's second page returns an error
+- **THEN** the endpoint returns 502 rather than a truncated list built from the first page
+
+#### Scenario: A repeated personal-bucket cursor is rejected
+
+- **WHEN** DIAL Core returns a `nextToken` that the personal-bucket walk has already followed
+- **THEN** the service throws `BadGatewayException` instead of looping
 
 #### Scenario: Returns compound nextToken when either paginated bucket has more results
 
@@ -413,8 +438,6 @@ class RenameConversationResponseDto {
   name: string;
 }
 ```
-
-Rate limiting: `@Throttle({ default: { limit: 20, ttl: 60000 } })` on the handler.
 
 Generated-client impact:
 - OpenAPI operationId: `renameConversation`

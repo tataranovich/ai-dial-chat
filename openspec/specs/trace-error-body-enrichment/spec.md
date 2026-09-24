@@ -1,8 +1,13 @@
-## ADDED Requirements
+# trace-error-body-enrichment Specification
+
+## Purpose
+
+Carrying the active trace context in JSON error responses, without fabricating or duplicating it.
+
+## Requirements
 
 ### Requirement: JSON error responses carry the active trace context
-When a traced `chat-api` route throws and the response is serialized as a JSON error body, the
-system SHALL add a `traceparent` property to that body whenever a valid active OpenTelemetry span
+When a traced `chat-api` route throws and the response is serialized as a JSON error body, the system SHALL add a `traceparent` property to that body whenever a valid active OpenTelemetry span
 exists at response time, using the same validity check (`isSpanContextValid` on
 `trace.getSpan(context.active())`) already used to set the `traceparent` response header. The
 value SHALL be byte-identical to the value set on the response header for the same response. All
@@ -30,9 +35,8 @@ every current and future traced route is covered without additional per-endpoint
 - **THEN** the response keeps that mapped status code and message
 - **AND** its JSON body includes the same `traceparent` as the response header
 
-#### Scenario: Validation, auth, and rate-limit failures also gain traceparent
-- **WHEN** a request fails `ValidationPipe` validation, an auth/CSRF guard, or the global
-  rate limiter
+#### Scenario: Validation and auth failures also gain traceparent
+- **WHEN** a request fails `ValidationPipe` validation or an auth/CSRF guard
 - **THEN** the resulting JSON error body includes `traceparent` under the same validity rule as
   any other traced error response
 

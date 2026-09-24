@@ -24,6 +24,10 @@ export default defineConfig(() => ({
         import.meta.dirname,
         '../chat-shared/src/index.ts',
       ),
+      '@epam/ai-dial-builder-form': path.resolve(
+        import.meta.dirname,
+        '../builder-form/src/index.ts',
+      ),
     },
   },
   build: {
@@ -39,15 +43,17 @@ export default defineConfig(() => ({
       fileName: 'index',
       formats: ['es' as const],
     },
-    rollupOptions: {
+    rolldownOptions: {
       external: [
         'react',
         'react-dom',
         'react/jsx-runtime',
-        '@epam/ai-dial-ui-kit',
-        '@epam/ai-dial-kit',
+        '@epam/ai-dial-builder-form',
+        /^@epam\/ai-dial-ui-kit(?:\/|$)/,
         '@epam/ai-dial-chat-shared',
         '@tabler/icons-react',
+        '@uiw/react-markdown-preview',
+        '@uiw/react-md-editor',
       ],
     },
   },

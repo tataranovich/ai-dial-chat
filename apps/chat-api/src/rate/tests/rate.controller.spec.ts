@@ -74,6 +74,7 @@ describe('RateController (integration)', () => {
           rate: VALID_BODY.rate,
         }),
         TEST_USER.at,
+        undefined,
       );
     });
 
@@ -115,6 +116,19 @@ describe('RateController (integration)', () => {
         .post('/rate')
         .send({ ...VALID_BODY, rate: 0 })
         .expect(400);
+    });
+
+    it('returns 204 when rate is null (clearing a rating)', async () => {
+      await request(app.getHttpServer())
+        .post('/rate')
+        .send({ ...VALID_BODY, rate: null })
+        .expect(204);
+
+      expect(service.rateMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ rate: null }),
+        TEST_USER.at,
+        undefined,
+      );
     });
 
     it('returns 400 when body is empty', async () => {

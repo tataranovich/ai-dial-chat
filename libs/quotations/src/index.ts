@@ -1,6 +1,7 @@
 // Components
 export { CitationCard } from './components/CitationCard/CitationCard';
 export type {
+  CitationCardColors,
   CitationCardLabels,
   CitationCardProps,
   CitationCardTypography,
@@ -25,22 +26,41 @@ export type { CitationCardHook } from './context/CitationCardContext';
 // Hooks
 export { useAnnotations } from './utils/useAnnotations';
 export { useCitationCard } from './utils/useCitationCard';
+export { useCitationMarkdownComponents } from './hooks/useCitationMarkdownComponents/useCitationMarkdownComponents';
+export type { UseCitationMarkdownComponentsCallbacks } from './hooks/useCitationMarkdownComponents/useCitationMarkdownComponents';
 
 // Utils
-export { groupAnnotationsBySource } from './utils/group-annotations-by-source';
+export {
+  gatherSameSourceAnnotations,
+  groupAnnotations,
+  groupAnnotationsByCitId,
+  groupAnnotationsBySource,
+} from './utils/group-annotations-by-source';
 export type { AnnotationGroup } from './utils/group-annotations-by-source';
 
 export {
-  annotationsToPdfHighlights,
   annotationHighlightId,
-  normalizeRawAnnotations,
+  annotationsToPdfHighlights,
+  annotationToOfficeHighlightLocations,
+  getAnnotationPdfPage,
+  isDocxRangeSelector,
+  isExcelRcRangeSelector,
+  isPptxRangeSelector,
   resolveMessageAnnotations,
 } from './utils/annotation';
-export type { AttachmentResource } from './utils/annotation';
+export type {
+  DocxOfficeHighlightLocation,
+  DocxTableRowOfficeHighlightLocation,
+  ExcelOfficeHighlightLocation,
+  OfficeHighlightLocation,
+  PptxOfficeHighlightLocation,
+  PptxTableRowOfficeHighlightLocation,
+} from './models/office-highlight';
 
 export {
   injectCitationSentinels,
   replaceSentinelsInChildren,
+  stripCitTagsWhileStreaming,
 } from './utils/citation-injection';
 
 export {
@@ -49,3 +69,4 @@ export {
   getReferenceAttachmentGroups,
 } from './utils/reference-attachment';
 export type { PdfPageReference } from './utils/reference-attachment';
+export { QUOTATIONS_CLASS } from './constants/public-class-names';

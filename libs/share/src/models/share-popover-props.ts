@@ -6,7 +6,7 @@ export interface SharePopoverLabels {
   title?: string;
   /** QR-tab button label. Defaults to `"QR"`. */
   qrButtonLabel?: string;
-  /** Link-tab (back) button label and label above the URL input field. Defaults to `"Link"`. */
+  /** Link-tab (back) button label. Defaults to `"Link"`. */
   linkLabel?: string;
   /** Primary row text. Defaults to `"Anyone with the link"`. */
   anyoneWithLinkTitle?: string;
@@ -22,6 +22,8 @@ export interface SharePopoverLabels {
   visibilityNote?: string;
   /** Visibility note shown when access is Edit. */
   visibilityNoteEdit?: string;
+  /** Extra warning shown below the visibility note when the shared item has nested content (e.g. prompts, files) that is not shared automatically. Omitted when not supplied. */
+  nestedItemsNote?: string;
   /** Copy button default label. Defaults to `"Copy"`. */
   copyButtonLabel?: string;
   /** Copy button label after copying. Defaults to `"Copied"`. */
@@ -62,18 +64,12 @@ export interface SharePopoverColors {
   anyoneSubtitle?: string;
   /** Access-trigger chevron icon color. */
   accessChevron?: string;
-  /** Access menu item background color on hover. */
-  menuItemHover?: string;
-  /** Access menu item focus-visible ring color. */
-  menuItemFocusShadow?: string;
-  /** Access menu item background color when checked. */
-  menuItemCheckedBackground?: string;
   /** Access menu item label text color. */
   menuItemLabel?: string;
-  /** Access menu item checkmark icon color. */
-  menuItemCheck?: string;
-  /** Section heading text color (e.g. above the link input). */
-  sectionLabel?: string;
+  /** Background color of the link pill row. */
+  linkRowBackground?: string;
+  /** Share-URL text color inside the link pill row. */
+  linkText?: string;
   /** Error message text color. */
   errorText?: string;
   /** Visibility/expiry note text color. */
@@ -90,9 +86,11 @@ export interface SharePopoverTypography {
   errorClassName?: string;
   /** CSS class applied to the visibility and expiry notes. Defaults to `'dial-tiny-text'`. */
   noteClassName?: string;
+  /** CSS class applied to the nested-items warning note. Defaults to `'dial-tiny-semi-text'`. */
+  nestedItemsNoteClassName?: string;
   /** CSS class applied to the "Anyone with the link" primary text. Defaults to `'dial-small-semi-text'`. */
   anyoneTitleClassName?: string;
-  /** CSS class applied to the "Anyone with the link" secondary text. Defaults to `'dial-tiny-text'`. */
+  /** CSS class applied to the "Anyone with the link" secondary text. Defaults to `'dial-small-text'`. */
   anyoneSubtitleClassName?: string;
   /** CSS class applied to the access-trigger label. Defaults to `'dial-small-semi-text'`. */
   accessTriggerLabelClassName?: string;

@@ -10,12 +10,21 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { FeatureKey } from '../app-config/feature-flags/feature-key.enum';
 import { FeatureGuard } from '../app-config/feature-flags/feature.guard';
 import { RequireFeature } from '../app-config/feature-flags/require-feature.decorator';
 import type { SessionUser } from '../auth/session/session.types';
+import {
+  SSE_DRAIN_TIMEOUT_MS,
+  startSseResponse,
+  waitForDrain,
+  writeSseChunk,
+} from '../common/utils/sse';
+import {
+  SseSubscriptionKind,
+  trackSseSubscription,
+} from '../telemetry/runtime-metrics';
 import { ClientChannelService } from './client-channel.service';
 import {
   assertValidChannelId,
@@ -36,7 +45,6 @@ export class ClientChannelController {
   @UseGuards(FeatureGuard)
   @RequireFeature(FeatureKey.LiveChatInteraction)
   @HttpCode(200)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({
     operationId: 'subscribeClientChannel',
     summary: 'Subscribe to the DIAL Core client channel',
@@ -79,55 +87,102 @@ export class ClientChannelController {
     const validReconnectChannelId =
       assertValidOptionalChannelId(reconnectChannelId);
     const abortController = new AbortController();
-
-    const { stream, channelId } = await this.clientChannelService.subscribe(
-      at,
-      validReconnectChannelId,
-      abortController.signal,
+    const finishSubscription = trackSseSubscription(
+      SseSubscriptionKind.ClientChannel,
     );
 
-    res.setHeader(CHANNEL_ID_HEADER, channelId);
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    const reader = stream.getReader();
     let isClientAborted = false;
     let isReaderReleased = false;
+    let activeChannelId = validReconnectChannelId;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
     const handleClose = () => {
       isClientAborted = true;
       abortController.abort();
-      if (!isReaderReleased) {
+      this.logger.debug(
+        `Client-channel browser connection closed — channel: ${activeChannelId ?? 'pending'}, upstream abort signalled: ${abortController.signal.aborted}`,
+      );
+      if (reader && !isReaderReleased) {
         void reader.cancel().catch(() => undefined);
       }
     };
     res.on('close', handleClose);
 
     try {
-      while (true) {
-        if (isClientAborted) break;
+      this.logger.debug('[timing] subscribe request received by BFF');
+      const { stream, channelId } = await this.clientChannelService.subscribe(
+        at,
+        validReconnectChannelId,
+        abortController.signal,
+      );
+      activeChannelId = channelId;
+      this.logger.debug(
+        `[timing] subscribe request headers about to flush — channelId: ${channelId}`,
+      );
 
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        res.write(value);
-      }
-    } catch (err) {
-      if (!isClientAborted) {
-        this.logger.error(
-          'Error while relaying client-channel events to browser',
-          err,
+      if (isClientAborted) {
+        await stream.cancel().catch(() => undefined);
+        this.logger.debug(
+          `Client-channel late subscription cleanup finished — channel: ${channelId}`,
         );
+        return;
+      }
+
+      res.setHeader(CHANNEL_ID_HEADER, channelId);
+      startSseResponse(res);
+
+      reader = stream.getReader();
+
+      try {
+        while (true) {
+          if (isClientAborted) break;
+
+          const { done, value } = await reader.read();
+          if (done) {
+            this.logger.debug(
+              `Client-channel upstream reader finished — channel: ${channelId}, client aborted: ${isClientAborted}`,
+            );
+            break;
+          }
+
+          const { needsDrain } = writeSseChunk(res, value);
+          if (needsDrain) {
+            const outcome = await waitForDrain(
+              res,
+              abortController.signal,
+              SSE_DRAIN_TIMEOUT_MS,
+            );
+            if (outcome === 'timeout') {
+              this.logger.debug(
+                `Client-channel SSE drain timed out — channel: ${channelId}, cancelling upstream reader`,
+              );
+              isClientAborted = true;
+              void reader.cancel().catch(() => undefined);
+              break;
+            }
+            if (outcome === 'aborted') break;
+          }
+        }
+      } catch (err) {
+        if (!isClientAborted) {
+          this.logger.error(
+            'Error while relaying client-channel events to browser',
+            err,
+          );
+        }
+      } finally {
+        isReaderReleased = true;
+        reader.releaseLock();
+        if (!res.writableEnded) {
+          res.end();
+        }
       }
     } finally {
       res.off('close', handleClose);
-      isReaderReleased = true;
-      reader.releaseLock();
-      if (!res.writableEnded) {
-        res.end();
-      }
+      finishSubscription();
+      this.logger.debug(
+        `Client-channel SSE relay cleanup finished — channel: ${activeChannelId ?? 'pending'}, client aborted: ${isClientAborted}, upstream abort signalled: ${abortController.signal.aborted}, reader released: ${isReaderReleased}, response ended: ${res.writableEnded}, response destroyed: ${res.destroyed}`,
+      );
     }
   }
 
@@ -135,7 +190,6 @@ export class ClientChannelController {
   @UseGuards(FeatureGuard)
   @RequireFeature(FeatureKey.LiveChatInteraction)
   @HttpCode(200)
-  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({
     operationId: 'reportClientChannel',
     summary: 'Report an RPC response on the client channel',
@@ -159,7 +213,6 @@ export class ClientChannelController {
     status: 403,
     description: 'The liveChatInteraction feature is not enabled for this user',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -182,13 +235,13 @@ export class ClientChannelController {
    */
   @Post('unsubscribe')
   @HttpCode(200)
-  @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({
     operationId: 'unsubscribeClientChannel',
     summary: 'Unsubscribe from the client channel',
     description:
-      'Closes the given client channel on DIAL Core. Treats an already-gone ' +
-      'channel (404) as idempotent success.',
+      'Closes the given client channel on DIAL Core and returns its HTTP ' +
+      'status unchanged with an empty body, including 404 for an already-gone ' +
+      'channel. Returns 503 if Core cannot be reached.',
   })
   @ApiHeader({
     name: CHANNEL_ID_HEADER,
@@ -196,17 +249,40 @@ export class ClientChannelController {
     description: 'The active client channel id to close.',
   })
   @ApiResponse({ status: 200, description: 'Unsubscribed successfully' })
+  @ApiResponse({ status: 204, description: 'DIAL Core returned no content' })
   @ApiResponse({
     status: 400,
-    description: 'Missing or invalid channel id header',
+    description:
+      'Missing or invalid channel id header, or Core rejected the request',
   })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
+  @ApiResponse({ status: 403, description: 'DIAL Core denied access' })
+  @ApiResponse({ status: 404, description: 'DIAL Core channel does not exist' })
+  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
+  @ApiResponse({
+    status: 500,
+    description: 'DIAL Core returned a server error',
+  })
+  @ApiResponse({
+    status: 502,
+    description: 'DIAL Core returned a gateway error',
+  })
+  @ApiResponse({ status: 503, description: 'DIAL Core is unavailable' })
+  @ApiResponse({
+    status: 'default',
+    description: 'HTTP status returned by DIAL Core, with an empty body',
+  })
   async unsubscribe(
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
     @Headers(CHANNEL_ID_HEADER) channelId: string | undefined,
   ): Promise<void> {
     const { at } = req.user as SessionUser;
     const validChannelId = assertValidChannelId(channelId);
-    await this.clientChannelService.unsubscribe(at, validChannelId);
+    const status = await this.clientChannelService.unsubscribe(
+      at,
+      validChannelId,
+    );
+    res.status(status);
   }
 }

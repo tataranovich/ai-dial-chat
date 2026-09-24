@@ -1,0 +1,293 @@
+import {
+  mergeClasses,
+  RESIZABLE_TEXTAREA_CLASS_NAME,
+} from '@epam/ai-dial-chat-shared';
+import {
+  ButtonAppearance,
+  ButtonVariant,
+  DangerIconButton,
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  ElementSize,
+  Input,
+  LinkButton,
+  Popup,
+  Select,
+  Textarea,
+  TextareaResize,
+} from '@epam/ai-dial-ui-kit';
+import { IconPlus, IconTrashX } from '@tabler/icons-react';
+import { useEffect, useRef, useState, type FC } from 'react';
+import type {
+  DeploymentCreationFormLocaleEntry,
+  DeploymentCreationFormLocaleLabels,
+  DeploymentCreationFormLocaleOption,
+} from '../../models/deployment-creation-form';
+
+/** Props accepted by the `DeploymentLocalesField` component. */
+export interface DeploymentLocalesFieldProps {
+  /** Current list of additional (non-primary) locale entries. */
+  value: DeploymentCreationFormLocaleEntry[];
+  /** Called with the full updated list when the user saves changes in the popup. */
+  onChange: (entries: DeploymentCreationFormLocaleEntry[]) => void;
+  /** Selectable language options for new/existing rows. Defaults to an empty list, in which case the whole control renders nothing. */
+  availableLocaleOptions?: DeploymentCreationFormLocaleOption[];
+  /** Pre-translated labels for the summary row and popup. */
+  labels: DeploymentCreationFormLocaleLabels;
+  /** Class applied to the summary row container. */
+  className?: string;
+  /** Typography and color class applied to the summary text. Defaults to `'dial-body-text text-secondary'`. */
+  summaryClassName?: string;
+  /** Typography and color class applied to each row's heading. Defaults to `'dial-tiny-lead-text text-secondary'`, which uppercases the label itself. */
+  rowLabelClassName?: string;
+}
+
+const createEmptyRow = (
+  id: string,
+  usedLanguages: ReadonlySet<string>,
+  availableLocaleOptions: DeploymentCreationFormLocaleOption[],
+): DeploymentCreationFormLocaleEntry => ({
+  id,
+  language:
+    availableLocaleOptions.find((option) => !usedLanguages.has(option.code))
+      ?.code ?? '',
+  name: '',
+  description: '',
+});
+
+/** Summary row ("Locales: [DE]  Edit locales") plus the "Add locale" popup for editing additional name/description translations. Shows "Add locales" instead of "Edit locales" until at least one entry exists, and renders nothing at all when `availableLocaleOptions` is empty. */
+export const DeploymentLocalesField: FC<DeploymentLocalesFieldProps> = ({
+  value,
+  onChange,
+  availableLocaleOptions = [],
+  labels,
+  className,
+  summaryClassName = 'dial-body-text text-secondary',
+  rowLabelClassName = 'dial-tiny-lead-text text-secondary',
+}) => {
+  const {
+    summaryLabel,
+    addLabel,
+    editLabel,
+    popupTitle,
+    addLocaleLabel,
+    localeRowLabel = 'Locale',
+    languageLabel,
+    nameLabel,
+    namePlaceholder,
+    descriptionLabel,
+    descriptionPlaceholder,
+    deleteAriaLabel,
+    cancelLabel = 'Cancel',
+    saveLabel = 'Save',
+  } = labels;
+
+  const [isOpen, setIsOpen] = useState(false);
+  const [draftEntries, setDraftEntries] = useState<
+    DeploymentCreationFormLocaleEntry[]
+  >([]);
+
+  const nextRowIdRef = useRef(0);
+
+  useEffect(() => {
+    if (isOpen) {
+      setDraftEntries(
+        value.length > 0
+          ? value
+          : [
+              createEmptyRow(
+                `locale-row-${++nextRowIdRef.current}`,
+                new Set(),
+                availableLocaleOptions,
+              ),
+            ],
+      );
+    }
+  }, [isOpen, value, availableLocaleOptions]);
+
+  const handleOpen = (): void => setIsOpen(true);
+  const handleCancel = (): void => setIsOpen(false);
+
+  const handleSave = (): void => {
+    onChange(draftEntries.filter((entry) => entry.language && entry.name));
+    setIsOpen(false);
+  };
+
+  const handleAddRow = (): void => {
+    const usedLanguages = new Set(
+      draftEntries.map((entry) => entry.language).filter(Boolean),
+    );
+    setDraftEntries((prev) => [
+      ...prev,
+      createEmptyRow(
+        `locale-row-${++nextRowIdRef.current}`,
+        usedLanguages,
+        availableLocaleOptions,
+      ),
+    ]);
+  };
+
+  const handleRowChange = (
+    id: string,
+    patch: Partial<Omit<DeploymentCreationFormLocaleEntry, 'id'>>,
+  ): void => {
+    setDraftEntries((prev) =>
+      prev.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)),
+    );
+  };
+
+  const handleRowDelete = (id: string): void => {
+    setDraftEntries((prev) => prev.filter((entry) => entry.id !== id));
+  };
+
+  const localeLabel = (code: string): string =>
+    availableLocaleOptions.find((option) => option.code === code)?.label ??
+    code.toUpperCase();
+
+  const isSaveDisabled = draftEntries.some(
+    (entry) => !entry.language || !entry.name,
+  );
+
+  /*
+   * With no selectable language there is nothing the popup could ever produce:
+   * every row would be missing its required language, so Save would stay
+   * permanently disabled with no way for the user to satisfy it. Render no
+   * control at all rather than an unusable one. `value` is left untouched —
+   * `onChange` never fires from here, so already-stored locales survive.
+   */
+  if (availableLocaleOptions.length === 0) return null;
+
+  return (
+    <div className={mergeClasses('flex items-center gap-2', className)}>
+      {value.length > 0 && (
+        <span className={summaryClassName}>
+          {`${summaryLabel}: ${value.map((entry) => `[${localeLabel(entry.language)}]`).join(', ')}`}
+        </span>
+      )}
+      <LinkButton
+        label={value.length > 0 ? editLabel : addLabel}
+        iconBefore={
+          <IconPlus
+            size={DIAL_ICON_SIZE.SM}
+            aria-hidden
+            stroke={DIAL_KIT_ICON_STROKE}
+          />
+        }
+        className="!px-0"
+        onClick={handleOpen}
+      />
+
+      <Popup
+        open={isOpen}
+        header={popupTitle}
+        onClose={handleCancel}
+        mainButtons={[
+          { label: cancelLabel, onClick: handleCancel },
+          {
+            label: saveLabel,
+            variant: ButtonVariant.Primary,
+            disabled: isSaveDisabled,
+            onClick: handleSave,
+          },
+        ]}
+      >
+        <div className="flex flex-col gap-8 px-6 py-3">
+          {draftEntries.map((entry, index) => {
+            const usedByOtherRows = new Set(
+              draftEntries
+                .filter((other) => other.id !== entry.id)
+                .map((other) => other.language)
+                .filter(Boolean),
+            );
+
+            return (
+              <div key={entry.id} className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className={rowLabelClassName}>
+                    {localeRowLabel} {index + 1}
+                  </span>
+                  <DangerIconButton
+                    appearance={ButtonAppearance.Ghost}
+                    size={ElementSize.Small}
+                    icon={
+                      <IconTrashX
+                        size={DIAL_ICON_SIZE.SM}
+                        aria-hidden
+                        stroke={DIAL_KIT_ICON_STROKE}
+                      />
+                    }
+                    aria-label={`${deleteAriaLabel} ${index + 1}`}
+                    onClick={() => handleRowDelete(entry.id)}
+                  />
+                </div>
+
+                <div
+                  role="group"
+                  aria-label={`${localeRowLabel} ${index + 1}`}
+                  className="flex flex-col gap-5"
+                >
+                  <div className="flex flex-col gap-5 desktop:flex-row desktop:items-start">
+                    <Select
+                      id={`${entry.id}-language`}
+                      labelProps={{ label: languageLabel, required: true }}
+                      /* Full width when stacked; on one row, wide enough for a full BCP-47 tag ("PT-BR") plus the chevron. */
+                      className="desktop:shrink-0 desktop:basis-40"
+                      options={availableLocaleOptions.map((option) => ({
+                        value: option.code,
+                        label: option.label,
+                        disabled: usedByOtherRows.has(option.code),
+                      }))}
+                      value={entry.language}
+                      onChange={(next) =>
+                        handleRowChange(entry.id, {
+                          language: next as string,
+                        })
+                      }
+                    />
+
+                    <Input
+                      id={`${entry.id}-name`}
+                      containerClassName="min-w-0 flex-1"
+                      required
+                      value={entry.name}
+                      onChange={(next) =>
+                        handleRowChange(entry.id, { name: next ?? '' })
+                      }
+                      labelProps={{ label: nameLabel, required: true }}
+                      placeholder={namePlaceholder}
+                    />
+                  </div>
+
+                  <Textarea
+                    id={`${entry.id}-description`}
+                    className={RESIZABLE_TEXTAREA_CLASS_NAME}
+                    resize={TextareaResize.Vertical}
+                    value={entry.description}
+                    onChange={(next) =>
+                      handleRowChange(entry.id, { description: next })
+                    }
+                    labelProps={{ label: descriptionLabel }}
+                    placeholder={descriptionPlaceholder}
+                  />
+                </div>
+              </div>
+            );
+          })}
+          <LinkButton
+            label={addLocaleLabel}
+            iconBefore={
+              <IconPlus
+                size={DIAL_ICON_SIZE.SM}
+                aria-hidden
+                stroke={DIAL_KIT_ICON_STROKE}
+              />
+            }
+            className="self-start"
+            onClick={handleAddRow}
+            disabled={draftEntries.length >= availableLocaleOptions.length}
+          />
+        </div>
+      </Popup>
+    </div>
+  );
+};

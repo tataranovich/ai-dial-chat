@@ -1,9 +1,9 @@
+import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { render, screen } from '@testing-library/react';
 import type { ICellRendererParams } from 'ag-grid-community';
 import { describe, expect, it } from 'vitest';
 import type { CatalogItem } from '../../../../models/catalog-item';
 import type { GridContext } from '../../../../models/grid-context';
-import { CatalogEntityType } from '../../../../types/entity-type';
 import { FolderCellRenderer } from '../FolderCellRenderer';
 
 const makeItem = (overrides: Partial<CatalogItem> = {}): CatalogItem => ({
@@ -31,6 +31,8 @@ describe('FolderCellRenderer', () => {
     const { container } = render(
       <FolderCellRenderer {...makeParams(undefined)} />,
     );
+    // Component renders null; no semantic query can assert total absence of output.
+    // eslint-disable-next-line testing-library/no-node-access
     expect(container.firstChild).toBeNull();
   });
 
@@ -38,17 +40,40 @@ describe('FolderCellRenderer', () => {
     const { container } = render(
       <FolderCellRenderer {...makeParams(makeItem({ folder: [] }))} />,
     );
+    // Component renders null; no semantic query can assert total absence of output.
+    // eslint-disable-next-line testing-library/no-node-access
     expect(container.firstChild).toBeNull();
     expect(screen.queryByText('—')).toBeNull();
   });
 
-  it('renders the folder path when the item belongs to a folder', () => {
+  it('shows the deepest folder, not the squeezed full path', () => {
     render(
       <FolderCellRenderer
-        {...makeParams(makeItem({ folder: ['Team', 'Shared'] }))}
+        {...makeParams(
+          makeItem({ folder: ['Organization', 'public', 'prompts'] }),
+        )}
       />,
     );
-    expect(screen.getByText('Shared')).toBeTruthy();
+    expect(screen.getByText('prompts')).toBeTruthy();
+    expect(screen.queryByText('Organization')).toBeNull();
     expect(screen.queryByText('—')).toBeNull();
+  });
+
+  it('keeps the whole path reachable for assistive tech', () => {
+    render(
+      <FolderCellRenderer
+        {...makeParams(
+          makeItem({ folder: ['Organization', 'public', 'prompts'] }),
+        )}
+      />,
+    );
+    expect(screen.getByText('Organization / public / prompts')).toBeTruthy();
+  });
+
+  it('does not repeat a single-segment path', () => {
+    render(
+      <FolderCellRenderer {...makeParams(makeItem({ folder: ['Shared'] }))} />,
+    );
+    expect(screen.getAllByText('Shared')).toHaveLength(1);
   });
 });

@@ -24,19 +24,18 @@ const renderProviders = (
   signInLabel: string,
 ) => (
   <>
-    <p className="text-center text-base text-primary">{signInLabel}</p>
+    <p className="dial-body-text text-center text-primary">{signInLabel}</p>
     <div className="flex w-full flex-col gap-3">
       {providers.map((provider) => {
         const href = `/api/v1/auth/login/${encodeURIComponent(provider.id)}?callbackUrl=${encodeURIComponent(callbackUrl)}`;
         return (
-          <a key={provider.id} href={href} className="w-full">
-            <NeutralButton
-              className="w-full"
-              tabIndex={-1}
-              iconBefore={<ProviderIcon providerId={provider.id} />}
-              label={provider.label}
-            />
-          </a>
+          <NeutralButton
+            key={provider.id}
+            href={href}
+            className="w-full"
+            iconBefore={<ProviderIcon providerId={provider.id} />}
+            label={provider.label}
+          />
         );
       })}
     </div>
@@ -93,16 +92,16 @@ const LoginPage: FC = () => {
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-layer-sunken mobile:bg-layer-raised mobile:px-6">
       <div
-        className="pointer-events-none absolute inset-0 size-full mobile:hidden"
+        className="pointer-events-none absolute inset-0 size-full"
         aria-hidden="true"
       >
         <picture className="block size-full">
-          <source media="(min-width: 1920px)" srcSet="/1920_login.png" />
-          <img src="/768_login.png" alt="" className="size-full object-cover" />
+          <source media="(min-width: 1920px)" srcSet="/1920_login.svg" />
+          <img src="/768_login.svg" alt="" className="size-full object-cover" />
         </picture>
       </div>
 
-      <div className="relative mx-6 flex flex-col items-center gap-12 overflow-hidden rounded-xl bg-overlay p-16 mobile:mx-0 mobile:mt-10 mobile:w-full mobile:rounded-none mobile:bg-transparent mobile:p-0">
+      <div className="relative mx-6 flex flex-col items-center gap-12 overflow-hidden rounded-xl bg-layer-raised p-16 mobile:mx-0 mobile:mt-10 mobile:w-full mobile:rounded-none mobile:bg-transparent mobile:p-0">
         {currentThemeFavicon && (
           <span
             style={{

@@ -1,4 +1,5 @@
-import { Spinner, NotificationVariant } from '@epam/ai-dial-ui-kit';
+import { getApiErrorDetails } from '@epam/ai-dial-chat-hooks';
+import { Spinner } from '@epam/ai-dial-ui-kit';
 import {
   createContext,
   type ReactNode,
@@ -10,7 +11,6 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { UserConfigI18nKeys } from '../constants/translation-keys';
-import { getApiErrorDetails } from '../server-api/api-error';
 import {
   getUserConfig,
   pinConversation as apiPinConversation,
@@ -40,7 +40,7 @@ const UserConfigContext = createContext<UserConfigContextType | undefined>(
 
 export const UserConfigProvider = ({ children }: { children: ReactNode }) => {
   const { t } = useTranslation();
-  const { showNotification } = useNotification();
+  const { showErrorNotification } = useNotification();
   const { user } = useUser();
   const userSub = user?.sub;
 
@@ -86,8 +86,7 @@ export const UserConfigProvider = ({ children }: { children: ReactNode }) => {
         if (guard.isCancelled) return;
         console.error('[UserConfigContext] Failed to load user config', err);
         const { traceId } = await getApiErrorDetails(err);
-        showNotification({
-          variant: NotificationVariant.Error,
+        showErrorNotification({
           message: t(UserConfigI18nKeys.LoadError),
           requestId: traceId,
         });

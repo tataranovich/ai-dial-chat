@@ -1,3 +1,4 @@
+import type { EditorThemes } from '@epam/ai-dial-ui-kit';
 import type { ReactNode } from 'react';
 import type { ScheduledTaskRepeat } from '../types/scheduled-task-schedule';
 
@@ -83,12 +84,14 @@ export interface ScheduledTaskCreateFormLabels {
   displayNameRequired: string;
   /** Run-at field label (shown when `repeat` is "oneTime"). */
   runAtLabel: string;
+  /** Time-of-day field label (shown when `repeat` is "daily", "weekly", or "monthly"). */
+  timeLabel: string;
+  /** Validation message shown under the time field when its visible draft is not a complete `HH:mm` value. */
+  timeInvalidLabel: string;
   /** Accessible label for the Repeat dropdown. */
   repeatLabel: string;
   /** Options rendered in the Repeat dropdown. */
   repeatOptions: ScheduledTaskRepeatOption[];
-  /** Time field label (shown when `repeat` is "daily", "weekly", or "monthly"). */
-  timeLabel: string;
   /** Day-of-week field label (shown when `repeat` is "weekly"). */
   dayOfWeekLabel: string;
   /** Day-of-month field label (shown when `repeat` is "monthly"). */
@@ -109,10 +112,14 @@ export interface ScheduledTaskCreateFormLabels {
   descriptionLabel: string;
   /** Accessible label for the Instructions markdown editor. */
   instructionsLabel: string;
+  /** Optional placeholder forwarded to the Instructions editor. */
+  instructionsPlaceholder?: string;
   /** Label for the Cancel action. */
   cancelButtonLabel: string;
   /** Label for the Save action (submits the create form). */
   createButtonLabel: string;
+  /** Accessible name for the Save action's busy indicator, announced while `isSubmitting` is `true`. Defaults to `'Saving'`. */
+  submittingLabel?: string;
 }
 
 /**
@@ -152,6 +159,8 @@ export interface ScheduledTaskCreateFormStyles {
   colors?: ScheduledTaskCreateFormColors;
   /** Typography class overrides. */
   typography?: ScheduledTaskCreateFormTypography;
+  /** Layout values scoped to this form instance. */
+  layout?: { detailsWidth?: string; columnGap?: string };
 }
 
 /** Props for the {@link ScheduledTaskCreateForm} component. */
@@ -188,8 +197,12 @@ export interface ScheduledTaskCreateFormProps {
   onSubmit: () => void;
   /** When `true`, the Save action is disabled and shows a busy affordance. Defaults to `false`. */
   isSubmitting?: boolean;
-  /** Color theme applied to the Instructions markdown editor. Defaults to the editor's own default (`'dark'`). */
-  markdownEditorTheme?: 'light' | 'dark';
+  /** Color theme applied to the Instructions markdown editor. Defaults to the editor's own default (`EditorThemes.light`). */
+  markdownEditorTheme?: EditorThemes;
+  /** Optional replacement for the default back icon. */
+  backIcon?: ReactNode;
+  /** Additional class name on the form root. */
+  className?: string;
   /** Style overrides. */
   styles?: ScheduledTaskCreateFormStyles;
 }

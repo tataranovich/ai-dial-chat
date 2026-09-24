@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EnvironmentVariables } from '../../../config/environment.config';
 import type { DialClientService } from '../../../dial/dial-client.service';
+import { DeploymentItemType } from '../../dto/deployment-item.dto';
 import type { DeploymentItemDto } from '../../dto/deployment-item.dto';
 import { DeploymentInterfaceType } from '../../dto/deployments-query.dto';
 import { DeploymentsListingService } from '../deployments-listing.service';
@@ -158,7 +159,7 @@ describe('DeploymentsListingService', () => {
 
     it('returns cached value without calling SDK on cache hit', async () => {
       const cached: DeploymentItemDto[] = [
-        { id: 'cached', displayName: 'Cached', type: 'model' },
+        { id: 'cached', displayName: 'Cached', type: DeploymentItemType.Model },
       ];
       const { service, sdkClient } = makeService({ cached });
       const result = await service.listDeployments(
@@ -172,7 +173,7 @@ describe('DeploymentsListingService', () => {
 
     it('bypasses cached deployments when refresh is true', async () => {
       const cached: DeploymentItemDto[] = [
-        { id: 'cached', displayName: 'Cached', type: 'model' },
+        { id: 'cached', displayName: 'Cached', type: DeploymentItemType.Model },
       ];
       const { service, sdkClient } = makeService({ cached });
       sdkClient.listDeployments.mockResolvedValue({
@@ -198,16 +199,16 @@ describe('DeploymentsListingService', () => {
         {
           id: 'chat-model',
           displayName: 'Chat',
-          type: 'model',
+          type: DeploymentItemType.Model,
           interfaces: ['chat'],
         },
         {
           id: 'embed-model',
           displayName: 'Embed',
-          type: 'model',
+          type: DeploymentItemType.Model,
           interfaces: ['embedding'],
         },
-        { id: 'no-iface', displayName: 'None', type: 'model' },
+        { id: 'no-iface', displayName: 'None', type: DeploymentItemType.Model },
       ];
       const { service } = makeService({ cached });
       const result = await service.listDeployments(
@@ -240,6 +241,38 @@ describe('DeploymentsListingService', () => {
           },
         }),
       );
+    });
+
+    it('forwards the job title in the X-JOB-TITLE header on cache miss', async () => {
+      const { service, sdkClient } = makeService();
+
+      await service.listDeployments(
+        'user1',
+        'token',
+        'bucket-1',
+        undefined,
+        false,
+        'Lead Software Engineer',
+      );
+
+      expect(sdkClient.listDeployments).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'X-JOB-TITLE': 'Lead Software Engineer',
+          }),
+        }),
+      );
+    });
+
+    it('omits the X-JOB-TITLE header when no job title is provided', async () => {
+      const { service, sdkClient } = makeService();
+
+      await service.listDeployments('user1', 'token', 'bucket-1');
+
+      const call = sdkClient.listDeployments.mock.calls[0][0] as {
+        headers: Record<string, string>;
+      };
+      expect(call.headers).not.toHaveProperty('X-JOB-TITLE');
     });
 
     it('maps application_type_schema_id to applicationTypeSchemaId for application deployments', async () => {
@@ -447,7 +480,7 @@ describe('DeploymentsListingService', () => {
 
     it('overlays isInstalled after cache hit', async () => {
       const cached: DeploymentItemDto[] = [
-        { id: 'gpt-4o', displayName: 'GPT-4o', type: 'model' },
+        { id: 'gpt-4o', displayName: 'GPT-4o', type: DeploymentItemType.Model },
       ];
       const { service } = makeService({
         cached,
@@ -618,6 +651,89 @@ describe('DeploymentsListingService', () => {
 
       expect(result.deployments[0].features?.chatCompletion).toBe(true);
     });
+
+    it('maps features.skillsSupported true for a model with skills_supported support', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.listDeployments.mockResolvedValue({
+        error: false,
+        response: { status: 200 },
+        data: [{ ...mockModel, features: { skills_supported: true } }],
+      });
+
+      const result = await service.listDeployments(
+        'user1',
+        'token',
+        'bucket-1',
+      );
+
+      expect(result.deployments[0].features?.skillsSupported).toBe(true);
+    });
+
+    it('maps features.skillsSupported true for an application with skills_supported support', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.listDeployments.mockResolvedValue({
+        error: false,
+        response: { status: 200 },
+        data: [{ ...mockApplication, features: { skills_supported: true } }],
+      });
+
+      const result = await service.listDeployments(
+        'user1',
+        'token',
+        'bucket-1',
+      );
+
+      expect(result.deployments[0].features?.skillsSupported).toBe(true);
+    });
+
+    it('omits features.skillsSupported when skills_supported is absent or non-boolean', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.listDeployments.mockResolvedValue({
+        error: false,
+        response: { status: 200 },
+        data: [
+          { ...mockModel, features: { system_prompt: true } },
+          { ...mockApplication, features: { skills_supported: 'yes' } },
+        ],
+      });
+
+      const result = await service.listDeployments(
+        'user1',
+        'token',
+        'bucket-1',
+      );
+
+      expect(result.deployments[0].features?.skillsSupported).toBeUndefined();
+      expect(result.deployments[1].features?.skillsSupported).toBeUndefined();
+    });
+
+    it('maps differing skills_supported values without changing list caching', async () => {
+      const { service, sdkClient, cacheManager } = makeService();
+      sdkClient.listDeployments.mockResolvedValue({
+        error: false,
+        response: { status: 200 },
+        data: [
+          { ...mockModel, features: { skills_supported: true } },
+          { ...mockApplication, features: { tools: true } },
+        ],
+      });
+
+      const result = await service.listDeployments(
+        'user1',
+        'token',
+        'bucket-1',
+      );
+
+      expect(result.deployments).toHaveLength(2);
+      expect(result.deployments[0].features?.skillsSupported).toBe(true);
+      expect(result.deployments[1].features?.skillsSupported).toBeUndefined();
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        'deployments:list:user1',
+        expect.any(Array),
+        30_000,
+      );
+    });
+
     it('maps features.mcp true for an MCP-capable application', async () => {
       const { service, sdkClient } = makeService();
       sdkClient.listDeployments.mockResolvedValue({
@@ -804,7 +920,7 @@ describe('DeploymentsListingService', () => {
         {
           id: 'applications/BUCKET_HASH/my-app',
           displayName: 'My App',
-          type: 'application',
+          type: DeploymentItemType.Application,
           isMy: false,
         },
       ];
@@ -1083,7 +1199,7 @@ describe('DeploymentsListingService', () => {
       );
     });
 
-    it('resolves canEdit, sharedWithMe and recipientsCount from exactly two getSharedResources calls, both scoped to APPLICATION', async () => {
+    it('resolves canEdit and sharedWithMe from exactly one getSharedResources call scoped to APPLICATION', async () => {
       const { service, sdkClient } = makeService();
       sdkClient.listDeployments.mockResolvedValue({
         error: false,
@@ -1106,13 +1222,13 @@ describe('DeploymentsListingService', () => {
 
       await service.listDeployments('user1', 'token', 'BUCKET_HASH');
       /*
-       * Toolsets are excluded from this listing's items entirely, so only
-       * the APPLICATION-scoped shared resources are ever needed here. Two
-       * calls, not one: `with: 'me'` derives canEdit/sharedWithMe, and the
-       * mirror-image `with: 'others'` derives recipientsCount. They run in
-       * parallel, and neither is issued per item.
+       * Toolsets are excluded from this listing's items entirely, so only the
+       * APPLICATION-scoped shared resources are ever needed here. One call,
+       * not two: the mirror-image `with: 'others'` query that used to derive a
+       * per-item recipient count is now `GET /api/v1/share/recipients`, issued
+       * only when an owner opens the menu offering "Revoke access".
        */
-      expect(sdkClient.getSharedResources).toHaveBeenCalledTimes(2);
+      expect(sdkClient.getSharedResources).toHaveBeenCalledOnce();
       expect(sdkClient.getSharedResources).toHaveBeenCalledWith(
         expect.objectContaining({
           body: expect.objectContaining({
@@ -1121,101 +1237,6 @@ describe('DeploymentsListingService', () => {
           }),
         }),
       );
-      expect(sdkClient.getSharedResources).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: expect.objectContaining({
-            resourceTypes: ['APPLICATION'],
-            with: 'others',
-            includeUserInfo: true,
-          }),
-        }),
-      );
-    });
-
-    it('maps the recipient count from the shared-with-others call onto owned items', async () => {
-      const { service, sdkClient } = makeService();
-      sdkClient.listDeployments.mockResolvedValue({
-        error: false,
-        response: { status: 200 },
-        data: [{ ...mockApplication, id: 'applications/BUCKET_HASH/my-app' }],
-      });
-      sdkClient.getSharedResources.mockImplementation(
-        ({ body }: { body: { with?: string } }) =>
-          Promise.resolve(
-            body.with === 'others'
-              ? {
-                  data: {
-                    resources: [
-                      {
-                        url: 'applications/BUCKET_HASH/my-app',
-                        sharedWith: [{ user: 'a' }, { user: 'b' }],
-                      },
-                    ],
-                  },
-                  error: undefined,
-                }
-              : { data: { resources: [] }, error: undefined },
-          ),
-      );
-
-      const result = await service.listDeployments(
-        'user1',
-        'token',
-        'BUCKET_HASH',
-      );
-
-      expect(result.deployments[0].recipientsCount).toBe(2);
-    });
-
-    it('reports recipientsCount 0 for an owned item the successful response does not mention', async () => {
-      const { service, sdkClient } = makeService();
-      sdkClient.listDeployments.mockResolvedValue({
-        error: false,
-        response: { status: 200 },
-        data: [{ ...mockApplication, id: 'applications/BUCKET_HASH/my-app' }],
-      });
-      /*
-       * DIAL Core omits resources nobody holds from a `with: 'others'`
-       * response, so "not in the result" is a genuine zero — not the
-       * "unknown" the failure path below reports.
-       */
-      sdkClient.getSharedResources.mockResolvedValue({
-        data: { resources: [] },
-        error: undefined,
-      });
-
-      const result = await service.listDeployments(
-        'user1',
-        'token',
-        'BUCKET_HASH',
-      );
-
-      expect(result.deployments[0].recipientsCount).toBe(0);
-    });
-
-    it('leaves recipientsCount absent when the shared-with-others call fails', async () => {
-      const { service, sdkClient } = makeService();
-      sdkClient.listDeployments.mockResolvedValue({
-        error: false,
-        response: { status: 200 },
-        data: [{ ...mockApplication, id: 'applications/BUCKET_HASH/my-app' }],
-      });
-      sdkClient.getSharedResources.mockImplementation(
-        ({ body }: { body: { with?: string } }) =>
-          Promise.resolve(
-            body.with === 'others'
-              ? { data: undefined, error: {}, response: { status: 500 } }
-              : { data: { resources: [] }, error: undefined },
-          ),
-      );
-
-      const result = await service.listDeployments(
-        'user1',
-        'token',
-        'BUCKET_HASH',
-      );
-
-      expect(result.deployments[0].recipientsCount).toBeUndefined();
     });
   });
 });

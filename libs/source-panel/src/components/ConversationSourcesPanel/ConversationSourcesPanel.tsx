@@ -1,11 +1,15 @@
 import { BASE_LG_ICON_PROPS } from '@epam/ai-dial-chat-shared';
 import {
   PanelNoResults,
-  SearchInput,
   SidebarOrientation,
   SidebarPanel,
 } from '@epam/ai-dial-sidebar';
-import { DialNoDataContent, GhostIconButton } from '@epam/ai-dial-ui-kit';
+import {
+  GhostIconButton,
+  NoDataContent,
+  Search,
+  mergeClasses,
+} from '@epam/ai-dial-ui-kit';
 import { IconDownload } from '@tabler/icons-react';
 import {
   memo,
@@ -15,6 +19,7 @@ import {
   type FC,
   type ReactNode,
 } from 'react';
+import { SOURCE_PANEL_CLASS } from '../../constants/public-class-names';
 import type { ConversationSourcesPanelProps } from '../../models/conversation-sources-panel-props';
 import FilesSection from '../FilesSection/FilesSection';
 import SourcesSection from '../SourcesSection/SourcesSection';
@@ -43,6 +48,10 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
   additionalSections,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+
+  const handleSearchChange = (value?: string) => {
+    setSearchQuery(value ?? '');
+  };
 
   useLayoutEffect(() => {
     if (!isOpen) {
@@ -98,7 +107,7 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
   if (isGloballyEmpty) {
     bodyContent = (
       <div className="flex h-full items-center justify-center">
-        <DialNoDataContent title={labels.noDataLabel} />
+        <NoDataContent title={labels.noDataLabel} />
       </div>
     );
   } else {
@@ -146,9 +155,11 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
       isOpen={isOpen}
       orientation={SidebarOrientation.Right}
       styles={{
-        className: isMobile && isOpen ? 'w-full' : undefined,
+        className: mergeClasses(
+          isMobile && isOpen && 'w-full',
+          SOURCE_PANEL_CLASS.panel,
+        ),
         bodyClassName: 'flex flex-col overflow-hidden p-0',
-        headerClassName: 'border-b border-tertiary',
       }}
       labels={labels}
       title={title}
@@ -171,19 +182,20 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
       }
     >
       {hasFilesOrSources && (
-        <SearchInput
-          value={searchQuery}
-          onChange={setSearchQuery}
-          labels={{
-            placeholder: labels.searchPlaceholder,
-            clearLabel: labels.searchClearLabel,
-          }}
-        />
+        <div role="search" className="px-3 py-2">
+          <Search
+            value={searchQuery}
+            onChange={handleSearchChange}
+            placeholder={labels.searchPlaceholder}
+            clearLabel={labels.searchClearLabel}
+            aria-label={labels.searchPlaceholder}
+          />
+        </div>
       )}
       <span role="status" aria-live="polite" className="sr-only">
         {isNoResults ? labels.noResultsLabel : ''}
       </span>
-      <div className="flex-1 overflow-y-auto p-4">{bodyContent}</div>
+      <div className="flex-1 overflow-y-auto p-4 pt-0">{bodyContent}</div>
     </SidebarPanel>
   );
 };

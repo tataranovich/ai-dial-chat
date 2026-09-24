@@ -46,13 +46,14 @@ The session is a JWE (`alg: dir`, `enc: A256GCM`) whose plaintext payload is:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "sid": "0d3e6a…",
   "providerId": "keycloak",
   "sub": "user-123",
   "at": "<access_token>",
   "rt": "<refresh_token>",
   "at_exp": 1715600000,
+  "session_exp": 1718188400,
   "rt_exp": 1715686400,
   "iat": 1715596400,
   "claims": { "roles": ["admin"], "email": "u@x.io" }
@@ -64,10 +65,10 @@ The session is a JWE (`alg: dir`, `enc: A256GCM`) whose plaintext payload is:
 | Attribute  | Value                                                 | Reason                                                                                                       |
 | ---------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `HttpOnly` | `true`                                                | JS cannot read or write                                                                                      |
-| `Secure`   | `true` by default                                     | HTTPS only; may be disabled only for local HTTP smoke testing                                                |
+| `Secure`   | `true` by default                                     | HTTPS only; local HTTP smoke mode disables it together with HSTS and CSP `upgrade-insecure-requests`         |
 | `SameSite` | `Lax` by default; `None` for secure overlay embedding | Blocks most CSRF in the normal app; allows cross-site iframe requests only when overlay embedding is enabled |
 | `Path`     | `/`                                                   | One cookie for whole app                                                                                     |
-| `Max-Age`  | `rt_exp`                                              | Lives as long as the refresh token                                                                           |
+| `Max-Age`  | Remaining effective session lifetime                  | Server enforces the same deadline; see §3.5                                                                  |
 | `Name`     | `__Host-chat.sess`                                    | `__Host-` prefix locks host/path; runtime drops this prefix when `AUTH_COOKIE_SECURE=false`                  |
 
 ### 3.3 Size Considerations
@@ -84,6 +85,78 @@ Each chunk uses the same `HttpOnly`, `Secure`, resolved `SameSite`, `Path=/`, an
 - Active key + 1–2 previous keys for rotation without forced logout.
 - 32-byte random secrets from env or KMS.
 - Recommended library: [`jose`](https://github.com/panva/jose) (`CompactEncrypt` / `compactDecrypt`) — standards-based, supports key rotation, no extra deps. Alternative: [`iron-session`](https://github.com/vvo/iron-session) ergonomic wrapper.
+
+---
+
+### 3.5 Session Lifetime Policy
+
+All payload timestamps use Unix **seconds**. Login and successful token refresh set
+`session_exp = now + AUTH_SESSION_MAX_AGE_SECONDS` (default **2592000 seconds / 30 days**).
+The setting is a positive integer up to 2147483647; invalid values fail startup.
+The requested `offline_access` scope does not select a session lifetime.
+Configuration changes apply to new logins and successful renewals; an already-issued
+cookie retains its deadline until renewal.
+
+The effective deadline is:
+
+| Tokens available                  | Effective deadline         |
+| --------------------------------- | -------------------------- |
+| Refresh token with known expiry   | `min(session_exp, rt_exp)` |
+| Refresh token with unknown expiry | `session_exp`              |
+| No refresh token                  | `min(session_exp, at_exp)` |
+
+`rt_exp` is optional and contains only a supported provider-reported deadline.
+For Keycloak, a positive integer `refresh_expires_in` in the token response is
+added to the exchange start time, conservatively excluding network latency.
+Keycloak zero denotes no advertised bound; missing or unusable metadata is
+unknown. This extension is not assumed for other providers, and refresh tokens
+are not decoded as JWTs. The provider can still reject or revoke a token earlier.
+
+Required cookie authentication triggers refresh when the access token or effective
+session deadline is less than 60 seconds away. A successful exchange renews
+`session_exp` and `iat`, after verifying that the existing session deadline has not
+already elapsed. New Keycloak expiry metadata updates `rt_exp`; a replacement
+refresh token without a known expiry
+clears the previous token's deadline. If the same token is retained and no new
+expiry metadata is available, its known deadline is preserved. Without a refresh
+token, the proactive 60-second refresh window is skipped: authorization lasts
+until the earlier of access-token or session expiry.
+
+`CookieSessionStrategy` rejects invalid, legacy, or expired sessions before any
+refresh/bucket calls, then rechecks expiration after asynchronous work. Equality
+with the deadline is expired. Required authentication responds with 401 and
+clears base/chunked cookies. Upstream refresh failures do not clear cookies: the
+frontend recovery probe must be able to observe a winning pod’s rotated cookie.
+An absorbed refresh race authorizes only while the old access token and session
+remain valid, without renewing or rewriting the cookie, including after lazy bucket
+resolution. Bucket-only cookie rewrites also preserve the current session deadline.
+Optional authentication returns no user without
+refresh or cookie mutation, and also rejects expired access tokens. Cookie
+`maxAge` in Express is the remaining effective lifetime in milliseconds; the
+browser's `Max-Age` attribute is in seconds. `SessionService.decrypt` itself only
+decodes ciphertext so legacy/expired cookies can still be processed for logout.
+
+**Upgrade:** normal authorization requires v2 payloads. V1 sessions require login
+again because they lack an explicit application session deadline and their `rt_exp`
+was fabricated from scopes. Deploy auth replicas together to avoid mixed enforcement.
+Existing login transaction cookies retain their original ten-minute window.
+Rollback restores the old expiration behavior; coordinate session invalidation
+if reverting. No server-side session data needs migration.
+
+This is a rolling Chat session lifetime: successful renewals can keep an active
+session alive beyond 30 days from login. There is no separate absolute limit from
+the original login time. Renewal is driven by protected requests, not a background
+timer; optional authentication never renews a session. The IdP may immediately
+authenticate a new login using its
+existing SSO session. Already-authorized streaming responses are not terminated
+by a timer at this deadline; subsequent requests must pass authorization again.
+
+The default and rolling policy match [NextAuth’s session configuration](https://next-auth.js.org/configuration/options#session),
+which the legacy Chat used without overriding `maxAge`. The renewal trigger is
+adapted to the BFF: NextAuth reissues its JWT from the session handler, whereas this
+BFF renews after a successful token exchange. This avoids rewriting token-bearing
+cookies on every API request. OAuth-token expiry is separate from the application
+session deadline; `offline_access` never implies a specific lifetime.
 
 ---
 
@@ -109,6 +182,13 @@ type ProviderConfig = {
 };
 ```
 
+For providers configured with a host URL, that URL is the OIDC discovery
+location. The registry replaces the provisional configured issuer with the
+canonical `issuer` from the discovered provider metadata before validating
+authorization callbacks or bearer tokens. Consequently, an internal cluster
+discovery URL may safely resolve metadata whose canonical issuer is the
+externally advertised identity, while RFC 9207 issuer matching remains exact.
+
 Login URLs become `/auth/login/:providerId?callbackUrl=<app-url>`. The active provider is encoded in the session, so refresh and logout always use the correct IdP; the validated `callbackUrl` is encoded in the short-lived transaction cookie so the callback can return the browser to the correct SPA origin/page.
 
 ---
@@ -122,6 +202,16 @@ Login URLs become `/auth/login/:providerId?callbackUrl=<app-url>`. The active pr
 _Source: [`auth-diagrams/03-login-flow.mmd`](./auth-diagrams/03-login-flow.mmd)_
 
 The transient `tx` cookie holds only `{ state, nonce, code_verifier, providerId }`, lives 5–10 minutes, and is deleted immediately after callback.
+
+The callback allowlists `job_title` from the ID token for forwarding as
+`X-JOB-TITLE` on Core completion, deployments-list, rating, and transcription
+requests. If Keycloak's ID token has no non-empty string value, the callback
+queries the discovered UserInfo endpoint with the access token, when available.
+It copies only a non-empty string `job_title`, and only when UserInfo's `sub`
+matches the validated ID-token subject. This restores the legacy Keycloak
+profile source; other providers keep their ID-token path. A failed lookup or
+subject mismatch leaves the optional value unset and does not block login.
+Claims are captured at login; transparent token refresh does not reload them.
 
 #### 5.1.1 Overlay External Login
 
@@ -176,15 +266,30 @@ _Source: [`auth-diagrams/08-toolset-signin-interrupt.mmd`](./auth-diagrams/08-to
 
 **This is a separate flow from application OIDC login (5.1) and does not touch the session cookie.** The user is already authenticated to Chat; this flow lets DIAL Core ask that already-authenticated user to (re)supply credentials mid-completion, via a generic client-channel RPC mechanism, for either of two distinct resource kinds:
 
-- **Toolsets** — a `toolset/signin` event, handled by `apps/chat-api/src/toolsets/` (`POST /api/v1/toolsets/{name}/login|logout`).
+- **Toolsets** — a `toolset/signin` event, handled by `apps/chat-api/src/toolsets/` (`POST /api/v1/toolsets/{name}/login|logout`). These authentication endpoints accept both bucket-qualified toolset references and bucketless platform deployment IDs, including applications configured as toolsets. The BFF derives the upstream `url` from the route parameter and percent-decodes it for Core's credential API without adding a bucket or resource prefix to platform IDs.
 - **Application external services** — an `external-service/signin` event (`params.url` identifying an `applications/{bucket}/{app}/external_services/{serviceId}` resource), handled by `apps/chat-api/src/external-services/` (`GET /api/v1/external-services/{appId}/{serviceId}`, `POST .../signin`, `POST .../signout`), proxying DIAL Core's `GET /v1/applications/{appId}/external-services/{id}` and `POST /v1/ops/external-service/signin|signout`.
+
+Application external-service metadata supports `DIAL_NATIVE`, but its per-service
+`signin`/`signout` endpoints do not. For this type, Chat opens the existing
+`offline-credentials` OAuth flow, reserves the popup synchronously before fetching
+settings, and verifies `connected: true` after the callback. If the user is already
+connected, their offline credentials are reused without revocation. The BFF also
+forwards Core's `app_level_auth_status` as `appLevelAuthStatus`: application consent
+must be `SIGNED_IN` before the flow and is checked again after OAuth. Missing or
+unknown consent never reports a successful interrupt. Missing administrator consent
+and unavailable offline access have separate dialog messages. The per-service
+"Allow offline use" checkbox applies only to API-key/OAuth rows; DIAL-native
+application consent is managed separately by an administrator.
+
+This separation follows [Core's external-service controller](https://github.com/epam/ai-dial-core/blob/development/server/src/main/java/com/epam/aidial/core/server/controller/ExternalServiceCredentialsController.java)
+and [auth-status enrichment](https://github.com/epam/ai-dial-core/blob/development/server/src/main/java/com/epam/aidial/core/server/service/ResourceAuthStatusEnricher.java).
 
 Both kinds share the exact same channel plumbing:
 
-- The SPA subscribes once per session to `POST /api/v1/client-channel/subscribe`, a BFF-relayed SSE stream proxying DIAL Core's own `/v1/ops/client-channel/subscribe`. The BFF never exposes the session's access token to the browser — it stays server-side, same as every other BFF-proxied call.
+- The SPA subscribes on demand: `POST /api/v1/client-channel/subscribe`, a BFF-relayed SSE stream proxying DIAL Core's own `/v1/ops/client-channel/subscribe`, is called only when a completion is actually requested (send, edit, regenerate, the automatic first-message start, or the QuickApps preview) — never merely from mounting a streaming-capable route, returning to one, or focusing the tab. One shared channel serves the whole tab; concurrent completions join the same in-flight subscribe rather than opening a second one. The BFF never exposes the session's access token to the browser — it stays server-side, same as every other BFF-proxied call.
 - The assigned channel id travels with subsequent completion requests (`X-DIAL-CLIENT-CHANNEL-ID`), so Core can correlate a `toolset/signin` or `external-service/signin` event back to the specific blocked tool call.
-- Either event kind surfaces as a row in the same global `SigninInterruptDialog`; the user logs in with the resource's own API-key/OAuth mechanics (toolset logins are unchanged from the Catalog/Toolset-Editor flows; the OAuth popup/callback/`BroadcastChannel` handshake is shared verbatim, parameterized by which BFF sign-in call the callback should submit to), and the result is reported back on the same channel (`POST /api/v1/client-channel/report`) so Core can resume or terminate the tool call.
-- Gated behind the same `liveChatInteraction` feature flag (`apps/chat-api/src/app-config/config-registry/config-registry.constants.ts`) for both event kinds — no separate flag; unsubscribes on logout, tab close, or the flag flipping off.
+- Either event kind surfaces as a row in the same global `SigninInterruptDialog`; the user logs in with the resource's API-key/OAuth mechanics or, for DIAL-native external services, the offline-credentials flow (toolset logins are unchanged from the Catalog/Toolset-Editor flows; the OAuth popup/callback/`BroadcastChannel` handshake is shared verbatim, parameterized by which BFF sign-in call the callback should submit to), and the result is reported back on the same channel (`POST /api/v1/client-channel/report`) so Core can resume or terminate the tool call.
+- Gated behind the same `liveChatInteraction` feature flag (`apps/chat-api/src/app-config/config-registry/config-registry.constants.ts`) for both event kinds — no separate flag; unsubscribes on logout, tab close, the flag flipping off, or (absent an unresolved sign-in event) a short idle period once nothing is generating. Returning to a streaming-capable route or focusing the tab no longer subscribes or reconnects by itself — only a new completion request does.
 - OAuth (either kind) opens an external-provider popup and tracks it from the initiating Chat tab. The
   Chat response therefore uses `Cross-Origin-Opener-Policy: same-origin-allow-popups` (rather
   than Helmet's `same-origin` default), preventing provider navigation from severing the
@@ -198,6 +303,59 @@ Both kinds share the exact same channel plumbing:
   status. The callback then closes itself, which still works when the opener's stale
   `WindowProxy` cannot close it. A real manual close is treated as cancellation when focus returns
   to the initiating tab. OAuth codes and credentials are never persisted by this handoff.
+
+#### Proactive application credential forms
+
+Application details in the Catalog also show these forms before any completion starts.
+The Chat `ApplicationCredentials` adapter supplies configured clients to
+`useApplicationCredentials` in `libs/chat-hooks`. The hook loads
+`GET /api/v1/external-services/{appId}`, an uncached,
+session-authenticated endpoint gated by `liveChatInteraction`. It reads DIAL Core's
+single-application endpoint through the SDK, because the management listing hides
+inline definitions from ordinary users. The response is an array of service identifiers,
+public OAuth settings and authentication statuses through an allowlist that excludes secrets.
+
+The reusable `ApplicationCredentials` UI in `libs/catalog` shares the credentials
+row, identity icon and configured-key card with toolsets. It accepts normalized
+service states, labels and callbacks; Chat owns DTO mapping, OAuth/offline login,
+personal signout, feature gating and iframe integration.
+Each authenticated service has its own API-key or OAuth form, current personal status,
+and login/logout actions. Shared credentials are informational; logout is confirmed and
+revokes only the user's credentials. DIAL-native services reuse offline access and require
+administrator application consent; the form never revokes shared offline credentials.
+The optional offline-use consent checkbox starts unchecked. Status is reloaded after
+successful mutations, and service-load failures offer retry. Services with `NONE` auth
+are omitted. Catalog forms require both backend and overlay `liveChatInteraction` support.
+
+The Quick Apps editor advertises host support via the `applicationCredentials=true`
+iframe query parameter. An authenticated agent's chip or advanced-settings action sends
+`{ type: 'REQUEST_APPLICATION_CREDENTIALS', appId }`. The Chat host verifies the editor
+origin and exact source window, then opens the same forms in a host dialog. API keys,
+authorization codes and tokens never cross this message boundary. Both repositories
+must include this contract for the action to appear. No client-channel subscription or
+chat request is needed, and closing the dialog preserves unsaved Quick app settings.
+
+### 5.6 Proactive Offline-Credentials Consent (Scheduled Tasks)
+
+![Offline-credentials consent](./auth-diagrams/10-offline-credentials-consent.svg)
+
+_Source: [`auth-diagrams/10-offline-credentials-consent.mmd`](./auth-diagrams/10-offline-credentials-consent.mmd)_
+
+Scheduled Tasks run unattended on a cron trigger via the DIAL Scheduler routed deployment — there is nobody present to click through an interactive OAuth popup at execution time. DIAL Core needs the user to have pre-granted an offline-capable credential (`offline_access` scope) before a schedule can run without them. This flow solicits that one-time consent.
+
+**This is a third, distinct pattern, different from both 5.1 and 5.5:**
+
+- **vs. 5.1 (OIDC login):** this flow never touches the session cookie. The user is already authenticated to Chat; the OAuth round trip here only grants DIAL Core its own separate, long-lived credential for the Scheduler to use later.
+- **vs. 5.5 (toolset/external-service sign-in):** the completion-interrupt variants of those flows are _reactive_ — triggered by a DIAL-Core-pushed `client-channel` event mid-completion, because a live tool call is blocked waiting for credentials. This flow is _proactive_ — triggered by the user simply navigating into the Scheduled Tasks section, with no in-flight completion to interrupt.
+
+Mechanics:
+
+- `apps/chat-api/src/offline-credentials/` is a new BFF domain, modeled directly on `apps/chat-api/src/external-services/`: `GET /api/v1/offline-credentials` (status) and `POST /api/v1/offline-credentials/signin` (authorization-code exchange), both proxying DIAL Core's `GET /v1/user/offline-credentials`/`POST /v1/user/offline-credentials/signin` via `DialClientService` using the session's bearer access token. Both routes require either the existing `scheduledTasksEnabled` or `liveChatInteraction` feature flag, so reactive DIAL-native login also works when the Scheduled Tasks UI is disabled. Authentication and CSRF checks still apply.
+- The frontend's `useOfflineCredentialsGate` hook (`apps/chat/src/hooks/offlineCredentials/`) runs this status check once per entry into the Scheduled Tasks **list** route only (`apps/chat/src/pages/ScheduledTasksPage/`) — never on the create/detail/edit routes, and never on the OAuth callback route, and never globally, since offline-credentials status is irrelevant outside the list page's own login-required banner.
+- Whenever the check reports `connected: false`, a non-blocking inline `ScheduledTasksLoginBanner`, hand-composed from ui-kit primitives and design tokens to match the neutral reference surface with a warning icon, renders between the list page's toolbar and its task cards. When Core also reports `available: true` and supplies `connect`, the banner offers a "Log in" action; when Core reports `available: false`, the banner remains visible without an action because the caller's identity provider has no configured offline OAuth client. It never opens automatically as a popup or modal — the OAuth popup opens only after an explicit "Log in" click when that action is available.
+- The OAuth popup/callback/`BroadcastChannel` handshake is reused **verbatim** from 5.5's shared toolset OAuth infrastructure, extended with a third `OAuthResourceKind.OfflineCredentials` member on the existing discriminated union — the callback branch is additive, not a fork. `ROUTES.ToolsetSignIn` is reused as the `redirect_uri`; no dedicated callback route was introduced. That infrastructure now lives in `libs/chat-hooks/src/oauth/` and is published from `@epam/ai-dial-chat-hooks` (`openToolsetOAuthPopup` / `navigateToolsetOAuthPopup` / `waitForToolsetOAuthResult`, plus `useOAuthCallbackCompletion` for the popup side), with the callback route supplied by the host as a `callbackPath` parameter; `apps/chat/src/pages/ToolsetAuthCallback/ToolsetAuthCallback.tsx` keeps only the per-resource-kind dispatch of the sign-in call, and `apps/chat/src/utils/toolsets.ts` keeps only toolset-editor form mapping.
+- The callback's own reported result is a hint, never authoritative: after any terminal popup outcome (including a reported success), the opener re-fetches `GET /api/v1/offline-credentials` and only hides the banner when that fresh check confirms `connected: true`. This mirrors 5.5's own "treat the backend as final authority" re-verification pattern for toolset/external-service logins.
+- The banner has no dismiss action; it stays visible — with retry messaging for a blocked/cancelled/timed-out/failed popup attempt — until the backend confirms `connected: true`, and Scheduled Task list browsing/search/sort/creation stays fully usable the whole time. It is scoped to the list page only: the create/detail/edit Scheduled Task pages show no login-required UI of any kind (the shared `ScheduledTasksRouteGate` layout route that previously wrapped all four routes to show a modal has been removed along with the modal itself).
 
 ---
 
@@ -298,7 +456,20 @@ Key properties:
   the diagram above) — cookie-authenticated requests are completely unaffected.
 - **`SessionUser.sid`/`csrf` are optional** — absent for a header-authenticated caller,
   since no session was created for it. `GET /auth/me` omits `X-CSRF-Token` for such
-  callers; `POST /auth/logout` is a no-op success (no session to clear).
+  callers; `POST /auth/logout` is a no-op success (no session to clear). **No endpoint may
+  reject a header-authenticated caller on the grounds that `sid` (or `csrf`) is absent.**
+  Server-side state that needs a stable per-caller identity derives it from verified
+  identity instead: `resolvePrincipalKey`
+  (`apps/chat-api/src/auth/session/principal-key.ts`) returns `c:<sid>` under cookie auth
+  and `h:<providerId>:<sub>` under header auth, and that key — not `sid` — is what owns an
+  in-flight generation (`generation-principal-ownership`). All three completion endpoints
+  (`completions`, `completions/stop`, `completions/attach`) are therefore reachable under
+  header auth.
+- **A verified token with no `sub` is rejected.** After signature and time verification,
+  `HeaderTokenStrategy` rejects claims carrying no `sub`, or a `sub` that is the empty
+  string, with `401` / `AUTH_HEADER_TOKEN_INVALID`. The claim is never coerced to `''`: it
+  is the server-verified identity generation ownership is derived from, so an empty subject
+  would collapse every such caller of one provider into a single owner.
 
 ---
 

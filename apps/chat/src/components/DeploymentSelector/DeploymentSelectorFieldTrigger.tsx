@@ -1,15 +1,17 @@
+import { DeploymentSelectorField } from '@epam/ai-dial-catalog';
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { DIAL_ICON_SIZE, Dropdown, Input, Spinner } from '@epam/ai-dial-ui-kit';
-import { IconChevronDown } from '@tabler/icons-react';
+import { BottomSheetShell } from '@epam/ai-dial-conversation-input';
 import {
-  memo,
-  useCallback,
-  useState,
-  type FC,
-  type KeyboardEvent,
-} from 'react';
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  Spinner,
+} from '@epam/ai-dial-ui-kit';
+import { IconChevronDown } from '@tabler/icons-react';
+import { memo, useCallback, useState, type FC } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DeploymentSelectorI18nKeys } from '../../constants/translation-keys';
+import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
+import type { DeploymentSelectorExtraOption } from './DeploymentSelectorPanel';
 import { useDeploymentSelectorFieldOverlay } from './useDeploymentSelectorFieldOverlay';
 
 interface Props {
@@ -27,13 +29,24 @@ interface Props {
   isInvalid?: boolean;
   /** Additional class names applied to the trigger button. */
   className?: string;
+  /**
+   * Non-deployment rows pinned above the panel's catalog sections, e.g. the
+   * mode sentinels of the default-agent preference. Their ids flow through
+   * `onSelect` and `selectedId` exactly like a deployment id does, and the
+   * field resolves its own label from them.
+   */
+  extraOptions?: DeploymentSelectorExtraOption[];
+  /** Additional classes merged over the selector panel root's defaults. */
+  panelClassName?: string;
 }
 
 /**
  * Full-width outlined form-field trigger that opens the same deployment
  * selector overlay content (search, favorites, Browse) the chat input's
  * icon trigger opens, via `useDeploymentSelectorFieldOverlay`. Its own
- * selection is independent of the chat input's active deployment.
+ * selection is independent of the chat input's active deployment. On
+ * desktop the overlay opens as a dropdown popover; on mobile as a bottom
+ * sheet — the same `BottomSheetShell` the chat page's picker uses.
  */
 const DeploymentSelectorFieldTrigger: FC<Props> = ({
   selectedId,
@@ -43,15 +56,27 @@ const DeploymentSelectorFieldTrigger: FC<Props> = ({
   isDisabled = false,
   isInvalid = false,
   className,
+  extraOptions,
+  panelClassName,
 }) => {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  /* One open state shared by both presentations (only one is ever mounted).
+   * Crossing the breakpoint while open — device rotation — intentionally
+   * keeps it open: the picker continues in the other presentation instead
+   * of dismissing the user mid-selection. */
   const [isOpen, setIsOpen] = useState(false);
 
   const { renderOverlay, catalogModal, isLoading, error, resolvedLabel } =
-    useDeploymentSelectorFieldOverlay(selectedId, (id) => {
-      onSelect(id);
-      setIsOpen(false);
-    });
+    useDeploymentSelectorFieldOverlay(
+      selectedId,
+      (id) => {
+        onSelect(id);
+        setIsOpen(false);
+      },
+      extraOptions,
+      mergeClasses('min-w-0', panelClassName),
+    );
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -59,15 +84,6 @@ const DeploymentSelectorFieldTrigger: FC<Props> = ({
       setIsOpen(open);
     },
     [isDisabled],
-  );
-
-  const handleTriggerKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    },
-    [],
   );
 
   /*
@@ -88,61 +104,63 @@ const DeploymentSelectorFieldTrigger: FC<Props> = ({
 
   return (
     <>
-      <Dropdown
+      <DeploymentSelectorField
+        selectedId={selectedId}
+        selectedLabel={resolvedLabel}
+        records={[]}
+        placeholder={effectivePlaceholder}
+        labels={{
+          searchPlaceholder: t(DeploymentSelectorI18nKeys.SearchPlaceholder),
+          searchAriaLabel: t(DeploymentSelectorI18nKeys.AriaLabel),
+          emptyLabel: t(DeploymentSelectorI18nKeys.EmptyHint),
+          errorLabel: t(DeploymentSelectorI18nKeys.Error),
+        }}
+        onSelect={onSelect}
+        isLoading={isLoading}
+        error={error}
+        isDisabled={isDisabled}
+        isInvalid={isInvalid}
+        labelledById={labelledById}
+        ariaHasPopup={isMobile ? 'dialog' : 'listbox'}
+        className={className}
+        panelClassName={panelClassName}
+        iconAfter={
+          isLoading ? (
+            <Spinner
+              size={DIAL_ICON_SIZE.SM}
+              ariaLabel={t(DeploymentSelectorI18nKeys.Loading)}
+            />
+          ) : (
+            <IconChevronDown
+              size={DIAL_ICON_SIZE.MD}
+              className={mergeClasses(
+                'transition-transform',
+                isOpen && 'rotate-180',
+              )}
+              aria-hidden
+              stroke={DIAL_KIT_ICON_STROKE}
+            />
+          )
+        }
         open={isOpen}
         onOpenChange={handleOpenChange}
-        outsideClosable
-        disabled={isDisabled}
-        renderOverlay={() => renderOverlay(() => setIsOpen(false))}
-        listClassName="cp-dropdown-overlay"
-        className="w-full"
-      >
-        {/*
-         * Built on the same `Input` component `Select` wraps in a `readOnly`
-         * combobox (see `@epam/ai-dial-ui-kit` Select.tsx), so this trigger's
-         * chrome (border, radius, height, focus/hover, colors) always stays
-         * pixel-identical to every other field/dropdown in the app instead
-         * of duplicating those styles by hand. Opening is handled by
-         * `Dropdown`'s default click trigger (a click anywhere in the field,
-         * including the chevron, toggles it via `onOpenChange`) — the same
-         * way `Select` opens, rather than a manual `onClick` scoped to just
-         * the `<input>` element, which the icon sits outside of.
-         */}
-        <Input
-          readOnly
-          role="combobox"
-          aria-haspopup="listbox"
-          aria-expanded={isOpen}
-          aria-labelledby={labelledById}
-          disabled={isDisabled}
-          invalid={isInvalid || Boolean(error)}
-          value={resolvedLabel ?? ''}
-          placeholder={effectivePlaceholder}
-          onKeyDown={handleTriggerKeyDown}
-          containerClassName="w-full"
-          wrapperClassName={mergeClasses('cursor-pointer', className)}
-          className="cursor-pointer"
-          iconAfter={
-            isLoading ? (
-              <Spinner
-                size={DIAL_ICON_SIZE.SM}
-                ariaLabel={t(DeploymentSelectorI18nKeys.Loading)}
-              />
-            ) : (
-              // A vertical rotation is direction-agnostic (up/down does not
-              // flip under RTL), so no `rtl:` mirroring class is needed here.
-              <IconChevronDown
-                size={DIAL_ICON_SIZE.MD}
-                className={mergeClasses(
-                  'transition-transform',
-                  isOpen && 'rotate-180',
-                )}
-                aria-hidden
-              />
-            )
-          }
-        />
-      </Dropdown>
+        renderPanel={renderOverlay}
+        renderOverlay={
+          isMobile
+            ? (panel, open, close) => (
+                <BottomSheetShell
+                  isOpen={open}
+                  title={t(DeploymentSelectorI18nKeys.AriaLabel)}
+                  closeLabel={t(DeploymentSelectorI18nKeys.CloseLabel)}
+                  onClose={close}
+                  className="max-h-[90dvh]"
+                >
+                  {panel}
+                </BottomSheetShell>
+              )
+            : undefined
+        }
+      />
       {catalogModal}
     </>
   );

@@ -7,7 +7,11 @@
 }
 
 .tableContainerLight {
-  background: var(--cm-code-block-bg, var(--bg-layer-6, #f8fafc));
+  background: var(--cm-code-block-bg, var(--bg-layer-base, #f5f7fa));
+}
+
+.copiedIcon {
+  color: var(--cm-code-block-copied, var(--text-success, #007274));
 }
 
 .scrollContainer {
@@ -16,6 +20,7 @@
     transparent;
 
   &::-webkit-scrollbar {
+    width: 4px;
     height: 4px;
   }
 
@@ -30,6 +35,8 @@
 }
 
 .tableHeaderCell {
+  /* min-block-size has no effect on <th> in CSS table layout; height acts as a minimum */
+  height: 3rem; /* 48px per Figma node 546-13233 */
   background: var(--cm-code-block-header-bg, var(--bg-layer-raised, #fcfcfc));
   color: var(--cm-table-header-text, var(--text-secondary, #57647a));
 }
@@ -38,18 +45,17 @@
   background: var(--cm-code-block-header-bg, var(--bg-layer-raised, #fcfcfc));
 }
 
-tbody .row:nth-child(even) td {
-  background: var(--cm-table-row-zebra-bg, var(--bg-layer-base, #f5f7fa));
-}
-
 .rowDivider {
-  border-color: var(--cm-table-row-divider, var(--stroke-tertiary, #e0e6f0));
+  /* Dividers inside a table sit on the thin stroke (0.5px), one step below the
+     1px main stroke controls and standalone dividers use. */
+  border-block-end: 0.5px solid
+    var(--cm-table-row-divider, var(--stroke-tertiary, #e0e6f0));
 }
 
 tbody .row:hover td {
   background: var(
     --cm-table-row-hover-bg,
-    var(--bg-accent-primary-alpha, #7da4ff2e)
+    var(--bg-control-accent-alpha-hover, #2764d924)
   );
 }
 

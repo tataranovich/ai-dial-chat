@@ -1,0 +1,117 @@
+# @epam/ai-dial-settings-panel
+
+## Overview
+
+Provides `SettingsPanel`, a presentational vertical navigation panel: an optional 64px section
+header followed by icon + label rows, with the active row highlighted. The panel uses the raised
+background token; its header uses `dial-h1-text` and the primary text token. The component is fully
+host-agnostic — it takes already-localized labels, host-resolved icons, and the active/selected
+state via props, and calls back via `onSelect`. It implements the ARIA "automatic activation"
+tabs pattern adapted to a vertical layout: roving `tabIndex`, `ArrowUp`/`ArrowDown` move focus and
+selection between enabled rows (wrapping at the ends), `Home`/`End` jump to the first/last enabled
+row, and disabled rows are skipped entirely by keyboard navigation. A single row remains
+semantically selected but uses the neutral visual state because there is no alternative tab to
+distinguish it from.
+
+## Installation
+
+```json
+{
+  "dependencies": {
+    "@epam/ai-dial-settings-panel": "*"
+  }
+}
+```
+
+Import the stylesheet once in the consuming app:
+
+```ts
+import '@epam/ai-dial-settings-panel/styles.css';
+```
+
+## Peer Dependencies
+
+- `react` ^19.2.8
+- `@epam/ai-dial-ui-kit`
+- `@epam/ai-dial-chat-shared`
+
+## Components
+
+### SettingsPanel
+
+```tsx
+import { IconLayoutGrid, IconUser } from '@tabler/icons-react';
+import { SettingsPanel } from '@epam/ai-dial-settings-panel';
+
+<SettingsPanel
+  sectionLabel="Settings"
+  activeId="usage"
+  onSelect={(id) => setActiveTab(id)}
+  items={[
+    {
+      id: 'general',
+      label: 'General',
+      icon: <IconUser size={18} />,
+      disabled: true,
+    },
+    { id: 'usage', label: 'Usage', icon: <IconLayoutGrid size={18} /> },
+  ]}
+/>;
+```
+
+Pass `styles={{ typography, colors }}` to override the section-header typography class or
+the row background/text/focus colors (applied as CSS custom properties). The rows are drawn by
+the UI kit's `Tabs`, so their typography is the kit's `dial-small-text` / `dial-small-semi-text`
+step and is not overridable here:
+
+```tsx
+<SettingsPanel
+  activeId="usage"
+  onSelect={setActiveTab}
+  items={items}
+  styles={{
+    colors: {
+      activeRowBackground: '#e6f0ff',
+      rowFocusOutline: '#161b2d',
+    },
+  }}
+/>
+```
+
+## Types
+
+- `SettingsPanelItem` — `{ id, label, icon?, disabled? }`
+- `SettingsPanelProps` — `{ items, activeId, onSelect, sectionLabel?, styles?, className? }`
+- `SettingsPanelStyles` — `{ typography?, colors? }`
+- `SettingsPanelColors` — CSS-custom-property color overrides
+- `SettingsPanelTypography` — `{ sectionLabelClassName? }`
+
+## Public class names
+
+A host embedding this package cannot style it through its CSS-module locals —
+they are hashed at build time — nor through DOM order or ARIA attributes, which
+are structure and accessibility contracts rather than styling ones. Selected
+elements therefore carry a stable public class.
+
+| Key       | Class                          | Element                                                |
+| --------- | ------------------------------ | ------------------------------------------------------ |
+| `panel`   | `dial-settings-panel-panel`    | The panel root, which carries the themed CSS variables |
+| `tabList` | `dial-settings-panel-tab-list` | The vertical tab list holding the section rows         |
+| `tab`     | `dial-settings-panel-tab`      | Every section row, selected or not                     |
+
+```tsx
+import { SETTINGS_PANEL_CLASS } from '@epam/ai-dial-settings-panel';
+
+SETTINGS_PANEL_CLASS.tab; // 'dial-settings-panel-tab'
+```
+
+`role="tablist"` and `role="tab"` stay accessibility contracts — these classes
+are what a host selects on instead.
+
+The classes carry no declarations of their own: nothing in `styles.css`
+selects on them, so they change nothing until a host writes a rule. Renaming
+one, or moving it to a different element, is a breaking change. The convention
+is in [`openspec/lib-styling-guide.md`](../../openspec/lib-styling-guide.md).
+
+Write host overrides with CSS logical properties (`margin-inline-start`,
+`inset-inline-end`) so they keep working under `dir="rtl"`.

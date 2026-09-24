@@ -8,12 +8,18 @@ import {
 } from '../../common/dial/dial-error.mapper';
 import { getBearerAuthHeaders } from '../../common/utils/auth-header';
 import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
+import {
+  buildConversationIdHeaders,
+  buildJobTitleHeaders,
+} from '../../common/utils/header-value';
 import { StringUtils } from '../../common/utils/string-utils';
 import { DeploymentsService } from '../../deployments/deployments.service';
 import { DialClientService } from '../../dial/dial-client.service';
 import {
   ConversationGenerationService,
+  GenerationCancelReason,
   GenerationStatus,
+  type GenerationLease,
 } from '../conversation-generation.service';
 import {
   ConversationMessageDto,
@@ -55,6 +61,22 @@ const getValidAttachments = (
     Boolean(attachment.data || attachment.url),
   );
 
+/*
+ * `custom_content.skills[].url` is persisted verbatim from the frontend
+ * (e.g. `skills/public/my chats/123`), unlike every other DIAL resource path
+ * in this codebase, which is percent-encoded right at the DIAL Core call
+ * boundary via `encodeDialResourcePath`. Left unencoded, a path segment with
+ * a space or other reserved character makes DIAL Core reject the whole
+ * completion request with a 400 — encode here, at the same boundary.
+ */
+const getEncodedSkills = (
+  customContent?: ConversationMessageDto['custom_content'],
+) =>
+  customContent?.skills?.map((skill) => ({
+    ...skill,
+    url: encodeDialResourcePath(skill.url),
+  }));
+
 type RelayOutcome =
   | {
       outcome: 'rejected';
@@ -87,7 +109,11 @@ export class ConversationStreamingService {
     sub: string,
     model: string,
     token: string,
-  ): Promise<{ generationApi: GenerationApi; temperatureSupported: boolean }> {
+  ): Promise<{
+    generationApi: GenerationApi;
+    temperatureSupported: boolean;
+    reasoningEfforts?: string[];
+  }> {
     /*
      * getDeploymentDetails is not skipped when features.responsesApiEnabled is
      * disabled — it also performs the toolset rejection and temperature-
@@ -115,11 +141,19 @@ export class ConversationStreamingService {
         ? details.applicationDetails?.features
         : details.modelDetails?.features;
 
+    const generationApi = responsesApiEnabled
+      ? resolveGenerationApi(features)
+      : GenerationApi.ChatCompletions;
+
+    const safeModel = StringUtils.sanitizeForLog(model);
+    this.logger.debug(
+      `Generation API resolved for "${safeModel}" — api: ${generationApi}, responsesApiEnabled: ${responsesApiEnabled}, deployment.responsesApi: ${features?.responsesApi ?? false}`,
+    );
+
     return {
-      generationApi: responsesApiEnabled
-        ? resolveGenerationApi(features)
-        : GenerationApi.ChatCompletions,
+      generationApi,
       temperatureSupported: features?.temperature === true,
+      reasoningEfforts: features?.reasoningEfforts,
     };
   }
 
@@ -127,6 +161,7 @@ export class ConversationStreamingService {
     conversationPath: string,
     token: string,
     sessionBucket: string,
+    signal: AbortSignal,
   ): Promise<ReadableStream<Uint8Array>> {
     const { bucket, subPath } = resolveConversationLocation(
       qualifySessionConversationPath(conversationPath, sessionBucket),
@@ -148,6 +183,7 @@ export class ConversationStreamingService {
           Accept: 'text/event-stream',
         },
         parseAs: 'stream',
+        signal,
       })) as { response: globalThis.Response; error?: unknown };
 
       if (!result.response.ok || !result.response.body) {
@@ -184,10 +220,20 @@ export class ConversationStreamingService {
     signal: AbortSignal,
     initialAssembledMessage: ConversationMessageDto,
     clientChannelId?: string,
+    timezone?: string,
     timing?: GenerationRelayTiming,
+    conversationId?: string,
+    onChunkApplied?: (
+      rawChunk: unknown,
+      message: ConversationMessageDto,
+    ) => void,
+    jobTitle?: string,
   ): AsyncGenerator<Uint8Array, RelayOutcome, void> {
     let assembledMessage = initialAssembledMessage;
     let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    const cancelUpstreamOnAbort = (): void => {
+      void upstreamReader?.cancel().catch(() => undefined);
+    };
 
     try {
       const dialResult =
@@ -199,6 +245,9 @@ export class ConversationStreamingService {
             ...(clientChannelId
               ? { 'X-DIAL-CLIENT-CHANNEL-ID': clientChannelId }
               : {}),
+            ...(timezone ? { 'X-Timezone': timezone } : {}),
+            ...buildConversationIdHeaders(conversationId),
+            ...buildJobTitleHeaders(jobTitle),
           },
           params: { query: { 'api-version': this.dialClient.dialApiVersion } },
           parseAs: 'stream',
@@ -241,6 +290,8 @@ export class ConversationStreamingService {
       }
 
       upstreamReader = dialResult.response.body.getReader();
+      signal.addEventListener('abort', cancelUpstreamOnAbort, { once: true });
+      if (signal.aborted) cancelUpstreamOnAbort();
       const decoder = new TextDecoder();
       let sseBuffer = '';
       let receivedDone = false;
@@ -248,6 +299,9 @@ export class ConversationStreamingService {
 
       while (true) {
         const { done, value } = await upstreamReader.read();
+        if (signal.aborted) {
+          return { outcome: 'aborted', assembledMessage };
+        }
         if (done) {
           this.logger.debug(
             `relayModelCompletion upstream socket closed without [DONE] — model: ${model}`,
@@ -295,6 +349,7 @@ export class ConversationStreamingService {
                 timing.firstDeltaAt = Date.now();
               }
               assembledMessage = applyChunkToMessage(assembledMessage, parsed);
+              onChunkApplied?.(parsed, assembledMessage);
             } catch {
               /*
                * Never log the payload itself here — chunk content is
@@ -343,8 +398,9 @@ export class ConversationStreamingService {
       return { outcome: 'completed', assembledMessage };
     } catch (err) {
       const isAbort =
-        err instanceof Error &&
-        (err.name === 'AbortError' || err.name === 'DOMException');
+        signal.aborted ||
+        (err instanceof Error &&
+          (err.name === 'AbortError' || err.name === 'DOMException'));
       this.logger.debug(
         `relayModelCompletion outcome: ${isAbort ? 'aborted' : 'error'} — model: ${model}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -352,6 +408,7 @@ export class ConversationStreamingService {
         ? { outcome: 'aborted', assembledMessage }
         : { outcome: 'error', error: err, assembledMessage };
     } finally {
+      signal.removeEventListener('abort', cancelUpstreamOnAbort);
       if (upstreamReader) {
         try {
           /*
@@ -384,25 +441,28 @@ export class ConversationStreamingService {
     messageIndex: number | undefined,
     model: string,
     customContent: MessageCustomContentDto | undefined,
-    sessionId: string,
+    ownerKey: string,
     onReadyToStream: () => void,
     sub: string,
     clientChannelId?: string,
+    timezone?: string,
+    jobTitle?: string,
   ): AsyncGenerator<Uint8Array | string, void, void> {
     this.logger.debug(
       `streamCompletion start — model: ${model}, bucket: ${bucket}, path: ${conversationPath}, mode: ${mode}`,
     );
 
-    const abortController = this.generationService.register(
-      sessionId,
+    const lease: GenerationLease = this.generationService.register(
+      ownerKey,
       conversationPath,
       generationId,
     );
 
     let generationApi: GenerationApi;
     let temperatureSupported: boolean;
+    let reasoningEfforts: string[] | undefined;
     try {
-      ({ generationApi, temperatureSupported } =
+      ({ generationApi, temperatureSupported, reasoningEfforts } =
         await this.resolveGenerationApiForDeployment(sub, model, token));
       generationCapabilityResolutionTotal.add(1, {
         outcome: 'resolved',
@@ -410,7 +470,10 @@ export class ConversationStreamingService {
       });
     } catch (err) {
       generationCapabilityResolutionTotal.add(1, { outcome: 'failed' });
-      this.generationService.error(sessionId, conversationPath, generationId);
+      this.generationService.error(
+        lease,
+        err instanceof Error ? err.message : undefined,
+      );
       throw err;
     }
 
@@ -435,7 +498,10 @@ export class ConversationStreamingService {
        * doesn't leave the conversation "locked" — otherwise the next request
        * (e.g. regenerate) would be rejected with a 409 until stale eviction.
        */
-      this.generationService.error(sessionId, conversationPath, generationId);
+      this.generationService.error(
+        lease,
+        err instanceof Error ? err.message : undefined,
+      );
       throw err;
     }
 
@@ -471,10 +537,12 @@ export class ConversationStreamingService {
       .filter((m) => m.role !== ConversationMessageRole.Status)
       .map((m) => {
         const validAttachments = getValidAttachments(m.custom_content);
+        const encodedSkills = getEncodedSkills(m.custom_content);
         const content = Object.fromEntries(
           Object.entries({
             ...m.custom_content,
             attachments: validAttachments.length ? validAttachments : undefined,
+            skills: encodedSkills?.length ? encodedSkills : undefined,
             configuration_value: undefined,
             stages: undefined,
           }).filter(([, value]) => value != null),
@@ -495,9 +563,10 @@ export class ConversationStreamingService {
     const requestBody = {
       messages: [...systemMessages, ...dialMessages],
       stream: true,
-      ...(startConversation.temperature != null && {
-        temperature: startConversation.temperature,
-      }),
+      ...(temperatureSupported &&
+        startConversation.temperature != null && {
+          temperature: startConversation.temperature,
+        }),
       ...(configuration ? { custom_fields: { configuration } } : {}),
     };
 
@@ -509,6 +578,13 @@ export class ConversationStreamingService {
 
     const assembledMessage = {
       ...startConversation.messages[assistantMessageIndex],
+    };
+    this.generationService.seedAssembledMessage(lease, assembledMessage);
+    const publishChunk = (
+      rawChunk: unknown,
+      message: ConversationMessageDto,
+    ) => {
+      this.generationService.applyChunk(lease, rawChunk, message);
     };
 
     const finalize = async (
@@ -525,6 +601,13 @@ export class ConversationStreamingService {
           partialMessage,
         ],
       };
+      /*
+       * Record that the terminal write has been dispatched before awaiting
+       * it (generation-registry, D5): a cancellation arriving after this
+       * point is recorded for telemetry only and never adds, replaces, or
+       * cancels this — the only — write attempt.
+       */
+      this.generationService.beginFinalizing(lease);
       try {
         await this.persistenceService.saveConversation(
           conversationPath,
@@ -536,13 +619,9 @@ export class ConversationStreamingService {
         this.logger.warn(`Failed to save ${status} conversation`, err);
       }
       if (status === GenerationStatus.Done) {
-        this.generationService.complete(
-          sessionId,
-          conversationPath,
-          generationId,
-        );
+        this.generationService.complete(lease);
       } else {
-        this.generationService.error(sessionId, conversationPath, generationId);
+        this.generationService.error(lease, partialMessage.streamErrorMessage);
       }
     };
 
@@ -556,66 +635,132 @@ export class ConversationStreamingService {
               startConversation,
               messagesForCompletion,
               temperatureSupported,
+              reasoningEfforts,
+              configuration,
             }),
             token,
-            abortController.signal,
+            lease.abortController.signal,
             assembledMessage,
             clientChannelId,
+            timezone,
             timing,
+            startConversation.id,
+            publishChunk,
+            jobTitle,
           )
         : this.relayModelCompletion(
             model,
             requestBody,
             token,
-            abortController.signal,
+            lease.abortController.signal,
             assembledMessage,
             clientChannelId,
+            timezone,
             timing,
+            startConversation.id,
+            publishChunk,
+            jobTitle,
           );
-    let next = await relayIterator.next();
-    while (!next.done) {
-      yield next.value;
-      next = await relayIterator.next();
-    }
-    const relayResult = next.value;
-
-    generationRequestsTotal.add(1, {
-      'generation.api': generationApi,
-      outcome: relayResult.outcome,
-    });
-    if (timing.firstDeltaAt != null) {
-      generationTimeToFirstDelta.record(
-        (timing.firstDeltaAt - streamStartedAt) / 1000,
-        { 'generation.api': generationApi },
-      );
-    }
-    generationStreamDuration.record((Date.now() - streamStartedAt) / 1000, {
-      'generation.api': generationApi,
-      outcome: relayResult.outcome,
-    });
-
-    switch (relayResult.outcome) {
-      case 'rejected': {
-        const errored = {
-          ...relayResult.assembledMessage,
-          custom_content: {
-            ...relayResult.assembledMessage.custom_content,
-            event_type: undefined,
-          } as never,
-          streamErrorMessage: relayResult.errorMessage,
-        };
-        await finalize(GenerationStatus.Error, errored);
-        break;
+    let relayCompletedNormally = false;
+    try {
+      let next = await relayIterator.next();
+      while (!next.done) {
+        yield next.value;
+        next = await relayIterator.next();
       }
-      case 'completed':
-        await finalize(GenerationStatus.Done, relayResult.assembledMessage);
-        break;
-      case 'aborted': {
+      relayCompletedNormally = true;
+      const relayResult = next.value;
+
+      generationRequestsTotal.add(1, {
+        'generation.api': generationApi,
+        outcome: relayResult.outcome,
+      });
+      if (timing.firstDeltaAt != null) {
+        generationTimeToFirstDelta.record(
+          (timing.firstDeltaAt - streamStartedAt) / 1000,
+          { 'generation.api': generationApi },
+        );
+      }
+      generationStreamDuration.record((Date.now() - streamStartedAt) / 1000, {
+        'generation.api': generationApi,
+        outcome: relayResult.outcome,
+      });
+
+      switch (relayResult.outcome) {
+        case 'rejected': {
+          const errored = {
+            ...relayResult.assembledMessage,
+            custom_content: {
+              ...relayResult.assembledMessage.custom_content,
+              event_type: undefined,
+            } as never,
+            streamErrorMessage: relayResult.errorMessage,
+          };
+          await finalize(GenerationStatus.Error, errored);
+          break;
+        }
+        case 'completed':
+          await finalize(GenerationStatus.Done, relayResult.assembledMessage);
+          break;
+        case 'aborted': {
+          const wasStopped =
+            this.generationService.getCancellation(lease)?.reason ===
+            GenerationCancelReason.UserStop;
+          const partialMsg = {
+            ...relayResult.assembledMessage,
+            ...(wasStopped
+              ? { wasStoppedByUser: true }
+              : { streamErrorMessage: '' }),
+          } as ConversationMessageDto;
+          await finalize(
+            wasStopped ? GenerationStatus.Stopped : GenerationStatus.Error,
+            partialMsg,
+          );
+          break;
+        }
+        case 'error': {
+          this.logger.error(
+            'DIAL Core streamCompletion failed',
+            relayResult.error,
+          );
+          const errorMessage =
+            relayResult.error instanceof Error ? relayResult.error.message : '';
+          const partialMsg = {
+            ...relayResult.assembledMessage,
+            streamErrorMessage: errorMessage,
+          } as ConversationMessageDto;
+          await finalize(GenerationStatus.Error, partialMsg);
+          break;
+        }
+      }
+    } finally {
+      /*
+       * Reached only when the consuming `for await` (the controller's) is
+       * abandoned for a reason other than the relay loop above reaching a
+       * terminal outcome — e.g. an unexpected exception unwinding this
+       * generator between a `yield` and the next `relayIterator.next()`
+       * call. This is NOT reached merely because the downstream HTTP
+       * response closed: `ConversationController.streamCompletion` keeps
+       * consuming this generator after disconnect (see
+       * backend-owned-generation-persistence — a completion's generation is
+       * independent of the originating browser connection), so a closed
+       * response alone never abandons this loop. `.return()` injected by a
+       * genuinely abandoned consumer unwinds this generator at its current
+       * `yield`, skipping the `switch` above entirely, so without this
+       * branch the registry entry would never be released outside the
+       * 30-minute stale sweep. Abort defensively (idempotent) so the
+       * upstream relay notices and stops even if the caller's own
+       * abandonment didn't.
+       */
+      if (!relayCompletedNormally) {
+        lease.abortController.abort();
         const wasStopped =
-          this.generationService.getStatus(sessionId, conversationPath) ===
-          GenerationStatus.Stopped;
+          this.generationService.getCancellation(lease)?.reason ===
+          GenerationCancelReason.UserStop;
+        const currentAssembledMessage =
+          this.generationService.getAssembledMessage(lease) ?? assembledMessage;
         const partialMsg = {
-          ...relayResult.assembledMessage,
+          ...currentAssembledMessage,
           ...(wasStopped
             ? { wasStoppedByUser: true }
             : { streamErrorMessage: '' }),
@@ -624,21 +769,6 @@ export class ConversationStreamingService {
           wasStopped ? GenerationStatus.Stopped : GenerationStatus.Error,
           partialMsg,
         );
-        break;
-      }
-      case 'error': {
-        this.logger.error(
-          'DIAL Core streamCompletion failed',
-          relayResult.error,
-        );
-        const errorMessage =
-          relayResult.error instanceof Error ? relayResult.error.message : '';
-        const partialMsg = {
-          ...relayResult.assembledMessage,
-          streamErrorMessage: errorMessage,
-        } as ConversationMessageDto;
-        await finalize(GenerationStatus.Error, partialMsg);
-        break;
       }
     }
   }

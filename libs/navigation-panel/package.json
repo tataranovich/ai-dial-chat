@@ -1,0 +1,40 @@
+{
+  "name": "@epam/ai-dial-navigation-panel",
+  "description": "Primary application navigation — desktop nav rail, user menu, and mobile navigation bottom sheet",
+  "version": "0.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    "./styles.css": "./dist/index.css",
+    ".": {
+      "@epam/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@tabler/icons-react": "^3.44.0",
+    "@epam/ai-dial-conversation-input": "*"
+  },
+  "peerDependencies": {
+    "react": "^19.2.8",
+    "@epam/ai-dial-chat-shared": "*",
+    "@epam/ai-dial-ui-kit": "^0.15.0-dev.12"
+  },
+  "nx": {
+    "tags": [
+      "publishable"
+    ],
+    "targets": {
+      "publish": {
+        "command": "node tools/publish-lib.mjs {projectName} --version={args.ver} --dry={args.dry} --tag={args.tag} --development={args.development}"
+      }
+    }
+  }
+}

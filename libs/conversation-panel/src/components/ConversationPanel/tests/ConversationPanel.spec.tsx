@@ -1,11 +1,13 @@
+import { FilterTab } from '@epam/ai-dial-chat-shared';
 import { fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { CONVERSATION_PANEL_CLASS } from '../../../constants/public-class-names';
 import { ConversationItem } from '../../../models/panel-props';
-import { FilterTab } from '../../../types/conversation-classification';
 import { ConversationPanel } from '../ConversationPanel';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   mergeClasses: (...args: (string | undefined | false | null)[]) =>
     args.filter(Boolean).join(' '),
   DIAL_ICON_SIZE: { SM: 16, LG: 24 },
@@ -22,21 +24,6 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {label}
     </button>
   ),
-  SearchBar: ({
-    onChange,
-    placeholder,
-    value,
-  }: {
-    onChange: (v: string) => void;
-    placeholder: string;
-    value: string;
-  }) => (
-    <input
-      placeholder={placeholder}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  ),
   DialRoundedButton: ({
     onClick,
     label,
@@ -50,7 +37,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {label}
     </button>
   ),
-  DialTag: ({
+  Tag: ({
     onClick,
     label,
     selected,
@@ -59,16 +46,66 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     label: string;
     selected?: boolean;
   }) => (
-    <button onClick={onClick} aria-selected={selected} role="tab">
+    <button onClick={onClick} aria-pressed={selected}>
       {label}
     </button>
   ),
-  DialEllipsisTooltip: ({ text }: { text: string }) => <span>{text}</span>,
+  FilterChips: <T extends string>({
+    items,
+    value,
+    onChange,
+    'aria-label': ariaLabel,
+    chipClassName,
+  }: {
+    items: { value: T; label: string }[];
+    value: T;
+    onChange: (value: T) => void;
+    'aria-label'?: string;
+    chipClassName?: string;
+  }) => (
+    <div role="group" aria-label={ariaLabel}>
+      {items.map((item) => (
+        <button
+          key={item.value}
+          aria-pressed={item.value === value}
+          className={chipClassName}
+          onClick={() => onChange(item.value)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  ),
+  TagAppearance: { Outlined: 'outlined', Selectable: 'selectable' },
+  EllipsisTooltip: ({ text }: { text: string }) => <span>{text}</span>,
   ElementSize: { Small: 'small', Standard: 'standard', Large: 'large' },
   Dropdown: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  DialTooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   Skeleton: () => null,
   SkeletonVariant: { Circular: 'circular' },
+  Search: ({
+    onChange,
+    placeholder,
+    value,
+    clearLabel,
+    wrapperClassName,
+  }: {
+    onChange?: (v?: string) => void;
+    placeholder?: string;
+    value?: string;
+    clearLabel?: string;
+    wrapperClassName?: string;
+  }) => (
+    <div data-testid="search-wrapper" className={wrapperClassName}>
+      <input
+        type="search"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange?.(e.target.value)}
+      />
+      <button aria-label={clearLabel} onClick={() => onChange?.(undefined)} />
+    </div>
+  ),
 
   Button: ({
     onClick,
@@ -87,6 +124,13 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
 }));
 
 vi.mock('@epam/ai-dial-chat-shared', () => ({
+  FilterTab: {
+    All: 'all',
+    Pinned: 'pinned',
+    MyChats: 'my-chats',
+    Shared: 'shared',
+    Organization: 'organization',
+  },
   DeploymentIcon: () => null,
   mergeClasses: (...args: (string | undefined | false | null)[]) =>
     args.filter(Boolean).join(' '),
@@ -98,44 +142,44 @@ vi.mock('@epam/ai-dial-sidebar', () => ({
   PanelEmpty: ({ label }: { label: string }) => <div>{label}</div>,
   PanelNoResults: ({ label }: { label: string }) => <div>{label}</div>,
   SidebarOrientation: { Left: 'left', Right: 'right' },
-  SearchInput: ({
-    onChange,
-    placeholder,
-    value,
-    clearLabel,
-  }: {
-    onChange: (v: string) => void;
-    placeholder: string;
-    value: string;
-    clearLabel: string;
-  }) => (
-    <>
-      <input
-        type="search"
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      <button aria-label={clearLabel} onClick={() => onChange('')} />
-    </>
-  ),
+  /*
+   * The real panel puts `styles.headerClassName` on its header bar and
+   * `styles.headerActionsClassName` on the cluster holding `rightActions`.
+   * The stand-in keeps that nesting and gives both boxes a role and name, so
+   * a class landing on the wrong one fails without reaching into the DOM.
+   */
   SidebarPanel: ({
     children,
     isOpen,
     ariaLabel,
     rightActions,
+    styles,
   }: {
     children: React.ReactNode;
     isOpen?: boolean;
     ariaLabel: string;
     rightActions?: React.ReactNode;
+    styles?: {
+      headerClassName?: string;
+      headerActionsClassName?: string;
+    };
   }) => (
     <aside role="complementary" aria-label={ariaLabel} aria-hidden={!isOpen}>
-      {rightActions && (
-        <div role="group" aria-label="panel header actions">
-          {rightActions}
-        </div>
-      )}
+      <div
+        role="group"
+        aria-label="panel header"
+        className={styles?.headerClassName}
+      >
+        {rightActions && (
+          <div
+            role="group"
+            aria-label="panel header actions"
+            className={styles?.headerActionsClassName}
+          >
+            {rightActions}
+          </div>
+        )}
+      </div>
       {children}
     </aside>
   ),
@@ -236,6 +280,11 @@ const items: ConversationItem[] = [
     title: 'Shared chat',
     source: FilterTab.Shared,
   },
+  {
+    id: 'c6',
+    title: 'Org chat',
+    source: FilterTab.Organization,
+  },
 ];
 
 describe('ConversationPanel', () => {
@@ -296,6 +345,11 @@ describe('ConversationPanel', () => {
     render(
       <ConversationPanel {...BASE_PROPS} conversations={[]} isOpen={false} />,
     );
+    /*
+     * A backdrop overlay would be a plain div with no accessible role, so
+     * there is no semantic query that can assert its absence.
+     */
+    // eslint-disable-next-line testing-library/no-node-access -- see comment above
     expect(document.querySelector('div[aria-hidden="true"]')).toBeNull();
   });
 
@@ -312,6 +366,34 @@ describe('ConversationPanel', () => {
     expect(onNewChat).toHaveBeenCalledTimes(1);
   });
 
+  it('renders the filter tabs by default', () => {
+    render(<ConversationPanel {...BASE_PROPS} conversations={items} />);
+    expect(screen.getByText('All')).toBeTruthy();
+  });
+
+  it('does not render the filter tabs when isFilterTabsHidden is true', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={items}
+        isFilterTabsHidden
+      />,
+    );
+    expect(screen.queryByText('All')).toBeNull();
+  });
+
+  it('still lists every conversation group when the filter tabs are hidden', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={items}
+        isFilterTabsHidden
+      />,
+    );
+    expect(screen.getByText('Pinned chat')).toBeTruthy();
+    expect(screen.getByText('First chat')).toBeTruthy();
+  });
+
   it('puts isPinned items in Pinned group and others in My chats group', () => {
     render(<ConversationPanel {...BASE_PROPS} conversations={items} />);
     expect(screen.getByText('Pinned')).toBeTruthy();
@@ -322,10 +404,15 @@ describe('ConversationPanel', () => {
 
   it('collapses a group when its header is clicked', () => {
     render(<ConversationPanel {...BASE_PROPS} conversations={items} />);
-    const pinnedHeader = screen.getByText('Pinned').closest('button');
-    expect(pinnedHeader).toBeTruthy();
+    /*
+     * The mocked IconCaretDownFilled doesn't forward aria-hidden, so the
+     * header button's accessible name includes the icon's mock text.
+     */
+    const pinnedHeader = screen.getByRole('button', {
+      name: 'caret-down-filled Pinned',
+    });
     expect(screen.getByText('Pinned chat')).toBeTruthy();
-    fireEvent.click(pinnedHeader!);
+    fireEvent.click(pinnedHeader);
     expect(screen.queryByText('Pinned chat')).toBeNull();
   });
 
@@ -348,5 +435,160 @@ describe('ConversationPanel', () => {
     expect(
       screen.queryByRole('group', { name: 'panel header actions' }),
     ).toBeNull();
+  });
+
+  /*
+   * The corner radius itself is a CSS custom property read by the stylesheet
+   * (--cp-search-radius), so what a DOM test can pin is that the panel no
+   * longer hardcodes a radius utility on the wrapper.
+   */
+  it('sets no radius utility on the search field by default', () => {
+    render(<ConversationPanel {...BASE_PROPS} conversations={[]} />);
+
+    expect(screen.getByTestId('search-wrapper').className).not.toMatch(
+      /rounded-/,
+    );
+  });
+
+  it('still forwards styles.searchWrapperClassName to the search field', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={[]}
+        styles={{ searchWrapperClassName: 'rounded-xl' }}
+      />,
+    );
+
+    expect(
+      screen.getByTestId('search-wrapper').classList.contains('rounded-xl'),
+    ).toBe(true);
+  });
+
+  it('drops conversations whose source is in hiddenSources from every group', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={items}
+        hiddenSources={[FilterTab.Organization]}
+      />,
+    );
+    expect(screen.queryByText('Org chat')).toBeNull();
+    expect(screen.getByText('First chat')).toBeTruthy();
+  });
+
+  it('omits the hidden source tab from the filter row', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={items}
+        hiddenSources={[FilterTab.Organization]}
+      />,
+    );
+    expect(screen.queryByText('Organization')).toBeNull();
+    expect(screen.getAllByText('Shared').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows empty label when every conversation is hidden by hiddenSources', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={[items[5]]}
+        hiddenSources={[FilterTab.Organization]}
+      />,
+    );
+    expect(screen.queryByRole('listitem')).toBeNull();
+    expect(screen.getAllByText('No conversations yet')).toBeTruthy();
+  });
+});
+
+/*
+ * The public classes are host styling hooks, so these tests never find an
+ * element *by* the class — that would still pass with the class on the wrong
+ * node. They locate by role or text first, then assert the hook is present.
+ *
+ * This lives in the main spec rather than its own file so it reuses the ui-kit,
+ * chat-shared, sidebar and react-window mocks defined above.
+ */
+describe('ConversationPanel — public class names', () => {
+  it('marks the new-chat button, and only it', () => {
+    render(<ConversationPanel {...BASE_PROPS} conversations={items} />);
+
+    /*
+     * Located by its accessible name, which is the label the host passes —
+     * finding it by the class would pass even with the class on another node,
+     * which is the whole failure this test exists to catch.
+     */
+    expect(
+      screen.getByRole('button', { name: /New chat/ }).classList,
+    ).toContain(CONVERSATION_PANEL_CLASS.newChatButton);
+
+    expect(
+      screen
+        .getAllByRole('button')
+        .filter((button) =>
+          button.classList.contains(CONVERSATION_PANEL_CLASS.newChatButton),
+        ),
+    ).toHaveLength(1);
+  });
+
+  it('marks the search region found by its role', () => {
+    render(<ConversationPanel {...BASE_PROPS} conversations={items} />);
+
+    expect(screen.getByRole('search').classList).toContain(
+      CONVERSATION_PANEL_CLASS.search,
+    );
+  });
+});
+
+describe('ConversationPanel — header style forwarding', () => {
+  it('keeps its own header height when the host passes no class', () => {
+    render(<ConversationPanel {...BASE_PROPS} conversations={[]} />);
+
+    expect(
+      screen.getByRole('group', { name: 'panel header' }).classList,
+    ).toContain('h-[64px]');
+  });
+
+  it('forwards styles.headerClassName onto the header bar', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={[]}
+        styles={{ headerClassName: 'h-[80px] border-b' }}
+      />,
+    );
+
+    const header = screen.getByRole('group', { name: 'panel header' });
+    expect(header.classList).toContain('h-[80px]');
+    expect(header.classList).toContain('border-b');
+  });
+
+  it('forwards styles.newChatButtonClassName onto the New chat button', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={[]}
+        styles={{ newChatButtonClassName: 'h-[44px]' }}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: /New chat/ }).classList,
+    ).toContain('h-[44px]');
+  });
+
+  it('forwards styles.headerActionsClassName onto the trailing action cluster', () => {
+    render(
+      <ConversationPanel
+        {...BASE_PROPS}
+        conversations={[]}
+        headerActions={<button>Test Action</button>}
+        styles={{ headerActionsClassName: 'gap-4' }}
+      />,
+    );
+
+    expect(
+      screen.getByRole('group', { name: 'panel header actions' }).classList,
+    ).toContain('gap-4');
   });
 });

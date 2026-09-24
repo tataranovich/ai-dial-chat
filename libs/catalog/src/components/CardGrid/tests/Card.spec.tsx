@@ -1,8 +1,9 @@
+import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { CATALOG_CLASS } from '../../../constants/public-class-names';
 import type { CatalogItem } from '../../../models/catalog-item';
-import { CatalogEntityType } from '../../../types/entity-type';
 import {
   CredentialStatus,
   ToolsetAuthenticationType,
@@ -35,13 +36,60 @@ describe('Card — selected state', () => {
 
     const card = screen.getByRole('article', { hidden: true });
     expect(card.className).toContain('selectedCard');
+    // Checkmark icon is aria-hidden with no accessible role, so no semantic query can find it.
+    // eslint-disable-next-line testing-library/no-node-access
     expect(card.querySelector('svg')).toBeTruthy();
+  });
+});
+
+describe('Card — long version', () => {
+  it('caps the version at 30% of the row so it cannot overlap the name', () => {
+    render(
+      <Card item={makeItem({ version: 'With Google Search Grounding' })} />,
+    );
+
+    const version = screen.getByText('With Google Search Grounding');
+    expect(version.className).toContain('max-w-[30%]');
+    expect(version.className).toContain('shrink-0');
+  });
+
+  it('lets the name truncate instead of being pushed out', () => {
+    render(<Card item={makeItem()} />);
+
+    const name = screen.getByText('Claude');
+    expect(name.className).toContain('min-w-0');
+    expect(name.className).toContain('truncate');
   });
 });
 
 describe('Card — favorite visibility', () => {
   it('renders the star button for every entity type, prompts included', () => {
     render(<Card item={makeItem({ type: CatalogEntityType.Prompt })} />);
+
+    expect(
+      screen.getByRole('button', { name: 'Add to favorites' }),
+    ).toBeTruthy();
+  });
+
+  it('hides the star button and keeps the item non-favoritable when isFavoriteVisible returns false', () => {
+    render(
+      <Card
+        item={makeItem()}
+        isFavoriteVisible={() => false}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole('button', { name: 'Add to favorites' }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Remove from favorites' }),
+    ).toBeNull();
+  });
+
+  it('renders the star button when isFavoriteVisible returns true', () => {
+    render(<Card item={makeItem()} isFavoriteVisible={() => true} />);
 
     expect(
       screen.getByRole('button', { name: 'Add to favorites' }),
@@ -72,7 +120,7 @@ describe('Card — favorite revert', () => {
 });
 
 describe('Card — credentials badge', () => {
-  it('shows the LOGGED OUT badge for a signed-out toolset, for both API_KEY and OAUTH', () => {
+  it('shows the logged-out warning icon for a signed-out toolset, for both API_KEY and OAUTH', () => {
     for (const authenticationType of [
       ToolsetAuthenticationType.ApiKey,
       ToolsetAuthenticationType.OAuth,
@@ -86,15 +134,17 @@ describe('Card — credentials badge', () => {
               globalStatus: CredentialStatus.SignedOut,
             },
           })}
-          credentialsBadgeLoggedOutLabel="LOGGED OUT"
+          credentialsBadgeLoggedOutLabel="Authorize to use this toolset."
         />,
       );
-      expect(screen.getByText('LOGGED OUT')).toBeTruthy();
+      expect(
+        screen.getByRole('img', { name: 'Authorize to use this toolset.' }),
+      ).toBeTruthy();
       unmount();
     }
   });
 
-  it('shows no badge when signed in or when authenticationType is NONE', () => {
+  it('shows no warning icon when signed in or when authenticationType is NONE', () => {
     const { unmount } = render(
       <Card
         item={makeItem({
@@ -103,10 +153,12 @@ describe('Card — credentials badge', () => {
             userStatus: CredentialStatus.SignedIn,
           },
         })}
-        credentialsBadgeLoggedOutLabel="LOGGED OUT"
+        credentialsBadgeLoggedOutLabel="Authorize to use this toolset."
       />,
     );
-    expect(screen.queryByText('LOGGED OUT')).toBeNull();
+    expect(
+      screen.queryByRole('img', { name: 'Authorize to use this toolset.' }),
+    ).toBeNull();
     unmount();
 
     render(
@@ -114,9 +166,141 @@ describe('Card — credentials badge', () => {
         item={makeItem({
           credentials: { authenticationType: ToolsetAuthenticationType.None },
         })}
-        credentialsBadgeLoggedOutLabel="LOGGED OUT"
+        credentialsBadgeLoggedOutLabel="Authorize to use this toolset."
       />,
     );
-    expect(screen.queryByText('LOGGED OUT')).toBeNull();
+    expect(
+      screen.queryByRole('img', { name: 'Authorize to use this toolset.' }),
+    ).toBeNull();
+  });
+});
+
+describe('Card — read-only state', () => {
+  const featuredItem = makeItem({ isFeatured: true, folder: ['Root', 'Team'] });
+
+  it('shows the Featured tag, the star, and the footer divider by default', () => {
+    render(<Card item={featuredItem} />);
+
+    const card = screen.getByRole('article', { hidden: true });
+    expect(screen.getByText('Featured')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Add to favorites' }),
+    ).toBeTruthy();
+    expect(screen.getByText('Team')).toBeTruthy();
+    expect(card.innerHTML).toContain('border-t');
+  });
+
+  it('withholds the Featured tag, the star, and the footer divider when isReadonly is set', () => {
+    render(<Card item={featuredItem} isReadonly onToggle={vi.fn()} />);
+
+    const card = screen.getByRole('article', { hidden: true });
+    expect(screen.queryByText('Featured')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Add to favorites' }),
+    ).toBeNull();
+    expect(card.innerHTML).not.toContain('border-t');
+    // The folder path is the one footer element a read-only card keeps.
+    expect(screen.getByText('Team')).toBeTruthy();
+  });
+
+  it('drops the footer row entirely when a read-only item has no folder path', () => {
+    render(<Card item={makeItem({ isFeatured: true })} isReadonly />);
+
+    const card = screen.getByRole('article', { hidden: true });
+    expect(card.innerHTML).not.toContain('pt-3');
+  });
+});
+
+describe('Card — description rendering', () => {
+  it('renders a Markdown-formatted description as formatted text, not literal characters', () => {
+    render(<Card item={makeItem({ description: '**bold** text' })} />);
+
+    const boldElement = screen.getByText('bold');
+    expect(boldElement.tagName).toBe('STRONG');
+  });
+
+  it('renders an HTML-like description as sanitized text content without literal tag markup', () => {
+    render(
+      <Card
+        item={makeItem({ description: "<span style='color:red'>text</span>" })}
+      />,
+    );
+
+    expect(screen.getByText('text')).toBeTruthy();
+    // Verify the style attribute was stripped by checking the span has no style
+    const span = screen.getByText('text');
+    expect(span.parentElement?.getAttribute('style')).toBeNull();
+  });
+
+  it('renders a plain-text description unchanged', () => {
+    const plainText = 'Plain text description with no markdown or HTML';
+    render(<Card item={makeItem({ description: plainText })} />);
+
+    expect(screen.getByText(plainText)).toBeTruthy();
+  });
+
+  it('triggers the card onClick when clicking plain description text', async () => {
+    const item = makeItem({ description: 'Open details' });
+    const onCardClick = vi.fn();
+    render(<Card item={item} onClick={onCardClick} />);
+
+    await userEvent.click(screen.getByText('Open details'));
+
+    expect(onCardClick).toHaveBeenCalledWith(item);
+  });
+
+  it('renders a Markdown link as a real, clickable <a> element', () => {
+    render(
+      <Card
+        item={makeItem({ description: '[link text](https://example.com)' })}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: 'link text' });
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('https://example.com');
+  });
+
+  it('does not trigger the card onClick when clicking a description link', async () => {
+    const onCardClick = vi.fn();
+    render(
+      <Card
+        item={makeItem({ description: '[link](https://example.com)' })}
+        onClick={onCardClick}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: 'link' });
+    await userEvent.click(link);
+
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it('keeps the description wrapper with line-clamp-2 and min-h-[2lh] classes for truncation', () => {
+    const longDescription =
+      'Line 1\nLine 2\nLine 3\nLine 4 which should be hidden due to clamping';
+    render(<Card item={makeItem({ description: longDescription })} />);
+
+    const card = screen.getByRole('article', { hidden: true });
+    // eslint-disable-next-line testing-library/no-node-access
+    const descriptionDiv = Array.from(card.querySelectorAll('div')).find((el) =>
+      el.className.includes('line-clamp-2'),
+    );
+    expect(descriptionDiv?.className).toContain('line-clamp-2');
+    expect(descriptionDiv?.className).toContain('min-h-[2lh]');
+  });
+});
+
+describe('Card — public class names', () => {
+  it('stamps the card in every state', () => {
+    const { rerender } = render(<Card item={makeItem()} />);
+    expect(screen.getByRole('article', { hidden: true }).classList).toContain(
+      CATALOG_CLASS.card,
+    );
+
+    rerender(<Card item={makeItem()} isSelected />);
+    expect(screen.getByRole('article', { hidden: true }).classList).toContain(
+      CATALOG_CLASS.card,
+    );
   });
 });

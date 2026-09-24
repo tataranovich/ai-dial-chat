@@ -66,8 +66,12 @@ const makeItem = (
 
 /** The overlay protocol does not forward scheduler-only fields — strip them before comparing against bridge output. */
 const makeOverlayItem = (overrides?: Partial<ConversationListItemDto>) => {
-  const { isScheduledTask, scheduleId, runId, ...overlayItem } =
-    makeItem(overrides);
+  const {
+    isScheduledTask: _isScheduledTask,
+    scheduleId: _scheduleId,
+    runId: _runId,
+    ...overlayItem
+  } = makeItem(overrides);
   return overlayItem;
 };
 
@@ -80,6 +84,7 @@ const makeOverlay = (): OverlayContextType & {
   registerConversationListBridge: vi.fn(),
   pendingModelId: null,
   authProviderUiModes: undefined,
+  authAutoSignInProvider: undefined,
   clearPendingModelId: vi.fn(),
   notifyConversationLoaded: vi.fn(),
   notifyConversationsUpdated: vi.fn(),

@@ -1,8 +1,9 @@
 import { copyToClipboard, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
-  GhostIconButton,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
+  GhostIconButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck, IconCopy } from '@tabler/icons-react';
 import {
@@ -20,6 +21,8 @@ interface Props {
   children: ReactNode;
   /** Language class from react-markdown (e.g. `language-json`). */
   codeClassName?: string;
+  /** Typography class applied to the `<pre>` block. Defaults to `'dial-code-text'`. */
+  blockClassName?: string;
   /** Accessible label for the copy button. */
   copyAriaLabel: string;
 }
@@ -28,6 +31,7 @@ interface Props {
 export const StageCodeBlock: FC<Props> = ({
   children,
   codeClassName,
+  blockClassName = 'dial-code-text',
   copyAriaLabel,
 }) => {
   const [isCopied, setIsCopied] = useState(false);
@@ -53,7 +57,8 @@ export const StageCodeBlock: FC<Props> = ({
   return (
     <pre
       className={mergeClasses(
-        'dial-small-text relative max-h-[300px] overflow-auto rounded border p-3',
+        'relative max-h-[300px] overflow-auto rounded border p-3',
+        blockClassName,
         styles.codeBlock,
       )}
     >
@@ -64,11 +69,13 @@ export const StageCodeBlock: FC<Props> = ({
             <IconCheck
               size={DIAL_ICON_SIZE.SM}
               className={styles.iconSecondary}
+              stroke={DIAL_KIT_ICON_STROKE}
             />
           ) : (
             <IconCopy
               size={DIAL_ICON_SIZE.SM}
               className={styles.iconSecondary}
+              stroke={DIAL_KIT_ICON_STROKE}
             />
           )
         }
@@ -76,9 +83,9 @@ export const StageCodeBlock: FC<Props> = ({
         onClick={handleCopy}
         className="absolute end-2 top-2"
       />
-      <code className={mergeClasses('font-mono', codeClassName)}>
-        {children}
-      </code>
+      {/* Family is inherited from the `<pre>`'s typography class. A monospace
+       * utility here would replace the themed face with the generic stack. */}
+      <code className={codeClassName}>{children}</code>
     </pre>
   );
 };

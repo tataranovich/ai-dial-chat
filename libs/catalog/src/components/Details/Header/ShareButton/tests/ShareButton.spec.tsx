@@ -1,12 +1,13 @@
+import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { CatalogItem } from '../../../../../models/catalog-item';
-import { CatalogEntityType } from '../../../../../types/entity-type';
 import { ShareButton } from '../ShareButton';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   NeutralButton: ({
     label,
     onClick,

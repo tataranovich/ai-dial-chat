@@ -1,6 +1,7 @@
 import type {
   CodeBlockTheme,
   DisplayAttachment,
+  MarkdownRendererClassNames,
   MessageRole,
   StarterOption,
 } from '@epam/ai-dial-chat-shared';
@@ -77,14 +78,26 @@ export interface AssistantMessageBubbleLabels extends MessageBubbleLabels {
   codeBlockCopyLabel?: string;
   /** aria-label for the code block copy button after copying. */
   codeBlockCopiedLabel?: string;
+  /** Label for the copy action on a Markdown table (copies as Markdown format). */
+  tableCopyLabel?: string;
+  /** Status announced after a Markdown table has been copied. */
+  tableCopiedLabel?: string;
+  /** Label for downloading a Markdown table as CSV. */
+  tableDownloadCsvLabel?: string;
+  /** Label for opening a Markdown table in the canvas. */
+  tableOpenInCanvasLabel?: string;
+  /** Filename used when downloading a Markdown table as CSV. */
+  tableDownloadFilename?: string;
+  /** Accessible label for a Markdown table's scrollable region. */
+  tableScrollRegionAriaLabel?: string;
   /** Fallback aria-label for the deployment icon. Defaults to `'AI'`. */
   deploymentIconFallbackLabel?: string;
 }
 
 /** Shared props for user and assistant message bubble components. */
 interface BaseMessageBubbleProps {
-  /** Plain-text (or Markdown) content of the message. */
-  text: string;
+  /** Plain-text (or Markdown) content of the message. When absent, the bubble renders for `beforeContent` alone. */
+  text?: string;
   /** Color and typography overrides applied as CSS custom properties. */
   styles?: MessageBubbleStyles;
   /** Props for the `MessageActions` bar below the bubble. */
@@ -105,6 +118,17 @@ interface BaseMessageBubbleProps {
   onAttachmentRetry?: (id: string) => void;
   /** ID of the attachment currently open in the canvas panel, if any. Renders that tile's selected visual state. */
   selectedAttachmentId?: string;
+  /**
+   * Content rendered at the inline-start of the message's first text line,
+   * which word-flows after it (e.g. a used-skill chip — inline-level content
+   * no taller than a text line). The user bubble renders it inline within
+   * the text; the assistant bubble overlays it on the first markdown block's
+   * first line, which indents past it. The user bubble renders for the slot
+   * alone even when `text` is empty; an assistant message with no text
+   * renders the slot on its own line — above the streaming placeholder while
+   * the first token has not arrived yet.
+   */
+  beforeContent?: ReactNode;
 }
 
 /** Props for `UserMessageBubble`. */
@@ -119,6 +143,14 @@ export interface UserMessageBubbleProps extends BaseMessageBubbleProps {
 export interface AssistantMessageBubbleProps extends BaseMessageBubbleProps {
   /** react-markdown component overrides. Use to inject custom renderers (e.g. citation markers) into markdown elements. */
   markdownComponents?: Components;
+  /** Per-element markdown typography classes. Defaults to the renderer's full-size scale; pass `COMPACT_MARKDOWN_CLASS_NAMES` for the smaller body scale. */
+  markdownClassNames?: MarkdownRendererClassNames;
+  /**
+   * Rewrites markdown `href`/`src` values before they are rendered. Forwarded
+   * to `MDMessageViewer`. Hosts use this to map DIAL file ids to download URLs.
+   * Defaults to no extra rewrite.
+   */
+  markdownUrlTransform?: (url: string) => string;
   /** Quick-reply buttons rendered below the message text when non-empty. */
   starters?: StarterOption[];
   /** Fires with the clicked `StarterOption`. */
@@ -131,6 +163,8 @@ export interface AssistantMessageBubbleProps extends BaseMessageBubbleProps {
   deploymentDisplayName?: string;
   /** Syntax highlight theme for code blocks. Defaults to `'dark'`. */
   codeBlockTheme?: CodeBlockTheme;
+  /** Opens serialized Markdown table content in the host canvas. */
+  tableOnOpenInCanvas?: (markdown: string) => void;
   /** Localised labels for quick replies, the thinking indicator, and code block copy actions. */
   labels?: AssistantMessageBubbleLabels;
 }

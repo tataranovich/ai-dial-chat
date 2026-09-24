@@ -2,30 +2,38 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import dts from 'vite-plugin-dts';
+import { createLibTailwindUtilities } from '../../tools/vite-lib-tailwind-utilities.mjs';
 import * as path from 'path';
-
-export default defineConfig(() => ({
+import { createIsExternalPeerImport } from '../../tools/vite-external-matcher.mjs';
+import { createVerifyPublishedStyles } from '../../tools/vite-verify-published-styles.mjs';
+const REQUIRED_PUBLISHED_STYLE_MARKERS = [
+  '.desktop\\:w-\\[540px\\]',
+  '.rtl\\:flex-row-reverse',
+  '.text-start',
+] as const;
+const EXTERNAL_PEER_NAMES = [
+  '@epam/ai-dial-chat-shared',
+  '@epam/ai-dial-publish-panel',
+];
+const isExternalPeerImport = createIsExternalPeerImport(EXTERNAL_PEER_NAMES);
+export default defineConfig(({ command }) => ({
+  // Published libraries must also run with React's production runtime.
+  oxc: command === 'build' ? { jsx: { development: false } } : undefined,
   root: import.meta.dirname,
   cacheDir: '../../node_modules/.vite/libs/catalog',
   plugins: [
+    createLibTailwindUtilities({ root: import.meta.dirname }),
     react(),
     dts({
       entryRoot: 'src',
       tsconfigPath: path.join(import.meta.dirname, 'tsconfig.lib.json'),
     }),
+    createVerifyPublishedStyles({
+      root: import.meta.dirname,
+      requiredMarkers: REQUIRED_PUBLISHED_STYLE_MARKERS,
+      forbidEmbeddedFonts: true,
+    }),
   ],
-  resolve: {
-    alias: {
-      '@epam/ai-dial-kit': path.resolve(
-        import.meta.dirname,
-        '../ai-dial-kit/src/index.ts',
-      ),
-      '@epam/ai-dial-publish-panel': path.resolve(
-        import.meta.dirname,
-        '../publish-panel/src/index.ts',
-      ),
-    },
-  },
   build: {
     outDir: './dist',
     emptyOutDir: true,
@@ -34,19 +42,25 @@ export default defineConfig(() => ({
       transformMixedEsModules: true,
     },
     lib: {
-      entry: 'src/index.ts',
+      entry: {
+        index: 'src/index.ts',
+        mapping: 'src/entry-points/mapping.ts',
+      },
       name: '@epam/ai-dial-catalog',
-      fileName: 'index',
+      cssFileName: 'index',
       formats: ['es' as const],
     },
-    rollupOptions: {
-      external: [
-        'react',
-        'react-dom',
-        'react/jsx-runtime',
-        '@epam/ai-dial-ui-kit',
-        '@tabler/icons-react',
-      ],
+    rolldownOptions: {
+      external: (id) =>
+        [
+          'react',
+          'react-dom',
+          'react/jsx-runtime',
+          'react/jsx-dev-runtime',
+          '@tabler/icons-react',
+        ].includes(id) ||
+        /^@epam\/ai-dial-ui-kit(?:\/|$)/.test(id) ||
+        isExternalPeerImport(id),
     },
   },
   test: {
@@ -54,6 +68,22 @@ export default defineConfig(() => ({
     watch: false,
     globals: true,
     environment: 'jsdom',
+    /*
+     * Resolve workspace peers from source for tests only: their published
+     * bundles import `.scss` modules that are not emitted to `dist`, which
+     * vitest cannot load. Kept out of the shared `resolve.alias` so it never
+     * affects this lib's own production build.
+     */
+    alias: {
+      '@epam/ai-dial-chat-shared': path.resolve(
+        import.meta.dirname,
+        '../chat-shared/src/index.ts',
+      ),
+      '@epam/ai-dial-publish-panel': path.resolve(
+        import.meta.dirname,
+        '../publish-panel/src/index.ts',
+      ),
+    },
     setupFiles: ['./src/test-setup.ts'],
     include: ['{src,tests}/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
     reporters: ['default'],

@@ -10,14 +10,14 @@
         "options": {
           "command": "webpack-cli build",
           "args": [
-            "--node-env=production"
+            "--config-node-env=production"
           ],
           "cwd": "apps/chat-api"
         },
         "configurations": {
           "development": {
             "args": [
-              "--node-env=development"
+              "--config-node-env=development"
             ]
           }
         }
@@ -73,7 +73,7 @@
         ],
         "options": {
           "cwd": "{workspaceRoot}",
-          "command": "cross-env SWC_NODE_PROJECT=apps/chat-api/tsconfig.app.json node -r @swc-node/register apps/chat-api/src/openapi-spec.ts"
+          "command": "cross-env SWC_NODE_PROJECT=apps/chat-api/tsconfig.app.json node -r @swc-node/register apps/chat-api/src/openapi-spec.ts && npm exec prettier -- --write libs/chat-api-client/openapi.json"
         }
       },
       "openapi-sdk": {
@@ -86,7 +86,7 @@
         ],
         "options": {
           "cwd": "{workspaceRoot}",
-          "command": "cross-env HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= npm exec openapi-generator-cli -- generate -i libs/chat-api-client/openapi.json -g typescript-fetch --reserved-words-mappings function=function -o libs/chat-api-client/src/generated --additional-properties=supportsES6=true,withoutRuntimeChecks=true,npmName=@epam/chat-api-client,npmVersion=0.0.1 && node tools/openapi/postprocess-client.mjs && npm exec prettier -- --write \"libs/chat-api-client/src/generated/src/**/*.ts\" && node tools/openapi/check-client.mjs"
+          "command": "cross-env HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= npm exec openapi-generator-cli -- generate -i libs/chat-api-client/openapi.json -g typescript-fetch --reserved-words-mappings function=function -o libs/chat-api-client/src/generated --additional-properties=supportsES6=true,withoutRuntimeChecks=true,npmName=@epam/chat-api-client,npmVersion=0.0.1 && node tools/openapi/postprocess-client.mjs && npm exec prettier -- --write \"libs/chat-api-client/src/generated/src/**/*.ts\" libs/chat-api-client/src/generated/README.md && node tools/openapi/check-client.mjs"
         }
       },
       "openapi": {
@@ -118,7 +118,8 @@
     }
   },
   "dependencies": {
-    "@epam/ai-dial-typescript-sdk": "0.1.0-dev.31",
+    "@cacheable/memory": "^2.2.0",
+    "@epam/ai-dial-typescript-sdk": "0.1.1",
     "@nestjs/cache-manager": "^3.1.2",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.4",
@@ -150,11 +151,11 @@
     "helmet": "^8.1.0",
     "jose": "5.10.0",
     "mime-types": "^3.0.2",
-    "multer": "2.2.0",
+    "multer": "2.3.0",
     "openid-client": "~5.7.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.0",
-    "sanitize-html": "^2.15.0",
+    "sanitize-html": "^2.17.7",
     "tslib": "^2.3.0",
     "yauzl": "^3.4.0"
   },
@@ -168,7 +169,7 @@
     "@types/yauzl": "^3.4.0"
   },
   "overrides": {
-    "js-yaml": "4.3.1",
-    "multer": "2.2.0"
+    "js-yaml": "4.3.2",
+    "multer": "2.3.0"
   }
 }

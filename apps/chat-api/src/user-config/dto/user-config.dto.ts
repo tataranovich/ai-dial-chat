@@ -18,12 +18,17 @@ export interface PromptsConfig {
   installed: string[];
 }
 
+export interface SkillsConfig {
+  installed: string[];
+}
+
 export interface UserConfig {
   version: number;
   conversations: ConversationsConfig;
   toolsets: ToolsetsConfig;
   deployments: DeploymentsConfig;
   prompts: PromptsConfig;
+  skills: SkillsConfig;
   /** Internal flag: set after legacy installation files have been consolidated once. */
   legacyMigrationDone?: boolean;
 }
@@ -62,8 +67,17 @@ export class DeploymentsConfigDto implements DeploymentsConfig {
 
 export class PromptsConfigDto implements PromptsConfig {
   @ApiProperty({
-    description: 'Favorited prompt paths.',
-    example: ['Work/AI/summarize'],
+    description: 'Favorited prompt resource ids (`prompts/{bucket}/{path}`).',
+    example: ['prompts/my-bucket/Work/AI/summarize'],
+    type: [String],
+  })
+  installed!: string[];
+}
+
+export class SkillsConfigDto implements SkillsConfig {
+  @ApiProperty({
+    description: 'Favorited skill resource URLs.',
+    example: ['skills/my-bucket/analysis/revenue-skill'],
     type: [String],
   })
   installed!: string[];
@@ -87,9 +101,12 @@ export class UserConfigDto implements UserConfig {
 
   @ApiProperty({ type: PromptsConfigDto })
   prompts!: PromptsConfigDto;
+
+  @ApiProperty({ type: SkillsConfigDto })
+  skills!: SkillsConfigDto;
 }
 
-export const CURRENT_CONFIG_VERSION = 4;
+export const CURRENT_CONFIG_VERSION = 6;
 
 export const DEFAULT_USER_CONFIG: UserConfig = {
   version: CURRENT_CONFIG_VERSION,
@@ -97,6 +114,7 @@ export const DEFAULT_USER_CONFIG: UserConfig = {
   toolsets: { installed: [] },
   deployments: { installed: [], selectedId: null },
   prompts: { installed: [] },
+  skills: { installed: [] },
 };
 
 /*
@@ -109,6 +127,7 @@ export const createDefaultUserConfig = (): UserConfig => ({
   toolsets: { installed: [] },
   deployments: { installed: [], selectedId: null },
   prompts: { installed: [] },
+  skills: { installed: [] },
 });
 
 /** Returns the string entries of a stored `installed` array, dropping anything else. */
@@ -122,7 +141,29 @@ const readInstalledIds = (
   );
 };
 
-export const migrateConfig = (raw: unknown): UserConfig => {
+const PROMPT_RESOURCE_PREFIX = 'prompts/';
+
+/*
+ * v5→v6: `prompts.installed` becomes full `prompts/{bucket}/{path}` ids,
+ * the same shape `CatalogItem.id` already carries end to end (see
+ * `unify-prompt-resource-id`). A stored entry from any earlier version can
+ * only be a bare, bucket-relative path — a shared prompt was already stored
+ * qualified with its owner's bucket under the old scheme (see
+ * `map-prompt-to-catalog-item.ts`'s pre-change split) — so a bare entry is
+ * unambiguously a personal prompt and is qualified with the caller's own
+ * bucket. An already-qualified entry is left untouched.
+ */
+const qualifyInstalledPrompts = (
+  installed: string[],
+  userBucket: string,
+): string[] =>
+  installed.map((id) =>
+    id.startsWith(PROMPT_RESOURCE_PREFIX)
+      ? id
+      : `${PROMPT_RESOURCE_PREFIX}${userBucket}/${id}`,
+  );
+
+export const migrateConfig = (raw: unknown, userBucket: string): UserConfig => {
   if (raw == null || typeof raw !== 'object') {
     return createDefaultUserConfig();
   }
@@ -151,13 +192,19 @@ export const migrateConfig = (raw: unknown): UserConfig => {
   const toolsetsInstalled = readInstalledIds(toolsetsObj);
 
   const deploymentsObj = obj['deployments'] as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   const deploymentsInstalled = readInstalledIds(deploymentsObj);
 
   /* v3→v4: prompts favorites. Absent in every earlier shape. */
   const promptsObj = obj['prompts'] as Record<string, unknown> | undefined;
-  const promptsInstalled = readInstalledIds(promptsObj);
+  const promptsInstalled = qualifyInstalledPrompts(
+    readInstalledIds(promptsObj),
+    userBucket,
+  );
+
+  /* v4→v5: skill favorites. Absent in every earlier shape. */
+  const skillsObj = obj['skills'] as Record<string, unknown> | undefined;
+  const skillsInstalled = readInstalledIds(skillsObj);
 
   // v2→v3: extract selectedId if present, default to null
   const deploymentsSelectedIdRaw = deploymentsObj?.['selectedId'];
@@ -178,6 +225,7 @@ export const migrateConfig = (raw: unknown): UserConfig => {
       selectedId: deploymentsSelectedId,
     },
     prompts: { installed: promptsInstalled },
+    skills: { installed: skillsInstalled },
     legacyMigrationDone,
   };
 };

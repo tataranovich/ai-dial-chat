@@ -5,18 +5,19 @@ import {
 } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
-  DialSearch,
   DropdownItem,
   ElementSize,
   Highlight,
+  MenuItemMark,
+  Search,
 } from '@epam/ai-dial-ui-kit';
-import { IconCheck } from '@tabler/icons-react';
 import { type ReactNode, useMemo, useState } from 'react';
 import {
   MODEL_SELECTOR_SKELETON_ROW_COUNT,
   ModelSelectorSkeletonIcon,
   ModelSelectorSkeletonLabel,
 } from '../components/ModelSelectorSkeleton/ModelSelectorSkeleton';
+import { CONVERSATION_INPUT_CLASS } from '../constants/public-class-names';
 import type { ModelSelectorLabels } from '../models/Input';
 import {
   buildDeploymentIcon,
@@ -37,26 +38,14 @@ export interface UseModelSelectorOptions {
   modelSelectorLabels?: ModelSelectorLabels;
   /** Class applied to the sticky search header wrapper for theming. Defaults to a `--bg-layer-raised` background. */
   searchHeaderClassName?: string;
-  /**
-   * Class applied to the currently selected menu item. Defaults to a
-   * `--bg-accent-primary-alpha` background. The dropdown item is owned by the
-   * ui-kit and takes no `style`, so its background can only be overridden
-   * through this class or by setting `--ms-selected-item-bg` at theme level —
-   * unlike the other two, it has no entry in {@link ModelSelectorColors}.
-   */
-  selectedItemClassName?: string;
-  /** Class applied to the checkmark icon on the currently selected menu item. Defaults to a `--text-accent` color. */
-  selectedItemCheckClassName?: string;
   /** Color overrides applied as CSS custom properties. */
   colors?: ModelSelectorColors;
 }
 
 /** Color overrides for the model-selector menu, applied as CSS custom properties. */
-export interface ModelSelectorColors {
+interface ModelSelectorColors {
   /** Sticky search header background. Fallback: `--bg-layer-raised`. */
   searchHeaderBackground?: string;
-  /** Checkmark icon color on the selected row. Fallback: `--text-accent`. */
-  selectedItemCheck?: string;
 }
 
 /** Values returned by `useModelSelector`. */
@@ -67,6 +56,8 @@ export interface UseModelSelectorResult {
   selectorAriaLabel: string;
   /** Display name of the currently selected deployment, or `undefined` when none is selected or loading. */
   selectedLabel: string | undefined;
+  /** Display version of the currently selected deployment, or `undefined` when none is selected, loading, or the deployment has no version. */
+  selectedVersion: string | undefined;
   /** Menu items for the deployment dropdown. */
   menuItems: DropdownItem[];
   /** Sticky search header rendered above the menu items. */
@@ -82,8 +73,6 @@ export const useModelSelector = ({
   onDeploymentChange,
   modelSelectorLabels,
   searchHeaderClassName = styles.searchHeader,
-  selectedItemClassName = styles.selectedItem,
-  selectedItemCheckClassName = styles.selectedItemCheck,
   colors,
 }: UseModelSelectorOptions): UseModelSelectorResult => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -93,6 +82,9 @@ export const useModelSelector = ({
     [deployments, selectedDeploymentId],
   );
   const isLoading = modelSelectorLabels?.loading !== undefined;
+
+  const isSelectedDeploymentUnavailable =
+    !isLoading && !selectedItem && !!selectedDeploymentId;
 
   const selectorIcon: ReactNode = useMemo(
     () =>
@@ -104,12 +96,22 @@ export const useModelSelector = ({
           selectedItem?.type,
           selectedItem?.displayName ?? selectedItem?.id ?? '',
           DIAL_ICON_SIZE.LG,
+          isSelectedDeploymentUnavailable
+            ? (modelSelectorLabels?.unavailableTooltip ??
+                'This deployment is no longer available')
+            : undefined,
         )
       ),
-    [isLoading, selectedItem],
+    [
+      isLoading,
+      selectedItem,
+      isSelectedDeploymentUnavailable,
+      modelSelectorLabels?.unavailableTooltip,
+    ],
   );
 
   const selectedLabel = selectedItem?.displayName ?? selectedItem?.id;
+  const selectedVersion = selectedItem?.displayVersion;
   const selectorAriaLabel = selectedLabel
     ? `${modelSelectorLabels?.ariaLabel ?? 'Select model'}: ${selectedLabel}`
     : (modelSelectorLabels?.ariaLabel ?? 'Select model');
@@ -141,41 +143,31 @@ export const useModelSelector = ({
       }
       return [];
     }
-    return filterDeployments(deployments, searchQuery).map((item) => {
-      const isSelected = item.id === selectedDeploymentId;
-      return {
-        key: item.id,
-        label: (
-          <span
-            className="flex w-full items-center justify-between gap-2"
-            style={buildCssVars({
-              '--ms-selected-item-check': colors?.selectedItemCheck,
-            })}
-          >
-            <Highlight
-              text={getDeploymentLabel(item)}
-              query={searchQuery}
-              maxLines={1}
-            />
-            {isSelected && (
-              <IconCheck
-                size={DIAL_ICON_SIZE.SM}
-                stroke={2}
-                className={selectedItemCheckClassName}
-                aria-hidden
-              />
-            )}
-          </span>
-        ),
-        icon: buildDeploymentIcon(
-          item.iconUrl,
-          item.type,
-          item.displayName ?? item.id,
-        ),
-        onClick: () => onDeploymentChange?.(item.id),
-        className: isSelected ? selectedItemClassName : undefined,
-      };
-    });
+    return filterDeployments(deployments, searchQuery).map((item) => ({
+      key: item.id,
+      label: (
+        <Highlight
+          text={getDeploymentLabel(item)}
+          query={searchQuery}
+          maxLines={1}
+        />
+      ),
+      icon: buildDeploymentIcon(
+        item.iconUrl,
+        item.type,
+        item.displayName ?? item.id,
+      ),
+      /* The picked deployment is the menu's single choice, so the kit draws the
+         trailing check and announces the row as a radio item. */
+      mark: MenuItemMark.Check,
+      checked: item.id === selectedDeploymentId,
+      className: mergeClasses(
+        CONVERSATION_INPUT_CLASS.modelMenuItem,
+        item.id === selectedDeploymentId &&
+          CONVERSATION_INPUT_CLASS.modelMenuItemSelected,
+      ),
+      onClick: () => onDeploymentChange?.(item.id),
+    }));
   }, [
     deployments,
     isLoading,
@@ -183,9 +175,6 @@ export const useModelSelector = ({
     selectedDeploymentId,
     modelSelectorLabels,
     onDeploymentChange,
-    selectedItemClassName,
-    selectedItemCheckClassName,
-    colors?.selectedItemCheck,
   ]);
 
   const menuHeader: ReactNode = useMemo(
@@ -198,14 +187,15 @@ export const useModelSelector = ({
           className={mergeClasses(
             'sticky top-0 z-10 pb-1 pe-2 pt-2',
             searchHeaderClassName,
+            CONVERSATION_INPUT_CLASS.modelMenuSearch,
           )}
         >
-          <DialSearch
+          <Search
             value={searchQuery}
             placeholder={modelSelectorLabels?.searchPlaceholder ?? 'Search'}
             size={ElementSize.Small}
             wrapperClassName="border-0"
-            onChange={setSearchQuery}
+            onChange={(value) => setSearchQuery(value ?? '')}
           />
         </div>
       ) : undefined,
@@ -227,6 +217,7 @@ export const useModelSelector = ({
     selectorIcon,
     selectorAriaLabel,
     selectedLabel,
+    selectedVersion,
     menuItems,
     menuHeader,
     onOpenChange: handleOpenChange,

@@ -97,7 +97,7 @@ Before uploading, the system SHALL list the destination month folder once per im
 #### Scenario: Skipped attachment
 
 - **WHEN** an attachment fails path validation, cannot be found in the archive, or exhausts its conflict retries
-- **THEN** that attachment is skipped, a warning notification is shown, and the conversation still imports
+- **THEN** that attachment is skipped, the notification and import job warning identify its file name using the same localized text (never a raw translation placeholder), and the conversation still imports
 
 #### Scenario: JSON import has no attachment upload
 
@@ -106,7 +106,24 @@ Before uploading, the system SHALL list the destination month folder once per im
 
 ### Requirement: Rewrite attachment references to new upload locations
 
-After re-uploading an archive attachment, the system SHALL rewrite the corresponding `message.custom_content.attachments[].url` (and `reference_url` where present) to the uploaded file's returned `files/{bucket}/{path}` URL, so the imported conversation points at the newly uploaded files. When the upload was suffixed to resolve a name collision, the system SHALL also rewrite the attachment's `title` to the suffixed file name, so the displayed name matches the file actually stored; an attachment uploaded under its original name SHALL keep its original `title` unchanged.
+After re-uploading an archive attachment, the system SHALL rewrite the corresponding reference (`url`, and `reference_url` where present) to the uploaded file's returned `files/{bucket}/{path}` URL, so the imported conversation points at the newly uploaded files. The rewrite SHALL cover every place a message can carry a reference — `custom_content.attachments[]`, `custom_content.stages[].attachments[]`, and `custom_content.annotations[].body.source.attachment` — matching the set the export bundles. A reference is matched to its upload by file id alone, with any trailing `#…` display anchor (e.g. a PDF `#page=N`) stripped for the lookup and re-appended to the rewritten URL, so an imported citation still opens the page it cited. An anchor is re-appended only when it stays within `/^#[\w.=%-]*$/`; an archive is untrusted input and the anchor from one is persisted into the conversation record, while the only anchor any reader parses is `#page=<digits>` — so an anchor outside that shape SHALL be discarded, leaving the rewritten reference unanchored. The file id SHALL still resolve either way, so the attachment itself is transferred regardless of its anchor. When the upload was suffixed to resolve a name collision, the system SHALL also rewrite the attachment's `title` to the suffixed file name, so the displayed name matches the file actually stored; an attachment uploaded under its original name SHALL keep its original `title` unchanged.
+
+A reference left unrewritten still points into the exporting user's bucket, which the importing user usually cannot read — the preview and the download then both fail, and the browser saves the error response under the attachment's file name (issue #8708). Missing one of the three reference sites is therefore a correctness defect, not a cosmetic one.
+
+#### Scenario: Stage and citation references are rewritten too
+
+- **WHEN** a `.dial` archive conversation carries a file produced inside an execution stage and a citation source document
+- **THEN** both references are rewritten to their new upload locations, not only the message-level attachments
+
+#### Scenario: A rewritten reference keeps its display anchor
+
+- **WHEN** a citation referencing `files/{oldBucket}/sources/spec.pdf#page=7` is uploaded as `spec.pdf`
+- **THEN** the rewritten reference is `files/{userBucket}/uploads/<YYYY-MM>/spec.pdf#page=7`
+
+#### Scenario: An anchor no reader parses is not carried onto the rewritten reference
+
+- **WHEN** an archive attachment references `files/{oldBucket}/reports/q1.pdf#"><script>` and is uploaded as `q1.pdf`
+- **THEN** the attachment is still uploaded and its reference rewritten to `files/{userBucket}/uploads/<YYYY-MM>/q1.pdf`, with no anchor
 
 #### Scenario: Reference rewrite
 
@@ -149,32 +166,48 @@ The system SHALL rebase each imported conversation's id/path to the current user
 
 ### Requirement: Import job queue and cancellation
 
-The system SHALL track each imported file as one job in its own `ImportExportQueue` panel instance, separate from (and stacked alongside, not merged with) the export queue panel, with in-progress, success, and failed states and a determinate aggregate progress bar. When a job represents a single conversation and the file carries a source folder path, its row SHALL show that folder-path breadcrumb as a secondary line above the name. An in-progress job SHALL be cancellable (aborting its in-flight requests); a failed job SHALL be retryable in place. Because this is the same `ImportExportQueue` panel used for export, it also auto-closes 8 seconds after every job succeeds with none in progress or failed — see the auto-close requirement in the conversation-export spec.
+The system SHALL track each imported file as one job in its own `ImportExportQueue` component instance (imported from `@epam/ai-dial-conversation-panel`; see `conversation-panel-transfer-queue-ui` for the component's own contract), separate from (and stacked alongside, not merged with) the export queue instance, with in-progress, success, failed, and canceled states.
+
+Each row SHALL be identified by the **selected file's name** (`file.name`), preceded by a file-type icon derived from its extension, and SHALL show a per-job determinate circular progress indicator while in progress, driven by that job's `progress.percent` per the `conversation-transfer-progress` capability. The panel SHALL NOT render an aggregate progress bar. The source-folder breadcrumb SHALL NOT be rendered — the file name is the row's only label.
+
+An in-progress job SHALL be cancellable through a per-row cancel control that is revealed on row hover and always reachable by keyboard; cancelling aborts its in-flight requests (via the app's `useConversationImport` hook — the library component only calls the `onCancel` callback the app supplies) and leaves the row visible with status canceled. A failed job SHALL show a filled alert icon whose tooltip states the failure reason resolved from the job's `errorCode`; it SHALL NOT expose a retry control, though `retryJob` remains on `useConversationImport`'s public API for the host. Because this is the same `ImportExportQueue` component used for export, it also auto-closes 8 seconds after every job succeeds with none in progress, failed, or canceled — see the auto-close requirement in the conversation-export spec. The app SHALL supply the component's `labels` object and its count-based `title` via `useTranslation`; the component itself has no i18n import.
 
 #### Scenario: One job per imported file
 
 - **WHEN** the user imports two separate single-conversation files
-- **THEN** the queue shows two job rows, each independently tracked as in-progress / success / failed
+- **THEN** the queue shows two job rows, each labelled by its own file name and independently tracked as in-progress / success / failed / canceled
 
-#### Scenario: Row shows source folder breadcrumb
+#### Scenario: Row shows the file name, not a breadcrumb
 
-- **WHEN** a single-conversation file carries a source folder path
-- **THEN** its queue row shows that folder-path breadcrumb as a secondary line above the conversation name
+- **WHEN** a single-conversation file carrying a source folder path is imported
+- **THEN** its queue row shows only the selected file's name; no folder-path breadcrumb line is rendered
+
+#### Scenario: Import progress is determinate and per row
+
+- **GIVEN** an archive holding 10 attachments, 4 of which have uploaded
+- **WHEN** the queue panel renders
+- **THEN** that row's circular indicator shows a determinate value strictly between 0 and 100, reflecting only that job
 
 #### Scenario: Import and export queues stay visually distinct
 
 - **WHEN** an import job and an export job are both active (or recently finished and not yet dismissed) at the same time
-- **THEN** two separate queue panels are shown, each with its own title ("Importing" / "Exporting") — a user exporting something never sees it appear inside a panel titled "Importing", or vice versa
+- **THEN** two separate `ImportExportQueue` instances are shown, each with its own count-based title ("Importing 1 file" / "Exporting 1 file") passed via its `title` prop — a user exporting something never sees it appear inside a panel titled "Importing", or vice versa
 
 #### Scenario: Cancel an in-progress import
 
-- **WHEN** the user dismisses an in-progress import job
-- **THEN** its in-flight requests are aborted and the job is removed from the queue
+- **WHEN** the user activates an in-progress import row's cancel control
+- **THEN** its in-flight requests are aborted, the job's status becomes canceled, and the row stays in the queue showing the "Canceled" label with its file name dimmed
 
-#### Scenario: Retry a failed import
+#### Scenario: A failed import explains itself
 
-- **WHEN** the user retries a failed import job
-- **THEN** the whole file re-imports from the start with a fresh abort controller, reusing the already-parsed file data
+- **GIVEN** an import that failed because no storage bucket could be resolved
+- **WHEN** the user hovers or focuses the row's alert icon
+- **THEN** a tooltip shows the translated message for `ConversationTransferErrorCode.MissingBucket`, and the row exposes no retry button
+
+#### Scenario: Retry through the hook re-imports the file
+
+- **WHEN** the host calls `retryJob` for a failed import job
+- **THEN** the whole file re-imports from the start with a fresh abort controller, reusing the already-parsed file data, under the same job id with progress reset to 0
 
 ### Requirement: Aggregate success and failure notifications
 
@@ -194,3 +227,29 @@ When an import operation settles, the system SHALL show a success notification n
 
 - **WHEN** the selected file is not a valid v5 export (bad version, malformed, or no readable archive entry)
 - **THEN** a single unsupported-format notification is shown and no job rows are created
+
+---
+
+### Requirement: Skipped attachment names in import queue warnings
+
+The import hook SHALL retain unique skipped attachment names on each warning job. The queue SHALL pass those names to the host warning callback and use its result as both tooltip and accessible name. The app SHALL interpolate `conversationImport.warningAttachmentSkipped` with that job's names, using the existing notification formatting: up to five quoted names followed by a localized count of remaining names. Jobs without names SHALL use `conversationImport.jobWarningAttachmentSkipped` without raw placeholders. Retrying a job SHALL clear previous warning metadata. Existing code-only callbacks SHALL remain supported. Translation stays app-owned; no new flag, endpoint, telemetry, or directional layout behavior is required.
+
+#### Scenario: Referenced attachment is missing
+
+- **WHEN** a `.dial` archive references `absent.pdf` without its resource entry
+- **THEN** the conversation still imports and both notification and queue warning name `absent.pdf`, without a raw `{{names}}` placeholder
+
+#### Scenario: Multiple attachments and jobs
+
+- **WHEN** several attachments are skipped or several jobs have warnings
+- **THEN** each row uses the unique skipped names from that job and no names from another job, with the same overflow summary as its notification
+
+#### Scenario: Legacy job has no names
+
+- **WHEN** a warning job has no attachment names
+- **THEN** the app shows its generic warning without raw placeholders
+
+#### Scenario: Retry clears previous warning
+
+- **WHEN** a job is retried
+- **THEN** its new attempt begins without previous warning code or names

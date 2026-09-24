@@ -18,6 +18,7 @@ import {
   mapPromptToResponse,
   metadataItemToPromptPath,
   nameFromId,
+  PROMPT_RESOURCE_PREFIX,
   type PromptMetadataItem,
   type PromptPayload,
   type PromptReadResult,
@@ -69,9 +70,14 @@ export class PromptsPersonalService {
           ),
         )
       ).filter((p): p is PromptResponseDto => p != null);
+      for (const prompt of prompts) {
+        prompt.isMy = true;
+        prompt.canEdit = prompt.permissions?.includes('WRITE') ?? true;
+        prompt.sharedWithMe = false;
+      }
 
       const folders = deriveFolders([
-        ...prompts.map((p) => p.id),
+        ...promptItems.map(({ path }) => path),
         ...sentinelFolderIds.map((folderId) => `${folderId}/placeholder`),
       ]);
       const sharedWithMe = await this.getSharedPrompts(token, bucket);
@@ -103,31 +109,37 @@ export class PromptsPersonalService {
       );
 
       const results = await Promise.all(
-        sharedItems.map((item) => {
+        sharedItems.map(async (item) => {
           const raw =
             item.url ??
             (item.parentPath != null && item.name != null
               ? `${item.parentPath}/${item.name}`
               : null);
 
-          if (raw == null) return Promise.resolve(null);
+          if (raw == null) return null;
 
           /* URL format: 'prompts/{ownerBucket}/{path}' */
           const decoded = safeDecodeURIComponent(raw);
           const parts = decoded.split('/');
-          if (parts.length < 3 || parts[0] !== 'prompts')
-            return Promise.resolve(null);
+          if (parts.length < 3 || parts[0] !== PROMPT_RESOURCE_PREFIX)
+            return null;
 
           const ownerBucket = parts[1];
           const path = parts.slice(2).join('/');
 
-          if (isHiddenPromptPath(path)) return Promise.resolve(null);
+          if (isHiddenPromptPath(path)) return null;
 
-          return this.resourceService.readPromptByPath(
+          const prompt = await this.resourceService.readPromptByPath(
             token,
             ownerBucket,
             path,
           );
+          if (prompt == null) return null;
+          prompt.isMy = false;
+          prompt.canEdit = item.permissions?.includes('WRITE') ?? false;
+          prompt.sharedWithMe = true;
+          prompt.permissions = item.permissions;
+          return prompt;
         }),
       );
 
@@ -169,7 +181,11 @@ export class PromptsPersonalService {
     if (metadata == null) {
       throw new NotFoundException(`Prompt metadata not found: ${path}`);
     }
-    return mapPromptToResponse(data, path, metadata);
+    return mapPromptToResponse(data, path, metadata, bucket, {
+      isMy: true,
+      canEdit: true,
+      sharedWithMe: false,
+    });
   }
 
   async createPrompt(
@@ -194,7 +210,11 @@ export class PromptsPersonalService {
       'prompts.createPrompt',
       true,
     );
-    return mapPromptToResponse(prompt, id, metadata);
+    return mapPromptToResponse(prompt, id, metadata, bucket, {
+      isMy: true,
+      canEdit: true,
+      sharedWithMe: false,
+    });
   }
 
   async updatePrompt(
@@ -275,7 +295,11 @@ export class PromptsPersonalService {
       }
     }
 
-    return mapPromptToResponse(updatedPrompt, targetId, metadata);
+    return mapPromptToResponse(updatedPrompt, targetId, metadata, bucket, {
+      isMy: true,
+      canEdit: true,
+      sharedWithMe: false,
+    });
   }
 
   async deletePrompt(

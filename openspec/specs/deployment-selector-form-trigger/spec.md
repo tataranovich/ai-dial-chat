@@ -1,5 +1,9 @@
 # Spec: deployment-selector-form-trigger
 
+## Purpose
+
+A form-field trigger that reuses the deployment selector overlay, including its loading, empty, error, disabled, and unavailable-deployment states.
+
 ## Requirements
 
 ### Requirement: DeploymentSelectorFieldTrigger reuses the existing overlay content behind a form-field trigger
@@ -13,7 +17,15 @@ The trigger SHALL render:
 - A placeholder string (supplied via a labels prop) when `selectedId` is `null`/unset.
 - A trailing chevron icon that visually indicates expand/collapse state.
 
-Opening the trigger SHALL render the panel with `matchReferenceWidth` left at the `Dropdown` default (`true`), so the overlay matches the field's full width rather than the icon trigger's fixed `320px` override.
+Opening the trigger SHALL render the panel with `matchReferenceWidth` left at the `Dropdown` default (`true`), so the overlay starts at the field's full width rather than the icon trigger's fixed `320px` override.
+
+`matchReferenceWidth` sets only a `min-width`, so on its own it lets a long agent name stretch the overlay well past the field it belongs to. The panel SHALL therefore also be capped at `max-w-[max(var(--reference-width),360px)]` — `--reference-width` is the field width the kit publishes on the floating element — so the panel reads as this field's popup the way a `Select`'s list does. The `max()` floor keeps the panel's own `360px` minimum honoured on a field narrower than that, and the `!` prefix is required because the kit writes its available-width cap as an inline style.
+
+#### Scenario: A long deployment name does not widen the panel past its field
+
+- **GIVEN** the opened panel contains a deployment whose display name is far wider than the field
+- **WHEN** the panel renders
+- **THEN** the panel's width does not exceed the field's own width, except on a field narrower than `360px`, where the panel stops at `360px`
 
 #### Scenario: Trigger shows placeholder when nothing is selected
 
@@ -59,6 +71,45 @@ Opening the trigger SHALL render the panel with `matchReferenceWidth` left at th
 
 - **WHEN** the user stars/unstars an item or activates "Browse" from the opened panel
 - **THEN** the same `toggleFavorite`/catalog-navigation behavior fires as when the equivalent action is taken from the chat input's selector
+
+### Requirement: The panel accepts host-supplied non-deployment rows through extraOptions
+
+A host SHALL be able to pin rows that are not deployments above every catalog section — a mode or sentinel choice, such as the `Default agent` / `Last used agent` modes of the default-agent preference. `DeploymentSelectorPanel.tsx` SHALL export a `DeploymentSelectorExtraOption` interface of exactly `{ id: string; label: string }`: no `CatalogItem` shape, no icon field, no entity type. Constructing a fake `CatalogItem` to carry a mode — chat 1.0's `SPECIAL_DEFAULT_MODEL_DIC` hack, where a synthetic `DialAIEntityModel` was pushed through the model list — SHALL NOT be reintroduced.
+
+The prop SHALL be threaded through the whole chain without any of the layers interpreting it: `DeploymentSelectorFieldTrigger` → `useDeploymentSelectorFieldOverlay` (third parameter) → `DeploymentSelectorOverlay` → `DeploymentSelectorPanel`. It SHALL default to a module-level empty array, so the default never changes identity between renders and the plain deployment picker is unaffected.
+
+An extra option's `id` SHALL flow through `onSelect` and `selectedId` exactly as a deployment id does, so the host needs no separate prop pair or discriminator for them. `useDeploymentSelectorFieldOverlay`'s `resolvedLabel` SHALL resolve in this order: a matching `extraOptions` row's `label`, then the resolved deployment's name, then the raw `selectedId` — so a mode's own label, not its sentinel id, is what the field displays.
+
+Each extra row SHALL render with the same row chrome as a deployment row — a `MenuItem` with `role="menuitemradio"`, `aria-checked` reflecting selection, and `MenuItemMark.Tint` when chosen, inside the same `role="menu"` scroll body — minus the deployment icon and the favourite star toggle, neither of which a mode has, so it reads as a mode rather than as an agent. The rows SHALL be grouped in their own `role="group"` list rendered before the Current Selected and Favorites sections. Picking one SHALL call `onSelect` with its `id` and close the panel, the same path a deployment pick takes.
+
+The panel's search SHALL filter extra rows by case-insensitive substring on `label`, alongside the deployment rows, and a surviving row's matched text SHALL render through the shared `Highlight` component from `@epam/ai-dial-ui-kit` per `.claude/rules/search-results-highlight.md`; with an empty query the row's label renders through `EllipsisTooltip` instead. A selected extra row SHALL participate in the panel's scroll-the-selection-into-view behaviour on open, exactly as a selected deployment row does.
+
+#### Scenario: Extra rows precede every catalog section
+
+- **GIVEN** `extraOptions` holds two rows and the user has favorites
+- **WHEN** the panel opens
+- **THEN** the two rows render first, in the supplied order, above the Current Selected and Favorites sections, each without an icon and without a favourite toggle
+
+#### Scenario: Picking an extra row reports its id and closes the panel
+
+- **WHEN** the user picks an extra row whose `id` is `default-agent`
+- **THEN** `onSelect` is called with `'default-agent'` and the panel closes
+
+#### Scenario: The field displays an extra option's label, not its id
+
+- **GIVEN** `selectedId` equals an `extraOptions` row's `id`
+- **WHEN** the trigger renders
+- **THEN** it displays that row's `label`, and no attempt is made to resolve the id against the deployment list
+
+#### Scenario: Search filters extra rows alongside deployments
+
+- **WHEN** the user types a query that matches one extra row's label and no other row
+- **THEN** that row survives with its matched substring rendered through `Highlight`, and the non-matching extra row is filtered out
+
+#### Scenario: Omitting extraOptions leaves the plain deployment picker unchanged
+
+- **WHEN** a host renders the trigger without `extraOptions`
+- **THEN** no extra group is rendered and the panel's sections, selection marking, and search behave exactly as they do for the chat input's own selector
 
 ### Requirement: DeploymentSelectorFieldTrigger surfaces loading, empty, error, disabled, and unavailable-deployment states
 
@@ -128,3 +179,55 @@ The trigger button SHALL expose `aria-haspopup="listbox"`, `aria-expanded` refle
 
 - **WHEN** `document.documentElement.dir` is `rtl`
 - **THEN** the trigger's label, selected value, and chevron lay out mirrored using logical properties, with no hard-coded left/right offset breaking the mirrored layout
+
+### Requirement: Deployment picker presentation is reusable outside app providers
+
+catalog SHALL export a controlled DeploymentSelectorField and panel presentation using host-resolved display records, selected id, labels, loading/error/disabled state, extraOptions and callbacks. Host adapters SHALL retain deployment resolution, favorites persistence, CatalogModal and chat state ownership. Existing app component exports and the form's opaque modelSelector slot SHALL remain compatible.
+
+#### Scenario: External field mounts without parent contexts
+
+- **WHEN** a consumer supplies display records and callbacks without app providers
+- **THEN** the selector renders, opens through the supplied overlay composition and selects through onSelect.
+
+#### Scenario: Form selection does not change the current conversation
+
+- **WHEN** a user selects a model/agent or invokes Browse from a scheduled-task field
+- **THEN** only the host form selection/Browse callback changes; no library updates chat conversation state.
+
+#### Scenario: Fallback and extra options are preserved
+
+- **WHEN** the selected id is unavailable or host extraOptions are present
+- **THEN** the raw-id fallback remains selectable state without automatic clearing, and extra option selection follows the host callback contract.
+
+### Requirement: Picker width follows its reference and containing viewport
+
+The picker SHALL expose supported fit-container sizing and overlay composition. Popup width SHALL follow the field within viewport constraints; panel children SHALL shrink without a fixed 360px minimum. Mobile sheet composition SHALL account for padding. No consumer SHALL override a private nested div to eliminate horizontal scrolling.
+
+#### Scenario: Narrow form opens without horizontal scroll
+
+- **WHEN** a picker opens in a 335px field or a 320/360px mobile viewport with sheet padding
+- **THEN** the panel and its content remain within available inline width with no horizontal scroll.
+
+#### Scenario: Long selected and result labels do not widen the panel
+
+- **WHEN** items contain long unbroken labels in LTR or RTL
+- **THEN** labels wrap/truncate accessibly and the field/panel retain their configured bounds.
+
+### Requirement: Extracted picker retains accessible loading and interaction behavior
+
+The exported field SHALL preserve the existing keyboard/ARIA/loading/empty/error/disabled/unavailable-selection behavior, search highlighting, focus restoration and RTL support. Localized names SHALL be supplied by the host. An empty favorites list SHALL not hide Browse.
+
+#### Scenario: Keyboard selection restores focus
+
+- **WHEN** a keyboard user opens, navigates and selects, or presses Escape
+- **THEN** selection/close follows the host callbacks and focus returns to the trigger.
+
+#### Scenario: Loading error and disabled states preserve selection
+
+- **WHEN** a background load or error occurs, or isDisabled becomes true
+- **THEN** a resolved label is not cleared, errors remain accessible, and disabled interaction cannot open a new panel.
+
+#### Scenario: Empty favorites keep Browse available
+
+- **WHEN** favorites are empty after loading
+- **THEN** the localized empty hint and Browse action remain available.

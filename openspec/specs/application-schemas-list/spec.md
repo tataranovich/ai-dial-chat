@@ -1,6 +1,8 @@
 # Capability: application-schemas-list
 
-List all DIAL Core application type schemas visible to the authenticated session user.
+## Purpose
+
+Endpoint that lists every DIAL Core application type schema visible to the authenticated session user, with per-user caching.
 
 ---
 
@@ -80,13 +82,11 @@ This override exists to let developers point the QuickApps 2.0 editor iframe at 
 |---|---|
 | 401 | No valid session cookie / upstream returns 401 |
 | 403 | Caller lacks permission to list schemas |
-| 429 | Rate limit exceeded (60 req/60 s per user) |
-| 502 | DIAL Core returned a non-OK status |
+| 429 | DIAL Core rate limit exceeded |
+| 502 | DIAL Core returned a 5xx, or any status the shared mapper has no more specific exception for |
 | 503 | DIAL Core is unreachable or timed out |
 
-## Rate Limiting
-
-`@Throttle({ default: { limit: 60, ttl: 60000 } })` — same as `GET /api/v1/applications`.
+Status translation is delegated to the shared `mapDialHttpStatus` / `handleDialFetchError` helpers, so this endpoint maps a given upstream status exactly the way every other `chat-api` domain does — it does not fold every non-OK status into 502.
 
 ## Caching
 
@@ -94,6 +94,7 @@ This override exists to let developers point the QuickApps 2.0 editor iframe at 
 - TTL: 60 seconds
 - Scope: per authenticated user
 - On cache hit: upstream SDK is not called; cached `ApplicationSchemasResponseDto` is returned directly.
+- Implemented through the shared `withCachedDialRequest` helper (see the `cached-dial-request` capability), which owns the read-through, the TTL write, and mapping a thrown transport error via `handleDialFetchError`.
 
 ## Generated Client
 
@@ -112,96 +113,97 @@ export const getApplicationSchemas = (): Promise<ApplicationSchemasResponseDto> 
 
 ---
 
-## Scenarios
+## Requirements
 
-### S1 — Authenticated user receives schema list
+### Requirement: Authenticated listing of visible schemas
 
-**Given** an authenticated session user  
-**When** `GET /api/v1/application-schemas` is called  
-**Then** the service calls `client.listCustomApplicationSchemas` with a `Bearer <accessToken>` Authorization header  
-**And** the response is `200` with `{ schemas: [...] }` containing normalised DTO fields
+`GET /api/v1/application-schemas` SHALL require a valid session and SHALL call `client.listCustomApplicationSchemas`, forwarding the session user's access token as a `Bearer` Authorization header. Each upstream entry SHALL be normalised into an `ApplicationSchemaSummaryDto` per the field mapping above, and the response SHALL be `{ schemas: [...] }`.
 
-### S2 — Cache hit skips upstream call
+#### Scenario: Authenticated user receives the list
 
-**Given** the result for `application-schemas:list:<userSub>` is already cached  
-**When** `GET /api/v1/application-schemas` is called  
-**Then** `client.listCustomApplicationSchemas` is NOT called  
-**And** the cached list is returned with `200`
+- **GIVEN** an authenticated session user
+- **WHEN** `GET /api/v1/application-schemas` is called
+- **THEN** the SDK is called with `Authorization: Bearer <accessToken>` and the response is `200` with normalised DTO fields
 
-### S3 — Cache miss populates cache
+#### Scenario: An empty upstream list is still a valid response
 
-**Given** no cached entry for `application-schemas:list:<userSub>`  
-**When** `GET /api/v1/application-schemas` returns successfully from upstream  
-**Then** the result is stored in cache with a 60 second TTL  
-**And** subsequent calls within the TTL window hit the cache
+- **WHEN** DIAL Core returns an empty array
+- **THEN** the response is `200` with `{ schemas: [] }`
 
-### S4 — Different users have independent cache entries
+#### Scenario: A non-array upstream payload degrades to an empty list
 
-**Given** user A and user B both call the list endpoint  
-**Then** each gets their own cache key (`application-schemas:list:<subA>`, `application-schemas:list:<subB>`)  
-**And** user A's token is never used for user B's request
+- **WHEN** DIAL Core returns a successful response whose body is not an array
+- **THEN** the response is `200` with `{ schemas: [] }` rather than an error
 
-### S5 — Authorization header is forwarded to upstream
+#### Scenario: Optional upstream fields stay optional
 
-**Given** a session user with access token `tok-xyz`  
-**When** the service calls the SDK  
-**Then** the SDK request includes `Authorization: Bearer tok-xyz`
+- **WHEN** an upstream item carries `dial:applicationTypeIconUrl`
+- **THEN** the DTO carries the same value in `iconUrl`
+- **AND** an item without that key produces a DTO whose `iconUrl` is omitted
 
-### S6 — Upstream 401 maps to 401
+### Requirement: `DEV_QUICKAPPS_EDITOR_URL` overrides the editor URL for QuickApps schemas only
 
-**Given** DIAL Core returns 401  
-**Then** the endpoint returns `401 Unauthorized`
+`EnvironmentVariables` SHALL declare an optional `DEV_QUICKAPPS_EDITOR_URL?: string` validated with `@IsOptional()` and `@IsUrl({ require_tld: false })`. While building each summary, the service SHALL substitute that value for `editorUrl` only when `isQuickAppSchema(schema.id)` is true and the variable is set; in every other case `dial:applicationTypeEditorUrl` SHALL pass through unchanged.
 
-### S7 — Upstream 403 maps to 403
+#### Scenario: A QuickApps schema is redirected to the dev editor
 
-**Given** DIAL Core returns 403  
-**Then** the endpoint returns `403 Forbidden`
+- **GIVEN** `DEV_QUICKAPPS_EDITOR_URL=http://localhost:5555` is set
+- **WHEN** DIAL Core returns a schema whose `$id` identifies it as QuickApps, with `dial:applicationTypeEditorUrl` set to a production URL
+- **THEN** the DTO carries `editorUrl: "http://localhost:5555"`
 
-### S8 — Upstream 5xx maps to 502
+#### Scenario: The override is inert when unset
 
-**Given** DIAL Core returns 500 or 503  
-**Then** the endpoint returns `502 Bad Gateway`
+- **GIVEN** `DEV_QUICKAPPS_EDITOR_URL` is not set
+- **WHEN** a QuickApps schema is returned
+- **THEN** `editorUrl` equals `dial:applicationTypeEditorUrl` unchanged
 
-### S9 — Network error maps to 503
+#### Scenario: Non-QuickApps schemas are never overridden
 
-**Given** the SDK throws a network/fetch error  
-**Then** the endpoint returns `503 Service Unavailable`
+- **GIVEN** `DEV_QUICKAPPS_EDITOR_URL` is set
+- **WHEN** a schema that `isQuickAppSchema` does not match is returned
+- **THEN** `editorUrl` equals `dial:applicationTypeEditorUrl` unchanged
 
-### S10 — Empty upstream list returns empty schemas array
+### Requirement: The list is cached per user
 
-**Given** DIAL Core returns an empty array  
-**Then** the response is `200` with `{ schemas: [] }`
+The response SHALL be cached under `application-schemas:list:<userSub>` with a 60 second TTL. A cache hit SHALL be served without calling the SDK, and one user's entry SHALL never serve another user's request.
 
-### S11 — Generated client method exists after OpenAPI generation
+#### Scenario: A cache hit skips the upstream call
 
-**Given** the Swagger annotations are in place  
-**When** `npm run openapi` runs  
-**Then** `libs/chat-api-client` contains a `listApplicationSchemas()` method with return type `ApplicationSchemasResponseDto`
+- **GIVEN** `application-schemas:list:<userSub>` is already cached
+- **WHEN** the endpoint is called again
+- **THEN** `client.listCustomApplicationSchemas` is not called and the cached list is returned with `200`
 
-### S12 — `iconUrl` is populated when upstream provides `dial:applicationTypeIconUrl`
+#### Scenario: A cache miss populates the cache
 
-**Given** DIAL Core returns a schema item with `"dial:applicationTypeIconUrl": "https://example.com/icon.png"`  
-**Then** the normalised DTO includes `iconUrl: "https://example.com/icon.png"`
+- **GIVEN** no cached entry exists for the user
+- **WHEN** the upstream call succeeds
+- **THEN** the result is stored with a 60 second TTL and subsequent calls inside that window are served from cache
 
-### S13 — `iconUrl` is absent when upstream omits `dial:applicationTypeIconUrl`
+#### Scenario: Two users do not share an entry
 
-**Given** DIAL Core returns a schema item without `dial:applicationTypeIconUrl`  
-**Then** the normalised DTO has `iconUrl` as `undefined` (field omitted from response)
+- **WHEN** user A and user B both call the endpoint
+- **THEN** each is served from its own key and user A's token is never used for user B's request
 
-### S14 — `DEV_QUICKAPPS_EDITOR_URL` overrides `editorUrl` for a quickapps2 schema
+### Requirement: Upstream failures map to typed HTTP exceptions
 
-**Given** `DEV_QUICKAPPS_EDITOR_URL=http://localhost:5555` is set  
-**And** DIAL Core returns a schema with `"$id": "https://example.com/schemas/quickapps2"` and `"dial:applicationTypeEditorUrl": "https://prod-editor.example.com"`  
-**Then** the normalised DTO has `editorUrl: "http://localhost:5555"`
+Upstream non-OK statuses SHALL be translated by the shared `mapDialHttpStatus` helper, so `401` and `403` surface unchanged and a `5xx` becomes `502 Bad Gateway`; a network or timeout failure SHALL be translated by `handleDialFetchError` into `503 Service Unavailable`.
 
-### S15 — `DEV_QUICKAPPS_EDITOR_URL` unset leaves `editorUrl` unchanged
+#### Scenario: Client-error statuses pass through
 
-**Given** `DEV_QUICKAPPS_EDITOR_URL` is not set  
-**And** DIAL Core returns a schema whose `$id` contains `quickapps2`  
-**Then** the normalised DTO `editorUrl` equals `dial:applicationTypeEditorUrl` unchanged
+- **WHEN** DIAL Core returns `401` or `403`
+- **THEN** the endpoint returns the same status
 
-### S16 — Non-quickapps2 schema is never overridden
+#### Scenario: Server errors and outages are distinguished
 
-**Given** `DEV_QUICKAPPS_EDITOR_URL` is set  
-**And** DIAL Core returns a schema whose `$id` does not include `quickapps2`  
-**Then** the normalised DTO `editorUrl` equals `dial:applicationTypeEditorUrl` unchanged
+- **WHEN** DIAL Core returns `500` or `503`
+- **THEN** the endpoint returns `502 Bad Gateway`
+- **AND** when the SDK throws a network or timeout error, the endpoint returns `503 Service Unavailable`
+
+### Requirement: The endpoint is reachable through the generated client
+
+Swagger annotations SHALL declare `operationId: listApplicationSchemas` so that regeneration produces a typed SDK method, wrapped for the frontend in `apps/chat/src/server-api/application-schemas.ts`.
+
+#### Scenario: Regeneration produces the typed method
+
+- **WHEN** `npm run openapi` runs against the annotated controller
+- **THEN** `libs/chat-api-client` exposes `listApplicationSchemas()` returning `ApplicationSchemasResponseDto`

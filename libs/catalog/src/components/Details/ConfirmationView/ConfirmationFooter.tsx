@@ -2,6 +2,7 @@ import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DangerButton,
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   GhostButton,
   NeutralButton,
   Spinner,
@@ -21,6 +22,13 @@ export interface ConfirmationFooterProps {
   variant?: DetailsConfirmationVariant;
   /** Whether the confirmed action is in flight. Default: `false`. */
   isLoading?: boolean;
+  /**
+   * Whether confirming is not yet possible because the step's required input
+   * is unsatisfied — e.g. no published folder chosen yet. Kept separate from
+   * `isLoading`: a confirmation that cannot run yet and one already running are
+   * different states, and only `isLoading` disables cancel. Default: `false`.
+   */
+  isConfirmDisabled?: boolean;
   /** Status text announced to assistive tech while the action is in flight. */
   loadingStatusLabel?: string;
   /** Called when the user confirms. */
@@ -35,6 +43,7 @@ export const ConfirmationFooter: FC<ConfirmationFooterProps> = ({
   cancelLabel,
   variant = DetailsConfirmationVariant.Info,
   isLoading = false,
+  isConfirmDisabled = false,
   loadingStatusLabel,
   onConfirm,
   onCancel,
@@ -46,7 +55,13 @@ export const ConfirmationFooter: FC<ConfirmationFooterProps> = ({
       return <Spinner size={DIAL_ICON_SIZE.SM} />;
     }
     if (isDanger) {
-      return <IconTrashX size={DIAL_ICON_SIZE.MD} aria-hidden />;
+      return (
+        <IconTrashX
+          size={DIAL_ICON_SIZE.MD}
+          aria-hidden
+          stroke={DIAL_KIT_ICON_STROKE}
+        />
+      );
     }
     return undefined;
   })();
@@ -67,7 +82,7 @@ export const ConfirmationFooter: FC<ConfirmationFooterProps> = ({
       />
       <ConfirmButton
         label={confirmLabel}
-        disabled={isLoading}
+        disabled={isLoading || isConfirmDisabled}
         iconBefore={iconBefore}
         onClick={onConfirm}
       />

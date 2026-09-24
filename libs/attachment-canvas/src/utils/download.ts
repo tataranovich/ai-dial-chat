@@ -1,5 +1,6 @@
 import {
   MIMEType,
+  ensureDownloadFilename,
   triggerAnchorDownload,
   triggerBlobDownload,
 } from '@epam/ai-dial-chat-shared';
@@ -7,7 +8,21 @@ import type { AttachmentCanvasContent } from '../models/attachment-canvas';
 import {
   AttachmentContentType,
   AttachmentErrorType,
+  OoxmlFileType,
 } from '../types/attachment-canvas';
+
+/* `content.url` for `Ooxml` is a blob URL created while resolving the preview
+ * (see `resolveOoxmlCanvasContent`), so it never carries the original file's
+ * extension. Fall back to the MIME type implied by `content.format`. */
+const RENDERER_MIME_TYPES: Record<OoxmlFileType, string> = {
+  [OoxmlFileType.Docx]:
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  [OoxmlFileType.Xlsx]:
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  [OoxmlFileType.Pptx]:
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  [OoxmlFileType.Csv]: MIMEType.CSV,
+};
 
 /** Returns true if the given canvas content can be downloaded. */
 export const isDownloadable = (content: AttachmentCanvasContent): boolean => {
@@ -18,11 +33,19 @@ export const isDownloadable = (content: AttachmentCanvasContent): boolean => {
     case AttachmentContentType.Image:
     case AttachmentContentType.Audio:
     case AttachmentContentType.Pdf:
+    case AttachmentContentType.Ooxml:
     case AttachmentContentType.Code:
       return true;
     case AttachmentContentType.Html:
       return content.url != null;
+    /*
+     * A standalone table's download action lives in its own inline header
+     * (CSV, via its localized table labels), not the generic download button.
+     */
+    case AttachmentContentType.MarkdownTable:
     case AttachmentContentType.Visualizer:
+    case AttachmentContentType.GroupedVisualizer:
+    case AttachmentContentType.McpApp:
       return false;
     case AttachmentContentType.Unsupported:
       return content.url != null;
@@ -41,12 +64,55 @@ export const fetchBlobFromUrl = async (url: string): Promise<Blob> => {
   return r.blob();
 };
 
+/*
+ * Returns the URL and MIME type hint that best describe `content` for the
+ * purposes of deriving a file extension when the display name lacks one.
+ */
+const getContentUrlAndMimeType = (
+  content: AttachmentCanvasContent,
+): { url: string | undefined; mimeType: string | undefined } => {
+  switch (content.type) {
+    case AttachmentContentType.Image:
+      return { url: content.url, mimeType: undefined };
+    case AttachmentContentType.Audio:
+      return { url: content.url, mimeType: content.mimeType };
+    case AttachmentContentType.Pdf:
+      return { url: content.url, mimeType: MIMEType.PDF };
+    case AttachmentContentType.Ooxml:
+      return {
+        url: content.url,
+        mimeType: RENDERER_MIME_TYPES[content.format],
+      };
+    case AttachmentContentType.Html:
+      return { url: content.url, mimeType: MIMEType.HTML };
+    case AttachmentContentType.Unsupported:
+    case AttachmentContentType.Error:
+      return { url: content.url, mimeType: undefined };
+    case AttachmentContentType.PlainText:
+    case AttachmentContentType.Code:
+      return { url: undefined, mimeType: MIMEType.Plain };
+    case AttachmentContentType.Markdown:
+    case AttachmentContentType.MarkdownTable:
+      return { url: undefined, mimeType: MIMEType.Markdown };
+    case AttachmentContentType.Json:
+      return { url: undefined, mimeType: MIMEType.JSON };
+    default:
+      return { url: undefined, mimeType: undefined };
+  }
+};
+
 /** Triggers a browser download for the given canvas content. */
 export const downloadAttachmentContent = (
   content: AttachmentCanvasContent,
   fileName?: string,
 ): void => {
-  const name = fileName ?? 'attachment';
+  const { url: contentUrl, mimeType: contentMimeType } =
+    getContentUrlAndMimeType(content);
+  const name = ensureDownloadFilename(
+    fileName ?? 'attachment',
+    contentUrl,
+    contentMimeType,
+  );
   switch (content.type) {
     case AttachmentContentType.PlainText:
       if (content.text === '') return;
@@ -73,6 +139,7 @@ export const downloadAttachmentContent = (
     case AttachmentContentType.Image:
     case AttachmentContentType.Audio:
     case AttachmentContentType.Pdf:
+    case AttachmentContentType.Ooxml:
       triggerAnchorDownload(content.url, name);
       return;
     case AttachmentContentType.Code:
@@ -86,7 +153,10 @@ export const downloadAttachmentContent = (
       if (content.url == null) return;
       triggerAnchorDownload(content.url, name);
       return;
+    /* Not downloadable — see `isDownloadable`. */
+    case AttachmentContentType.MarkdownTable:
     case AttachmentContentType.Visualizer:
+    case AttachmentContentType.McpApp:
       return;
     case AttachmentContentType.Unsupported:
       if (content.url == null) return;

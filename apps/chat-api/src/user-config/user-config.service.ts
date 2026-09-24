@@ -71,7 +71,7 @@ export class UserConfigService {
       if (!response.ok) return null;
 
       const text = await response.text();
-      return migrateConfig(JSON.parse(text) as unknown);
+      return migrateConfig(JSON.parse(text) as unknown, bucket);
     } catch {
       return null;
     }
@@ -302,7 +302,7 @@ export class UserConfigService {
   }
 
   private async updateInstalledEntry(
-    section: 'toolsets' | 'deployments' | 'prompts',
+    section: 'toolsets' | 'deployments' | 'prompts' | 'skills',
     id: string,
     isInstalled: boolean,
     token: string,
@@ -362,6 +362,15 @@ export class UserConfigService {
     bucket: string,
   ): Promise<void> {
     return this.updateInstalledEntry('prompts', id, isInstalled, token, bucket);
+  }
+
+  async updateInstalledSkill(
+    id: string,
+    isInstalled: boolean,
+    token: string,
+    bucket: string,
+  ): Promise<void> {
+    return this.updateInstalledEntry('skills', id, isInstalled, token, bucket);
   }
 
   async updateSelectedDeployment(

@@ -5,12 +5,16 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
+  "sideEffects": [
+    "**/*.css",
+    "**/*.scss"
+  ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
-    "./styles.css": "./dist/style.css",
+    "./styles.css": "./dist/index.css",
     ".": {
       "@epam/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
@@ -18,14 +22,14 @@
       "default": "./dist/index.js"
     }
   },
+  "dependencies": {
+    "@tabler/icons-react": "^3.44.0"
+  },
   "peerDependencies": {
-    "react": "^19.0.0",
-    "@tabler/icons-react": "^3.0.0",
-    "@epam/ai-dial-sidebar": "*",
+    "react": "^19.2.8",
     "@epam/ai-dial-chat-shared": "*",
-    "@epam/ai-dial-kit": "*",
-    "@epam/ai-dial-ui-kit": "^0.13.0-dev.26",
-    "@epam/ai-dial-react-file-manager": "^0.1.0-dev.17"
+    "@epam/ai-dial-ui-kit": "^0.15.0-dev.12",
+    "@epam/ai-dial-react-file-manager": "^0.3.0-dev.4"
   },
   "nx": {
     "tags": [

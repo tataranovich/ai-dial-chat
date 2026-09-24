@@ -36,7 +36,13 @@ Libraries under `libs/*` must stay maximally isolated from host applications and
 
 Put application, backend, platform, and external-system knowledge at the application edge (`apps/chat/src/server-api`, app-level containers, providers, route handlers, or other app adapters). Pass data, resolved values, and behavior into libs through props, typed callbacks, or narrow interfaces. For example, a lib may accept `iconUrl`, `resolveIconUrl`, or `onDownloadFile`; it must not construct `/api/v1/files/download?...`, read app storage keys, initialize analytics, or decide navigation targets itself.
 
-Exception: `libs/chat-api-client` is a generated OpenAPI client package. It may contain generated endpoint paths, DTOs, runtime transport code, and OpenAPI artifacts because that is its only purpose. Do not hand-edit generated client files or add app-specific behavior there; update the backend Swagger/OpenAPI source and regenerate with the repository OpenAPI scripts. Other hand-authored libs still must not import or wrap `@epam/chat-api-client`; apps consume it through app-level adapters such as `apps/chat/src/server-api`.
+Exception: `libs/chat-api-client` is a generated OpenAPI client package. It may contain generated endpoint paths, DTOs, runtime transport code, and OpenAPI artifacts because that is its only purpose. Do not hand-edit generated client files or add app-specific behavior there; update the backend Swagger/OpenAPI source and regenerate with the repository OpenAPI scripts. Other hand-authored libs still must not import or wrap `@epam/ai-dial-chat-api-client`; apps consume it through app-level adapters such as `apps/chat/src/server-api`.
+
+Second, narrower exception: `libs/chat-hooks` may depend on `@epam/ai-dial-chat-api-client`'s types and operation signatures, and may contain the thin request/response logic that calling those operations requires (equivalent in shape to today's `apps/chat/src/server-api/*.api.ts` wrappers), because every DIAL-Core-backed chat application this library serves calls the same generated client against the same API. It may also depend on already-published, host-agnostic packages that describe DIAL Core's data shapes (`@epam/ai-dial-chat-shared`, `@epam/ai-dial-share`, `@epam/ai-dial-quotations`, `@epam/ai-dial-source-panel`, `@epam/ai-dial-attachment-canvas`). This exception does not extend further: `libs/chat-hooks` must still never construct or configure a client instance (base URL, auth headers, CSRF token) — every hook that calls DIAL Core accepts an already-configured client instance as a parameter — and must still never import app contexts, routing, auth/session/cookies, environment variables, feature flags, i18n, or UI-kit component rendering.
+
+Third exception, narrower still: `libs/chat-shared` and `libs/chat-hooks` may depend on a raw third-party UI/grid library's types (e.g. `ag-grid-community`) when, and only when, a declared peer dependency's own component (`@epam/ai-dial-react-file-manager`) leaks that library's engine through its public prop surface (e.g. `onGridApiChange` exposing a raw `GridApi`) without itself forwarding the specific callback a hook needs (`useGridEditingScroll`'s `cellEditingStarted`/`rowDataUpdated` binding is the reference case). The canonical `useGridEditingScroll` hook lives in `libs/chat-shared` (co-located with the shared `DialFileManagerShell` that invokes it); `libs/chat-hooks` re-exports it for backward compatibility. The dependency is scoped to binding to events/APIs the peer component's own types expose — never for rendering, theming, column/row-model construction, or any UI beyond that narrow event-binding purpose — and the hook's own public contract must not expose the third-party type to its caller. This exception does not extend further: it does not license libs to adopt AG Grid (or any other UI/grid engine) as a general-purpose dependency, and does not apply to any other lib without its own equivalent narrow-leak justification recorded in that change's design doc.
+
+Fourth exception, narrower still: `libs/chat-hooks` may host a DIAL-Core-response-to-display adapter — not merely the request/response transport the second exception already covers — when the adaptation (a) is driven entirely by the generated response's own shape (a sentinel, a status threshold, a field-presence rule) rather than a product-specific decision, (b) is characterized by an existing test suite proven behavior-preserving across a prior relocation, and (c) is consumed identically by every DIAL-Core-backed chat application this library serves, with every per-host variance (icon-URL construction, locale resolution, date/time formatting, translated strings) still arriving as a caller-supplied callback or parameter. `mapUsageDataToDashboard` and `mapUserUsageToModelLimits` (with `mapOverallCostLimitsToPeriodStatuses`) are the reference case. This exception does not extend further: it does not license moving an app-specific business rule, an uncharacterized transformation, or a per-host-varying decision into `chat-hooks`, and does not apply to any other adapter without its own equivalent justification recorded in that change's design doc.
 
 ## Skill routing
 
@@ -53,14 +59,30 @@ Default behavior:
 - Implementation work should follow incremental slices with per-slice verification.
 - Before merge (or on explicit review requests), run the five-axis quality review.
 - Before changing anything under `libs/*`, explicitly check the library isolation rule: host/external contracts are adapted by apps, not embedded in libs.
+- Anything under `libs/*` is also governed by `.claude/rules/libs.md` (package.json metadata, `dependencies` vs `peerDependencies`, version ranges, the `exports`/`styles.css` contract, README shape, JSDoc, `buildCssVars` theming) and `.claude/rules/lib-styling.md`. Both are path-scoped, so read `libs.md` before touching a lib manifest — an embeddable lib is a normal npm package, and a host must install one package and render without a peer laundry list or a bundler alias.
 - UI work is mobile-first by default. The project's named Tailwind breakpoints (`mobile`, `desktop`) live in `tailwind.config.js`; do not introduce `small_tablet:`/`large_tablet:`/`large_desktop:` or `sm:`/`md:`/`lg:`/`xl:` prefixes. When a component must branch in JS, use `useBreakpoint` / `useIsMobile` from `apps/chat/src/hooks/breakpoint/useBreakpoint.ts` rather than reading `window.innerWidth`.
 
 ## Docs
 
-Ground-truth design docs live in `docs/` — app architecture, technical/product requirements, and the auth subsystem (OIDC login/logout, session cookies, token refresh, BFF flow, SessionGuard).
+Ground-truth design docs live in `docs/` — app architecture, technical/product requirements, and the auth subsystem (OIDC login/logout, session cookies, token refresh, BFF flow, SessionGuard). Every app and lib additionally owns a `README.md` that documents its public API.
 
 - **Reading:** Before changing or explaining documented behavior, use the `dial-docs` skill to find the one authoritative doc. Don't guess from memory and don't read all docs — the skill is an index that routes you to the right one.
 - **Writing:** When a change alters behavior a doc describes, update that doc and any affected diagram in the **same commit**.
+- **Verifying:** Run `npm run validate:docs` after touching any README, `docs/**`, a lib's public API, or a project's `package.json`. It checks README coverage and H1/package identity, lib `package.json` metadata, a publishable lib's `./styles.css` export against what the build emits, that every relative link resolves, and that every name a lib README imports is actually exported. Nothing in `lint`/`test`/`build` covers this — the PR workflow runs it as its own job.
+
+READMEs are part of the public contract: a documented prop that a component never had is worse than no README, because callers copy it. Treat every code fence as if it were type-checked — names, required props, value types, and owning packages must all match the source. `.claude/rules/docs.md` has the full rule set, the same-change update matrix, and the drift classes that have actually reached the main line here.
+
+### `docs/architecture.md` is structural — keep it current
+
+`docs/architecture.md` is the map of what exists. It goes stale silently, because nothing fails when a new library or backend domain is missing from it. Update it in the **same change**, not later, whenever you:
+
+- add, rename, or remove a library under `libs/` or an app under `apps/`
+- add, rename, or remove a backend domain folder under `apps/chat-api/src/` or a controller base path
+- add or remove a React context in `apps/chat/src/context/`, a route folder under `pages/`, or an entry in the `ApiEndpoints` enum
+- change a cross-cutting mechanism the document describes — auth/session/CSRF, SSE streaming, theming token flow, the overlay protocol, styling tiers, or module boundaries
+- change a tooling major version listed in the Monorepo & Tooling table
+
+Two rules for the content: state what the code does today, and when intent and code disagree, say so explicitly rather than documenting the intent (see the `Open` rows in the Decision Log). Deep detail belongs in the specialized doc — `docs/theme-customization.md`, `docs/chat-overlay-migration-guide.md`, `docs/auth/` — with `architecture.md` carrying a summary and a link, so the same fact is not maintained twice.
 
 ## TypeScript module imports
 
@@ -133,6 +155,18 @@ Whenever implementing or modifying a search feature (search bars, filterable dro
 ## @epam/ai-dial-ui-kit MCP tools
 
 Use these two tools for all UI kit discovery and documentation needs: `searchEntity(entity, query?)` and `getEntityDetails(entity, name?)`. If you need to look up **ANYTHING** about the ui kit, use the MCP server. **Never** use `grep`, `glob`, `find`, or similar file system tools to discover components — they miss type information and examples.
+
+### Component generations — always use 2.0
+
+The kit ships two generations: **2.0** (current design system, exported without the `Dial` prefix — `Button`, `Input`, `Select`, `Popup`, `Tabs`) and **1.0** (legacy `Dial*`). Always use the 2.0 component; fall back to a `Dial*` one only when the MCP lookup shows no 2.0 replacement exists. `searchEntity` ranks 2.0 first and flags superseded 1.0 entries with "Use instead". See `.claude/rules/all-tsx.md` for details.
+
+### Icon stroke — always pass the token
+
+Tabler renders every outline icon at `stroke={2}`; the design scale puts icons
+at 1.5. Pass `stroke={DIAL_KIT_ICON_STROKE}` (exported from
+`@epam/ai-dial-ui-kit`) on every Tabler icon you write — never the literal 1.5,
+and never nothing. Filled glyphs (`Icon*Filled`) ignore the prop, and
+empty-state illustrations stay at `stroke={1}`. See `.claude/rules/all-tsx.md`.
 
 ### UI Kit Breaking Changes & Migration
 

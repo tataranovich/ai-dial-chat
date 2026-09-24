@@ -1,14 +1,17 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   ErrorText,
   GhostIconButton,
   PrimaryIconButton,
+  Spinner,
 } from '@epam/ai-dial-ui-kit';
 import { IconPlayerStopFilled, IconX } from '@tabler/icons-react';
 import {
   type CSSProperties,
   type FC,
+  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -35,14 +38,20 @@ export interface VoiceBarProps {
   onStop: () => void;
   /** Called when the user clicks the X to discard the recording. */
   onDiscard: () => void;
+  /** Host-rendered attach-file trigger for the second row's inline start (the same control as the normal footer's `+`, disabled by the host while it must not interrupt the session). Omit to render no attach control. */
+  attachButton?: ReactNode;
   /** Accessible label for the stop-recording button. Defaults to `'Stop recording'`. */
   stopLabel?: string;
   /** Accessible label for the discard / cancel button. Defaults to `'Discard recording'`. */
   discardLabel?: string;
+  /** Accessible name for the processing spinner shown during recognition. Defaults to 'Transcribing audio…'. */
+  processingLabel?: string;
   /** CSS custom properties forwarded from the parent (e.g. `--ci-bg`, `--ci-border`). */
   style?: CSSProperties;
   /** Extra class names applied to the root element. */
   className?: string;
+  /** Render controls inside an existing input border. Defaults to false. */
+  embedded?: boolean;
 }
 
 /** Voice recording bar: scrolling waveform, stop and discard controls. */
@@ -52,10 +61,13 @@ export const VoiceBar: FC<VoiceBarProps> = ({
   errorMessage,
   onStop,
   onDiscard,
+  attachButton,
   stopLabel = 'Stop recording',
   discardLabel = 'Discard recording',
+  processingLabel = 'Transcribing audio…',
   style,
   className,
+  embedded = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ringBufferRef = useRef<Float32Array>(new Float32Array(RING_SIZE));
@@ -64,6 +76,7 @@ export const VoiceBar: FC<VoiceBarProps> = ({
   const scrollPxRef = useRef(0);
   const isRecording = state === VoiceRecorderState.Recording;
   const isError = state === VoiceRecorderState.Error;
+  const isProcessing = state === VoiceRecorderState.Processing;
 
   /* Draw the ring buffer as a scrolling bar histogram spanning the full canvas width.
    * Uses scrollPxRef for sub-bar-width translation so bars slide at 1 px/frame rather
@@ -179,16 +192,30 @@ export const VoiceBar: FC<VoiceBarProps> = ({
   const controls = (
     <div className="flex flex-shrink-0 items-center justify-end gap-1">
       <GhostIconButton
-        icon={<IconX size={DIAL_ICON_SIZE.LG} aria-hidden />}
+        icon={
+          <IconX
+            size={DIAL_ICON_SIZE.LG}
+            aria-hidden
+            stroke={DIAL_KIT_ICON_STROKE}
+          />
+        }
         aria-label={discardLabel}
+        className="mobile:min-h-11 mobile:min-w-11"
         onClick={onDiscard}
       />
       {isRecording && (
         <PrimaryIconButton
           icon={<IconPlayerStopFilled size={DIAL_ICON_SIZE.LG} aria-hidden />}
           onClick={() => onStop?.()}
+          autoFocus
           aria-label={stopLabel}
+          className="mobile:min-h-11 mobile:min-w-11"
         />
+      )}
+      {isProcessing && (
+        <span className="flex size-[40px] flex-shrink-0 items-center justify-center mobile:min-h-11 mobile:min-w-11">
+          <Spinner size={20} ariaLabel={processingLabel} />
+        </span>
       )}
     </div>
   );
@@ -198,12 +225,19 @@ export const VoiceBar: FC<VoiceBarProps> = ({
       <div
         style={style}
         className={mergeClasses(
-          inputStyles.wrapper,
-          'flex min-h-[64px] w-full max-w-[748px] flex-col justify-center gap-3 rounded-xl border px-3 shadow-md desktop:flex-row desktop:items-center desktop:gap-2 desktop:py-2',
+          'flex w-full min-w-0 flex-col justify-center gap-2',
+          !embedded && inputStyles.wrapper,
+          !embedded &&
+            'min-h-[64px] max-w-[748px] rounded-xl border px-3 shadow-md',
           isError && styles.wrapperError,
         )}
       >
-        {/* Row 1 on mobile / inline on desktop: recording dot + waveform canvas */}
+        {/*
+         * Row 1: recording dot + waveform canvas, full width. Canvas height
+         * matches the single-line textarea's line-height (dial-body-paragraph-text,
+         * 26px) so switching between typing and recording does not change the
+         * input's overall height.
+         */}
         <div className="flex min-w-0 flex-1 items-center gap-3">
           {isRecording && (
             <span
@@ -216,19 +250,26 @@ export const VoiceBar: FC<VoiceBarProps> = ({
           )}
           <canvas
             ref={canvasRef}
-            height={32}
+            height={26}
+            aria-hidden
             className={mergeClasses(
               styles.waveformCanvas,
-              'h-8 min-w-0 flex-1 desktop:h-6',
+              'h-[26px] min-w-0 flex-1',
             )}
           />
         </div>
 
-        {controls}
+        {/* Row 2: attach-file trigger at the start, discard/stop/spinner at the end */}
+        <div className="flex items-center justify-between gap-2">
+          {attachButton ?? <span aria-hidden />}
+          {controls}
+        </div>
       </div>
 
       {isError && errorMessage && (
-        <ErrorText text={errorMessage} className="mt-1 px-1" />
+        <div role="alert">
+          <ErrorText text={errorMessage} className="mt-1 px-1" />
+        </div>
       )}
     </div>
   );

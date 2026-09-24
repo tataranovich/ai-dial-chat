@@ -4,8 +4,14 @@ import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { StandalonePublishPanel } from '../StandalonePublishPanel';
 
+/* Records what the shell forwarded, so prop pass-through is assertable without rendering the real body. */
+const publishPanelProps = vi.fn();
+
 vi.mock('../PublishPanel', () => ({
-  PublishPanel: () => <span>Publish panel body</span>,
+  PublishPanel: (props: Record<string, unknown>) => {
+    publishPanelProps(props);
+    return <span>Publish panel body</span>;
+  },
 }));
 
 vi.mock('../PublishFooter', () => ({
@@ -37,6 +43,8 @@ const renderPanel = (
       hasExistingPublicationInFolder={false}
       hasWriteAccess
       isSubmitting={false}
+      author=""
+      onAuthorChange={vi.fn()}
       rules={[]}
       onRulesChange={vi.fn()}
       ruleSourceOptions={[]}
@@ -107,11 +115,11 @@ describe('StandalonePublishPanel', () => {
 
     const { unmount } = renderPanel({ returnFocusRef });
 
-    expect(document.activeElement).toBe(
-      screen.getByRole('dialog', { name: 'Publish' }),
-    );
+    expect(
+      screen.getByRole('dialog', { name: 'Publish' }).matches(':focus'),
+    ).toBe(true);
     unmount();
-    expect(document.activeElement).toBe(trigger);
+    expect(trigger.matches(':focus')).toBe(true);
     trigger.remove();
   });
 
@@ -129,9 +137,9 @@ describe('StandalonePublishPanel', () => {
     queueMicrotask(() => trigger.focus({ preventScroll: true }));
     await new Promise<void>((resolve) => queueMicrotask(resolve));
 
-    expect(document.activeElement).toBe(
-      screen.getByRole('dialog', { name: 'Publish' }),
-    );
+    expect(
+      screen.getByRole('dialog', { name: 'Publish' }).matches(':focus'),
+    ).toBe(true);
     trigger.remove();
   });
 
@@ -145,8 +153,73 @@ describe('StandalonePublishPanel', () => {
     );
     outside.focus();
 
-    expect(document.activeElement).toBe(outside);
+    expect(outside.matches(':focus')).toBe(true);
     outside.remove();
+  });
+
+  describe('Tab focus trap', () => {
+    /* Waits past the one-frame focus guard the panel installs on open, so the
+     * guard cannot be mistaken for the trap under test. */
+    const settleOpeningFrame = () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    it('wraps Tab from the last control back to the first', async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await settleOpeningFrame();
+
+      const publish = screen.getByRole('button', { name: 'Publish' });
+      publish.focus();
+      await user.tab();
+
+      expect(
+        screen.getByRole('button', { name: 'Close' }).matches(':focus'),
+      ).toBe(true);
+    });
+
+    it('wraps Shift+Tab from the first control back to the last', async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await settleOpeningFrame();
+
+      screen.getByRole('button', { name: 'Close' }).focus();
+      await user.tab({ shift: true });
+
+      expect(
+        screen.getByRole('button', { name: 'Publish' }).matches(':focus'),
+      ).toBe(true);
+    });
+
+    it('does not trap Tab while focus sits outside the panel', async () => {
+      const user = userEvent.setup();
+      const outside = document.createElement('button');
+      const alsoOutside = document.createElement('button');
+      document.body.append(outside, alsoOutside);
+
+      renderPanel();
+      await settleOpeningFrame();
+      outside.focus();
+      await user.tab();
+
+      expect(alsoOutside.matches(':focus')).toBe(true);
+      outside.remove();
+      alsoOutside.remove();
+    });
+
+    it('leaves Tab alone while the panel is closed', async () => {
+      const user = userEvent.setup();
+      const outside = document.createElement('button');
+      const alsoOutside = document.createElement('button');
+      document.body.append(outside, alsoOutside);
+
+      renderPanel({ isOpen: false });
+      outside.focus();
+      await user.tab();
+
+      expect(alsoOutside.matches(':focus')).toBe(true);
+      outside.remove();
+      alsoOutside.remove();
+    });
   });
 
   it('makes the closed panel inert', () => {
@@ -154,5 +227,13 @@ describe('StandalonePublishPanel', () => {
     const dialog = screen.getByRole('dialog', { hidden: true });
     expect(dialog.hasAttribute('inert')).toBe(true);
     expect(dialog.getAttribute('aria-hidden')).toBe('true');
+  });
+  it('forwards the author props through to the inner publish panel unmodified', () => {
+    const onAuthorChange = vi.fn();
+    renderPanel({ author: 'DIAL Team', onAuthorChange });
+
+    expect(publishPanelProps).toHaveBeenCalledWith(
+      expect.objectContaining({ author: 'DIAL Team', onAuthorChange }),
+    );
   });
 });

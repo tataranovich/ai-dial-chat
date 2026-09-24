@@ -1,4 +1,9 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  ApiExtraModels,
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from '@nestjs/swagger';
 import { DeploymentItemType } from './deployment-item.dto';
 
 export class ModelCapabilitiesDto {
@@ -44,19 +49,59 @@ export class ModelLimitsDto {
   maxCompletionTokens?: number;
 }
 
-export class ModelPricingDto {
-  @ApiPropertyOptional({ description: 'The pricing unit' })
-  unit?: string;
+/*
+ * DIAL Core quotes pricing as an open-ended map: `unit` names the billing unit
+ * and every other key (`prompt`, `completion`, `cache_read`, and
+ * deployment-specific ones) holds either a per-unit price or a conditional
+ * pricing tree, so the map is forwarded verbatim instead of whitelisting a
+ * fixed set of keys.
+ */
+export class ModelPricingRateDto {
+  @ApiPropertyOptional({ type: () => ModelPricingRateDto })
+  ifFalse?: ModelPricingRateDto;
+
+  @ApiPropertyOptional({ type: () => ModelPricingRateDto })
+  ifTrue?: ModelPricingRateDto;
 
   @ApiPropertyOptional({
-    description: 'Per-unit price for the completion request',
+    description: 'Per-unit price for this pricing branch',
   })
-  prompt?: string;
+  rate?: string;
 
   @ApiPropertyOptional({
-    description: 'Per-unit price for the completion response',
+    description: 'Condition selecting the applicable pricing branch',
+    type: 'object',
+    additionalProperties: true,
   })
-  completion?: string;
+  test?: object;
+}
+
+export type ModelPricingRecord = Record<
+  string,
+  string | ModelPricingRateDto | undefined
+>;
+
+export class ModelCatalogPropertiesDto {
+  @ApiPropertyOptional({ description: 'Model provider for catalog display' })
+  provider?: string;
+
+  @ApiPropertyOptional({ description: 'Model vendor for catalog display' })
+  vendor?: string;
+
+  @ApiPropertyOptional({ description: 'Model license for catalog display' })
+  license?: string;
+
+  @ApiPropertyOptional({
+    description: 'Model knowledge cutoff date for catalog display',
+    example: '2026-08-17',
+  })
+  knowledgeCutoffDate?: string;
+
+  @ApiPropertyOptional({
+    description: 'Model parameter count for catalog display',
+    example: '100B',
+  })
+  parameters?: string;
 }
 
 /**
@@ -134,6 +179,11 @@ export class DeploymentFeaturesDetailsDto {
   @ApiPropertyOptional({ description: 'Supports the responses API' })
   responsesApi?: boolean;
 
+  @ApiPropertyOptional({
+    description: 'Supports custom skills in chat requests',
+  })
+  skillsSupported?: boolean;
+
   @ApiPropertyOptional({ description: 'Supports the max_tokens parameter' })
   maxTokensSupported?: boolean;
 
@@ -155,6 +205,7 @@ export class DeploymentFeaturesDetailsDto {
   reasoningEfforts?: string[];
 }
 
+@ApiExtraModels(ModelPricingRateDto)
 export class ModelDetailsDto {
   @ApiPropertyOptional({ type: ModelCapabilitiesDto })
   capabilities?: ModelCapabilitiesDto;
@@ -171,11 +222,31 @@ export class ModelDetailsDto {
   @ApiPropertyOptional({ type: ModelLimitsDto })
   limits?: ModelLimitsDto;
 
-  @ApiPropertyOptional({ type: ModelPricingDto })
-  pricing?: ModelPricingDto;
+  @ApiPropertyOptional({
+    description:
+      'Pricing as reported by DIAL Core: `unit` names the billing unit and every other key holds a scalar price or conditional pricing tree',
+    type: 'object',
+    additionalProperties: {
+      oneOf: [{ type: 'string' }, { $ref: getSchemaPath(ModelPricingRateDto) }],
+    },
+    example: {
+      unit: 'token',
+      prompt: '0.000003',
+      completion: '0.000015',
+      cache_read: { rate: '0.000001' },
+    },
+  })
+  pricing?: ModelPricingRecord;
 
   @ApiPropertyOptional({ type: DeploymentFeaturesDetailsDto })
   features?: DeploymentFeaturesDetailsDto;
+
+  @ApiPropertyOptional({
+    type: ModelCatalogPropertiesDto,
+    description:
+      'Known model catalog properties allow-listed from DIAL Core catalog_properties',
+  })
+  catalogProperties?: ModelCatalogPropertiesDto;
 
   @ApiPropertyOptional({
     description: 'Owner of the deployment as reported by DIAL Core',
@@ -284,9 +355,23 @@ export class ApplicationDetailsDto {
     type: 'object',
     additionalProperties: true,
     description:
-      'Non-secret custom application properties reported by DIAL Core',
+      'Non-secret custom application properties reported by DIAL Core — a verbatim ' +
+      'passthrough of the stored application_properties object, never merged with ' +
+      'customAppFeatures or features.',
   })
   applicationProperties?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'The raw top-level DIAL Core "features" JSON read from getCustomApplication — ' +
+      "what the plain Custom App editor's Features textarea reads and writes through " +
+      "updateApplication's features field. Distinct from applicationProperties.features " +
+      '(a schema-specific key some applications, e.g. Quick Apps, store as part of their ' +
+      'own config) and from features (allow-listed capability flags below).',
+  })
+  customAppFeatures?: Record<string, unknown>;
 
   @ApiPropertyOptional({ description: 'Runtime environment for the function' })
   functionRuntime?: string;
@@ -315,6 +400,9 @@ export class ApplicationDetailsDto {
     type: [String],
   })
   inputAttachmentTypes?: string[];
+
+  @ApiPropertyOptional({ type: ModelCatalogPropertiesDto })
+  catalogProperties?: ModelCatalogPropertiesDto;
 
   @ApiPropertyOptional({
     description: 'URI of the custom application type schema, when present',
@@ -367,6 +455,9 @@ export class ToolsetDetailsDto {
 
   @ApiPropertyOptional({ type: DeploymentFeaturesDetailsDto })
   features?: DeploymentFeaturesDetailsDto;
+
+  @ApiPropertyOptional({ type: ModelCatalogPropertiesDto })
+  catalogProperties?: ModelCatalogPropertiesDto;
 
   @ApiPropertyOptional({
     description:

@@ -1,5 +1,5 @@
+import { safeDecodeURIComponent } from '@epam/ai-dial-chat-hooks';
 import { ROUTES } from '../types/routes';
-import { safeDecodeURIComponent } from '../utils/string-utils';
 
 const CONVERSATION_ROUTE_PREFIX = `${ROUTES.Conversations}/`;
 const CONVERSATION_ROUTE_PREFIX_NO_LEADING_SLASH =
@@ -20,6 +20,15 @@ export const normalizeConversationId = (id: string): string => {
 /** Rejects an empty, `.`, or `..` path segment — guards against traversal in a route-derived id. */
 export const isSafePathSegment = (segment: string): boolean =>
   segment !== '' && segment !== '.' && segment !== '..';
+
+/**
+ * Rejects anything but a local, same-app path for a `returnUrl` query param
+ * (e.g. `EditorQuery.ReturnUrl`) — blocks absolute URLs and protocol-relative
+ * URLs (`//evil.example`), which a `navigate()` call would otherwise follow
+ * off-site.
+ */
+export const isSafeReturnUrl = (value: string): boolean =>
+  value.startsWith('/') && !value.startsWith('//');
 
 /*
  * Some callers (e.g. the accept-invitation flow) build this route from a

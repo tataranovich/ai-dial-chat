@@ -1,43 +1,47 @@
-import { CatalogEntityType } from '@epam/ai-dial-catalog';
-import type { PublishHistoryEntryDto } from '@epam/ai-dial-chat-api-client';
 import {
   PublishAccessRulesLabels,
-  PublishHistoryEntry,
+  PublishPanelLabels,
 } from '@epam/ai-dial-publish-panel';
 import type { TFunction } from 'i18next';
 import {
+  BasicI18nKeys,
   ButtonsI18nKeys,
   PublishAccessRulesI18nKeys,
+  PublishI18nKeys,
 } from '../constants/translation-keys';
-import { CatalogPublishEntityType } from '../server-api/publish.api';
 
-const PUBLISHABLE_ENTITY_TYPES: Partial<
-  Record<CatalogEntityType, CatalogPublishEntityType>
-> = {
-  [CatalogEntityType.Model]: CatalogPublishEntityType.Model,
-  [CatalogEntityType.Toolset]: CatalogPublishEntityType.Toolset,
-  [CatalogEntityType.Agent]: CatalogPublishEntityType.Application,
+/**
+ * Display name of a publish target folder, for notification copy.
+ *
+ * The Organization root is the whole public bucket and so has no path segments;
+ * taking the last segment of its path yields an empty string, which rendered as
+ * `folder ""` in the confirmation. It falls back to the same root label the
+ * publish panel's folder tree shows for that node.
+ *
+ * Accepts either the `string[]` segments the publish panel hands its callbacks
+ * or the already-joined path kept in publish history.
+ */
+export const getPublishFolderLabel = (
+  folderPath: string | string[],
+  t: TFunction,
+): string => {
+  const segments = Array.isArray(folderPath)
+    ? folderPath
+    : folderPath.split('/');
+  return segments[segments.length - 1] || t(BasicI18nKeys.Organization);
 };
-
-/** Maps a catalog item's entity type to the publish API's entity-type path param, or `undefined` if that type is not publishable. */
-export const toPublishEntityType = (
-  type: CatalogEntityType,
-): CatalogPublishEntityType | undefined => PUBLISHABLE_ENTITY_TYPES[type];
-
-/** Maps a publish-history API response entry to the catalog lib's `PublishHistoryEntry` model. */
-export const mapPublishHistoryEntryDto = (
-  dto: PublishHistoryEntryDto,
-): PublishHistoryEntry => ({
-  version: dto.version,
-  publishedAt: Date.parse(dto.publishedAt),
-  folderPath: dto.folderPath.split('/').filter(Boolean),
-});
 
 /** Builds the translated `accessRulesLabels` overrides shared by every publish panel host (catalog, conversation). */
 export const getAccessRulesLabels = (
   t: TFunction,
 ): PublishAccessRulesLabels => ({
   heading: t(PublishAccessRulesI18nKeys.Heading),
+  folderScopeHint: t(PublishAccessRulesI18nKeys.FolderScopeHint),
+  noFolderScopeHint: t(PublishAccessRulesI18nKeys.NoFolderScopeHint),
+  rulesWithoutFolderWarning: t(
+    PublishAccessRulesI18nKeys.RulesWithoutFolderWarning,
+  ),
+  maxRulesReachedLabel: t(PublishAccessRulesI18nKeys.MaxRulesReachedLabel),
   addRuleLabel: t(PublishAccessRulesI18nKeys.AddRuleLabel),
   clearAllLabel: t(PublishAccessRulesI18nKeys.ClearAllLabel),
   orSeparatorLabel: t(PublishAccessRulesI18nKeys.OrSeparatorLabel),
@@ -68,6 +72,9 @@ export const getAccessRulesLabels = (
     regexOptionLabel: t(PublishAccessRulesI18nKeys.RegexFunctionLabel),
     targetsLabel: t(PublishAccessRulesI18nKeys.TargetsLabel),
     targetsPlaceholder: t(PublishAccessRulesI18nKeys.TargetsPlaceholder),
+    targetsHintLabel: t(PublishAccessRulesI18nKeys.TargetsHintLabel),
+    requiredFieldError: t(PublishAccessRulesI18nKeys.RequiredFieldError),
+    targetsRequiredError: t(PublishAccessRulesI18nKeys.TargetsRequiredError),
     patternLabel: t(PublishAccessRulesI18nKeys.PatternLabel),
     patternPlaceholder: t(PublishAccessRulesI18nKeys.PatternPlaceholder),
     invalidRegexError: t(PublishAccessRulesI18nKeys.InvalidRegexError),
@@ -75,4 +82,16 @@ export const getAccessRulesLabels = (
     cancelLabel: t(ButtonsI18nKeys.Cancel),
     dialogAriaLabel: t(PublishAccessRulesI18nKeys.DialogAriaLabel),
   },
+});
+
+/** Builds the translated author-field label overrides shared by every publish panel host (catalog, conversation). */
+export const getPublishAuthorLabels = (
+  t: TFunction,
+): Pick<
+  PublishPanelLabels,
+  'authorLabel' | 'authorPlaceholder' | 'authorHint'
+> => ({
+  authorLabel: t(PublishI18nKeys.AuthorLabel),
+  authorPlaceholder: t(PublishI18nKeys.AuthorPlaceholder),
+  authorHint: t(PublishI18nKeys.AuthorHint),
 });

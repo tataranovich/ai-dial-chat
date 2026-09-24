@@ -36,10 +36,9 @@ export class ClientChannelService {
     reconnectChannelId: string | undefined,
     signal: AbortSignal,
   ): Promise<ClientChannelSubscription> {
+    const startedAt = Date.now();
     this.logger.debug(
-      reconnectChannelId
-        ? `Subscribing to client channel (reconnect: ${reconnectChannelId})`
-        : 'Subscribing to a new client channel',
+      `[timing] ${reconnectChannelId ? `Subscribing to client channel (reconnect: ${reconnectChannelId})` : 'Subscribing to a new client channel'} — calling DIAL Core now`,
     );
 
     try {
@@ -55,9 +54,11 @@ export class ClientChannelService {
         signal,
       })) as { response: globalThis.Response; error?: unknown };
 
+      const elapsedMs = Date.now() - startedAt;
+
       if (!result.response.ok || !result.response.body) {
         this.logger.warn(
-          `DIAL Core rejected client-channel subscribe — status: ${result.response.status}`,
+          `[timing] DIAL Core rejected client-channel subscribe after ${elapsedMs}ms — status: ${result.response.status}`,
         );
         return handleDialSdkError(
           { status: result.response.status },
@@ -69,7 +70,7 @@ export class ClientChannelService {
       const channelId = result.response.headers.get(CHANNEL_ID_HEADER);
       if (!channelId) {
         this.logger.error(
-          'DIAL Core client-channel subscribe response is missing the channel id header',
+          `[timing] DIAL Core client-channel subscribe response is missing the channel id header after ${elapsedMs}ms`,
         );
         return handleDialSdkError(
           { status: 502 },
@@ -78,9 +79,14 @@ export class ClientChannelService {
         );
       }
 
-      this.logger.debug(`Subscribed to client channel: ${channelId}`);
+      this.logger.debug(
+        `[timing] Subscribed to client channel: ${channelId} — DIAL Core responded after ${elapsedMs}ms`,
+      );
       return { stream: result.response.body, channelId };
     } catch (err) {
+      this.logger.debug(
+        `[timing] client-channel subscribe fetch threw after ${Date.now() - startedAt}ms`,
+      );
       return handleDialFetchError(err, 'client-channel.subscribe', this.logger);
     }
   }
@@ -121,8 +127,11 @@ export class ClientChannelService {
     }
   }
 
-  async unsubscribe(token: string, channelId: string): Promise<void> {
-    this.logger.debug(`Unsubscribing client channel: ${channelId}`);
+  async unsubscribe(token: string, channelId: string): Promise<number> {
+    const startedAt = Date.now();
+    this.logger.debug(
+      `Unsubscribing client channel: ${channelId} — calling DIAL Core now`,
+    );
 
     try {
       const response = await this.dialClient.client.unsubscribeClientChannel({
@@ -131,21 +140,15 @@ export class ClientChannelService {
           [CHANNEL_ID_HEADER]: channelId,
         },
       });
-      /*
-       * A 404 means Core already dropped the channel (e.g. it expired) —
-       * treat it as the idempotent success it represents, mirroring
-       * `ToolsetsService.logoutToolset`'s handling of an already-signed-out
-       * credential.
-       */
-      if (response.error && response.response.status !== 404) {
-        return mapDialHttpStatus(
-          response.response.status,
-          'client-channel.unsubscribe',
-          this.logger,
-        );
-      }
-      this.logger.debug(`Unsubscribed client channel: ${channelId}`);
+      const status = response.response.status;
+      this.logger.debug(
+        `Client-channel unsubscribe completed — channel: ${channelId}, DIAL Core status: ${status}, already absent: ${status === 404}, elapsed: ${Date.now() - startedAt}ms`,
+      );
+      return status;
     } catch (err) {
+      this.logger.debug(
+        `Client-channel unsubscribe failed — channel: ${channelId}, elapsed: ${Date.now() - startedAt}ms`,
+      );
       return handleDialFetchError(
         err,
         'client-channel.unsubscribe',

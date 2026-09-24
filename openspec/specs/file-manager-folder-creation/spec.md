@@ -1,8 +1,12 @@
 # Spec: File Manager Folder Creation
 
+## Purpose
+
+Creating folders as zero-byte markers, with inline name validation and the cache update that follows.
+
 ## State ownership
 
-`useDialFileManager` (`apps/chat/src/hooks/files/useDialFileManager.ts`) owns folder-creation state.
+`useDialFileManager` (`libs/chat-hooks/src/files/useDialFileManager/useDialFileManager.ts (@epam/ai-dial-chat-hooks)`) owns folder-creation state.
 
 New state field:
 ```ts
@@ -22,7 +26,6 @@ Exposed in `UseDialFileManagerResult`:
 
 - **Controller**: `FilesController` (`apps/chat-api/src/files/files.controller.ts`)
 - **Handler name**: `createFolder` → operationId `createFolder`
-- **Rate limit**: `@Throttle({ default: { limit: 10, ttl: 60000 } })`
 - **Authentication**: session guard (existing)
 - **Request content-type**: `application/json`
 - **Response content-type**: `application/json`
@@ -98,7 +101,7 @@ class CreateFolderResponseDto {
 | `403` | User lacks permission on the bucket |
 | `404` | Parent folder not found (DIAL Core 404) |
 | `409` | A folder (or file) with the same name already exists at the parent path |
-| `429` | Rate limit exceeded |
+| `429` | DIAL Core rate limit exceeded |
 | `502` | DIAL Core returned an error |
 | `503` | DIAL Core unreachable or timed out |
 
@@ -160,46 +163,27 @@ Called by `DialFileManager` during name input (before `onCreateFolder`):
 onCreateFolderValidate: (name: string, parentFolder: DialFile): string | null
 ```
 
-Rules (synchronous — no BFF call):
-- Empty name → error key `dialFileManager.folderNameEmpty`
-- Contains `/`, `\`, or a forbidden symbol from `forbiddenSymbolsRegExp` → error key `dialFileManager.folderNameInvalidChars`
-- Starts with `.` → error key `dialFileManager.folderNameHidden`
-- Equals `.dial_folder` → error key `dialFileManager.folderNameReserved`
-- Exceeds 255 characters → error key `dialFileManager.folderNameTooLong`
-- Duplicate sibling name (case-insensitive check against `parentFolder.items`) → error key `dialFileManager.folderConflict`
+Rules, evaluated **in this order** by `@epam/ai-dial-react-file-manager`, which returns on
+the first match (synchronous — no BFF call):
+1. Empty name → error key `dialFileManager.folderNameEmpty`
+2. Contains `..` anywhere → error key `dialFileManager.nameConsecutiveDots`
+3. Starts with `.` → error key `dialFileManager.folderNameHidden`
+4. Duplicate sibling name (case-insensitive check against `parentFolder.items`) → error key `dialFileManager.folderConflict`
+5. Contains a path separator or a forbidden symbol from `forbiddenSymbolsRegExp` → error key `dialFileManager.folderNameInvalidChars`
+6. Equals `.dial_folder` → error key `dialFileManager.folderNameReserved`
+7. Exceeds 255 characters → error key `dialFileManager.folderNameTooLong`
+
+The order matters for names that break several rules at once, and it is owned by the
+third-party package, not by this repository: a name is rejected with the message of the
+**first** rule it trips, not the most specific one. `../secret` breaks rules 2 and 5 and
+therefore reports the consecutive-dots message. A test that asserts a specific message for
+a multi-fault name MUST assert the message of the earliest matching rule.
 
 Forbidden-symbol validation SHALL use the same effective symbol set as rename validation: path separators (`/` and `\`) are always rejected, and all other forbidden characters come from the `forbiddenSymbolsRegExp` option passed to `useDialFileManager`. Production File Manager hosts pass `NOT_ALLOWED_SYMBOLS_REGEXP` from `@epam/ai-dial-ui-kit`, so names such as `reports:2026` are rejected before `onCreateFolder` is called.
 
 Conflict check in `onCreateFolderValidate` is against the **cached** `items` — it is a best-effort pre-check. The authoritative `409` check is server-side (`markerMetadataMatches` on the marker probe in `FilesFolderService.createFolder`).
 
 `onCreateFolder` does not catch BFF errors locally — failures (including `409`) propagate to `DialFileManager`, which surfaces them inline in the folder-creation dialog.
-
----
-
-### Requirement: Folder creation is rejected for invalid names independent of the host UI
-
-`onCreateFolder` (`apps/chat/src/hooks/files/useDialFileMutations.ts`) SHALL independently call `onCreateFolderValidate` with the resolved folder name and parent folder before calling the `POST /api/v1/files/folders` BFF endpoint, and SHALL NOT call it when `onCreateFolderValidate` returns a non-null error — regardless of whether the host `DialFileManager` component already blocked confirmation on that same validation result.
-
-#### Scenario: Enter confirms an invalid folder name
-
-- **WHEN** a user is creating a new folder, types a name that fails validation (empty, contains a forbidden symbol such as `/` or `:`, starts with `.`, equals the reserved marker name, or exceeds 255 characters) so the inline error is shown, and presses Enter to confirm
-- **THEN** `onCreateFolder` does not call the `createFolder` BFF endpoint and no folder is created
-
-#### Scenario: Clicking the folder row confirms an invalid folder name
-
-- **WHEN** a user is creating a new folder with an invalid name (as above) and confirms by clicking the folder row instead of pressing Enter
-- **THEN** `onCreateFolder` does not call the `createFolder` BFF endpoint and no folder is created
-
-#### Scenario: Valid folder name is created normally
-
-- **WHEN** a user confirms a folder name that passes `onCreateFolderValidate`
-- **THEN** `onCreateFolder` calls the `createFolder` BFF endpoint exactly as before this change, and the folder is created
-
-#### Scenario: Parent folder resolution when creating outside the currently browsed folder
-
-- **WHEN** a folder is created from a destination-folder popup browsing a different folder than the outer grid, so no cached sibling list is available for the new folder's actual parent
-- **THEN** `onCreateFolder` still runs the empty-name, forbidden-symbol, leading-dot, reserved-name, and length checks against the resolved name
-- **AND** the client-side sibling-duplicate check is best-effort only for this case; a genuine conflict is still caught by the BFF's `409` response, exactly as already specified for the existing conflict-check scenario
 
 ---
 
@@ -227,6 +211,7 @@ setRetryCounter((c) => c + 1);
 | `dialFileManager.folderNameEmpty` | `"Folder name cannot be empty"` |
 | `dialFileManager.folderNameInvalidChars` | `"Folder name should not contain special symbols {{notAllowedSymbols}}"` |
 | `dialFileManager.folderNameHidden` | `"Folder name cannot start with a dot"` |
+| `dialFileManager.nameConsecutiveDots` | `"Name cannot contain consecutive dots"` — shared with rename validation |
 | `dialFileManager.folderNameReserved` | `"This folder name is reserved"` |
 | `dialFileManager.folderNameTooLong` | `"Folder name is too long"` |
 
@@ -325,7 +310,10 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 
 - **GIVEN** the user types `../secret`
 - **WHEN** `onCreateFolderValidate` runs
-- **THEN** the slash in the name triggers the `folderNameInvalidChars` error inline
+- **THEN** the name is rejected inline before `onCreateFolder` is called
+- **AND** the inline message is `nameConsecutiveDots` ("Name cannot contain consecutive
+  dots"), because the `..` rule is evaluated before the forbidden-character rule — the name
+  breaks both, and the earlier rule wins
 - **AND** if a crafted request bypasses the frontend and hits the BFF directly
 - **THEN** `CreateFolderDto` `@Matches` validation rejects the name with `400 Bad Request`
 
@@ -372,3 +360,52 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 - **WHEN** the folder appears in the grid
 - **THEN** the folder row is not selectable (existing `isRowSelectable` checks `nodeType === DialFileNodeType.ITEM`)
 - **AND** the "Attach" button remains disabled while no files are selected
+
+## Requirements
+### Requirement: Folder creation is rejected for invalid names independent of the host UI
+
+`onCreateFolder` (`libs/chat-hooks/src/files/useDialFileMutations/useDialFileMutations.ts (@epam/ai-dial-chat-hooks)`) SHALL independently call `onCreateFolderValidate` with the resolved folder name and parent folder before calling the `POST /api/v1/files/folders` BFF endpoint, and SHALL NOT call it when `onCreateFolderValidate` returns a non-null error — regardless of whether the host `DialFileManager` component already blocked confirmation on that same validation result.
+
+#### Scenario: Enter confirms an invalid folder name
+
+- **WHEN** a user is creating a new folder, types a name that fails validation (empty, contains a forbidden symbol such as `/` or `:`, starts with `.`, equals the reserved marker name, or exceeds 255 characters) so the inline error is shown, and presses Enter to confirm
+- **THEN** `onCreateFolder` does not call the `createFolder` BFF endpoint and no folder is created
+
+#### Scenario: Clicking the folder row confirms an invalid folder name
+
+- **WHEN** a user is creating a new folder with an invalid name (as above) and confirms by clicking the folder row instead of pressing Enter
+- **THEN** `onCreateFolder` does not call the `createFolder` BFF endpoint and no folder is created
+
+#### Scenario: Valid folder name is created normally
+
+- **WHEN** a user confirms a folder name that passes `onCreateFolderValidate`
+- **THEN** `onCreateFolder` calls the `createFolder` BFF endpoint exactly as before this change, and the folder is created
+
+#### Scenario: Parent folder resolution when creating outside the currently browsed folder
+
+- **WHEN** a folder is created from a destination-folder popup browsing a different folder than the outer grid, so no cached sibling list is available for the new folder's actual parent
+- **THEN** `onCreateFolder` still runs the empty-name, forbidden-symbol, leading-dot, reserved-name, and length checks against the resolved name
+- **AND** the client-side sibling-duplicate check is best-effort only for this case; a genuine conflict is still caught by the BFF's `409` response, exactly as already specified for the existing conflict-check scenario
+---
+### Requirement: A created folder confirms itself
+
+`onCreateFolder` (`libs/chat-hooks/src/files/useDialFileMutations/useDialFileMutations.ts (@epam/ai-dial-chat-hooks)`) SHALL raise a success notification after the `POST /api/v1/files/folders` call resolves and the created folder has been merged into the listing cache, through `useOperationNotification` (see `entity-operation-notifications`) with `NotifiableEntity.Folder` + `EntityOperation.Created` and `name` = the created folder's resolved name.
+
+Today only the failure path notifies (`dialFileManager.folderCreateError`), so a folder created into a collapsed or non-visible parent — from a destination-folder popup, for example — produces no feedback at all.
+
+The notification SHALL NOT be raised when validation rejects the name locally or when the BFF returns `409`; those paths keep their existing inline error and error-toast behaviour.
+
+#### Scenario: Folder created from the grid confirms
+
+- **WHEN** a user confirms a valid new folder name and the create request succeeds
+- **THEN** a success notification titled `"Folder created successfully"` is shown, naming the folder
+
+#### Scenario: Folder created from a destination-folder popup confirms
+
+- **WHEN** a folder is created from a destination-folder popup browsing a different folder than the outer grid, and the create request succeeds
+- **THEN** the same success notification is shown, even though the new folder is not visible in the outer grid
+
+#### Scenario: Rejected name raises no success notification
+
+- **WHEN** the name fails client-side validation, or the BFF responds `409`
+- **THEN** no success notification is raised and the existing inline error / error toast behaviour is unchanged

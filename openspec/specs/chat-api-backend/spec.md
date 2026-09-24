@@ -1,7 +1,10 @@
 ## Purpose
 
-Define the Chat API application's bootstrap, security, validation, health, rate-limiting, and
-theme-service requirements.
+Define the Chat API application's bootstrap, security, validation, health,
+shared in-memory cache, and theme-service requirements.
+
+The BFF does not enforce global or per-route request-rate limits. Upstream rate-limit
+responses follow the error mapping defined by each domain.
 
 ## Requirements
 
@@ -76,7 +79,7 @@ The application SHALL validate required environment variables at bootstrap using
 
 ### Requirement: Health check endpoint
 
-The application SHALL expose `GET /api/health` returning HTTP 200 with a JSON body containing at minimum `{ "status": "ok" }`. This endpoint SHALL be exempt from rate limiting and authentication.
+The application SHALL expose `GET /api/health` returning HTTP 200 with a JSON body containing at minimum `{ "status": "ok" }`. This endpoint SHALL be exempt from authentication.
 
 The response body SHALL additionally include a `buildId` string field: a stable identifier for the currently served frontend deployment, derived by hashing the built frontend's `index.html` once when the application process starts (no dedicated deploy-time environment variable required). `buildId` SHALL change whenever a new deployment replaces the served frontend static assets, and SHALL stay constant across repeated calls against the same running process. Because every pod serving the same deployed image bundles an identical `index.html`, all pods behind a load balancer report the same `buildId` for a given deployment. This field is the mechanism the frontend uses to detect that a newer build has been deployed while a tab is open (see the `frontend-new-version-reload` capability).
 
@@ -148,22 +151,96 @@ reverse-tabnabbing protection.
 
 ---
 
-### Requirement: Rate limiting on public endpoints
-
-The application SHALL configure `@nestjs/throttler` globally. Theme endpoints (`/api/themes`, `/api/themes/icon`) SHALL be subject to the default throttle limit. Requests exceeding the limit SHALL return HTTP 429.
-
-#### Scenario: Excessive requests return 429
-
-- **WHEN** a client exceeds the configured request rate for a theme endpoint
-- **THEN** the endpoint returns HTTP 429 Too Many Requests
-
----
-
 ### Requirement: In-memory caching for theme configuration
 
-`ThemeService.getThemes()` SHALL cache the result using `@nestjs/cache-manager` for a configurable TTL (default: 60 seconds). Subsequent calls within the TTL SHALL return the cached value without making a new external HTTP request.
+`ThemeService.getThemes()` SHALL cache the result under `themes:config` using the shared
+`@nestjs/cache-manager` cache and its default TTL of 5 minutes. Subsequent calls while the
+entry remains present and unexpired SHALL return the cached value without making a new
+external HTTP request. Expiration, capacity eviction, or explicit invalidation SHALL cause
+the next call to fetch and cache a fresh result.
 
 #### Scenario: Second call returns cached result
 
-- **WHEN** `GET /api/themes` is called twice within the cache TTL
+- **WHEN** `GET /api/themes` is called again after the first call completes, within the cache TTL
+- **AND** the cached entry has not been evicted or explicitly invalidated
 - **THEN** the external themes service receives only one HTTP request
+
+#### Scenario: Evicted theme configuration is fetched again
+
+- **WHEN** `themes:config` is evicted because the shared cache reaches its capacity
+- **AND** `GET /api/themes` is called again before the original TTL would have expired
+- **THEN** the external themes service receives a new HTTP request
+- **AND** the successful result is cached under `themes:config`
+
+---
+
+### Requirement: Bounded shared application cache
+
+`AppModule` SHALL own one global in-memory cache shared by backend services in each
+application process. The cache SHALL retain at most 100 entries across all service keys
+and SHALL evict the least recently used entry when adding a new entry at capacity.
+Successful reads SHALL refresh an entry's recency for eviction. This limit SHALL apply
+to the number of entries, regardless of their individual byte sizes.
+
+The cache SHALL use a default TTL of 300,000 milliseconds and SHALL honor per-entry TTL
+overrides in milliseconds. A TTL of zero SHALL disable time-based expiration while
+leaving the entry subject to capacity eviction and explicit invalidation. Expired
+entries SHALL return a cache miss on reads. A background sweep SHALL run every 60
+seconds and physically remove expired entries even when their keys are never read again.
+
+The cache SHALL preserve object references and `Buffer` values without cloning or
+serialization. Explicit deletion SHALL remove the selected key, and clearing SHALL
+remove all entries. When the Nest application module is destroyed, the cache SHALL
+stop its cleanup timer and release its retained entries.
+
+#### Scenario: Least recently used entry is evicted at capacity
+
+- **WHEN** 100 distinct unexpired entries have been cached
+- **AND** the oldest entry is read successfully before a 101st distinct entry is written
+- **THEN** the least recently used entry is evicted and the recently read entry remains
+- **AND** the new entry is present and the stored entry count is 100
+
+#### Scenario: Expired entries are removed without further reads
+
+- **WHEN** a cached entry expires and its key is never read again
+- **THEN** the next background sweep physically removes the entry
+- **AND** unexpired entries remain cached
+
+#### Scenario: Repeated unique keys do not accumulate indefinitely
+
+- **WHEN** successive batches of 1,000 distinct keys are written with a 20-millisecond TTL
+- **THEN** the stored entry count is at most 100 after each write
+- **AND** after each batch expires and a background sweep runs, none of its entries remain
+
+#### Scenario: Default TTL and per-entry overrides are honored
+
+- **WHEN** entries are written with no TTL override, a 30,000-millisecond TTL, and a
+  600,000-millisecond TTL, respectively, without subsequent eviction or invalidation
+- **THEN** reads after 30 seconds return a miss for the short-lived entry
+- **AND** the default entry remains readable until its 5-minute TTL expires
+- **AND** the entry with the longer override remains readable until its 10-minute TTL expires
+
+#### Scenario: Zero TTL disables expiration
+
+- **WHEN** an entry is written with a TTL of zero
+- **THEN** elapsed time and background sweeps do not expire it
+- **AND** it remains subject to capacity eviction and explicit invalidation
+
+#### Scenario: Binary values and object references are preserved
+
+- **WHEN** a `Buffer` containing binary icon data and a configuration object are cached
+- **THEN** reads before expiration or eviction return the original `Buffer` and object references
+- **AND** the binary bytes remain unchanged
+
+#### Scenario: Explicit deletion and clearing release entries
+
+- **WHEN** a service deletes a cached key
+- **THEN** that key is physically removed and other entries remain
+- **WHEN** the cache is cleared
+- **THEN** no entries remain
+
+#### Scenario: Application shutdown releases cache resources
+
+- **WHEN** the Nest application module is destroyed
+- **THEN** the background cleanup timer is stopped
+- **AND** all entries retained by the cache are cleared

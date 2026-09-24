@@ -1,4 +1,10 @@
-## ADDED Requirements
+# file-manager-tab-config Specification
+
+## Purpose
+
+The operator-configurable file-manager tab list, from the config registry through to active-tab correction in the UI.
+
+## Requirements
 
 ### Requirement: fileManager.availableTabs config-registry key
 
@@ -111,7 +117,7 @@
 
 ### Requirement: useDialFileManagerTabConfig hook filters tabs and owns active-tab correction
 
-`apps/chat/src/hooks/files/useDialFileManagerTabConfig.ts` SHALL export `useDialFileManagerTabConfig(activeTab: DialFileManagerTabs, onTabChange: (tab: DialFileManagerTabs) => void, allTabs: ToolbarOptions['tabs'])`, returning `{ tabs: ToolbarOptions['tabs'] }` where `tabs = allTabs?.filter((tab) => fileManagerTabs.includes(tab.id))` and `fileManagerTabs` is read from `useAppConfig().config.fileManagerTabs`.
+`libs/chat-hooks/src/files/useDialFileManagerTabConfig/useDialFileManagerTabConfig.ts (@epam/ai-dial-chat-hooks)` SHALL export `useDialFileManagerTabConfig(activeTab: DialFileManagerTabs, onTabChange: (tab: DialFileManagerTabs) => void, allTabs: ToolbarOptions['tabs'])`, returning `{ tabs: ToolbarOptions['tabs'] }` where `tabs = allTabs?.filter((tab) => fileManagerTabs.includes(tab.id))` and `fileManagerTabs` is read from `useAppConfig().config.fileManagerTabs`.
 
 The hook SHALL run a `useEffect` (dependencies: `fileManagerTabs`, `activeTab`, `onTabChange`) that, whenever `activeTab` is not present in `fileManagerTabs`, calls `onTabChange` with the first id present in `fileManagerTabs` following the fixed priority `my_files` → `shared` → `organization`, falling back to `my_files` if `fileManagerTabs` is empty.
 
@@ -163,5 +169,5 @@ This capability SHALL NOT implement client-side or BFF-side filtering of individ
 
 #### Scenario: No per-file provenance field is introduced
 
-- **WHEN** the file listing endpoints (`/list`, `/shared`, `/shared-by-me`, organization listing) are inspected after this change
+- **WHEN** the file listing endpoints (`/list`, `/shared`, `/shared-by-me`, organization listing) are inspected
 - **THEN** none of their response DTOs carry a `sharedWithMe` or `publishedWithMe` field on individual file items

@@ -5,10 +5,10 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
   Req,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import type { SessionUser } from '../auth/session/session.types';
 import { AcceptInvitationResponseDto } from './dto/accept-invitation-response.dto';
@@ -23,6 +23,10 @@ import {
   RevokeSharedAccessResponseDto,
 } from './dto/revoke-shared-access.dto';
 import { ShareLinkResponseDto } from './dto/share-link-response.dto';
+import {
+  GetShareRecipientsDto,
+  ShareRecipientsResponseDto,
+} from './dto/share-recipients.dto';
 import { ShareService } from './share.service';
 
 /** Controller for creating share links for DIAL Core resources. */
@@ -33,7 +37,6 @@ export class ShareController {
 
   @Post()
   @HttpCode(201)
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({
     operationId: 'createShareLink',
     summary: 'Create a share link',
@@ -57,7 +60,6 @@ export class ShareController {
     status: 401,
     description: 'Not authenticated — valid session cookie required',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -76,7 +78,6 @@ export class ShareController {
 
   @Get('invitations/:invitationId')
   @HttpCode(200)
-  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @ApiOperation({
     operationId: 'acceptInvitation',
     summary: 'Accept a share invitation',
@@ -101,7 +102,6 @@ export class ShareController {
     status: 404,
     description: 'Invitation not found, expired, or already revoked',
   })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -120,15 +120,15 @@ export class ShareController {
 
   @Post('discard')
   @HttpCode(200)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({
     operationId: 'discardSharedCatalogItem',
-    summary: 'Discard a shared catalog resource or conversation',
+    summary: 'Discard a shared catalog resource, conversation, or prompt',
     description:
       "Discards the authenticated user's own access to a shared catalog " +
-      "entity (application or toolset) or conversation, via DIAL Core's " +
-      "discardSharedResources operation. Only affects the caller's own " +
-      'access — removing access for everyone else is a separate operation.',
+      'entity (application or toolset), a skill, a conversation, or a ' +
+      "prompt, via DIAL Core's discardSharedResources operation. Only " +
+      "affects the caller's own access — removing access for everyone " +
+      'else is a separate operation.',
   })
   @ApiBody({ type: DiscardSharedCatalogItemDto })
   @ApiResponse({
@@ -149,7 +149,6 @@ export class ShareController {
     description: 'Resource is not shared with the caller',
   })
   @ApiResponse({ status: 404, description: 'Resource does not exist' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -166,14 +165,52 @@ export class ShareController {
     return this.shareService.discardShared(body.itemId, at, sub);
   }
 
+  @Get('recipients')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'getShareRecipientsCount',
+    summary: 'Count current recipients of an owned resource',
+    description:
+      "Returns how many users currently hold shared access to a catalog entity (application or toolset), a skill, a conversation, or a prompt the caller owns, via DIAL Core's " +
+      'getSharedResources operation. Intended to be called when an owner opens the menu offering "Revoke access", so the count is never stale. ' +
+      'Counts accepted invitations only — an issued but unopened share link is not counted.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Recipient count resolved',
+    type: ShareRecipientsResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation error — invalid itemId',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Not authenticated — valid session cookie required',
+  })
+  @ApiResponse({
+    status: 502,
+    description: 'DIAL Core returned an error response',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'DIAL Core is unavailable or timed out',
+  })
+  getShareRecipientsCount(
+    @Req() req: Request,
+    @Query() { itemId }: GetShareRecipientsDto,
+  ): Promise<ShareRecipientsResponseDto> {
+    const { at } = req.user as SessionUser;
+    return this.shareService.getRecipientsCount(itemId, at);
+  }
+
   @Post('revoke')
   @HttpCode(200)
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({
     operationId: 'revokeSharedAccess',
     summary: 'Revoke all shared access to an owned resource',
     description:
-      "Revokes every outstanding share grant on a catalog entity (application or toolset) or conversation the caller owns, via DIAL Core's " +
+      "Revokes every outstanding share grant on a catalog entity (application or toolset), a skill, a conversation, or a prompt the caller owns, via DIAL Core's " +
       'revokeSharedResources operation. Affects all recipients at once — DIAL Core cannot target a single recipient. Discarding only the ' +
       "caller's own access to a resource shared with them is a separate operation.",
   })
@@ -196,7 +233,6 @@ export class ShareController {
     description: 'Caller does not own the resource',
   })
   @ApiResponse({ status: 404, description: 'Resource does not exist' })
-  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',

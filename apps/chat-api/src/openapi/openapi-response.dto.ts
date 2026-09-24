@@ -1,4 +1,9 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  ApiExtraModels,
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from '@nestjs/swagger';
 import { LOCALIZED_TEXT_SCHEMA } from '../common/types/localized-text';
 import type { LocalizedText } from '../common/types/localized-text';
 import { ConversationMessageDto } from '../conversations/dto/conversation-message.dto';
@@ -465,13 +470,6 @@ export class DialToolsetDto {
       'True when this toolset is shared with the current user (READ or WRITE) and not owned by them',
   })
   sharedWithMe?: boolean;
-
-  @ApiPropertyOptional({
-    description:
-      'How many other users currently hold shared access to this toolset, for toolsets the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.',
-    example: 3,
-  })
-  recipientsCount?: number;
 }
 
 export class DialToolsetListResponseDto {
@@ -485,6 +483,19 @@ export class LimitStatsDto {
 
   @ApiProperty({ example: 10 })
   used!: number;
+
+  @ApiPropertyOptional({
+    example: '2026-09-16T00:00:00Z',
+    description:
+      'Optional ISO-8601 instant with an explicit UTC designator marking the exclusive end of this ' +
+      "stat's current calendar accumulation period — at that instant the period rolls over and DIAL " +
+      'Core begins reporting against a fresh window. Its presence establishes that the day, week, and ' +
+      'month stats are calendar periods anchored to UTC boundaries (UTC midnight, UTC week start, UTC ' +
+      'month start), not trailing windows. DIAL Core may omit it on a given stat, and its absence is ' +
+      'not an error. The BFF forwards the value verbatim and never parses, reformats, converts, ' +
+      'clamps, drops, or synthesizes it.',
+  })
+  resetsAt?: string;
 }
 
 export class DeploymentLimitsResponseDto {
@@ -516,6 +527,58 @@ export class DeploymentLimitsResponseDto {
   weekCostStats?: LimitStatsDto;
 
   @ApiPropertyOptional({ type: () => LimitStatsDto })
+  monthCostStats?: LimitStatsDto;
+}
+
+@ApiExtraModels(DeploymentLimitsResponseDto)
+export class UserLimitStatsResponseDto {
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { $ref: getSchemaPath(DeploymentLimitsResponseDto) },
+    description:
+      'Per-deployment rate-limit and calendar-period usage stats, keyed by deployment name. Models ' +
+      'only — applications, toolsets, and routes never appear here. On GET /v1/user/limits every ' +
+      'deployment visible to the caller is present, including ones never used (reported against zero ' +
+      'usage). On GET /v1/user/usage only deployments the caller used within the currently reported ' +
+      'calendar periods are present; absence means zero usage, not "unknown".',
+  })
+  deployments?: Record<string, DeploymentLimitsResponseDto>;
+
+  @ApiPropertyOptional({
+    type: () => LimitStatsDto,
+    description:
+      "The caller's global cost budget for the current UTC minute and spend against it. Unlike the " +
+      'identically-named field nested inside a `deployments` entry (that is per-deployment attributed ' +
+      'spend whose `total` is the unlimited sentinel in every payload observed to date; consumers ' +
+      "detect the sentinel rather than assume it), this is the caller's actual money budget. A " +
+      '`total` at or above 9007199254740992 (2^53) represents the upstream "unlimited" sentinel ' +
+      '(`Long.MAX_VALUE`, which exceeds `Number.MAX_SAFE_INTEGER`) and must be treated as unlimited ' +
+      'rather than rendered as a used/total ratio.',
+  })
+  minuteCostStats?: LimitStatsDto;
+
+  @ApiPropertyOptional({
+    type: () => LimitStatsDto,
+    description:
+      "The caller's global cost budget for the current UTC day and spend against it. See " +
+      'minuteCostStats for the unlimited-sentinel and global-vs-per-deployment scope notes.',
+  })
+  dayCostStats?: LimitStatsDto;
+
+  @ApiPropertyOptional({
+    type: () => LimitStatsDto,
+    description:
+      "The caller's global cost budget for the current UTC week and spend against it. See " +
+      'minuteCostStats for the unlimited-sentinel and global-vs-per-deployment scope notes.',
+  })
+  weekCostStats?: LimitStatsDto;
+
+  @ApiPropertyOptional({
+    type: () => LimitStatsDto,
+    description:
+      "The caller's global cost budget for the current UTC month and spend against it. See " +
+      'minuteCostStats for the unlimited-sentinel and global-vs-per-deployment scope notes.',
+  })
   monthCostStats?: LimitStatsDto;
 }
 

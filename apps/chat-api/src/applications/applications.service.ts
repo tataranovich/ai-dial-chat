@@ -11,10 +11,19 @@ import {
   handleDialFetchError,
   mapDialHttpStatus,
 } from '../common/dial/dial-error.mapper';
+import { isQuickAppSchema } from '../common/utils/application-schema';
 import { getBearerAuthHeaders } from '../common/utils/auth-header';
-import { composeLocalizedFields } from '../common/utils/compose-localized-fields';
+import {
+  composeLocalizedFields,
+  toLocalizedValue,
+} from '../common/utils/compose-localized-fields';
+import {
+  parseDialApplicationResource,
+  type DialApplicationResource,
+} from '../common/utils/dial-application-resource';
 import { encodeDialResourcePath } from '../common/utils/encode-dial-path';
 import { DeploymentsService } from '../deployments/deployments.service';
+import { DeploymentsDetailsService } from '../deployments/details/deployments-details.service';
 import { withCachedDialRequest } from '../dial/cached-dial-request.helper';
 import { DialClientService } from '../dial/dial-client.service';
 import type { ApplicationsResponseDto } from './dto/application.dto';
@@ -26,32 +35,9 @@ import type {
   UpdateApplicationBodyDto,
   UpdatedApplicationDto,
 } from './dto/update-application.dto';
+import { hoistApplicationFields } from './utils/application-body-mapping';
 
 type DialApplication = components['schemas']['Application'];
-
-const APPLICATION_RESOURCE_PREFIX = 'applications/';
-
-interface DialApplicationResource {
-  bucket: string;
-  path: string;
-}
-
-const parseDialApplicationResource = (
-  applicationName: string,
-): DialApplicationResource | undefined => {
-  if (!applicationName.startsWith(APPLICATION_RESOURCE_PREFIX)) {
-    return undefined;
-  }
-
-  const resource = applicationName.slice(APPLICATION_RESOURCE_PREFIX.length);
-  const [bucket, ...pathSegments] = resource.split('/');
-  const path = pathSegments.join('/');
-  if (!bucket || !path) {
-    return undefined;
-  }
-
-  return { bucket, path: encodeDialResourcePath(path) };
-};
 
 @Injectable()
 export class ApplicationsService {
@@ -61,6 +47,7 @@ export class ApplicationsService {
     private readonly dialClient: DialClientService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
     private readonly deploymentsService: DeploymentsService,
+    private readonly deploymentsDetailsService: DeploymentsDetailsService,
   ) {}
 
   private async getUserBucket(
@@ -158,8 +145,8 @@ export class ApplicationsService {
         features,
         inputAttachmentTypes,
         maxInputAttachments,
-        ...remainingProps
-      } = (body.applicationProperties ?? {}) as Record<string, unknown>;
+        remainingProperties,
+      } = hoistApplicationFields(body.applicationProperties);
 
       const { displayName, description } = composeLocalizedFields(
         body.name,
@@ -168,26 +155,39 @@ export class ApplicationsService {
         body.primaryLocale,
       );
       const dialBody: DialApplication = {
-        // The SDK types `displayName`/`description` as plain `string`; DIAL
-        // Core actually accepts a locale map too. Remove this cast when the
-        // SDK's `Application` schema is widened to match.
-        displayName: displayName as unknown as string,
+        displayName: toLocalizedValue(displayName),
         displayVersion: version,
       };
       if (body.type) dialBody.application_type_schema_id = body.type;
-      if (Object.keys(remainingProps).length > 0)
-        dialBody.application_properties = remainingProps;
+      if (Object.keys(remainingProperties).length > 0)
+        dialBody.application_properties = remainingProperties;
       if (description != null)
         dialBody.description = description as unknown as string;
       if (body.iconUrl != null) dialBody.iconUrl = body.iconUrl;
       if (body.topics != null && body.topics.length > 0)
         dialBody.descriptionKeywords = body.topics;
-      if (typeof endpoint === 'string') dialBody.endpoint = endpoint;
+      if (endpoint != null) dialBody.endpoint = endpoint;
       if (features != null)
         dialBody.features = features as (typeof dialBody)['features'];
-      if (Array.isArray(inputAttachmentTypes))
-        dialBody.inputAttachmentTypes = inputAttachmentTypes as string[];
-      if (typeof maxInputAttachments === 'number')
+      /*
+       * Quick App creation has no `skills_supported` UI control in chat (unlike
+       * the Admin app, which exposes one), so a chat-created Quick App would
+       * otherwise never get the flag set and silently lose skills. Rather than
+       * push this into every individual Quick App implementation or leave
+       * skills broken, the BFF force-sets it here whenever the schema is a
+       * Quick App — a deliberate coupling of generic application-write logic
+       * to Quick-App-specific business rules, accepted as the least-bad of
+       * those three options.
+       */
+      if (isQuickAppSchema(body.type)) {
+        dialBody.features = {
+          ...dialBody.features,
+          skills_supported: true,
+        } as (typeof dialBody)['features'];
+      }
+      if (inputAttachmentTypes != null)
+        dialBody.inputAttachmentTypes = inputAttachmentTypes;
+      if (maxInputAttachments != null)
         dialBody.maxInputAttachments = maxInputAttachments;
 
       const response = await this.dialClient.client.saveCustomApplication(
@@ -211,7 +211,7 @@ export class ApplicationsService {
       this.logger.debug(
         `Created application ${appPath}, invalidated cache for sub: ${userSub}`,
       );
-      return { id: `applications/${bucket}/${appPath}` };
+      return { id: `applications/${bucket}/${encodedPath}` };
     } catch (err) {
       return handleDialFetchError(err, 'create application', this.logger, 0);
     }
@@ -246,11 +246,11 @@ export class ApplicationsService {
       }
 
       /*
-       * Only the General-step fields are overwritten. Everything else
-       * fetched from DIAL Core — `application_type_schema_id`,
-       * `displayVersion`, `application_properties` (orchestrator/tool set
-       * state) — is carried through unchanged so this update can never
-       * affect the Settings step.
+       * `application_type_schema_id` is never in the body and is always
+       * carried through unchanged, so this update can never mutate an
+       * application's schema type. `application_properties` is carried
+       * through unchanged unless the body supplies `applicationProperties`,
+       * in which case it is fully replaced below.
        */
       const { displayName, description } = composeLocalizedFields(
         body.name,
@@ -260,12 +260,12 @@ export class ApplicationsService {
       );
       const mergedBody: DialApplication = {
         ...(existingResponse.data as DialApplication),
-        // The SDK types `displayName`/`description` as plain `string`; DIAL
-        // Core actually accepts a locale map too. Remove this cast when the
-        // SDK's `Application` schema is widened to match. This is a full
-        // replacement, not a per-locale merge with whatever the existing
-        // resource had — consistent with every other General-step field.
-        displayName: displayName as unknown as string,
+        /*
+         * This is a full replacement, not a per-locale merge with whatever
+         * the existing resource had — consistent with every other
+         * General-step field.
+         */
+        displayName: toLocalizedValue(displayName),
       };
       if (description != null)
         mergedBody.description = description as unknown as string;
@@ -281,6 +281,38 @@ export class ApplicationsService {
         mergedBody.inputAttachmentTypes = body.inputAttachmentTypes;
       if (body.maxInputAttachments != null)
         mergedBody.maxInputAttachments = body.maxInputAttachments;
+      /*
+       * Same rationale as `createApplication` above: chat has no UI control
+       * for `skills_supported`, so every update to a Quick App re-asserts the
+       * flag, regardless of whether this request body touches `features` at
+       * all — it's a standing guarantee, not a one-time default set only on
+       * creation.
+       */
+      if (isQuickAppSchema(mergedBody.application_type_schema_id)) {
+        mergedBody.features = {
+          ...mergedBody.features,
+          skills_supported: true,
+        } as (typeof mergedBody)['features'];
+      }
+
+      /*
+       * `applicationProperties` fully replaces the stored
+       * `application_properties` when supplied (including `{}` — a
+       * deliberate clear), rather than being merged with the previous
+       * value — see the `applications-write-api` spec's "applicationProperties
+       * replacement semantics". Unlike `createApplication`, this is stored
+       * verbatim with NO hoisting of endpoint/features/inputAttachmentTypes/
+       * maxInputAttachments out of it: a Quick App's own `application_properties`
+       * may itself carry a schema-specific `features` key (e.g. `timestamp`),
+       * and hoisting would silently move that key to the top-level DIAL Core
+       * `features` field, destroying it. A caller that wants to set the
+       * top-level fields uses this DTO's own separate `endpoint`/`features`/
+       * `inputAttachmentTypes`/`maxInputAttachments` properties (handled
+       * above), not `applicationProperties`.
+       */
+      if (body.applicationProperties != null) {
+        mergedBody.application_properties = body.applicationProperties;
+      }
 
       const saveResponse = await this.dialClient.client.saveCustomApplication(
         bucket,
@@ -290,6 +322,7 @@ export class ApplicationsService {
           body: mergedBody,
         },
       );
+
       if (saveResponse.error) {
         return mapDialHttpStatus(
           saveResponse.response.status,
@@ -314,13 +347,24 @@ export class ApplicationsService {
     try {
       await this.cacheManager.del(`applications:list:${userSub}`);
       await this.deploymentsService.invalidateListCache(userSub);
+      /*
+       * `GET .../details` caches the mapped DeploymentDetailsDto (including
+       * application_properties) for up to 60 s under this same applicationName
+       * as its `deployment` key. Without invalidating it here, re-opening Edit
+       * right after a save could load the pre-update configuration and write
+       * it straight back, silently reverting the just-saved change.
+       */
+      await this.deploymentsDetailsService.invalidateDetailsCache(
+        userSub,
+        applicationName,
+      );
       this.logger.debug(
-        `Updated application ${applicationName}, invalidated applications and deployments list caches (sub: ${userSub})`,
+        `Updated application ${applicationName}, invalidated applications list, deployments list, and deployment details caches (sub: ${userSub})`,
       );
     } catch (err) {
       handleDialFetchError(
         err,
-        `invalidate list caches after updating application "${applicationName}" (sub: ${userSub})`,
+        `invalidate list/details caches after updating application "${applicationName}" (sub: ${userSub})`,
         this.logger,
         0,
         { swallow: true },

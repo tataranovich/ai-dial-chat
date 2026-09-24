@@ -2,12 +2,15 @@ import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   CardShell,
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   FolderPath,
   Highlight,
 } from '@epam/ai-dial-ui-kit';
 import { IconPlayerPause } from '@tabler/icons-react';
 import type { FC, KeyboardEvent } from 'react';
+import { SCHEDULED_TASKS_CLASS } from '../../constants/public-class-names';
 import type { ScheduledTaskCardProps } from '../../models/scheduled-task-card-props';
+import { ScheduledTaskPresentationStatus } from '../../models/scheduled-task-item';
 import styles from './ScheduledTaskCard.module.scss';
 
 /**
@@ -30,11 +33,14 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
 }) => {
   const newBadgeLabel = labels?.newBadgeLabel ?? 'NEW';
   const pausedBadgeLabel = labels?.pausedBadgeLabel ?? 'Paused';
+  const completedBadgeLabel = labels?.completedBadgeLabel ?? 'Completed';
 
   const { colors, typography } = cardStyles ?? {};
   const titleClassName = typography?.titleClassName ?? 'dial-body-semi-text';
   const descriptionClassName =
     typography?.descriptionClassName ?? 'dial-small-text';
+  const descriptionSizeClassName =
+    typography?.descriptionSizeClassName ?? 'dial-tiny-text';
   const scheduleLabelClassName =
     typography?.scheduleLabelClassName ?? 'dial-tiny-text';
   const locationLabelClassName =
@@ -45,8 +51,21 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
     typography?.newBadgeClassName ?? 'dial-tiny-semi-text';
   const pausedBadgeClassName =
     typography?.pausedBadgeClassName ?? 'dial-tiny-text';
+  const completedBadgeClassName =
+    typography?.completedBadgeClassName ?? 'dial-tiny-text';
+  const status =
+    item.presentationStatus ??
+    (item.isActive === false
+      ? ScheduledTaskPresentationStatus.Paused
+      : ScheduledTaskPresentationStatus.Active);
+  const statusTitleText =
+    status === ScheduledTaskPresentationStatus.Paused
+      ? colors?.pausedTitleText
+      : status === ScheduledTaskPresentationStatus.Completed
+        ? colors?.completedTitleText
+        : undefined;
   const cssVars = buildCssVars({
-    '--stc-title-text': colors?.titleText,
+    '--stc-title-text': statusTitleText ?? colors?.titleText,
     '--stc-desc-text': colors?.descriptionText,
     '--stc-pill-bg': colors?.schedulePillBackground,
     '--stc-pill-border': colors?.schedulePillBorder,
@@ -59,6 +78,9 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
     '--stc-paused-bg': colors?.pausedBadgeBackground,
     '--stc-paused-border': colors?.pausedBadgeBorder,
     '--stc-paused-text': colors?.pausedBadgeText,
+    '--stc-completed-bg': colors?.completedBadgeBackground,
+    '--stc-completed-border': colors?.completedBadgeBorder,
+    '--stc-completed-text': colors?.completedBadgeText,
   });
 
   const cardClickProps = onCardClick
@@ -80,9 +102,10 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
       aria-label={item.displayName}
       style={cssVars}
       className={mergeClasses(
-        'h-[232px]',
+        'h-[var(--st-card-height,232px)]',
         onCardClick && 'cursor-pointer',
         className,
+        SCHEDULED_TASKS_CLASS.card,
       )}
       {...cardClickProps}
     >
@@ -109,7 +132,8 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
       {item.descriptionPreview && (
         <p
           className={mergeClasses(
-            'line-clamp-4 min-h-0 flex-1 overflow-hidden !leading-[22px]',
+            'line-clamp-4 min-h-0 flex-1 overflow-hidden',
+            descriptionSizeClassName,
             descriptionClassName,
             styles.description,
           )}
@@ -120,7 +144,7 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
 
       <div className="mt-auto flex shrink-0 flex-col gap-3">
         <div className="flex min-h-[28px] items-center">
-          {item.isActive === false ? (
+          {status === ScheduledTaskPresentationStatus.Paused ? (
             <span
               className={mergeClasses(
                 'inline-flex items-center gap-1.5 rounded-full border px-2 py-1',
@@ -129,8 +153,23 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
                 styles.pausedLabel,
               )}
             >
-              <IconPlayerPause size={DIAL_ICON_SIZE.SM} aria-hidden />
+              <IconPlayerPause
+                size={DIAL_ICON_SIZE.SM}
+                aria-hidden
+                stroke={DIAL_KIT_ICON_STROKE}
+              />
               {pausedBadgeLabel}
+            </span>
+          ) : status === ScheduledTaskPresentationStatus.Completed ? (
+            <span
+              className={mergeClasses(
+                'inline-flex items-center rounded-full border px-2 py-1',
+                styles.completedPill,
+                completedBadgeClassName,
+                styles.completedLabel,
+              )}
+            >
+              {completedBadgeLabel}
             </span>
           ) : (
             <span

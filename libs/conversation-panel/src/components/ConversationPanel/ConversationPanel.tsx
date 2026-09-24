@@ -1,12 +1,15 @@
-import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  buildCssVars,
+  FilterTab,
+  mergeClasses,
+} from '@epam/ai-dial-chat-shared';
 import {
   PanelEmpty,
   PanelNoResults,
-  SearchInput,
   SidebarOrientation,
   SidebarPanel,
 } from '@epam/ai-dial-sidebar';
-import { Skeleton } from '@epam/ai-dial-ui-kit';
+import { Search, Skeleton } from '@epam/ai-dial-ui-kit';
 import {
   type FC,
   memo,
@@ -18,14 +21,11 @@ import {
   useState,
 } from 'react';
 import { List, type ListImperativeAPI } from 'react-window';
+import { CONVERSATION_PANEL_CLASS } from '../../constants/public-class-names';
 import { ITEM_ROW_HEIGHT } from '../../constants/virtual-list';
 import { ConversationPanelProps } from '../../models/panel-props';
-import {
-  type RowRendererData,
-  type VirtualRow,
-  VirtualRowKind,
-} from '../../models/virtual-row';
-import { FilterTab } from '../../types/conversation-classification';
+import type { RowRendererData, VirtualRow } from '../../models/virtual-row';
+import { VirtualRowKind } from '../../types/virtual-row';
 import {
   getRowHeight,
   getSkeletonWidth,
@@ -60,6 +60,7 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
     onNewChat,
     styles: panelStyles,
     className,
+    isOverlay = false,
     getActions,
     onActionMenuOpen,
     onToggle,
@@ -67,11 +68,17 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
     onMoveConversation,
     activeFilter,
     onActiveFilterChange,
+    isFilterTabsHidden = false,
+    hiddenSources,
   }) => {
     const {
       colors,
       typography,
       newChatButton: newChatButtonColors,
+      searchWrapperClassName,
+      headerClassName,
+      headerActionsClassName,
+      newChatButtonClassName,
     } = panelStyles ?? {};
 
     const {
@@ -95,6 +102,21 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
       if (activeFilter == null) return;
       setActiveTab(activeFilter);
     }, [activeFilter]);
+
+    /*
+     * Dropped before any tab/search filtering so a hidden source never
+     * surfaces under `All` or as a group heading, not just off its own tab.
+     */
+    const visibleConversations = useMemo(
+      () =>
+        hiddenSources?.length
+          ? conversations.filter(
+              (item) =>
+                item.source == null || !hiddenSources.includes(item.source),
+            )
+          : conversations,
+      [conversations, hiddenSources],
+    );
 
     const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
       () => ALL_GROUP_KEYS,
@@ -120,6 +142,10 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
       setOverscanCount(Math.ceil((height / ITEM_ROW_HEIGHT) * 2));
     }, []);
 
+    const handleSearchChange = useCallback((value?: string) => {
+      setSearchQuery(value ?? '');
+    }, []);
+
     const handleToggleGroup = useCallback((key: string) => {
       setExpandedGroups((prev) => {
         const next = new Set(prev);
@@ -143,13 +169,17 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
     const handleDragStart = useCallback(
       (id: string, rows: VirtualRow[]) => {
         const groupKey = findGroupKeyForItem(rows, id);
-        const allowed = computeAllowedDropGroups(id, groupKey, conversations);
+        const allowed = computeAllowedDropGroups(
+          id,
+          groupKey,
+          visibleConversations,
+        );
         draggingIdRef.current = id;
         allowedDropGroupsRef.current = allowed;
         setDraggingId(id);
         setAllowedDropGroups(allowed);
       },
-      [conversations],
+      [visibleConversations],
     );
 
     const handleDragEnd = useCallback(() => {
@@ -205,11 +235,11 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
 
     const filteredItems = useMemo(
       () =>
-        conversations.filter(
+        visibleConversations.filter(
           (item) =>
             matchesTab(item, activeTab) && matchesSearch(item, searchQuery),
         ),
-      [conversations, activeTab, searchQuery],
+      [visibleConversations, activeTab, searchQuery],
     );
 
     const pinnedItems = useMemo(
@@ -363,12 +393,14 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
       ],
     );
 
-    const isNoConversations = conversations.length === 0;
-    const isNoResults = conversations.length > 0 && filteredItems.length === 0;
+    const isNoConversations = visibleConversations.length === 0;
+    const isNoResults =
+      visibleConversations.length > 0 && filteredItems.length === 0;
 
     return (
       <SidebarPanel
         isOpen={isOpen}
+        isOverlay={isOverlay}
         orientation={SidebarOrientation.Left}
         title={title}
         labels={{ ariaLabel: title, closeLabel: closeAriaLabel }}
@@ -384,7 +416,8 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
           bodyClassName: 'flex flex-col overflow-hidden p-0 gap-3',
           cssVars,
           titleClassName: typography?.fontClassName,
-          headerClassName: 'h-[64px]',
+          headerClassName: mergeClasses('h-[64px]', headerClassName),
+          headerActionsClassName,
           className: mergeClasses(
             isOpen ? 'w-[324px] mobile:w-full' : 'w-0',
             className,
@@ -397,26 +430,38 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
           onClick={onNewChat}
           labelClassName={typography?.newChatLabelClassName}
           colors={newChatButtonColors}
+          className={newChatButtonClassName}
         />
 
-        <SearchInput
-          value={searchQuery}
-          onChange={setSearchQuery}
-          labels={{
-            placeholder: searchPlaceholder,
-            clearLabel: searchClearLabel,
-          }}
-        />
+        <div
+          role="search"
+          className={mergeClasses('px-3 py-2', CONVERSATION_PANEL_CLASS.search)}
+        >
+          <Search
+            wrapperClassName={mergeClasses(
+              styles.search,
+              searchWrapperClassName,
+            )}
+            value={searchQuery}
+            onChange={handleSearchChange}
+            placeholder={searchPlaceholder}
+            clearLabel={searchClearLabel}
+            aria-label={searchPlaceholder}
+          />
+        </div>
 
-        <FilterTabs
-          activeTab={activeTab}
-          labels={filterLabels}
-          onChange={(tab) => {
-            setActiveTab(tab);
-            onActiveFilterChange?.(tab);
-          }}
-          tabClassName={typography?.tabClassName}
-        />
+        {!isFilterTabsHidden && (
+          <FilterTabs
+            activeTab={activeTab}
+            labels={filterLabels}
+            onChange={(tab) => {
+              setActiveTab(tab);
+              onActiveFilterChange?.(tab);
+            }}
+            tabClassName={typography?.tabClassName}
+            hiddenSources={hiddenSources}
+          />
+        )}
 
         <span role="status" aria-live="polite" className="sr-only">
           {isLoading
@@ -428,7 +473,7 @@ export const ConversationPanel: FC<ConversationPanelProps> = memo(
                 : ''}
         </span>
 
-        <div className="flex-1 overflow-hidden px-2 py-1">
+        <div className="flex-1 overflow-hidden py-1 pe-3 ps-2">
           {isLoading ? (
             <div className="flex flex-col gap-3 px-2 py-3">
               {Array.from({ length: SKELETON_ROW_COUNT }, (_, i) => (

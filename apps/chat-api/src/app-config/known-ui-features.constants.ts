@@ -2,37 +2,40 @@
  * The set of recognized UI feature wire values, duplicated here rather than
  * imported from the browser-facing overlay package, keeping this Node-only
  * service independent of the frontend SDK.
- * `KNOWN_UI_FEATURES` is a backend superset of `OverlayFeature` (32 public
- * members); it includes backend-only feature strings not exported by the
- * overlay library. The companion test asserts exactly 38 members.
+ * The members mirror `OverlayFeature` one-to-one, in the enum's declaration
+ * order; the companion test asserts exactly 45 members. Anything the frontend
+ * would drop is rejected here instead, so an operator sees the warning at the
+ * layer that read the env var. Keep this list in sync whenever a key is added
+ * to, removed from, or renamed in `OverlayFeature`.
  */
 export const KNOWN_UI_FEATURES: ReadonlySet<string> = new Set([
   'code-apps',
-  'custom-applications',
+  'schema-apps',
   'hide-custom-app-creation',
-  'chat-header-border',
-  'chat-input-border',
   'disabled-send',
   'skip-focus-chat-input-onload',
+  'chat-settings',
+  'removable-tools',
   'dislike-comment',
   'input-files',
   'likes',
   'live-chat-interaction',
   'disallow-change-agent',
+  'hide-change-agent',
   'hide-new-conversation',
-  'top-chat-model-settings',
-  'top-settings',
   'empty-chat-settings',
   'hide-empty-chat-change-agent',
   'attachments-manager',
   'conversations-panel-toggle',
   'conversations-section',
   'header',
+  'hide-navigation-menu',
   'showConversationsSectionByDefault',
-  'show-layout-dividers',
-  'marketplace',
-  'marketplace-hide-my-apps',
-  'marketplace-table-view',
+  'hide-conversations-filter',
+  'catalog',
+  'catalog-hide-my-apps',
+  'catalog-table-view',
+  'file-manager',
   'hide-delete-user-message',
   'hide-edit-user-message',
   'hide-regenerate-assistant-message',
@@ -41,8 +44,27 @@ export const KNOWN_UI_FEATURES: ReadonlySet<string> = new Set([
   'conversations-sharing',
   'toolsets-sharing',
   'toolsets',
-  'custom-logo',
+  'prompts',
+  'skills',
+  'custom-apps',
   'hide-user-menu',
   'hide-user-settings',
+  'hide-keyboard-shortcuts',
   'voice-input',
+  'show-all-starters',
+  'hide-footer-version',
+  'show-agent-description',
 ]);
+
+/**
+ * Renamed wire values still accepted from `ENABLED_UI_FEATURES`, mapped to their
+ * replacement in `KNOWN_UI_FEATURES`. Mirrors
+ * `DEPRECATED_OVERLAY_FEATURE_ALIASES` in `@epam/ai-dial-chat-overlay`, duplicated for
+ * the same reason the allowlist above is. An operator using a deprecated value
+ * gets the replacement plus a warning instead of a silent drop; remove an entry
+ * once deployments have migrated.
+ */
+export const DEPRECATED_UI_FEATURE_ALIASES: Readonly<Record<string, string>> = {
+  /* Renamed because it gates Quick Apps, not schema-less custom applications. */
+  'custom-applications': 'schema-apps',
+};

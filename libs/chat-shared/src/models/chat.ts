@@ -73,6 +73,16 @@ export interface StatusMessageCustomContent {
   new_deployment_id: string;
 }
 
+/**
+ * A skill referenced from `custom_content.skills` — DIAL Core's `RequestSkill`
+ * schema (PR #1956): an object with a non-blank `url`; Core rejects any other
+ * entry shape (e.g. a bare string) with 400.
+ */
+export interface RequestSkill {
+  /** The skill's resource URL (`skills/{bucket}/{path}`) — the same form the skill listing and `CatalogItem.id` use. */
+  url: string;
+}
+
 /** Extra DIAL API payload attached to a message. */
 export interface MessageCustomContent {
   /** Files or media items associated with this message. */
@@ -98,6 +108,12 @@ export interface MessageCustomContent {
    * stateful-app contract. Overwritten (not merged) by each new streaming delta.
    */
   state?: Record<string, unknown>;
+  /**
+   * Skills used with this message; each entry carries the skill's resource URL.
+   * Present on user requests and, per Core's contract, on assistant responses
+   * ("skills referenced by the model as part of the response").
+   */
+  skills?: RequestSkill[];
 }
 
 /** A single message in a conversation. */
@@ -119,6 +135,8 @@ export interface Message {
   deploymentId?: string;
   /* Human-readable error text from a failed stream. Present when generation ended in error — absence means generation succeeded or is still in progress. Used for both resume detection and UI error display. */
   streamErrorMessage?: string;
+  /** Set on an assistant message whose generation the user stopped; the content is whatever had streamed by then. */
+  wasStoppedByUser?: boolean;
   /** Allows extra SDK-level properties to pass through when serializing to DIAL Core. */
   [key: string]: unknown;
 }
@@ -151,6 +169,73 @@ export interface Stage {
    * Rendered only when present — never inferred from `name`.
    */
   tag?: string;
+}
+
+/** A single LangChain-style tool-call request emitted by the model, present on a `ToolStateMessage` with `type: 'ai'`. */
+export interface ToolCallRequest {
+  /** Name of the tool being called. */
+  name: string;
+  /** Arguments passed to the tool call. */
+  args: Record<string, unknown>;
+  /** Correlates this call to its result message via that message's `tool_call_id`. */
+  id: string;
+}
+
+/** One entry in `custom_content.state.tool_messages` — either the model's tool-call request or the tool's result. */
+export interface ToolStateMessage {
+  /** LangChain message type: `'ai'` for the request, `'tool'` for the result. */
+  type: string;
+  /** Present on `type: 'tool'` result messages — the tool's own name. */
+  name?: string;
+  /** Present on `type: 'ai'` messages that requested one or more tool calls. */
+  tool_calls?: ToolCallRequest[];
+  /** Present on `type: 'tool'` result messages — correlates to the request's `id`. */
+  tool_call_id?: string;
+  /** Text content — the tool's result body on `type: 'tool'` messages. */
+  content?: string;
+}
+
+/** A single OpenAI-style tool-call request, present on a `ToolExecutionHistoryMessage` with `role: 'assistant'`. */
+export interface OpenAiToolCall {
+  /** Correlates this call to its result message via that message's `tool_call_id`. */
+  id: string;
+  /** Always `'function'` for a tool call. */
+  type: string;
+  /** The invoked function's name and raw (unparsed) JSON-encoded arguments. */
+  function: {
+    name: string;
+    /** JSON-encoded arguments object — parse before use. */
+    arguments: string;
+  };
+}
+
+/** One entry in `custom_content.state.tool_execution_history` — either the model's tool-call request or the tool's result, in OpenAI chat-completion message shape (as opposed to `ToolStateMessage`'s LangChain shape). */
+export interface ToolExecutionHistoryMessage {
+  /** `'assistant'` for the request, `'tool'` for the result. */
+  role: string;
+  /** Present on `role: 'assistant'` messages that requested one or more tool calls. */
+  tool_calls?: OpenAiToolCall[];
+  /** Present on `role: 'tool'` result messages — correlates to the request's `id`. */
+  tool_call_id?: string;
+  /** Text content — the tool's result body on `role: 'tool'` messages. */
+  content?: string;
+}
+
+/**
+ * Orchestrator-specific execution state, kept wire-verbatim snake_case like
+ * every other pass-through field under `custom_content` (e.g. `stages`) —
+ * not part of any standard DIAL Core contract. Different orchestrators emit
+ * different shapes: `tool_messages` (LangChain-style) is known from the
+ * StatGPT agent, gated behind its own `show_debug_stages` flag;
+ * `tool_execution_history` (OpenAI chat-completion-style) is known from a
+ * different agent. Both are optional and independent — a given orchestrator
+ * emits at most one of them.
+ */
+export interface MessageState {
+  /** The model's tool-call requests and their results for this turn, LangChain-style. */
+  tool_messages?: ToolStateMessage[];
+  /** The model's tool-call requests and their results for this turn, OpenAI chat-completion-style. */
+  tool_execution_history?: ToolExecutionHistoryMessage[];
 }
 
 /** Incremental content delta inside a streaming SSE chunk. */
@@ -251,6 +336,14 @@ export interface DisplayAttachment {
 export interface Attachment extends DisplayAttachment {
   /** The underlying browser `File` object selected by the user. */
   file: File;
+}
+
+/** Result of successfully uploading an {@link Attachment}. */
+export interface UploadedAttachmentResult {
+  /** The DIAL Core file URL the attachment was uploaded to. */
+  url: string;
+  /** The name actually stored on DIAL Core; differs from the attachment's original name when it contained characters the storage path forbids, or when a ` (n)` suffix was needed to avoid replacing an existing file. */
+  name: string;
 }
 
 /**

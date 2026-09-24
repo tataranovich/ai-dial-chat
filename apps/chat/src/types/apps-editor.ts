@@ -1,5 +1,6 @@
 import type { CatalogItemCredentials } from '@epam/ai-dial-catalog';
-import type { ToolsetCredentialsLevel } from '../constants/toolsets';
+import type { LocaleTextEntryDto } from '@epam/ai-dial-chat-api-client';
+import { type ToolsetCredentialsLevel } from '@epam/ai-dial-chat-hooks';
 
 export enum AppsEditorQuery {
   Step = 'step',
@@ -46,6 +47,8 @@ export enum AppsEditorEvent {
   RequestToolsetLogout = 'REQUEST_TOOLSET_LOGOUT',
   /** Sent back to the iframe with the outcome of a `RequestToolsetLogout`. */
   ToolsetLogoutResult = 'TOOLSET_LOGOUT_RESULT',
+  /** Opens the host's credential forms for `{ appId: string }`; no credential material crosses the iframe boundary. */
+  RequestApplicationCredentials = 'REQUEST_APPLICATION_CREDENTIALS',
 }
 
 /**
@@ -90,6 +93,10 @@ export interface TriggerSaveGeneralPayload {
   iconUrl?: string;
   topics?: string[];
   display_version?: string;
+  /** Additional-locale name/description entries, keyed by locale code. Omitted when no additional locales are configured — see {@link composeLocalePayload}. */
+  locales?: LocaleTextEntryDto[];
+  /** The content locale `name`/`description` are authored in. Set only alongside `locales`, mirroring {@link composeLocalePayload}'s pairing with `PRIMARY_LOCALE`. */
+  primaryLocale?: string;
 }
 
 /** Payload of a `TriggerSave` message posted to the embedded QuickApps iframe. */

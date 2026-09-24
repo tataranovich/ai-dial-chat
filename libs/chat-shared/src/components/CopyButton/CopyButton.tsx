@@ -1,8 +1,9 @@
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
-  GhostIconButton,
   NeutralButton,
+  ToggleIconButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck, IconCopy } from '@tabler/icons-react';
 import { FC, ReactNode } from 'react';
@@ -18,6 +19,8 @@ export interface CopyButtonProps {
   ariaLabel?: string;
   iconSize?: number;
   iconCopy?: ReactNode;
+  /** Renders the button in its disabled state and blocks clicks. Defaults to `false`. */
+  isDisabled?: boolean;
 }
 export const CopyIconButton: FC<CopyButtonProps> = ({
   onClick,
@@ -28,15 +31,26 @@ export const CopyIconButton: FC<CopyButtonProps> = ({
   ariaLabel,
   iconSize = DIAL_ICON_SIZE.LG,
   iconCopy,
+  isDisabled = false,
 }) => {
   return (
-    <GhostIconButton
+    <ToggleIconButton
       size={size}
       icon={
         isCopied ? (
-          <IconCheck size={iconSize} stroke={1.5} aria-hidden />
+          <IconCheck
+            size={iconSize}
+            stroke={DIAL_KIT_ICON_STROKE}
+            aria-hidden
+          />
         ) : (
-          (iconCopy ?? <IconCopy size={iconSize} stroke={1.5} aria-hidden />)
+          (iconCopy ?? (
+            <IconCopy
+              size={iconSize}
+              stroke={DIAL_KIT_ICON_STROKE}
+              aria-hidden
+            />
+          ))
         )
       }
       aria-label={isCopied ? copiedLabel : (ariaLabel ?? copyLabel)}
@@ -44,6 +58,7 @@ export const CopyIconButton: FC<CopyButtonProps> = ({
         tooltip: isCopied ? copiedLabel : copyLabel,
       }}
       onClick={onClick}
+      disabled={isDisabled}
     />
   );
 };
@@ -54,6 +69,7 @@ export const CopyButton: FC<CopyButtonProps> = ({
   copyLabel,
   copiedLabel,
   size = ElementSize.Standard,
+  isDisabled = false,
 }) => {
   return (
     <NeutralButton
@@ -61,12 +77,21 @@ export const CopyButton: FC<CopyButtonProps> = ({
       label={isCopied ? copiedLabel : copyLabel}
       iconBefore={
         isCopied ? (
-          <IconCheck size={DIAL_ICON_SIZE.SM} aria-hidden />
+          <IconCheck
+            size={DIAL_ICON_SIZE.SM}
+            aria-hidden
+            stroke={DIAL_KIT_ICON_STROKE}
+          />
         ) : (
-          <IconCopy size={DIAL_ICON_SIZE.SM} aria-hidden />
+          <IconCopy
+            size={DIAL_ICON_SIZE.SM}
+            aria-hidden
+            stroke={DIAL_KIT_ICON_STROKE}
+          />
         )
       }
       onClick={onClick}
+      disabled={isDisabled}
       className="shrink-0"
     />
   );

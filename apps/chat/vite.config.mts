@@ -3,9 +3,14 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig } from 'vite';
 import svgr from 'vite-plugin-svgr';
+import {
+  CSP_NONCE_PLACEHOLDER,
+  trustedStyleNoncePlugin,
+} from '../../tools/vite/csp-nonce.mjs';
 
 export default defineConfig(() => ({
   root: import.meta.dirname,
+  html: { cspNonce: CSP_NONCE_PLACEHOLDER },
   cacheDir: '../../node_modules/.vite/apps/chat',
   server: {
     port: 4207,
@@ -21,99 +26,224 @@ export default defineConfig(() => ({
     port: 4207,
     host: 'localhost',
   },
-  plugins: [react(), svgr()],
+  plugins: [trustedStyleNoncePlugin(), react(), svgr()],
   resolve: {
     alias: {
       /* remark-math resolves math delimiters through micromark-extension-math, which only
        * recognizes `$...$`/`$$...$$`. This fork additionally recognizes the `\(...\)`/`\[...\]`
        * delimiters that LLMs commonly emit. */
       'micromark-extension-math': 'micromark-extension-llm-math',
+      '@epam/ai-dial-chat-shared/file-manager': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-shared/src/entry-points/file-manager.ts',
+      ),
       '@epam/ai-dial-chat-shared': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/chat-shared/src/index.ts',
       ),
+      /* `@epam/ai-dial-chat-hooks` ships one root barrel plus 18 dependency-scoped
+       * subpaths (see `libs/chat-hooks/package.json#exports`). Vite's alias matcher
+       * treats a plain string `find` as a prefix match (`importee === find ||
+       * importee.startsWith(find + '/')`), so a bare `@epam/ai-dial-chat-hooks`
+       * entry would also swallow every subpath import and rewrite it onto
+       * `src/index.ts/<subpath>` — a path that does not exist. Listing each
+       * subpath's own explicit alias before the general one (object key order is
+       * preserved and checked in order) makes the more specific match win. */
+      '@epam/ai-dial-chat-hooks/viewport-layout': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/viewport-layout.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/scroll-anchoring': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/scroll-anchoring.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/conversation': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/conversation.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/conversation-overlay': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/conversation-overlay.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/conversation-transfer': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/conversation-transfer.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/conversation-sources': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/conversation-sources.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/file-manager-canvas': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/file-manager-canvas.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/file-manager': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/file-manager.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/catalog': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/catalog.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/skills-state': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/skills-state.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/skill-editor': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/skill-editor.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/oauth': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/oauth.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/scheduled-tasks': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/scheduled-tasks.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/sharing': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/sharing.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/attachments': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/attachments.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/utils': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/utils.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/usage': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/usage.ts',
+      ),
+      '@epam/ai-dial-chat-hooks/mcp-apps': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/entry-points/mcp-apps.ts',
+      ),
+      '@epam/ai-dial-chat-hooks': path.resolve(
+        import.meta.dirname,
+        '../../libs/chat-hooks/src/index.ts',
+      ),
       '@epam/ai-dial-chat-overlay': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/chat-overlay/src/index.ts',
       ),
       '@epam/ai-dial-conversation-input': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/conversation-input/src/index.ts',
       ),
       '@epam/ai-dial-conversation-messages': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/conversation-messages/src/index.ts',
       ),
       '@epam/ai-dial-conversation-stages': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/conversation-stages/src/index.ts',
       ),
       '@epam/ai-dial-chat-api-client': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/chat-api-client/src/index.ts',
       ),
       '@epam/ai-dial-conversation-panel': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/conversation-panel/src/index.ts',
       ),
       '@epam/ai-dial-sidebar': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/sidebar/src/index.ts',
       ),
+      '@epam/ai-dial-navigation-panel': path.resolve(
+        import.meta.dirname,
+        '../../libs/navigation-panel/src/index.ts',
+      ),
       '@epam/ai-dial-starter-buttons': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/starter-buttons/src/index.ts',
       ),
       '@epam/ai-dial-catalog': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/catalog/src/index.ts',
       ),
       '@epam/ai-dial-publish-panel': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/publish-panel/src/index.ts',
       ),
       '@epam/ai-dial-source-panel': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/source-panel/src/index.ts',
       ),
       '@epam/ai-dial-attachment-canvas': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/attachment-canvas/src/index.ts',
       ),
       '@epam/ai-dial-attachment-input': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/attachment-input/src/index.ts',
       ),
-      '@epam/ai-dial-kit': path.resolve(
-        __dirname,
-        '../../libs/ai-dial-kit/src/index.ts',
+      '@epam/ai-dial-mcp-apps': path.resolve(
+        import.meta.dirname,
+        '../../libs/mcp-apps/src/index.ts',
       ),
       '@epam/ai-dial-share': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/share/src/index.ts',
       ),
-      '@epam/ai-dial-deployment-creation-form': path.resolve(
-        __dirname,
-        '../../libs/deployment-creation-form/src/index.ts',
+      '@epam/ai-dial-scheduled-tasks/validation': path.resolve(
+        import.meta.dirname,
+        '../../libs/scheduled-tasks/src/validation/index.ts',
       ),
       '@epam/ai-dial-scheduled-tasks': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/scheduled-tasks/src/index.ts',
       ),
       '@epam/ai-dial-quotations': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/quotations/src/index.ts',
       ),
+      // Source components import their CSS Modules; do not prefix-match the public CSS subpath.
+      '@epam/ai-dial-builder-form/styles.css': path.resolve(
+        import.meta.dirname,
+        '../../libs/builder-form/src/styles.css',
+      ),
       '@epam/ai-dial-builder-form': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../libs/builder-form/src/index.ts',
       ),
+      '@epam/ai-dial-skill-editor': path.resolve(
+        import.meta.dirname,
+        '../../libs/skill-editor/src/index.ts',
+      ),
+      '@epam/ai-dial-toolset-editor': path.resolve(
+        import.meta.dirname,
+        '../../libs/toolset-editor/src/index.ts',
+      ),
+      '@epam/ai-dial-prompt-editor': path.resolve(
+        import.meta.dirname,
+        '../../libs/prompt-editor/src/index.ts',
+      ),
+      '@epam/ai-dial-prompts': path.resolve(
+        import.meta.dirname,
+        '../../libs/prompts/src/index.ts',
+      ),
+      '@epam/ai-dial-skills': path.resolve(
+        import.meta.dirname,
+        '../../libs/skills/src/index.ts',
+      ),
+      '@epam/ai-dial-settings-panel': path.resolve(
+        import.meta.dirname,
+        '../../libs/settings-panel/src/index.ts',
+      ),
+      '@epam/ai-dial-usage-dashboard': path.resolve(
+        import.meta.dirname,
+        '../../libs/usage-dashboard/src/index.ts',
+      ),
       '@epam/ai-dial-react-pdf-highlighter/styles.css': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../node_modules/@epam/ai-dial-react-pdf-highlighter/dist/index.css',
       ),
       '@epam/pdf-highlighter-kit/dist/pdf-highlight-viewer.css': path.resolve(
-        __dirname,
+        import.meta.dirname,
         '../../node_modules/@epam/pdf-highlighter-kit/dist/pdf-highlight-viewer.css',
       ),
     },
@@ -124,17 +254,6 @@ export default defineConfig(() => ({
     reportCompressedSize: true,
     commonjsOptions: {
       transformMixedEsModules: true,
-    },
-    rollupOptions: {
-      output: {
-        manualChunks: (id) => {
-          if (id.includes('classnames') || id.includes('tailwind-merge'))
-            return 'vendor-utils';
-          if (id.includes('@tabler/icons-react')) return 'tabler-icons';
-          if (id.includes('@epam/ai-dial-ui-kit')) return 'ui-kit';
-          return undefined;
-        },
-      },
     },
   },
   test: {

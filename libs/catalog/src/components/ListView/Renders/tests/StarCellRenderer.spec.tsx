@@ -1,10 +1,10 @@
+import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ICellRendererParams } from 'ag-grid-community';
 import { describe, expect, it, vi } from 'vitest';
 import type { CatalogItem } from '../../../../models/catalog-item';
 import type { GridContext } from '../../../../models/grid-context';
-import { CatalogEntityType } from '../../../../types/entity-type';
 import { StarCellRenderer } from '../StarCellRenderer';
 
 const makeItem = (overrides: Partial<CatalogItem> = {}): CatalogItem => ({
@@ -31,7 +31,35 @@ describe('StarCellRenderer', () => {
     const { container } = render(
       <StarCellRenderer {...makeParams(undefined)} />,
     );
+    // Component renders null; no semantic query can assert total absence of output.
+    // eslint-disable-next-line testing-library/no-node-access
     expect(container.firstChild).toBeNull();
+  });
+
+  it('renders nothing when isFavoriteVisible returns false for the row', () => {
+    const onToggleFavorite = vi.fn();
+    const { container } = render(
+      <StarCellRenderer
+        {...makeParams(makeItem({ id: 'abc', isStarred: true }), {
+          onToggleFavorite,
+          isFavoriteVisible: () => false,
+        })}
+      />,
+    );
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(container.firstChild).toBeNull();
+    expect(onToggleFavorite).not.toHaveBeenCalled();
+  });
+
+  it('renders the toggle when isFavoriteVisible returns true', () => {
+    render(
+      <StarCellRenderer
+        {...makeParams(makeItem(), { isFavoriteVisible: () => true })}
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Toggle favorite' }),
+    ).toBeTruthy();
   });
 
   it('renders the toggle for a prompt row like any other entity type', () => {
@@ -90,15 +118,15 @@ describe('StarCellRenderer', () => {
   });
 
   it('applies the hover-reveal low-opacity class only when not starred', async () => {
-    const { container } = render(
+    render(
       <StarCellRenderer {...makeParams(makeItem({ isStarred: false }))} />,
     );
-    const button = container.querySelector('button');
-    expect(button?.className).toContain('starToggleOff');
+    const button = screen.getByRole('button', { name: 'Toggle favorite' });
+    expect(button.className).toContain('starToggleOff');
 
-    await userEvent.click(button as HTMLButtonElement);
+    await userEvent.click(button);
 
-    expect(button?.className).not.toContain('starToggleOff');
+    expect(button.className).not.toContain('starToggleOff');
   });
 
   it('resyncs the star to data.isStarred when it reverts after a failed toggle', async () => {

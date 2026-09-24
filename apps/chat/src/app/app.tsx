@@ -2,9 +2,10 @@ import {
   AttachmentCanvasContainer,
   useAttachmentCanvas,
 } from '@epam/ai-dial-attachment-canvas';
+import { clearAttachmentCache } from '@epam/ai-dial-chat-hooks/file-manager-canvas';
+import { usePanelMaxWidth } from '@epam/ai-dial-chat-hooks/viewport-layout';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
-import { CodeBlockTheme } from '@epam/ai-dial-chat-shared';
-import { FilterTab } from '@epam/ai-dial-conversation-panel';
+import { CodeBlockTheme, FilterTab } from '@epam/ai-dial-chat-shared';
 import {
   lazy,
   memo,
@@ -18,6 +19,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Navigate,
   Route,
   Routes,
   useLocation,
@@ -33,6 +35,7 @@ import Header from '../components/Header/Header';
 import Navigation from '../components/Navigation/Navigation';
 import NewVersionFallback from '../components/NewVersionFallback/NewVersionFallback';
 import RouteFallback from '../components/RouteFallback/RouteFallback';
+import { MIN_CONTENT_AREA_WIDTH } from '../constants/layout';
 import {
   getConversationRoute,
   normalizeConversationId,
@@ -42,27 +45,26 @@ import {
   ButtonsI18nKeys,
 } from '../constants/translation-keys';
 import { ActiveScheduledTaskProvider } from '../context/ActiveScheduledTaskContext';
-import { useConversationPanel } from '../context/ConversationPanelContext';
 import { useDeployments } from '../context/DeploymentsContext';
+import { useIsolatedModelView } from '../context/IsolatedModelViewContext';
 import { useOptionalOverlay } from '../context/overlay/OverlayContext';
 import { useSourcesSidebar } from '../context/SourcesSidebarContext';
 import { useTheme } from '../context/ThemeContext';
 import { useIsMobile } from '../hooks/breakpoint/useBreakpoint';
 import { useConversationListBridge } from '../hooks/conversation/useConversationListBridge';
+import { useConversationPanelRouteState } from '../hooks/conversation-panel/useConversationPanelRouteState';
 import { useAppVersionCheck } from '../hooks/useAppVersionCheck/useAppVersionCheck';
-import usePanelMaxWidth, {
-  MIN_CONTENT_AREA_WIDTH,
-} from '../hooks/usePanelMaxWidth';
 import { useUiFeature } from '../hooks/useUiFeature';
 import ConversationRoute from '../pages/ConversationRoute/ConversationRoute';
 import { ROUTES } from '../types/routes';
 import { ThemeId } from '../types/theme-id';
-import { clearAttachmentCache } from '../utils/attachment-canvas';
+import { configurePdfWorker } from '../utils/pdf';
 
 const CatalogView = lazy(() => import('../components/CatalogView/CatalogView'));
 const DialFileManagerPage = lazy(
   () => import('../pages/DialFileManagerPage/DialFileManagerPage'),
 );
+const SettingsPage = lazy(() => import('../pages/SettingsPage/SettingsPage'));
 const ScheduledTasksPage = lazy(
   () => import('../pages/ScheduledTasksPage/ScheduledTasksPage'),
 );
@@ -85,6 +87,7 @@ const CustomAppEditorPage = lazy(
 const PromptEditorPage = lazy(
   () => import('../pages/PromptEditor/PromptEditor'),
 );
+const SkillEditorPage = lazy(() => import('../pages/SkillEditor/SkillEditor'));
 const ToolsetAuthCallbackPage = lazy(
   () => import('../pages/ToolsetAuthCallback/ToolsetAuthCallback'),
 );
@@ -113,7 +116,7 @@ const App: FC = () => {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isMobile = useIsMobile();
-  const canvasMaxWidth = usePanelMaxWidth();
+  const canvasMaxWidth = usePanelMaxWidth(MIN_CONTENT_AREA_WIDTH);
   const canvasDefaultWidth = isMobile
     ? window.innerWidth
     : Math.min(
@@ -124,6 +127,8 @@ const App: FC = () => {
   const codeBlockTheme =
     currentTheme === ThemeId.Light ? CodeBlockTheme.Light : CodeBlockTheme.Dark;
   const { isNewVersionAvailable } = useAppVersionCheck();
+  // TODO: remove in next release
+  const { isActive: isIsolatedView } = useIsolatedModelView();
 
   /*
    * Registers the overlay's conversation-list bridge. Mounted here (below
@@ -171,57 +176,24 @@ const App: FC = () => {
   const isAttachmentsManagerEnabled = useUiFeature(
     OverlayFeature.AttachmentsManager,
   );
+  const isFileManagerEnabled = useUiFeature(OverlayFeature.FileManager);
 
   const { closeCanvas, isOpen: isCanvasOpen } = useAttachmentCanvas();
   const { handleClose: closeSourcesPanel } = useSourcesSidebar();
-  const { isPanelOpen, openPanel, closePanel } = useConversationPanel();
 
-  /* Tracks whether the user has explicitly closed the panel. When true, prevents
-     automatic panel opening on navigation (new chat, starter send). Reset on route
-     changes that leave the conversation section. */
-  const userClosedPanelRef = useRef(false);
-
-  const togglePanel = useCallback(() => {
-    if (!isPanelOpen) {
-      closeCanvas();
-      userClosedPanelRef.current = false;
-    } else {
-      userClosedPanelRef.current = true;
-    }
-    isPanelOpen ? closePanel() : openPanel();
-  }, [isPanelOpen, closeCanvas, openPanel, closePanel]);
-
-  // Always close the panel when switching to mobile so a stored desktop `true` doesn't bleed through
-  useEffect(() => {
-    if (isMobile) {
-      closePanel();
-      userClosedPanelRef.current = false;
-    }
-  }, [isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { isPanelOpen, closePanel, togglePanel } =
+    useConversationPanelRouteState({
+      pathname,
+      isMobile,
+      isCanvasOpen,
+      isOpenByDefault: isConversationsSectionOpenByDefault,
+      onCloseCanvas: closeCanvas,
+      onCloseSourcesPanel: closeSourcesPanel,
+    });
 
   useEffect(() => {
-    closeCanvas();
     clearAttachmentCache();
-    if (
-      pathname !== ROUTES.Root &&
-      pathname !== ROUTES.Conversations &&
-      !pathname.startsWith(ROUTES.Conversations)
-    ) {
-      closePanel();
-      userClosedPanelRef.current = false;
-    } else if (!isMobile && !isCanvasOpen && !userClosedPanelRef.current) {
-      isConversationsSectionOpenByDefault ? openPanel() : closePanel();
-    }
-  }, [pathname, isConversationsSectionOpenByDefault]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* Safety net for openCanvas call sites that bypass useOpenAttachmentCanvas
-     (e.g. citation preview, collapsed stage attachments). */
-  useEffect(() => {
-    if (isCanvasOpen) {
-      closePanel();
-      closeSourcesPanel();
-    }
-  }, [isCanvasOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pathname]);
 
   const matchRoot = useMatch(ROUTES.Root);
   const matchConversation = useMatch(`${ROUTES.Conversations}/*`);
@@ -293,7 +265,15 @@ const App: FC = () => {
         <Suspense fallback={null}>
           <SigninInterruptDialog />
         </Suspense>
-        <Navigation isOpen={isNavOpen} onClose={closeNav} />
+        {/* TODO: remove in next release. hide-navigation-menu only ever
+            covered the mobile hamburger/sheet, not this desktop rail — see
+            ui-feature-toggles' "The key SHALL NOT affect the desktop
+            navigation rail" — so isolated view hides the whole component
+            directly instead of adding a new permanent OverlayFeature key for
+            a temporary shim. */}
+        {!isIsolatedView && (
+          <Navigation isOpen={isNavOpen} onClose={closeNav} />
+        )}
 
         <ConversationPanelView
           isOpen={isPanelOpen}
@@ -311,7 +291,7 @@ const App: FC = () => {
           <main
             id="main-content"
             role="main"
-            className="relative flex min-h-0 min-w-0 flex-1 flex-col shadow-main-inset"
+            className="relative flex min-h-0 min-w-0 flex-1 flex-col"
           >
             <Header
               onMenuToggle={toggleNav}
@@ -374,13 +354,28 @@ const App: FC = () => {
                 }
               />
               <Route
-                path={ROUTES.FileManager}
+                path={ROUTES.Settings}
                 element={
                   <RouteErrorBoundary>
                     <Suspense fallback={<RouteFallback />}>
-                      <DialFileManagerPage />
+                      <SettingsPage />
                     </Suspense>
                   </RouteErrorBoundary>
+                }
+              />
+              <Route
+                path={ROUTES.FileManager}
+                element={
+                  isFileManagerEnabled ? (
+                    <RouteErrorBoundary>
+                      <Suspense fallback={<RouteFallback />}>
+                        <DialFileManagerPage />
+                      </Suspense>
+                    </RouteErrorBoundary>
+                  ) : (
+                    /* Keeps a direct /files URL from bypassing the hidden nav entry. */
+                    <Navigate to={ROUTES.Root} replace />
+                  )
                 }
               />
               <Route
@@ -484,6 +479,16 @@ const App: FC = () => {
                 }
               />
               <Route
+                path={ROUTES.SkillEditor}
+                element={
+                  <RouteErrorBoundary>
+                    <Suspense fallback={<RouteFallback />}>
+                      <SkillEditorPage />
+                    </Suspense>
+                  </RouteErrorBoundary>
+                }
+              />
+              <Route
                 path="*"
                 element={
                   <RouteErrorBoundary>
@@ -524,11 +529,49 @@ const App: FC = () => {
               htmlViewRenderedLabel: t(
                 AttachmentCanvasI18nKeys.HtmlViewRendered,
               ),
+              pdfThumbnailsLabel: t(
+                AttachmentCanvasI18nKeys.PdfThumbnailsLabel,
+              ),
+              pdfShowThumbnailsLabel: t(
+                AttachmentCanvasI18nKeys.PdfShowThumbnailsLabel,
+              ),
+              pdfHideThumbnailsLabel: t(
+                AttachmentCanvasI18nKeys.PdfHideThumbnailsLabel,
+              ),
+              pdfPageNumberLabel: t(
+                AttachmentCanvasI18nKeys.PdfPageNumberLabel,
+              ),
+              mcpAppReloadLabel: t(ButtonsI18nKeys.Reload),
+              pdfContentLoadingLabel: t(
+                AttachmentCanvasI18nKeys.PdfContentLoadingLabel,
+              ),
+              pdfContentErrorLabel: t(
+                AttachmentCanvasI18nKeys.PdfContentErrorLabel,
+              ),
+              pdfContentRetryLabel: t(ButtonsI18nKeys.Retry),
+              xlsxFormulaLabel: t(AttachmentCanvasI18nKeys.XlsxFormulaLabel),
+              codeContentLoadingLabel: t(
+                AttachmentCanvasI18nKeys.CodeContentLoadingLabel,
+              ),
+              codeContentErrorLabel: t(
+                AttachmentCanvasI18nKeys.CodeContentErrorLabel,
+              ),
+              codeContentRetryLabel: t(ButtonsI18nKeys.Retry),
+              tableCopyLabel: t(ButtonsI18nKeys.Copy),
+              tableCopiedLabel: t(ButtonsI18nKeys.Copied),
+              tableDownloadCsvLabel: t(ButtonsI18nKeys.DownloadAsCsv),
+              ooxmlHighlightsLabel: t(
+                AttachmentCanvasI18nKeys.OoxmlHighlightsLabel,
+              ),
+              ooxmlHighlightNavigatedLabel: t(
+                AttachmentCanvasI18nKeys.OoxmlHighlightNavigatedLabel,
+              ),
             }}
             isMobile={isMobile}
             defaultWidth={canvasDefaultWidth}
             maxWidth={canvasMaxWidth}
             codeBlockTheme={codeBlockTheme}
+            configurePdfWorker={configurePdfWorker}
           />
         )}
       </div>

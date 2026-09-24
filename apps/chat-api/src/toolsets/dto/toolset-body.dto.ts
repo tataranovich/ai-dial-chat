@@ -21,6 +21,7 @@ import {
   LOCALE_CODE_PATTERN,
   LOCALE_CODE_VALIDATION_MESSAGE,
 } from '../../common/validators/locale-code.pattern';
+import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
 
 export enum ToolsetTransport {
   Http = 'HTTP',
@@ -34,18 +35,18 @@ export enum ToolsetAuthType {
 }
 
 /*
- * http(s) or sse URL — allowlist regex so endpoint/URL strings that hit a
- * proxied request or a log line cannot carry unexpected characters.
+ * http(s) URL — allowlist regex so endpoint/URL strings that hit a proxied
+ * request or a log line cannot carry unexpected characters. DIAL Core
+ * validates the scheme of the endpoint it stores and accepts only http/https
+ * ("invalid URI scheme <x>" otherwise); the SSE transport is an ordinary
+ * http(s) endpoint chosen through `transport`, not through the URL scheme.
  */
-const ENDPOINT_URL_PATTERN = /^(https?|sse):\/\/[^\s]+$/;
-const ENDPOINT_URL_MESSAGE = 'Must be a valid http(s) or sse URL';
+const ENDPOINT_URL_PATTERN = /^https?:\/\/[^\s]+$/;
+const ENDPOINT_URL_MESSAGE = 'Must be a valid http(s) URL';
 
 const VERSION_PATTERN = /^[\w.+-]{1,64}$/;
 const VERSION_MESSAGE =
   'Must contain only word characters, dots, hyphens, and plus signs (max 64 chars)';
-
-const ICON_URL_PATTERN = /^https?:\/\/[^\s]+$/;
-const ICON_URL_MESSAGE = 'Must be a valid https?:// URL';
 
 export class ToolsetAuthSettingsBodyDto {
   @ApiProperty({ enum: ToolsetAuthType, example: ToolsetAuthType.None })
@@ -121,10 +122,15 @@ export class ToolsetBodyDto {
   @IsOptional()
   description?: string;
 
-  @ApiPropertyOptional({ example: 'https://example.com/icon.svg' })
+  @ApiPropertyOptional({
+    example: 'files/6FEup.../uploads/2026-06/icon.png',
+    description:
+      'An absolute https?:// URL, or a DIAL file id (files/{bucket}/{path}) ' +
+      'picked through the file manager.',
+  })
   @IsString()
   @IsOptional()
-  @Matches(ICON_URL_PATTERN, { message: ICON_URL_MESSAGE })
+  @IsValidResourceReference()
   iconUrl?: string;
 
   @ApiPropertyOptional({ type: [String], example: ['keyword1', 'keyword2'] })

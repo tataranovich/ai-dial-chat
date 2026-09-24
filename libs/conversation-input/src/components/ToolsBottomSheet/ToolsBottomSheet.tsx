@@ -1,6 +1,10 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import type { ToolMenuItem } from '@epam/ai-dial-chat-shared';
-import { BASE_ICON_SIZE, Button } from '@epam/ai-dial-ui-kit';
+import {
+  BASE_ICON_SIZE,
+  Button,
+  DIAL_KIT_ICON_STROKE,
+} from '@epam/ai-dial-ui-kit';
 import { IconCheck } from '@tabler/icons-react';
 import type { CSSProperties, FC } from 'react';
 import { BottomSheetShell } from '../BottomSheetShell/BottomSheetShell';
@@ -26,12 +30,14 @@ export interface ToolsBottomSheetProps {
   items: ToolMenuItem[];
   /** Called with the tool id when a row is tapped. */
   onToolToggle: (toolId: string) => void;
+  /** CSS class applied to each tool row label. Defaults to `'dial-small-text'`. */
+  itemLabelClassName?: string;
   /** Color overrides. */
   colors?: ToolsBottomSheetColors;
 }
 
 /** Color overrides for `ToolsBottomSheet`, applied as CSS custom properties with app theme fallbacks. */
-export interface ToolsBottomSheetColors {
+interface ToolsBottomSheetColors {
   /** Icon color for each tool row. Fallback: `--text-secondary`. */
   iconText?: string;
   /** Checkmark icon color for a selected tool row. Fallback: `--text-accent`. */
@@ -52,6 +58,7 @@ export const ToolsBottomSheet: FC<ToolsBottomSheetProps> = ({
   title = 'Tools',
   items,
   onToolToggle,
+  itemLabelClassName = 'dial-small-text',
   colors,
 }) => {
   const cssVars = buildCssVars({
@@ -89,11 +96,15 @@ export const ToolsBottomSheet: FC<ToolsBottomSheetProps> = ({
                   <span
                     className={mergeClasses('ms-auto', styles.selectedIcon)}
                   >
-                    <IconCheck size={BASE_ICON_SIZE} aria-hidden />
+                    <IconCheck
+                      size={BASE_ICON_SIZE}
+                      aria-hidden
+                      stroke={DIAL_KIT_ICON_STROKE}
+                    />
                   </span>
                 ) : null
               }
-              label={<span className="dial-small-text">{item.label}</span>}
+              label={<span className={itemLabelClassName}>{item.label}</span>}
               onClick={() => onToolToggle(item.id)}
             />
           </li>

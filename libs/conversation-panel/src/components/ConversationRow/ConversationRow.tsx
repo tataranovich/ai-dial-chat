@@ -1,20 +1,24 @@
-import { DeploymentIcon, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  DeploymentIcon,
+  FilterTab,
+  mergeClasses,
+} from '@epam/ai-dial-chat-shared';
 import {
   Button,
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   Dropdown,
+  ElementSize,
   GhostIconButton,
+  Highlight,
   Skeleton,
   SkeletonVariant,
-  ElementSize,
-  Highlight,
   type DropdownItem,
 } from '@epam/ai-dial-ui-kit';
 import { IconClock, IconDotsVertical } from '@tabler/icons-react';
 import { useCallback, useRef, useState, type DragEvent, type FC } from 'react';
 import { ConversationItem } from '../../models/panel-props';
 import type { VirtualRow } from '../../models/virtual-row';
-import { FilterTab } from '../../types/conversation-classification';
 import { getButtonPaddingEnd } from '../../utils/conversation-row';
 import { getDropAfterId } from '../../utils/drag';
 import styles from '../ConversationPanel/ConversationPanel.module.scss';
@@ -42,7 +46,7 @@ export interface ConversationRowProps {
   itemTitleClassName?: string;
   /** CSS class applied to the icon badge. Defaults to `'rounded-full'`. */
   itemIconBadgeClassName?: string;
-  /** Typography class applied to the task pill badge. Defaults to `'dial-caption-semi-text uppercase tracking-[0.6px]'`. Colors come from the module stylesheet. */
+  /** Typography class applied to the task pill badge. Defaults to `'dial-caption-lead-semi-text'`. Colors come from the module stylesheet. */
   taskBadgeClassName?: string;
   /** Accessible (visually hidden) label announced for the unread indicator dot. Defaults to `"Unread"`. */
   unreadIndicatorLabel?: string;
@@ -83,7 +87,7 @@ export const ConversationRow: FC<ConversationRowProps> = ({
   actionsLabel = 'More actions',
   itemTitleClassName = 'dial-small-text',
   itemIconBadgeClassName,
-  taskBadgeClassName = 'dial-caption-semi-text uppercase tracking-[0.6px]',
+  taskBadgeClassName = 'dial-caption-lead-semi-text',
   unreadIndicatorLabel = 'Unread',
   rowGroupKey,
   rows,
@@ -136,7 +140,7 @@ export const ConversationRow: FC<ConversationRowProps> = ({
    * button drops its own start padding (`ps-0`) so the two do not stack into a double indent.
    */
   const avatarWithUnreadIndicator = (
-    <span className="flex shrink-0 items-center">
+    <span className="flex shrink-0 items-center gap-0.5">
       <span className="relative flex size-3 shrink-0 items-center justify-center">
         {item.isUnread && (
           <>
@@ -165,7 +169,7 @@ export const ConversationRow: FC<ConversationRowProps> = ({
         taskBadgeClassName,
       )}
     >
-      <IconClock size={12} aria-hidden />
+      <IconClock size={12} aria-hidden stroke={DIAL_KIT_ICON_STROKE} />
       {item.taskBadgeLabel}
     </span>
   ) : undefined;
@@ -247,7 +251,8 @@ export const ConversationRow: FC<ConversationRowProps> = ({
           onClick={item.href ? undefined : () => onSelectConversation(item.id)}
           tabIndex={item.href ? -1 : undefined}
           className={mergeClasses(
-            'h-8 w-full justify-start gap-2 rounded-xl py-2 ps-0',
+            /* The row's corner radius comes from `styles.item` (--cp-row-radius). */
+            'h-8 w-full justify-start gap-2 py-2 ps-0 after:pointer-events-none',
             buttonPaddingEnd,
             styles.item,
             isActive && styles.itemActive,
@@ -278,6 +283,7 @@ export const ConversationRow: FC<ConversationRowProps> = ({
                   size={DIAL_ICON_SIZE.SM}
                   className={styles.triggerIcon}
                   aria-hidden
+                  stroke={DIAL_KIT_ICON_STROKE}
                 />
               }
               size={ElementSize.Small}

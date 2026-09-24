@@ -126,6 +126,25 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 - **WHEN** the `libs/scheduled-tasks` source is statically analyzed
 - **THEN** it contains no imports of `apps/chat/*`, `@epam/chat-api-client`, routing, feature-flag, auth, env, or analytics modules
 
+### Requirement: ScheduledTasks lib component renders an optional banner slot
+
+`libs/scheduled-tasks`'s `ScheduledTasks` component SHALL accept an optional `banner?: ReactNode` prop. When provided, the component SHALL render it between the search/sort toolbar row and the content region (the status message and card grid/spinner/error/empty states) in the resulting layout. When omitted, nothing renders in that position. The component SHALL treat `banner` as opaque content — it MUST NOT interpret, style beyond layout placement, or attach any auth/BFF/routing/feature-flag behavior to it, and MUST NOT import any type describing what the banner represents.
+
+#### Scenario: Banner renders between toolbar and content
+
+- **WHEN** `ScheduledTasks` renders with `banner={<div>Example</div>}` and a non-empty `items` array
+- **THEN** the rendered "Example" content appears after the search/sort toolbar and before the task card grid in document order
+
+#### Scenario: No banner prop renders nothing extra
+
+- **WHEN** `ScheduledTasks` renders without a `banner` prop
+- **THEN** no additional element appears between the toolbar and the content region, and the rendered output is unchanged from before this requirement was added
+
+#### Scenario: Banner renders across every content-region state
+
+- **WHEN** `ScheduledTasks` renders with a `banner` prop while `isLoading` is `true`, while `error` is set, and while `items` is empty
+- **THEN** the banner renders in each of these states — its visibility does not depend on the content region's loading/error/empty/populated state
+
 ### Requirement: ScheduledTaskCard renders a single task with highlighted search matches
 
 `libs/scheduled-tasks` SHALL export a `ScheduledTaskCard` component rendering: a title (highlighting the current search match via the shared `Highlight` component from `@epam/ai-dial-chat-shared`, per `.claude/rules/search-results-highlight.md`), an optional "N NEW"-style badge when `isNew`/a new-count is set, an optional description/prompt-preview line, a schedule/status pill, and an optional location breadcrumb built from `locationSegments` (outermost segment first, chevron separator between segments). The card exposes an overflow-menu trigger only when at least one action callback is supplied; the menu renders only the actions for which a corresponding callback prop (`onEdit`, `onRunNow`, `onDelete`) was provided by the caller.
@@ -364,7 +383,7 @@ Changing `searchQuery` (debounced ~300ms to avoid a request per keystroke) or `s
 
 ### Requirement: Infinite scroll loads and appends additional pages
 
-The Scheduled Tasks list SHALL support loading beyond the first page by scrolling: when the user scrolls the card grid's scroll container to reach a sentinel positioned at the end of the currently loaded content, and more pages exist (`hasMore`), the next page SHALL be requested and its items appended to the currently displayed list, without resetting scroll position or already-rendered cards. Scroll-position detection SHALL reuse the scroll-parent detection pattern already used by `libs/catalog/src/components/ListView/ListView.tsx` (`findScrollParent` + scroll-listener), not a bare `IntersectionObserver` against a non-document root, for consistency with the codebase's one existing infinite-scroll implementation.
+The Scheduled Tasks list SHALL support loading beyond the first page by scrolling: when the user scrolls the card grid's scroll container to reach a sentinel positioned at the end of the currently loaded content, and more pages exist (`hasMore`), the next page SHALL be requested and its items appended to the currently displayed list, without resetting scroll position or already-rendered cards. Scroll-position detection SHALL reuse the scroll-parent detection pattern already used elsewhere in the codebase — a walk up to the nearest scrollable ancestor plus a scroll listener, as in `findScrollParent` in `libs/scheduled-tasks/src/components/ScheduledTasks/ScheduledTasks.tsx` and `getScrollParent` in `libs/catalog/src/utils/scroll-window.ts` — not a bare `IntersectionObserver` against a non-document root.
 
 #### Scenario: Scrolling to the bottom loads the next page
 
@@ -394,3 +413,55 @@ While a subsequent page is being fetched (`isLoadingMore === true`), the list SH
 
 - **WHEN** the list is in its initial load (`isLoading === true`, no items yet loaded)
 - **THEN** the content region shows the existing `Spinner` state, not skeleton cards
+
+### Requirement: Dashboard composition exposes supported card grid and icon settings
+
+ScheduledTasks SHALL accept and forward cardStyles to grid/cards and expose className, sortIcon and typed gridLayout settings in design.md. Layout SHALL depend on available scoped inline space, not colliding host utilities. The default sort control SHALL use the real Tabler arrows-sort icon; custom and null icons SHALL be supported without affecting its name.
+
+#### Scenario: Compact dashboard fits three columns
+
+- **WHEN** a host configures maxColumns 3, minCardWidth 320px, maxWidth 1120px, gap 20px, cardHeight 184px
+- **THEN** the grid has three columns when at least 1000px is available, two when at least 660px is available, and one below that; skeletons use the same dimensions.
+
+#### Scenario: Nested card styles pass through the page component
+
+- **WHEN** the host changes title/status colors through ScheduledTasks.cardStyles
+- **THEN** rendered cards receive the settings without direct grid composition or private-class selectors.
+
+#### Scenario: Custom or absent sort icon preserves accessibility
+
+- **WHEN** sortIcon is customized or explicitly null
+- **THEN** the icon changes or disappears, and the translated button name, keyboard action and sorting behavior remain intact.
+
+### Requirement: Card status presentation is explicit and backward compatible
+
+ScheduledTaskItem SHALL support an optional exported Active/Paused/Completed status enum. Explicit status SHALL take precedence over isActive; omission SHALL preserve existing isActive behavior. Status labels and per-status badge/title styles SHALL be host-configurable. No lifecycle SHALL be inferred from absent nextRunTime alone.
+
+#### Scenario: Paused and completed reproduce transparent badges
+
+- **WHEN** the host supplies Paused/Completed with transparent badge background and secondary title color
+- **THEN** both render the translated status and requested styling without inspecting descendants or CSS hashes.
+
+#### Scenario: Existing callers retain active behavior
+
+- **WHEN** an existing host supplies only isActive
+- **THEN** the card behaves as before and is not newly classified Completed.
+
+#### Scenario: Missing next-run timestamp is not completion evidence
+
+- **WHEN** a task lacks nextRunTime but the host has not supplied Completed
+- **THEN** the library does not introduce a Completed badge.
+
+### Requirement: Dashboard incremental failure does not replace loaded content
+
+ScheduledTasks SHALL support distinct incremental error/retry props and preserve its cards while a later page fails. The app SHALL consume common trigger descriptions for schedule text, preserving next-run information as a separate product concept. Search highlighting, unread badges, banner and card navigation SHALL remain intact.
+
+#### Scenario: Retry is shown alongside existing cards
+
+- **WHEN** a later page fails while cards are already visible
+- **THEN** cards remain, an accessible localized incremental error/retry appears, and retry delegates to the supplied callback.
+
+#### Scenario: Metadata absence does not degrade a supported repeat label
+
+- **WHEN** a task's trigger is supported but optional model/prompt is absent
+- **THEN** its recurring description remains meaningful and does not become Custom merely because edit metadata is absent.

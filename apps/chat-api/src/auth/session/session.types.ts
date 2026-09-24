@@ -1,6 +1,6 @@
 export interface SessionPayload {
-  /** Schema version — always 1 */
-  v: 1;
+  /** Schema version — v1 sessions require a new login. */
+  v: 2;
   /** Unique session ID (UUID) */
   sid: string;
   /** Registered provider ID */
@@ -15,8 +15,10 @@ export interface SessionPayload {
   it?: string;
   /** Access-token expiry — Unix timestamp (seconds) */
   at_exp: number;
-  /** Refresh-token expiry — Unix timestamp (seconds) */
-  rt_exp: number;
+  /** Rolling session expiry, renewed after a successful refresh — Unix seconds. */
+  session_exp: number;
+  /** Provider-reported refresh-token expiry, when known — Unix seconds. */
+  rt_exp?: number;
   /** Cookie issue time — Unix timestamp (seconds) */
   iat: number;
   /** CSRF token — random UUID created on login and kept stable across refresh */
@@ -26,6 +28,17 @@ export interface SessionPayload {
   /** DIAL Core bucket assigned to this user — empty string means not yet resolved (will be lazily fetched on first authenticated request) */
   bucket: string;
 }
+
+/** Claim key the `job_title` OIDC claim (when allowlisted) is stored under. */
+export const JOB_TITLE_CLAIM = 'job_title';
+
+/** Reads the `job_title` claim out of `SessionUser.claims`, if present and a string. */
+export const getJobTitleClaim = (
+  claims: Record<string, unknown> | undefined,
+): string | undefined => {
+  const value = claims?.[JOB_TITLE_CLAIM];
+  return typeof value === 'string' ? value : undefined;
+};
 
 export interface SessionUser {
   /** Present only for cookie-authenticated callers — no session is created for header auth. */

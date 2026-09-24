@@ -16,14 +16,22 @@ export interface FavoritesColors {
   countText?: string;
   /** Color of the checkmark icon on the selected favorite card. Fallback: `--text-accent`. */
   selectedCheckIcon?: string;
-  /** Border color of the selected favorite card. Fallback: `--stroke-info`. */
+  /** Border color of the selected favorite card. Fallback: `--stroke-accent`. */
   selectedCardBorder?: string;
-  /** Background color (tint) of the selected favorite card. Fallback: `--bg-accent-primary-alpha`. */
+  /** Background color (tint) of the selected favorite card. Fallback: `--bg-control-accent-alpha-active`. */
   selectedCardBackground?: string;
   /** Icon color of the pagination arrows. Fallback: `--text-accent`. */
   navButton?: string;
   /** Icon color of a disabled pagination arrow. Fallback: `--stroke-secondary`. */
   navButtonDisabled?: string;
+  /** Background of a pagination arrow on hover. Fallback: `--bg-control-accent-alpha-hover`. */
+  navButtonHoverBackground?: string;
+  /** Background of a pagination arrow while pressed. Fallback: `--bg-control-accent-alpha-active`. */
+  navButtonActiveBackground?: string;
+  /** Border color of the pagination control. Fallback: `--stroke-accent-alpha`. */
+  pageNavBorder?: string;
+  /** Background of the pagination control. Fallback: `--bg-control-accent-alpha`. */
+  pageNavBackground?: string;
 }
 
 /** Grouped style overrides for `CatalogFavorites`. */
@@ -44,6 +52,8 @@ export interface FavoritesProps {
   title?: string;
   /** Called when a favorite card's star is toggled. */
   onToggleFavorite?: (id: string, isStarred: boolean) => void;
+  /** Rule for whether the favorite star is shown on a favorite card; `false` hides it and makes the item non-favoritable. Defaults to visible when omitted. */
+  isFavoriteVisible?: (item: CatalogItem) => boolean;
   /** Called when a favorite card body is clicked. Opens the details panel. */
   onItemClick?: (item: CatalogItem) => void;
   /** Grouped typography and color overrides for the section. */
@@ -62,6 +72,6 @@ export interface FavoritesProps {
   removeFromFavoritesAriaLabel?: string;
   /** ID of an item to visually mark as selected (border, tint, and checkmark). */
   selectedItemId?: string;
-  /** Credentials-status badge label shown when a favorited item is signed out. Default: `'LOGGED OUT'`. */
+  /** Accessible label for the logged-out warning icon on a favorited item's avatar, and the text shown in its hover tooltip. Default: `'Authorize to use this toolset.'`. */
   credentialsBadgeLoggedOutLabel?: string;
 }

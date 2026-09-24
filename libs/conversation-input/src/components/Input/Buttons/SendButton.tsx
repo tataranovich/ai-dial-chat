@@ -1,4 +1,8 @@
-import { DIAL_ICON_SIZE, PrimaryIconButton } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  PrimaryIconButton,
+} from '@epam/ai-dial-ui-kit';
 import { IconArrowNarrowRight } from '@tabler/icons-react';
 import { type FC } from 'react';
 
@@ -8,27 +12,28 @@ export interface SendButtonProps {
   isDisabled?: boolean;
   /** Accessible label for the send button. */
   ariaLabel?: string;
-  /** Whether the button is in the process of exiting (e.g., during an animation). */
-  isExiting?: boolean;
+  /** Tooltip shown on hover over the send button. Omitted when unset. */
+  sendTooltip?: string;
 }
 
-/** Animated circular send button with tooltip and disabled state. */
+/** Circular send button with tooltip and disabled state. */
 export const SendButton: FC<SendButtonProps> = ({
   onSend,
   isDisabled = false,
   ariaLabel = 'Send message',
-  isExiting = false,
+  sendTooltip,
 }) => {
   return (
     <PrimaryIconButton
       aria-label={ariaLabel}
       onClick={() => onSend?.()}
       disabled={isDisabled}
-      aria-hidden={isExiting}
+      tooltipProps={sendTooltip ? { tooltip: sendTooltip } : undefined}
       icon={
         <IconArrowNarrowRight
           size={DIAL_ICON_SIZE.LG}
           className="rtl:scale-x-[-1]"
+          stroke={DIAL_KIT_ICON_STROKE}
         />
       }
     />

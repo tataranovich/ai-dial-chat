@@ -1,25 +1,29 @@
+// Headless catalog enums and catalog-item-mapping functions — see
+// `./entry-points/mapping.ts`; import `@epam/ai-dial-catalog/mapping`
+// directly to avoid resolving the catalog/publish-panel UI.
+export * from './entry-points/mapping';
+
 // Types
 export { CodeLanguage } from './types/code-language';
 export { CatalogDetailsTab } from './types/detail-tab';
+export { CatalogLimitStatus } from './models/item-details-data';
 export {
   DetailsConfirmationKind,
   DetailsConfirmationVariant,
 } from './types/details-confirmation';
-export { CatalogEntityType } from './types/entity-type';
-export { CatalogSortKey } from './types/sort';
-export {
-  CredentialsBadgeState,
-  CredentialsLevel,
-  CredentialStatus,
-  CredentialsUiState,
-  ToolsetAuthenticationType,
-} from './types/toolset-auth';
+export { DeploymentSize } from './types/deployment-icon-size';
 export { CatalogViewMode } from './types/view-mode';
+export {
+  CatalogContentNodeType,
+  CatalogContentPreviewType,
+} from './types/catalog-content-type';
 
 // Models
-export type { CatalogItem } from './models/catalog-item';
-export type { CatalogItemCredentials } from './models/catalog-item-credentials';
-export type { CatalogProps, CatalogTitles } from './models/catalog-props';
+export type {
+  CatalogEmptyStateContext,
+  CatalogProps,
+  CatalogTitles,
+} from './models/catalog-props';
 export type {
   CatalogColors,
   CatalogStyles,
@@ -28,6 +32,14 @@ export type {
 export type { EndpointOption } from './models/item-details-data';
 export type {
   ApiResource,
+  CatalogContentFileNode,
+  CatalogContentFolderNode,
+  CatalogContentTreeNode,
+  CatalogContentFilePreview,
+  CatalogContentMarkdownPreview,
+  CatalogContentTextPreview,
+  CatalogContentImagePreview,
+  CatalogContentUnsupportedPreview,
   CatalogItemApiDetails,
   CatalogItemDetailsFetchResult,
   CatalogItemLimits,
@@ -40,6 +52,7 @@ export type {
   ToolAnnotation,
   ToolDefinition,
   ToolInputParam,
+  UsageLimitGroup,
   UsageLimitProgressRow,
   UsageLimitRow,
 } from './models/item-details-data';
@@ -56,14 +69,7 @@ export type {
   OverviewSpec,
 } from './models/item-overview';
 // Utils
-export { filterCatalogItems } from './utils/catalog-filter';
-export { sortCatalogItems } from './utils/catalog-sort';
 export { useFavColumns } from './utils/use-fav-columns';
-export {
-  getCredentialsBadgeState,
-  getCredentialsUiState,
-  getSignedInLevel,
-} from './utils/toolset-credentials';
 
 // Components
 export { Catalog } from './components/Catalog/Catalog';
@@ -90,7 +96,10 @@ export type { CardRowRendererProps } from './components/CardGrid/CardRowRenderer
 export type { CardRowData } from './models/card-row-data';
 export type { CardGridProps, CardGridTitles } from './models/grid-props';
 export { useScrollVirtualizer } from './utils/use-scroll-virtualizer';
-export type { ScrollVirtualizerResult } from './utils/use-scroll-virtualizer';
+export type {
+  ScrollVirtualizerOptions,
+  ScrollVirtualizerResult,
+} from './utils/use-scroll-virtualizer';
 
 export { Favorites } from './components/Favorites/Favorites';
 export type {
@@ -107,24 +116,57 @@ export type {
   ListViewStyles,
   ListViewTypography,
 } from './models/list-props';
-
-export { EntityTypeLabel } from './components/EntityTypeLabel/EntityTypeLabel';
-export type { EntityTypeLabelProps } from './components/EntityTypeLabel/EntityTypeLabel';
+export type {
+  ListViewColumnKey,
+  ListViewColumnVisibility,
+} from './components/ListView/columns';
 
 export { FavoriteCard } from './components/Favorites/FavoriteCard';
 export type { FavoriteCardProps } from './components/Favorites/FavoriteCard';
-
-export { FolderPath } from '@epam/ai-dial-ui-kit';
-export type { FolderPathProps } from '@epam/ai-dial-ui-kit';
 
 export { Filter } from './components/Filter/Filter';
 export type { FilterColors, FilterProps } from './components/Filter/Filter';
 
 export { TopicTag } from './components/TopicTag/TopicTag';
-export type { TopicTagProps } from './components/TopicTag/TopicTag';
+export type {
+  TopicTagColors,
+  TopicTagProps,
+} from './components/TopicTag/TopicTag';
 
 export { InfoCard } from './components/InfoCard/InfoCard';
 export type { InfoCardProps } from './components/InfoCard/InfoCard';
 
 export { CredentialsBadge } from './components/CredentialsBadge/CredentialsBadge';
-export type { CredentialsBadgeProps } from './components/CredentialsBadge/CredentialsBadge';
+export type {
+  CredentialsBadgeColors,
+  CredentialsBadgeProps,
+} from './components/CredentialsBadge/CredentialsBadge';
+
+export { ContentTab } from './components/Details/TabsContent/Content';
+export type { ContentTabProps } from './components/Details/TabsContent/Content';
+
+export { DetailsPanel } from './components/Details/DetailsPanel';
+
+export { AppIdentity } from './components/AppIdentity/AppIdentity';
+export type { AppIdentityProps } from './components/AppIdentity/AppIdentity';
+export type {
+  AppIdentityColors,
+  AppIdentityStyles,
+  AppIdentityTypography,
+} from './models/app-identity-styles';
+export { CATALOG_CLASS } from './constants/public-class-names';
+export { DeploymentSelectorField } from './components/DeploymentSelectorField/DeploymentSelectorField';
+export type {
+  DeploymentSelectorDisplayRecord,
+  DeploymentSelectorExtraOption,
+  DeploymentSelectorFieldLabels,
+  DeploymentSelectorFieldProps,
+} from './components/DeploymentSelectorField/DeploymentSelectorField';
+
+export { ApplicationCredentials } from './components/ApplicationCredentials/ApplicationCredentials';
+export type {
+  ApplicationCredential,
+  ApplicationCredentialLoginParams,
+  ApplicationCredentialsProps,
+  ApplicationCredentialsTexts,
+} from './models/application-credentials';

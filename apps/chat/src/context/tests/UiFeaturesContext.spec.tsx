@@ -2,13 +2,12 @@ import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import { act, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_ENABLED_UI_FEATURES } from '../../constants/ui-features';
 import { UserConfigStatus } from '../../types/user-config-status';
 import { AppConfigState, useAppConfig } from '../AppConfigContext';
 import { UiFeaturesProvider, useUiFeatures } from '../UiFeaturesContext';
 
-vi.mock('../AppConfigContext', () => ({
-  useAppConfig: vi.fn(),
-}));
+vi.mock('../AppConfigContext', async () => import('./app-config-context-mock'));
 
 const mockUseAppConfig = vi.mocked(useAppConfig);
 
@@ -22,6 +21,10 @@ const mockAppConfig = (enabledUiFeatures: string[] | null = null) =>
       transcribeSizeLimitBytes: 5 * 1024 * 1024,
       defaultDeploymentId: null,
       dialCoreExternalUrl: null,
+      mcpAppSandboxUrl: null,
+      mcpAppTheme: null,
+      mcpAppUserAgent: null,
+      mcpAppHostName: null,
       fileManagerTabs: [],
       overlayEnabled: false,
       overlayAllowedOrigins: [],
@@ -29,11 +32,13 @@ const mockAppConfig = (enabledUiFeatures: string[] | null = null) =>
       announcementTitle: null,
       announcementDescription: null,
       announcements: [],
-      deepResearchToolId: null,
       enabledUiFeatures,
+      welcomeScreenDescription: null,
       footerHtmlMessage: '',
       customVisualizers: [],
+      applicationVisualizers: {},
       publicationFilterSources: ['title', 'role', 'dial_roles'],
+      maxAttachmentFileSizeBytes: 536_870_912,
     },
   } satisfies AppConfigState);
 
@@ -47,25 +52,37 @@ describe('UiFeaturesContext', () => {
   });
 
   describe('default baseline', () => {
-    it('enables exactly the 21 default-on features', () => {
+    it('enables exactly the compiled-in default-on features', () => {
       mockAppConfig();
       const { result } = renderHook(() => useUiFeatures(), { wrapper });
 
-      expect(result.current.enabledFeatures.size).toBe(21);
+      /* Compared against the constant rather than a hardcoded count: the
+         baseline grows every time a feature ships default-on, and a literal
+         here only ever records how many there were the last time someone
+         edited this line. */
+      expect([...result.current.enabledFeatures].sort()).toEqual(
+        [...DEFAULT_ENABLED_UI_FEATURES].sort(),
+      );
       expect(result.current.isEnabled(OverlayFeature.Header)).toBe(true);
       expect(
         result.current.isEnabled(OverlayFeature.ConversationsSection),
       ).toBe(true);
       expect(result.current.isEnabled(OverlayFeature.Likes)).toBe(true);
       expect(result.current.isEnabled(OverlayFeature.Prompts)).toBe(true);
+      expect(result.current.isEnabled(OverlayFeature.FileManager)).toBe(true);
       expect(
         result.current.isEnabled(OverlayFeature.ConversationsSharing),
       ).toBe(true);
     });
 
-    it('leaves the 13 default-off (modifier) features disabled', () => {
+    it('leaves every non-default (modifier) feature disabled', () => {
       mockAppConfig();
       const { result } = renderHook(() => useUiFeatures(), { wrapper });
+
+      const enabledModifiers = Object.values(OverlayFeature)
+        .filter((feature) => !DEFAULT_ENABLED_UI_FEATURES.has(feature))
+        .filter((feature) => result.current.isEnabled(feature));
+      expect(enabledModifiers).toEqual([]);
 
       expect(result.current.isEnabled(OverlayFeature.HideNewConversation)).toBe(
         false,
@@ -101,7 +118,9 @@ describe('UiFeaturesContext', () => {
       mockAppConfig(null);
       const { result } = renderHook(() => useUiFeatures(), { wrapper });
 
-      expect(result.current.enabledFeatures.size).toBe(21);
+      expect([...result.current.enabledFeatures].sort()).toEqual(
+        [...DEFAULT_ENABLED_UI_FEATURES].sort(),
+      );
       expect(result.current.isEnabled(OverlayFeature.Header)).toBe(true);
     });
   });
@@ -118,6 +137,105 @@ describe('UiFeaturesContext', () => {
       expect(result.current.enabledFeatures.size).toBe(1);
       expect(result.current.isEnabled(OverlayFeature.Header)).toBe(true);
       expect(result.current.isEnabled(OverlayFeature.Likes)).toBe(false);
+    });
+  });
+
+  describe('isolated-view override', () => {
+    it('takes precedence over an active overlay override', () => {
+      mockAppConfig(null);
+      const { result } = renderHook(() => useUiFeatures(), { wrapper });
+
+      act(() => {
+        result.current.applyOverlayOverride(['header', 'likes']);
+      });
+      act(() => {
+        result.current.applyIsolatedViewOverride(
+          new Set([OverlayFeature.HideNavigationMenu]),
+        );
+      });
+
+      expect([...result.current.enabledFeatures]).toEqual([
+        OverlayFeature.HideNavigationMenu,
+      ]);
+      expect(result.current.isEnabled(OverlayFeature.Header)).toBe(false);
+      expect(result.current.isEnabled(OverlayFeature.Likes)).toBe(false);
+    });
+
+    it('takes precedence over the server baseline', () => {
+      mockAppConfig(['conversations-section', 'prompts']);
+      const { result } = renderHook(() => useUiFeatures(), { wrapper });
+
+      act(() => {
+        result.current.applyIsolatedViewOverride(
+          new Set([OverlayFeature.HideChangeAgent]),
+        );
+      });
+
+      expect([...result.current.enabledFeatures]).toEqual([
+        OverlayFeature.HideChangeAgent,
+      ]);
+      expect(
+        result.current.isEnabled(OverlayFeature.ConversationsSection),
+      ).toBe(false);
+      expect(result.current.isEnabled(OverlayFeature.Prompts)).toBe(false);
+    });
+
+    it('restores the prior priority chain when cleared with null', () => {
+      mockAppConfig(['header', 'likes']);
+      const { result } = renderHook(() => useUiFeatures(), { wrapper });
+
+      act(() => {
+        result.current.applyIsolatedViewOverride(
+          new Set([OverlayFeature.HideChangeAgent]),
+        );
+      });
+      act(() => {
+        result.current.applyIsolatedViewOverride(null);
+      });
+
+      expect([...result.current.enabledFeatures].sort()).toEqual(
+        ['header', 'likes'].sort(),
+      );
+    });
+  });
+
+  describe('deprecated aliases', () => {
+    it('resolves a deprecated value from the server baseline to its replacement', () => {
+      const warnSpy = vi
+        .spyOn(console, 'warn')
+        .mockImplementation(() => undefined);
+      mockAppConfig(['header', 'custom-applications']);
+      const { result } = renderHook(() => useUiFeatures(), { wrapper });
+
+      expect(result.current.isEnabled(OverlayFeature.SchemaApps)).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('custom-applications'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('resolves a deprecated value in an overlay override to its replacement', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      mockAppConfig(['likes']);
+      const { result } = renderHook(() => useUiFeatures(), { wrapper });
+
+      act(() => {
+        result.current.applyOverlayOverride(['custom-applications']);
+      });
+
+      expect([...result.current.enabledFeatures]).toEqual([
+        OverlayFeature.SchemaApps,
+      ]);
+    });
+
+    it('collapses a value supplied under both its deprecated alias and its current name', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      mockAppConfig(['schema-apps', 'custom-applications']);
+      const { result } = renderHook(() => useUiFeatures(), { wrapper });
+
+      expect([...result.current.enabledFeatures]).toEqual([
+        OverlayFeature.SchemaApps,
+      ]);
     });
   });
 

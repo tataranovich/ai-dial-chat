@@ -9,10 +9,6 @@ vi.mock('../Filter.module.scss', () => ({
     filterBtn: 'filterBtn',
     filterBtnActive: 'filterBtnActive',
     overlay: 'overlay',
-    row: 'row',
-    rowChecked: 'rowChecked',
-    checkbox: 'checkbox',
-    checkboxChecked: 'checkboxChecked',
     rowLabel: 'rowLabel',
     divider: 'divider',
     sectionLabel: 'sectionLabel',
@@ -27,7 +23,29 @@ vi.mock('../Filter.module.scss', () => ({
 }));
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16 },
+  MenuItemMark: { None: 'none', Check: 'check', Checkbox: 'checkbox' },
+  /* Mirrors the kit row's contract: the row is the button that carries the
+     role and aria-checked, and the checkbox box is decorative. */
+  MenuItem: ({
+    label,
+    labelClassName,
+    selected,
+    ...rest
+  }: {
+    label?: React.ReactNode;
+    labelClassName?: string;
+    mark?: string;
+    selected?: boolean;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement> & {
+      ref?: React.Ref<HTMLButtonElement>;
+    }) => (
+    <button type="button" {...rest}>
+      <span aria-hidden="true" data-selected={selected} />
+      <span className={labelClassName}>{label}</span>
+    </button>
+  ),
   Dropdown: ({
     children,
     renderOverlay,
@@ -54,27 +72,6 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {label}
     </button>
   ),
-  DialCheckbox: ({
-    id,
-    label,
-    checked,
-    onChange,
-  }: {
-    id: string;
-    label: string;
-    checked: boolean;
-    onChange: (v: boolean | undefined) => void;
-  }) => (
-    <label htmlFor={id}>
-      <input
-        type="checkbox"
-        id={id}
-        checked={checked}
-        onChange={() => onChange(!checked)}
-      />
-      {label}
-    </label>
-  ),
   GhostButton: ({
     label,
     className,
@@ -91,6 +88,7 @@ vi.mock('@tabler/icons-react', () => ({
   IconFilter: () => null,
 }));
 vi.mock('@epam/ai-dial-chat-shared', () => ({
+  SELECT_LIST_MAX_HEIGHT_CLASS_NAME: 'max-h-[344px]',
   mergeClasses: (...args: (string | undefined)[]) =>
     args.filter(Boolean).join(' '),
   buildCssVars: (vars: Record<string, string | undefined>) =>
@@ -173,15 +171,16 @@ describe('Filter', () => {
   });
 
   it('applies active CSS class to trigger when any filter is on', () => {
-    const { container } = renderFilter({ isMyAppsActive: true });
-    const btn = container.querySelector('button');
-    expect(btn?.className).toContain('filterBtnActive');
+    renderFilter({ isMyAppsActive: true });
+    // Trigger button renders first, ahead of the Clear/Apply footer buttons.
+    const btn = screen.getAllByRole('button')[0];
+    expect(btn.className).toContain('filterBtnActive');
   });
 
   it('does not apply active CSS class when no filter is on', () => {
-    const { container } = renderFilter();
-    const btn = container.querySelector('button');
-    expect(btn?.className ?? '').not.toContain('filterBtnActive');
+    renderFilter();
+    const btn = screen.getAllByRole('button')[0];
+    expect(btn.className).not.toContain('filterBtnActive');
   });
 
   it('renders the Apply button', () => {

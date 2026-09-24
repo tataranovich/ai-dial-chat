@@ -1,9 +1,7 @@
 import { CacheModule } from '@nestjs/cache-manager';
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ConfigModule } from '@nestjs/config';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AppConfigModule } from '../app-config/app-config.module';
 import { ApplicationSchemasModule } from '../application-schemas/application-schemas.module';
 import { ApplicationsModule } from '../applications/applications.module';
@@ -11,7 +9,6 @@ import { AuthModule } from '../auth/auth.module';
 import { ChatModule } from '../chat/chat.module';
 import { ClientChannelModule } from '../client-channel/client-channel.module';
 import { MetricsInterceptor } from '../common/interceptors/metrics.interceptor';
-import { EnvironmentVariables } from '../config/environment.config';
 import { validate } from '../config/validation';
 import { ConversationModule } from '../conversations/conversation.module';
 import { DeploymentsModule } from '../deployments/deployments.module';
@@ -20,18 +17,20 @@ import { ExternalServicesModule } from '../external-services/external-services.m
 import { FilesModule } from '../files/files.module';
 import { HealthController } from '../health/health.controller';
 import { ModelsModule } from '../models/models.module';
+import { OfflineCredentialsModule } from '../offline-credentials/offline-credentials.module';
 import { PromptModule } from '../prompts/prompt.module';
 import { PublishModule } from '../publish/publish.module';
 import { RateModule } from '../rate/rate.module';
 import { ScheduledTasksModule } from '../scheduled-tasks/scheduled-tasks.module';
 import { ShareModule } from '../share/share.module';
+import { SkillsModule } from '../skills/skills.module';
 import { TelemetryShutdownService } from '../telemetry/telemetry-shutdown.service';
 import { ThemesModule } from '../themes/themes.module';
 import { ToolsetsModule } from '../toolsets/toolsets.module';
 import { TranscriptionModule } from '../transcription/transcription.module';
 import { UserConfigModule } from '../user-config/user-config.module';
 import { AppController } from './app.controller';
-import { createServeStaticOptions } from './static-assets';
+import { createAppCacheOptions } from './cache.config';
 
 @Module({
   imports: [
@@ -41,25 +40,9 @@ import { createServeStaticOptions } from './static-assets';
       envFilePath: ['.env.local', '.env'],
       validate,
     }),
-    CacheModule.register({
+    CacheModule.registerAsync({
       isGlobal: true,
-      ttl: 5 * 60 * 1000, // 5 minutes in milliseconds
-      max: 100, // Maximum number of items in cache
-    }),
-    ThrottlerModule.forRoot([
-      {
-        ttl: 60000, // 60 seconds
-        limit: 100, // 100 requests per minute
-      },
-    ]),
-    ServeStaticModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService<EnvironmentVariables, true>) =>
-        createServeStaticOptions({
-          overlaySandboxEnabled: configService.get('OVERLAY_SANDBOX_ENABLED', {
-            infer: true,
-          }),
-        }),
+      useFactory: createAppCacheOptions,
     }),
     DialCoreModule,
     AppConfigModule,
@@ -81,13 +64,11 @@ import { createServeStaticOptions } from './static-assets';
     ShareModule,
     PublishModule,
     ScheduledTasksModule,
+    OfflineCredentialsModule,
+    SkillsModule,
   ],
   controllers: [AppController, HealthController],
   providers: [
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerGuard,
-    },
     {
       provide: APP_INTERCEPTOR,
       useClass: MetricsInterceptor,

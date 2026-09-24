@@ -1,12 +1,69 @@
-import { HTML_EXTENSIONS, TEXT_EXTENSIONS } from '../constants/file';
+import { MIMEType } from '@epam/ai-dial-chat-shared';
+import {
+  HTML_EXTENSIONS,
+  OOXML_MIME_TYPES,
+  TEXT_EXTENSIONS,
+} from '../constants/file';
 import type {
+  AttachmentCanvasContent,
   ErrorCanvasContent,
   UnsupportedCanvasContent,
 } from '../models/attachment-canvas';
 import {
   AttachmentContentType,
   AttachmentErrorType,
+  OoxmlFileType,
 } from '../types/attachment-canvas';
+
+const RENDERER_EXTENSION_TO_FILE_TYPE: Record<string, OoxmlFileType> = {
+  docx: OoxmlFileType.Docx,
+  xlsx: OoxmlFileType.Xlsx,
+  pptx: OoxmlFileType.Pptx,
+  csv: OoxmlFileType.Csv,
+};
+
+const RENDERER_MIME_TO_FILE_TYPE: Record<string, OoxmlFileType> = {
+  [OOXML_MIME_TYPES.docx]: OoxmlFileType.Docx,
+  [OOXML_MIME_TYPES.xlsx]: OoxmlFileType.Xlsx,
+  [OOXML_MIME_TYPES.pptx]: OoxmlFileType.Pptx,
+  [MIMEType.CSV]: OoxmlFileType.Csv,
+};
+
+const RENDERER_FILE_TYPE_TO_MIME: Record<OoxmlFileType, string> = {
+  [OoxmlFileType.Docx]: OOXML_MIME_TYPES.docx,
+  [OoxmlFileType.Xlsx]: OOXML_MIME_TYPES.xlsx,
+  [OoxmlFileType.Pptx]: OOXML_MIME_TYPES.pptx,
+  [OoxmlFileType.Csv]: MIMEType.CSV,
+};
+
+/** Resolves a format supported by the installed `@silurus/ooxml` renderer from a MIME type or file extension. */
+export const getOoxmlFileType = (
+  name: string,
+  mimeType?: string,
+): OoxmlFileType | undefined => {
+  const normalizedMimeType = mimeType?.split(';', 1)[0].trim().toLowerCase();
+  if (normalizedMimeType != null) {
+    const mimeMatch = RENDERER_MIME_TO_FILE_TYPE[normalizedMimeType];
+    if (mimeMatch != null) return mimeMatch;
+  }
+
+  const dot = name.lastIndexOf('.');
+  if (dot === -1) return undefined;
+  return RENDERER_EXTENSION_TO_FILE_TYPE[name.slice(dot + 1).toLowerCase()];
+};
+
+/** Returns true when a file can be rendered by the built-in `@silurus/ooxml` viewer. */
+export const isOoxmlPreviewable = (name: string, mimeType?: string): boolean =>
+  getOoxmlFileType(name, mimeType) != null;
+
+/** Returns the canonical MIME type recognized from `name`'s extension or `mimeType`, or `undefined` if neither matches a supported renderer format. */
+export const getOoxmlMimeType = (
+  name: string,
+  mimeType?: string,
+): string | undefined => {
+  const fileType = getOoxmlFileType(name, mimeType);
+  return fileType != null ? RENDERER_FILE_TYPE_TO_MIME[fileType] : undefined;
+};
 
 /** Returns true if the file name has an extension known to be text-previewable. */
 export const isTextPreviewable = (name: string): boolean => {
@@ -101,3 +158,36 @@ export const createForbiddenCanvasContent = (
   errorType: AttachmentErrorType.Forbidden,
   ...(url != null && { url }),
 });
+
+/**
+ * Returns `content.url` when it is an object URL created by
+ * `URL.createObjectURL` (i.e. it should be revoked once no longer displayed),
+ * or `undefined` otherwise (a remote/data URL, or a content type with no
+ * `url` at all).
+ */
+export const getRevocableObjectUrl = (
+  content: AttachmentCanvasContent,
+): string | undefined => {
+  if (
+    content.type !== AttachmentContentType.Image &&
+    content.type !== AttachmentContentType.Audio &&
+    content.type !== AttachmentContentType.Pdf &&
+    content.type !== AttachmentContentType.Ooxml
+  ) {
+    return undefined;
+  }
+  return content.url.startsWith('blob:') ? content.url : undefined;
+};
+
+/**
+ * Revokes `content`'s object URL, if it has one. Call this for content that
+ * was resolved but never displayed — the canvas revokes only what it actually
+ * held, so a payload discarded before it reached the canvas would otherwise
+ * leak its blob for the lifetime of the page.
+ */
+export const releaseCanvasContent = (
+  content: AttachmentCanvasContent,
+): void => {
+  const url = getRevocableObjectUrl(content);
+  if (url != null) URL.revokeObjectURL(url);
+};

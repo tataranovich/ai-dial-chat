@@ -56,6 +56,19 @@ async function makeToken(
     .sign(privateKey);
 }
 
+/* `sub` is omitted entirely, rather than set to a value — the claim is absent. */
+async function makeTokenWithoutSub(
+  privateKey: KeyLike,
+  kid: string,
+): Promise<string> {
+  return new SignJWT({ email: 'u@example.com' })
+    .setProtectedHeader({ alg: 'RS256', kid })
+    .setIssuer(ISSUER)
+    .setIssuedAt()
+    .setExpirationTime('1h')
+    .sign(privateKey);
+}
+
 describe('HeaderTokenStrategy', () => {
   let strategy: HeaderTokenStrategy;
   let registry: {
@@ -144,7 +157,7 @@ describe('HeaderTokenStrategy', () => {
       const token = await makeToken(privateKey, kid);
       const req = makeReq({ authorization: `Bearer ${token}` });
 
-      const user = await strategy.authenticate(req, {} as never);
+      const user = await strategy.authenticate(req);
 
       expect(user).toMatchObject({
         sub: 'user-1',
@@ -156,13 +169,54 @@ describe('HeaderTokenStrategy', () => {
       expect(user?.csrf).toBeUndefined();
     });
 
+    it('resolves the sub of a normal token unchanged', async () => {
+      const token = await makeToken(privateKey, kid, { sub: 'subject-42' });
+      const req = makeReq({ authorization: `Bearer ${token}` });
+
+      const user = await strategy.authenticate(req);
+
+      expect(user?.sub).toBe('subject-42');
+    });
+
+    /*
+     * `sub` is the identity generation ownership is derived from
+     * (`generation-principal-ownership`); coercing an absent claim to `''`
+     * would collapse every such caller of one provider into a single owner.
+     */
+    it.each([
+      ['no sub claim at all', undefined],
+      ['an empty-string sub', ''],
+    ])('rejects a verified token with %s', async (_case, sub) => {
+      const token =
+        sub === undefined
+          ? await makeTokenWithoutSub(privateKey, kid)
+          : await makeToken(privateKey, kid, { sub });
+      const req = makeReq({ authorization: `Bearer ${token}` });
+
+      let error: unknown;
+      try {
+        await strategy.authenticate(req);
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(UnauthorizedException);
+      expect((error as UnauthorizedException).getResponse()).toMatchObject({
+        code: AuthErrorCode.HeaderTokenInvalid,
+        message: 'Token is missing a "sub" claim',
+        statusCode: 401,
+      });
+      /* Rejected before the bucket round trip, so DIAL Core is never called. */
+      expect(bucketService.getUserBucket).not.toHaveBeenCalled();
+    });
+
     it('rejects an expired token with AUTH_HEADER_TOKEN_EXPIRED', async () => {
       const token = await makeToken(privateKey, kid, { exp: '-1h' });
       const req = makeReq({ authorization: `Bearer ${token}` });
 
       let error: unknown;
       try {
-        await strategy.authenticate(req, {} as never);
+        await strategy.authenticate(req);
       } catch (caught) {
         error = caught;
       }
@@ -181,7 +235,7 @@ describe('HeaderTokenStrategy', () => {
 
       let error: unknown;
       try {
-        await strategy.authenticate(req, {} as never);
+        await strategy.authenticate(req);
       } catch (caught) {
         error = caught;
       }
@@ -202,7 +256,7 @@ describe('HeaderTokenStrategy', () => {
 
       let error: unknown;
       try {
-        await strategy.authenticate(req, {} as never);
+        await strategy.authenticate(req);
       } catch (caught) {
         error = caught;
       }
@@ -214,18 +268,32 @@ describe('HeaderTokenStrategy', () => {
       });
     });
 
-    it('rejects a token from an issuer with no registered provider', async () => {
+    it('rejects an allowlisted issuer with no matching registered provider using AUTH_HEADER_PROVIDER_NOT_FOUND', async () => {
       registry.findByIssuer.mockReturnValue(undefined);
       const token = await makeToken(privateKey, kid);
       const req = makeReq({ authorization: `Bearer ${token}` });
 
-      await expect(
-        strategy.authenticate(req, {} as never),
-      ).rejects.toMatchObject({
+      await expect(strategy.authenticate(req)).rejects.toMatchObject({
         response: expect.objectContaining({
-          code: AuthErrorCode.HeaderTokenUntrustedIssuer,
+          code: AuthErrorCode.HeaderProviderNotFound,
         }),
       });
+    });
+
+    it('authenticates an Azure AD v1 issuer resolved to the registered v2 provider', async () => {
+      const azureIssuer = 'https://sts.windows.net/tenant-123/';
+      configValues.AUTH_HEADER_TOKEN_ALLOWED_ISSUERS = [azureIssuer];
+      registry.findByIssuer.mockReturnValue({
+        client: { issuer: { metadata: { jwks_uri: JWKS_URI } } },
+        config: { id: 'azure-ad' },
+      });
+      const token = await makeToken(privateKey, kid, { iss: azureIssuer });
+      const req = makeReq({ authorization: `Bearer ${token}` });
+
+      const user = await strategy.authenticate(req);
+
+      expect(user).toMatchObject({ providerId: 'azure-ad' });
+      expect(registry.findByIssuer).toHaveBeenCalledWith(azureIssuer);
     });
 
     it.each([
@@ -239,7 +307,7 @@ describe('HeaderTokenStrategy', () => {
 
         let error: unknown;
         try {
-          await strategy.authenticate(req, {} as never);
+          await strategy.authenticate(req);
         } catch (caught) {
           error = caught;
         }
@@ -257,7 +325,7 @@ describe('HeaderTokenStrategy', () => {
 
       let error: unknown;
       try {
-        await strategy.authenticate(req, {} as never);
+        await strategy.authenticate(req);
       } catch (caught) {
         error = caught;
       }
@@ -277,11 +345,9 @@ describe('HeaderTokenStrategy', () => {
 
       await strategy.authenticate(
         makeReq({ authorization: `Bearer ${token}` }),
-        {} as never,
       );
       await strategy.authenticate(
         makeReq({ authorization: `Bearer ${token}` }),
-        {} as never,
       );
 
       expect(vi.mocked(createRemoteJWKSet)).toHaveBeenCalledTimes(1);
@@ -293,7 +359,6 @@ describe('HeaderTokenStrategy', () => {
       const token = await makeToken(privateKey, kid);
       await strategy.authenticate(
         makeReq({ authorization: `Bearer ${token}` }),
-        {} as never,
       );
 
       expect(bucketService.getUserBucket).toHaveBeenCalledWith(token);
@@ -309,7 +374,6 @@ describe('HeaderTokenStrategy', () => {
       const token = await makeToken(privateKey, kid);
       const user = await strategy.authenticate(
         makeReq({ authorization: `Bearer ${token}` }),
-        {} as never,
       );
 
       expect(bucketService.getUserBucket).not.toHaveBeenCalled();
@@ -323,10 +387,7 @@ describe('HeaderTokenStrategy', () => {
       const token = await makeToken(privateKey, kid);
 
       await expect(
-        strategy.authenticate(
-          makeReq({ authorization: `Bearer ${token}` }),
-          {} as never,
-        ),
+        strategy.authenticate(makeReq({ authorization: `Bearer ${token}` })),
       ).rejects.toThrow(ServiceUnavailableException);
     });
   });

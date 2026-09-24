@@ -1,6 +1,21 @@
 import type { CatalogItemCredentials } from '@epam/ai-dial-catalog';
 import type { ApplicationSchemaSummaryDto } from '@epam/ai-dial-chat-api-client';
-import { Spinner } from '@epam/ai-dial-ui-kit';
+import {
+  decodeToolsetId,
+  encodeToolsetId,
+  mapDeploymentDetailsDtoToEntityDetails,
+  mapToolsetCredentials,
+  navigateToolsetOAuthPopup,
+  openToolsetOAuthPopup,
+  subscribeToolsetLoginSuccess,
+  ToolsetAuthTypes,
+  ToolsetCredentialsLevel,
+  ToolsetOAuthInitiationResultType,
+  ToolsetOAuthResultType,
+  waitForToolsetOAuthResult,
+} from '@epam/ai-dial-chat-hooks';
+import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
+import { Popup, Spinner } from '@epam/ai-dial-ui-kit';
 import {
   forwardRef,
   memo,
@@ -12,15 +27,16 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ApplicationCredentials } from '../../components/ApplicationCredentials/ApplicationCredentials';
 import {
-  ToolsetAuthTypes,
-  ToolsetCredentialsLevel,
-  ToolsetOAuthInitiationResultType,
-  ToolsetOAuthResultType,
-} from '../../constants/toolsets';
-import { AppsEditorI18nKeys } from '../../constants/translation-keys';
+  ApplicationCredentialsI18nKeys,
+  AppsEditorI18nKeys,
+  ButtonsI18nKeys,
+} from '../../constants/translation-keys';
+import { useFeatureFlag } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useUiFeature } from '../../hooks/useUiFeature';
 import { getDeploymentDetails } from '../../server-api/deployments';
 import { getToolset, logoutToolset } from '../../server-api/toolsets';
 import type {
@@ -30,19 +46,8 @@ import type {
   TriggerSaveMessage,
 } from '../../types/apps-editor';
 import { AppsEditorEvent } from '../../types/apps-editor';
-import {
-  mapDeploymentDetailsDtoToEntityDetails,
-  mapToolsetCredentials,
-} from '../../utils/map-entity-details-to-catalog';
-import { subscribeToolsetLoginSuccess } from '../../utils/toolset-login-events';
-import {
-  decodeToolsetId,
-  encodeToolsetId,
-  navigateToolsetOAuthPopup,
-  openToolsetOAuthPopup,
-  toolsetDtoToForm,
-  waitForToolsetOAuthResult,
-} from '../../utils/toolsets';
+import { ROUTES } from '../../types/routes';
+import { toolsetDtoToForm } from '../../utils/toolsets';
 
 export interface AppEditorIframeHandle {
   triggerSave: (general?: TriggerSaveGeneralPayload) => void;
@@ -92,6 +97,13 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
     const { t } = useTranslation();
     const { user } = useUser();
     const { currentTheme } = useTheme();
+    const isApplicationAuthCapable = useFeatureFlag('liveChatInteraction');
+    const isApplicationAuthEnabled = useUiFeature(
+      OverlayFeature.LiveChatInteraction,
+    );
+    const [credentialsAppId, setCredentialsAppId] = useState<string | null>(
+      null,
+    );
 
     const [isUiLoading, setIsUiLoading] = useState(true);
     const [isReadyToSave, setIsReadyToSave] = useState(false);
@@ -104,9 +116,19 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
         authProvider: providerId,
         id: appId,
         theme: currentTheme,
+        applicationCredentials: String(
+          isApplicationAuthCapable && isApplicationAuthEnabled,
+        ),
       });
       return `${schema.editorUrl}?${params.toString()}`;
-    }, [schema.editorUrl, appId, user?.providerId, currentTheme]);
+    }, [
+      schema.editorUrl,
+      appId,
+      user?.providerId,
+      currentTheme,
+      isApplicationAuthCapable,
+      isApplicationAuthEnabled,
+    ]);
 
     /*
      * Single source of truth for the embedded editor's origin — every
@@ -254,6 +276,7 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
           popup,
           auth,
           encodedToolsetId,
+          ROUTES.ToolsetSignIn,
           credentialsLevel,
         );
         if (initiation.type !== ToolsetOAuthInitiationResultType.Started) {
@@ -271,6 +294,7 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
           {
             toolsetId: encodedToolsetId,
             credentialsLevel,
+            callbackPath: ROUTES.ToolsetSignIn,
           },
         );
         if (result.type === ToolsetOAuthResultType.Success) {
@@ -362,6 +386,17 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
         if (!targetOrigin || event.origin !== targetOrigin) return;
         const displayName = schema.displayName ?? '';
         switch (event.data?.type) {
+          case AppsEditorEvent.RequestApplicationCredentials:
+            if (
+              event.source === iframeRef.current?.contentWindow &&
+              isApplicationAuthCapable &&
+              isApplicationAuthEnabled &&
+              typeof event.data.appId === 'string' &&
+              event.data.appId.length > 0
+            ) {
+              setCredentialsAppId(encodeToolsetId(event.data.appId));
+            }
+            break;
           case `${displayName}/${AppsEditorEvent.ReadyToInteract}`:
             setIsUiLoading(false);
             break;
@@ -408,6 +443,8 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
         onSaveError,
         handleToolsetLoginRequest,
         handleToolsetLogoutRequest,
+        isApplicationAuthCapable,
+        isApplicationAuthEnabled,
       ],
     );
 
@@ -438,7 +475,7 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
     useEffect(() => {
       if (!targetOrigin) return undefined;
       let isStale = false;
-      const unsubscribe = subscribeToolsetLoginSuccess(
+      const unsubscribe = subscribeToolsetLoginSuccess<ToolsetCredentialsLevel>(
         ({ toolsetId, credentialsLevel }) => {
           const rawToolsetId = decodeToolsetId(toolsetId);
           void (async () => {
@@ -484,6 +521,7 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
     useEffect(() => {
       setIsReadyToSave(false);
       setIsLoggedOut(false);
+      setCredentialsAppId(null);
     }, [iframeUrl]);
 
     useEffect(() => {
@@ -511,9 +549,25 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
 
     return (
       <div className="relative size-full">
+        {credentialsAppId &&
+          isApplicationAuthCapable &&
+          isApplicationAuthEnabled && (
+            <Popup
+              open
+              header={t(ApplicationCredentialsI18nKeys.Title)}
+              closeAriaLabel={t(ButtonsI18nKeys.Close)}
+              onClose={() => setCredentialsAppId(null)}
+            >
+              <ApplicationCredentials
+                key={credentialsAppId}
+                appId={credentialsAppId}
+                showEmptyState
+              />
+            </Popup>
+          )}
         {isUiLoading && (
           <div
-            className="absolute inset-0 flex items-center justify-center bg-layer-1"
+            className="absolute inset-0 flex items-center justify-center bg-layer-sunken"
             aria-label={t(AppsEditorI18nKeys.SettingsStepLoadingLabel)}
             aria-live="polite"
           >
@@ -525,6 +579,7 @@ const AppEditorIframe = forwardRef<AppEditorIframeHandle, Props>(
           src={iframeUrl}
           title={schema.displayName}
           className="size-full border-none"
+          allow="local-network-access=*"
         />
       </div>
     );

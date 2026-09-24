@@ -3,9 +3,14 @@ import {
   mergeClasses,
   StageStatus,
 } from '@epam/ai-dial-chat-shared';
-import { DIAL_ICON_SIZE, DialEllipsisTooltip } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  EllipsisTooltip,
+} from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconChevronRight } from '@tabler/icons-react';
 import { FC, useState } from 'react';
+import { CONVERSATION_STAGES_CLASS } from '../../constants/public-class-names';
 import { StageRow } from '../../models/stage-grouping';
 import type {
   StagesPanelLabels,
@@ -14,11 +19,9 @@ import type {
 } from '../../models/stages-props';
 import { groupStagesByName } from '../../utils/stage-grouping';
 import {
-  cleanStageName,
+  calculateStagesDurationSeconds,
   formatTotalDuration,
-  parseDurationSeconds,
 } from '../../utils/stage-name';
-import { findLiveStage } from '../../utils/stage-progress';
 import { StageIcon } from '../StageIcon/StageIcon';
 import { StageItem } from '../StageItem/StageItem';
 import styles from './StagesPanel.module.scss';
@@ -48,11 +51,16 @@ const StageGroupRow: FC<StageGroupRowProps> = ({
   } = labels ?? {};
   const [isOpen, setIsOpen] = useState(false);
 
+  const hasUnresolved = row.attempts?.some((a) => a.status == null) ?? false;
   const hasFailed = row.attempts?.some((a) => a.status === StageStatus.Failed);
-  const totalSeconds = (row.attempts || []).reduce((sum, attempt) => {
-    const { durationLabel } = cleanStageName(attempt.name);
-    return sum + (parseDurationSeconds(durationLabel) ?? 0);
-  }, 0);
+  const groupStatus = hasUnresolved
+    ? null
+    : hasFailed
+      ? StageStatus.Failed
+      : StageStatus.Completed;
+  const totalSeconds = calculateStagesDurationSeconds(
+    (row.attempts || []).map((attempt) => attempt.name),
+  );
   const totalDurationLabel =
     totalSeconds > 0 ? formatTotalDuration(totalSeconds) : undefined;
 
@@ -70,7 +78,7 @@ const StageGroupRow: FC<StageGroupRowProps> = ({
       >
         <span className="flex flex-none items-center">
           <StageIcon
-            status={hasFailed ? StageStatus.Failed : StageStatus.Completed}
+            status={groupStatus}
             isLive={isLive}
             runningLabel={runningAriaLabel}
             failedLabel={failedAriaLabel}
@@ -84,7 +92,7 @@ const StageGroupRow: FC<StageGroupRowProps> = ({
             hasFailed && styles.stageNameFailed,
           )}
         >
-          <DialEllipsisTooltip text={row.name} />
+          <EllipsisTooltip text={row.name} />
         </span>
         <span
           className={mergeClasses(
@@ -108,12 +116,17 @@ const StageGroupRow: FC<StageGroupRowProps> = ({
         )}
         <span className={mergeClasses('flex-none', styles.iconSecondary)}>
           {isOpen ? (
-            <IconChevronDown size={DIAL_ICON_SIZE.SM} aria-hidden />
+            <IconChevronDown
+              size={DIAL_ICON_SIZE.SM}
+              aria-hidden
+              stroke={DIAL_KIT_ICON_STROKE}
+            />
           ) : (
             <IconChevronRight
               size={DIAL_ICON_SIZE.SM}
               className="rtl:scale-x-[-1]"
               aria-hidden
+              stroke={DIAL_KIT_ICON_STROKE}
             />
           )}
         </span>
@@ -131,11 +144,7 @@ const StageGroupRow: FC<StageGroupRowProps> = ({
                 <StageItem
                   stage={attempt}
                   nameOverride={attemptLabel(i + 1)}
-                  isLive={
-                    isLive &&
-                    attempt.index ===
-                      row.attempts?.[row.attempts.length - 1]?.index
-                  }
+                  isLive={isLive && attempt.status == null}
                   typography={typography}
                   labels={labels}
                 />
@@ -176,13 +185,17 @@ export const StagesPanel: FC<StagesPanelProps> = ({
     '--cs-border': colors?.borderColor,
   });
 
-  const liveStage = isStreaming ? findLiveStage(stages) : undefined;
   const rows = groupStagesByName(stages);
 
   return (
     <div
       style={cssVars}
-      className={mergeClasses('w-full', styles.panel, className)}
+      className={mergeClasses(
+        'w-full',
+        styles.panel,
+        className,
+        CONVERSATION_STAGES_CLASS.panel,
+      )}
     >
       <ul role="list" className="flex w-full flex-col gap-0.5 ps-5">
         {rows.map((row) =>
@@ -190,7 +203,7 @@ export const StagesPanel: FC<StagesPanelProps> = ({
             <li key={row.key} role="listitem">
               <StageItem
                 stage={row.stage}
-                isLive={liveStage?.index === row.stage.index}
+                isLive={isStreaming && row.stage.status == null}
                 typography={typography}
                 labels={labels}
               />
@@ -200,8 +213,9 @@ export const StagesPanel: FC<StagesPanelProps> = ({
               <StageGroupRow
                 row={row}
                 isLive={
-                  liveStage?.index ===
-                  row.attempts?.[row.attempts.length - 1].index
+                  isStreaming &&
+                  (row.attempts?.some((attempt) => attempt.status == null) ??
+                    false)
                 }
                 typography={typography}
                 labels={labels}

@@ -1,5 +1,9 @@
-## ADDED Requirements
+# catalog-publish-flow Specification
 
+## Purpose
+
+Publishing a catalog entity: folder-tree destination picking, inline folder creation, access rules, and submission against real backend data.
+## Requirements
 ### Requirement: Folder selection uses the ui-kit folder tree
 The catalog publish panel SHALL present the destination-folder picker using ui-kit's `DialFoldersTree` component (`showFiles={false}`, no context menu) rendered inside the shared `PublishFoldersTree` wrapper (exported from `@epam/ai-dial-publish-panel`), instead of the bespoke `PublishFolderPicker` tree. Selection SHALL remain single-folder: selecting a new folder replaces the prior selection.
 
@@ -132,15 +136,27 @@ The catalog Header's Publish action SHALL only be shown (`isPublishVisible`) whe
 ### Requirement: Publish submission and history use real backend data
 `CatalogView` SHALL call the real `onPublish`, `getPublishHistory`, and `hasPublishWriteAccess` implementations backed by `apps/chat/src/server-api` wrappers instead of mock data (`MOCK_PUBLISH_FOLDERS`, `MOCK_PUBLISH_HISTORY`, and the mock `handlePublish`), which SHALL be deleted once parity is confirmed.
 
-Loading/empty/error states: while history is loading, `PublishHistoryList` SHALL show a loading state; on fetch failure it SHALL show an inline error state distinct from the empty-history state.
+`CatalogView.getPublishHistory` SHALL call `getCatalogPublishHistory` and map the response through `mapPublishHistoryEntryDto`. It currently returns a hardcoded `[]` — `const getPublishHistory = useCallback(async () => [], [])` behind a comment citing a DIAL Core `503` ([GitHub issue #7897](https://github.com/epam/ai-dial-chat/issues/7897)) — which this change removes. The temporary exception proposed by the `disable-catalog-publish-history-fetch` change is therefore lifted rather than carried forward, and that change SHALL be archived as superseded by this one; the `503` it worked around was our own `getPublications` response-shape defect — since fixed in `publish/publication.util.ts`, along with the list scope and the metadata-only list response (see `catalog-publish-api`) — not a missing endpoint and not Core being unavailable.
+
+The fetch is load-bearing beyond the publish panel: it is the only source of the folder list the Unpublish action needs, and it is what makes that action visible at all (see `catalog-unpublish-flow`). While it returned a frozen `[]`, `Unpublish` could never appear for any catalog entity.
+
+Loading/empty/error states: while history is loading, `PublishHistoryList` SHALL show a loading state; on fetch failure it SHALL show an inline error state distinct from the empty-history state. Both states are reachable again once the fetch is restored.
+
+Submit success: `CatalogView`'s `onPublishSuccess` SHALL raise its notification through `useOperationNotification` (see `entity-operation-notifications`) with the item's resolved `NotifiableEntity` and `EntityOperation.PublishRequested`, passing the entity name and the selected destination folder. The copy SHALL state that a publish request was submitted and appears once an admin approves it — the endpoint creates an admin-pending DIAL Core publication, exactly as the conversation publish flow already reports. The previous `CatalogI18nKeys.PublishSuccess*` pair (`"Published"` / `"\"{{name}}\" published to {{folder}}"`) SHALL be deleted, since it claimed an outcome the backend does not deliver.
 
 Submit failure: `CatalogView` SHALL supply an `onPublishError` handler, threaded down as `CatalogProps.onPublishError` → `DetailsPanelProps.onPublishError` → `usePublishFlow` the same way `onPublishSuccess` already is, so a rejected publish produces an error notification in addition to the inline submit-error callout ([GitHub issue #7898](https://github.com/epam/ai-dial-chat/issues/7898)). It SHALL reuse the same shared `usePublishErrorNotification` hook and shared `publish.*` i18n namespace as the conversation publish flow (see `conversation-publish-flow`), including the offline branch that swaps in `publish.networkErrorMessage` and omits `requestId`. `CatalogView` SHALL also pass the translated `publishLabels.submitError` (`publish.submitErrorCallout`), so the callout no longer renders the publish-panel library's hardcoded English default.
+
+**Temporary exception (tracked in [GitHub issue #7897](https://github.com/epam/ai-dial-chat/issues/7897)):** `CatalogView.getPublishHistory` SHALL NOT call the publish-history endpoint (`getCatalogPublishHistory`) while it returns 503 from DIAL Core. For the duration of this exception, `getPublishHistory` SHALL always resolve to `[]`, so `PublishHistoryList` SHALL always render its empty state and the fetch-failure error state described above SHALL NOT trigger. This exception SHALL be lifted — restoring the full requirement above — as soon as the backend publish-history endpoint (`catalog-publish-api`’s history requirement) is fixed; the exception itself is not a permanent relaxation of this requirement.
 
 Accessibility: the publish history list SHALL expose `role="list"`/`role="listitem"` semantics (or equivalent list semantics already implemented) so screen readers announce entry count; the submit-error callout SHALL use `role="alert"`.
 
 #### Scenario: Publish succeeds
 - **WHEN** the user submits a publish request and the backend returns success
-- **THEN** `onPublishSuccess` fires, a success notification is shown via `CatalogI18nKeys.PublishSuccess*`, and the publish history list refreshes to include the new entry
+- **THEN** `onPublishSuccess` fires, a success notification titled `"<Entity> publish requested"` is shown through `useOperationNotification`, its body names the entity and destination folder and states an admin must approve it, and the publish history list refreshes to include the new entry
+
+#### Scenario: Publish notification names the entity kind
+- **WHEN** a toolset is published and, separately, a prompt is published
+- **THEN** the first notification reads `"Toolset publish requested"` and the second `"Prompt publish requested"`, resolved from the item's `CatalogEntityType`
 
 #### Scenario: Publish fails due to no write access
 - **WHEN** the user submits a publish request and the backend returns a 403
@@ -150,9 +166,18 @@ Accessibility: the publish history list SHALL expose `role="list"`/`role="listit
 - **WHEN** the user submits a publish request and it rejects (backend error or lost connection)
 - **THEN** the publish sub-view stays open with the submit-error callout, `onPublishError` receives the rejection reason, and an error notification is shown
 
+#### Scenario: History is fetched from the endpoint, not stubbed
+- **WHEN** the publish sub-view or the Manage menu triggers a history lookup for an entity
+- **THEN** `getCatalogPublishHistory` is called for that entity and its mapped entries populate `PublishHistoryList`, with no code path resolving to a hardcoded empty array
+
 #### Scenario: Publish history fails to load
 - **WHEN** `getPublishHistory` rejects
-- **THEN** `PublishHistoryList` renders an inline error state instead of an empty-history message
+- **THEN** `PublishHistoryList` renders an inline error state instead of an empty-history message, and the `Unpublish` menu entry stays hidden (see `catalog-unpublish-flow`)
+
+#### Scenario: While the temporary exception is active, publish history is always empty
+- **GIVEN** the publish-history fetch is disabled per the temporary exception above
+- **WHEN** the user opens the publish panel for an application or toolset, regardless of any real prior publications
+- **THEN** `getPublishHistory` resolves to `[]` and `PublishHistoryList` renders its empty state, never a loading or error state
 
 ### Requirement: Catalog entity summary is supplied to the shared publish panel via a render-slot
 `DetailsPanel` SHALL supply its entity-specific publish summary (the `EntityHeader` block plus version tag, for Applications/Toolsets/Models) to the shared `PublishPanel` (from `@epam/ai-dial-publish-panel`) via the `renderSummary?: () => ReactNode` prop, rather than passing a `CatalogItem` directly. `DetailsPanel` SHALL remain the only place in `libs/catalog` that maps a `CatalogItem` to its publish-summary rendering; `PublishPanel` itself SHALL have no knowledge of `CatalogItem` or `EntityHeader`. This is a structural/ownership change only — the rendered output (entity name, icon, version tag) SHALL be visually identical to before the move.
@@ -195,3 +220,189 @@ Accessibility: the publish history list SHALL expose `role="list"`/`role="listit
 #### Scenario: A rules-lookup failure does not block the catalog publish flow
 - **GIVEN** the user selects a destination folder for a toolset and the rules lookup fails
 - **THEN** folder selection, manual rule entry, and the Publish submit action all remain fully usable; only the pre-fill did not occur
+
+### Requirement: Catalog publish panel offers an editable author pre-filled with the publisher's name
+
+The catalog publish sub-view SHALL show the shared publish panel's author field, pre-filled with the signed-in user's display name, and SHALL send the submitted value with the publish request so it becomes the published entity's **Hosted by** value.
+
+State ownership: `DetailsPanel`'s existing `usePublishFlow` instance owns `author`/`setAuthor` (see `publish-panel-library`) and supplies them to its inline `PublishPanel` render via the new required `author`/`onAuthorChange` props, threaded the same way `rules`/`onRulesChange` already are.
+
+Prefill is host-resolved, not lib-resolved. `CatalogProps` and `ItemDetailsProps` SHALL gain `publishDefaultAuthor?: string`, threaded `CatalogView` → `Catalog` → `DetailsPanel` → `usePublishFlow`'s `defaultAuthor` option, exactly as `publishFolderItems`/`publishLabels` already are. `CatalogView` SHALL resolve the value from `useUserProfile()`'s `displayName`. Neither `libs/catalog` nor `libs/publish-panel` reads `UserContext`, OIDC claims, or i18n for it, per AGENTS.md §Library isolation; `publishDefaultAuthor` is the app-level adapter contract that carries the host's session knowledge across the boundary.
+
+Submission: `CatalogProps.onPublish` and `ItemDetailsProps.onPublish` SHALL take the author as a fourth argument, matching `usePublishFlow`'s extended `onPublish` signature. `CatalogView.handlePublish` (delegating to `useCatalogPublishing`'s `handlePublish`) SHALL accept that argument and forward it to `publishCatalogEntity`, which SHALL include it in the request body's `author` field sent to `POST /api/v1/catalog/{entityType}/{entityId}/publish` (see `catalog-publish-api`). When the value is empty after trimming, `handlePublish` SHALL omit `author` from the request body entirely rather than sending an empty string, so the backend's session-derived fallback applies.
+
+Unpublish is unaffected: `unpublishCatalogEntity` SHALL NOT gain an author field, since a removal request's `displayAuthor` identifies the requester of that removal rather than the published entity's author.
+
+i18n: the new user-visible strings SHALL be registered on `PublishI18nKeys` in `apps/chat/src/constants/translation-keys.ts` and added to `apps/chat/src/i18n/locales/en.json` — `publish.authorLabel` (`"Author"`), `publish.authorPlaceholder` (`"Author name"`), and `publish.authorHint` (explaining the value is shown as the publication's author in the catalog). `CatalogView` SHALL pass them through `publishLabels` as `authorLabel`, `authorPlaceholder`, and `authorHint`, alongside the labels it already supplies. The library's English defaults SHALL NOT be relied upon by the app.
+
+RTL/direction impact: none beyond the surrounding panel. The field is a ui-kit `Input` positioned with CSS logical properties; no directional icon is introduced, so no `rtl:` mirroring applies.
+
+Feature gating: none. The field is not behind `ENABLED_FEATURES`/`ENABLED_FEATURES_ROLES` — it is part of the publish panel, whose visibility is already governed by the existing `Publish visibility is scoped to editable entities` requirement.
+
+#### Scenario: Author is pre-filled with the signed-in user's display name
+
+- **GIVEN** the signed-in user's profile resolves `displayName` to `"Daniil Pavlov"`
+- **WHEN** the user opens the publish sub-view for a toolset
+- **THEN** the author field shows `"Daniil Pavlov"` without the user typing anything
+
+#### Scenario: Edited author reaches the publish call
+
+- **GIVEN** the user replaces the pre-filled author with `"DIAL Team"` and selects a destination folder
+- **WHEN** the user clicks Publish
+- **THEN** `publishCatalogEntity` is called with a request body whose `author` is `"DIAL Team"`
+
+#### Scenario: Untouched pre-filled author is sent as-is
+
+- **GIVEN** the user leaves the pre-filled author unchanged
+- **WHEN** the user clicks Publish
+- **THEN** `publishCatalogEntity` is called with `author` equal to the signed-in user's display name, producing the same **Hosted by** value as before this change
+
+#### Scenario: Cleared author omits the field from the request
+
+- **GIVEN** the user clears the author field
+- **WHEN** the user clicks Publish
+- **THEN** `publishCatalogEntity` is called with no `author` key in the request body, and the backend falls back to the session-derived display name
+
+#### Scenario: Author resets when a different item is opened
+
+- **GIVEN** the user edited the author for one catalog item without submitting
+- **WHEN** the details panel switches to a different item and `publishFlow.reset()` runs
+- **THEN** the author field returns to the signed-in user's display name
+
+#### Scenario: Prefill arrives after the panel opens
+
+- **GIVEN** the user profile has not yet resolved when the publish sub-view first renders, so the author field is empty
+- **WHEN** `publishDefaultAuthor` resolves to the user's display name and the user has not typed in the field
+- **THEN** the field fills with that name
+
+#### Scenario: Labels come from the app's i18n, not the library defaults
+
+- **WHEN** the publish sub-view renders in the catalog
+- **THEN** the author field's label, placeholder, and hint are the translated `publish.authorLabel`/`publish.authorPlaceholder`/`publish.authorHint` values passed through `publishLabels`
+
+#### Scenario: Unpublish request carries no author
+
+- **WHEN** the user submits an unpublish request for a published catalog entity
+- **THEN** `unpublishCatalogEntity` is called with the same request body shape as before this change, with no `author` field
+
+### Requirement: Catalog publish panel offers a credentials opt-in for authenticated toolsets the publisher is signed in to
+
+The catalog publish sub-view SHALL show the shared publish panel's credentials checkbox for a toolset that needs a login and whose publisher holds one, and SHALL send the chosen value with the publish request so DIAL Core publishes the publisher's own credential alongside the toolset.
+
+**When the control is offered.** `DetailsPanel` SHALL offer it when all of the following hold for the item being published:
+
+- `item.type` is `CatalogEntityType.Toolset`;
+- `item.credentials?.authenticationType` is set and is not `ToolsetAuthenticationType.None`;
+- `item.credentials.userStatus` is `CredentialStatus.SignedIn` **or** `item.credentials.globalStatus` is `CredentialStatus.SignedIn`.
+
+Both authentication types qualify — OAuth and API key. A shared team API key is the most common internal case, and nothing about the flag is OAuth-specific.
+
+Either credential level qualifies because publishing always acts on the publisher's own source item (`isPublishVisible` already requires `item.isMyApp`): on a personal item `globalStatus` is the owner's own credential, and `userStatus` covers a personal credential configured on top of it. Access the publisher does not hold cannot be passed on, so a toolset the publisher is signed out of SHALL offer no control.
+
+The eligibility decision SHALL be made inside `libs/catalog` from `item.credentials`, which `DetailsPanel` already receives and already branches on for its credentials action (see `catalog-toolset-credentials`). No new fetch, no new loading state, and no new host prop are introduced for it, and `libs/publish-panel` SHALL remain unaware of toolsets and credential levels (see `publish-panel-library`).
+
+**No role gate.** Any publisher who is signed in to the toolset may select the option; administrator status is irrelevant. DIAL Core's existing pending-approval lifecycle — every publication is `PENDING` until an administrator approves — is the control point for the act.
+
+**Default state.** The option SHALL be cleared every time the publish sub-view is opened, including immediately after a publication submitted with it selected, and including for a destination folder whose previous publication carried shared credentials. `usePublishFlow` owns the state and `DetailsPanel` already calls `reset()` on every close path (see `publish-panel-library`).
+
+**Submission.** `CatalogProps.onPublish` and `ItemDetailsProps.onPublish` SHALL take the flag as a fifth argument, matching `usePublishFlow`'s extended signature. `CatalogView.handlePublish` (delegating to `useCatalogPublishing`'s `handlePublish`) SHALL forward it to `publishCatalogEntity` as the request body's `publishCredentials` field (see `catalog-publish-api`), omitting the field entirely when it is `false` so a publish without shared access sends exactly the request it sends today. A non-toolset item, or a toolset that was never offered the control, SHALL never send the field.
+
+**Unpublish is unaffected.** `unpublishCatalogEntity` SHALL NOT gain the field.
+
+**Confidentiality.** No credential value SHALL be read, displayed, logged, or sent by any part of this flow — only the boolean.
+
+**i18n.** The new user-visible strings SHALL be registered on `CatalogI18nKeys` in `apps/chat/src/constants/translation-keys.ts` and added to `apps/chat/src/i18n/locales/en.json` — `catalog.publish.credentialsLabel` (`"Publish with my credentials"`) and `catalog.publish.credentialsHint` (stating that members will use the toolset without authorising and that the credential itself is never shown to them). `CatalogView` SHALL pass them through `publishLabels` as `credentialsLabel` and `credentialsHint`, alongside the labels it already supplies. The library's English defaults SHALL NOT be relied upon by the app.
+
+**RTL/direction impact:** none beyond the surrounding panel. The control is a ui-kit `Checkbox` positioned with CSS logical properties; no directional icon is introduced, so no `rtl:` mirroring applies.
+
+**Feature gating:** none. The control is part of the publish panel, whose visibility is already governed by the existing `Publish visibility is scoped to editable entities` requirement.
+
+#### Scenario: An OAuth toolset the publisher is signed in to offers the option
+
+- **GIVEN** the publisher's own toolset has `authenticationType: OAuth` and `globalStatus: SignedIn`
+- **WHEN** the publisher opens the publish sub-view
+- **THEN** the credentials checkbox is shown, cleared
+
+#### Scenario: An API-key toolset the publisher is signed in to offers the option
+
+- **GIVEN** the publisher's own toolset has `authenticationType: ApiKey` and `userStatus: SignedIn`
+- **WHEN** the publisher opens the publish sub-view
+- **THEN** the credentials checkbox is shown, cleared
+
+#### Scenario: A toolset that needs no login offers no option
+
+- **GIVEN** the item is a toolset whose `authenticationType` is `None`, or which has no `credentials` at all
+- **WHEN** the publisher opens the publish sub-view
+- **THEN** no credentials checkbox is rendered
+
+#### Scenario: A toolset the publisher is signed out of offers no option
+
+- **GIVEN** the item is a toolset with `authenticationType: OAuth` whose `userStatus` and `globalStatus` are both absent or not `SignedIn`
+- **WHEN** the publisher opens the publish sub-view
+- **THEN** no credentials checkbox is rendered, because access the publisher does not hold cannot be passed on
+
+#### Scenario: A non-toolset entity offers no option
+
+- **GIVEN** the item is an application, prompt, skill, or model
+- **WHEN** the publisher opens the publish sub-view
+- **THEN** no credentials checkbox is rendered
+
+#### Scenario: A non-administrator may select the option
+
+- **GIVEN** the publisher is not an administrator and is signed in to their own authenticated toolset
+- **WHEN** the publisher opens the publish sub-view
+- **THEN** the credentials checkbox is shown and can be selected
+
+#### Scenario: Selecting the option reaches the publish call
+
+- **GIVEN** the publisher ticks the credentials checkbox and selects a destination folder
+- **WHEN** the publisher clicks Publish
+- **THEN** `publishCatalogEntity` is called with a request body whose `publishCredentials` is `true`
+
+#### Scenario: Leaving the option clear sends the unchanged request
+
+- **GIVEN** the publisher leaves the credentials checkbox clear
+- **WHEN** the publisher clicks Publish
+- **THEN** `publishCatalogEntity` is called with no `publishCredentials` field in the request body
+
+#### Scenario: The option is cleared when the panel is reopened
+
+- **GIVEN** the publisher published the toolset with the credentials checkbox ticked
+- **WHEN** the publisher opens the publish sub-view for that toolset again
+- **THEN** the checkbox is cleared
+
+#### Scenario: The option is cleared after cancelling
+
+- **GIVEN** the publisher ticks the checkbox and then cancels the publish sub-view
+- **WHEN** the publisher reopens it
+- **THEN** the checkbox is cleared
+
+#### Scenario: A destination folder previously published to with shared credentials does not pre-select it
+
+- **GIVEN** publish history shows the selected folder's previous publication carried shared credentials
+- **WHEN** the publisher selects that folder
+- **THEN** the checkbox stays cleared
+
+### Requirement: Catalog publish history shows which publications carried shared credentials
+
+`CatalogView.getPublishHistory` SHALL map the endpoint's `publishCredentials` field onto `PublishHistoryEntry` via `mapPublishHistoryEntryDto`, and SHALL pass a translated `sharedCredentialsLabel` through `publishLabels` so `PublishHistoryList` marks those entries (see `publish-panel-library`). The i18n key SHALL be `catalog.publish.historySharedCredentials`, registered on `CatalogI18nKeys` and added to `apps/chat/src/i18n/locales/en.json`.
+
+The synthesised single-entry history a public copy's own id produces (`isPublicCatalogEntityId`) SHALL leave `publishCredentials` unset, since that path never calls the endpoint and has no publication record to read it from. Absent reads as `false`, so the marker simply does not appear.
+
+This requirement delivers the data path and the rendering; it SHALL NOT re-enable the publish-history section that `PublishPanel` currently keeps behind a `TODO`, which is separate scope. The marker becomes visible when that section is re-enabled.
+
+#### Scenario: A publication made with shared credentials is marked in history
+
+- **WHEN** the history endpoint reports an entry with `publishCredentials: true`
+- **THEN** `mapPublishHistoryEntryDto` carries it onto the `PublishHistoryEntry`, and `PublishHistoryList` renders that row with the shared-credentials label
+
+#### Scenario: A publication made without shared credentials is unmarked
+
+- **WHEN** the history endpoint reports an entry with `publishCredentials: false`
+- **THEN** the mapped entry is `false` and the row carries no marker
+
+#### Scenario: A public copy's synthesised history entry carries no flag
+
+- **GIVEN** the item's id addresses the `public` bucket, so history is synthesised from the id rather than fetched
+- **WHEN** that entry is produced
+- **THEN** its `publishCredentials` is unset and no marker is rendered

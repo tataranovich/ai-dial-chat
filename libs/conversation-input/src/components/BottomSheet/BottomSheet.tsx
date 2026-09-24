@@ -11,7 +11,7 @@ export interface BottomSheetColors {
   itemText?: string;
   /** Item hover background. Defaults to `--bg-layer-raised`. */
   itemHoverBg?: string;
-  /** Item active/pressed background. Defaults to `--bg-layer-4`. */
+  /** Item active/pressed background. Defaults to `--bg-control-neutral-active`. */
   itemActiveBg?: string;
   /** Item leading-icon color. Defaults to `--text-secondary`. */
   itemIcon?: string;
@@ -51,7 +51,7 @@ export interface BottomSheetProps {
   items: BottomSheetItem[];
   /** Extra classes appended to the sheet container (e.g. a max-height constraint). */
   className?: string;
-  /** CSS class applied to the sheet title. Defaults to `'dial-body-semi-bold-text'`. */
+  /** CSS class applied to the sheet title. Defaults to `'dial-body-semi-text'`. */
   titleClassName?: string;
   /** CSS class applied to each item label. Defaults to `'dial-small-text'`. */
   itemLabelClassName?: string;

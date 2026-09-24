@@ -1,29 +1,204 @@
 import type {
   Annotation,
-  AttachmentResource,
+  AnnotationSelector,
+  DocxRangeSelector,
+  ExcelRcRangeSelector,
   Message,
-  MessageAttachment,
-  PdfBBoxSelector,
+  PptxRangeSelector,
 } from '@epam/ai-dial-chat-shared';
-import { MIMEType } from '@epam/ai-dial-chat-shared';
+import {
+  isAnnotationSelector,
+  normalizePersistedHtmlTagAttachmentType,
+  normalizeRawAnnotations,
+} from '@epam/ai-dial-chat-shared';
 import type {
+  BBox,
   HighlightStyle,
   InputHighlightData,
 } from '@epam/pdf-highlighter-kit';
+import type { OfficeHighlightLocation } from '../models/office-highlight';
+import { normalizeOfficeTableAnchor } from './office-table-anchor';
 
 const CITATION_HIGHLIGHT_STYLE: HighlightStyle = {
   backgroundColor: 'transparent',
-  borderColor: 'var(--stroke-info, #124ACE)',
+  borderColor: 'var(--stroke-accent, #1D4ED8)',
   borderWidth: '2px',
   opacity: 0.5,
   hoverOpacity: 0.5,
 };
 
 /**
+ * Reads the edges of a `pdf_region` selector's `bbox`, preferring the
+ * `lt`/`wh` origin/size pair over the legacy `left`/`top`/`width`/`height`
+ * fields when a bbox carries both. Returns `undefined` when neither
+ * coordinate form is present with valid numbers.
+ */
+const readPdfRegionEdges = (
+  bbox: unknown,
+): { x1: number; y1: number; x2: number; y2: number } | undefined => {
+  if (typeof bbox !== 'object' || bbox === null) return undefined;
+  const b = bbox as Record<string, unknown>;
+
+  const { lt, wh } = b;
+  if (
+    Array.isArray(lt) &&
+    Array.isArray(wh) &&
+    lt.length >= 2 &&
+    wh.length >= 2
+  ) {
+    const [left, top] = lt;
+    const [width, height] = wh;
+    if (
+      typeof left === 'number' &&
+      typeof top === 'number' &&
+      typeof width === 'number' &&
+      typeof height === 'number'
+    ) {
+      return { x1: left, y1: top, x2: left + width, y2: top + height };
+    }
+  }
+
+  const { left, top, width, height } = b;
+  if (
+    typeof left === 'number' &&
+    typeof top === 'number' &&
+    typeof width === 'number' &&
+    typeof height === 'number'
+  ) {
+    return { x1: left, y1: top, x2: left + width, y2: top + height };
+  }
+
+  return undefined;
+};
+
+/*
+ * Converts one `AnnotationSelector` to the highlighter's `BBox` shape, or
+ * `undefined` when the selector is not a recognised PDF selector or fails
+ * validation. Recognises three input shapes:
+ *  - `pdf_bbox`: `{ page, x1, y1, x2, y2 }` (absolute edges)
+ *  - `pdf_region` with `bbox: { lt: [left, top], wh: [width, height] }`
+ *  - `pdf_region` with `bbox: { left, top, width, height }` (legacy form)
+ * A `pdf_region` bbox converts to edges as `x1 = left`, `y1 = top`,
+ * `x2 = left + width`, `y2 = top + height`; `lt`/`wh` wins when a bbox
+ * carries both coordinate forms. Both shapes share one validation gate
+ * (integer `page >= 1`, four finite coordinates) so that highlight geometry
+ * (`annotationsToPdfHighlights`) and page navigation (`getAnnotationPdfPage`)
+ * can never disagree about which selectors they understand — both entry
+ * points call this one reader.
+ */
+const readPdfSelectorBox = (selector: AnnotationSelector): BBox | undefined => {
+  if (!isAnnotationSelector(selector)) return undefined;
+  const s = selector as unknown as Record<string, unknown>;
+
+  let edges: { x1: number; y1: number; x2: number; y2: number } | undefined;
+  if (s['type'] === 'pdf_bbox') {
+    const { x1, y1, x2, y2 } = s;
+    if (
+      typeof x1 === 'number' &&
+      typeof y1 === 'number' &&
+      typeof x2 === 'number' &&
+      typeof y2 === 'number'
+    ) {
+      edges = { x1, y1, x2, y2 };
+    }
+  } else if (s['type'] === 'pdf_region') {
+    edges = readPdfRegionEdges(s['bbox']);
+  }
+
+  if (edges == null) return undefined;
+
+  const page = s['page'];
+  if (typeof page !== 'number' || !Number.isInteger(page) || page < 1) {
+    return undefined;
+  }
+  if (![edges.x1, edges.y1, edges.x2, edges.y2].every(Number.isFinite)) {
+    return undefined;
+  }
+
+  return { page, x1: edges.x1, y1: edges.y1, x2: edges.x2, y2: edges.y2 };
+};
+
+/*
+ * Folds a value into a deterministic string with object keys in a fixed order,
+ * so two structurally equal selectors always digest identically regardless of
+ * the key order the wire happened to use.
+ */
+const canonicalize = (value: unknown): string => {
+  if (value === null || typeof value !== 'object') return String(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${k}=${canonicalize(v)}`);
+  return `{${entries.join(',')}}`;
+};
+
+/*
+ * djb2, folded to an unsigned base36 string. The result has to survive being
+ * interpolated into a CSS attribute selector — `@epam/pdf-highlighter-kit`
+ * queries highlights as `[data-term-id="<id>"]` — so the id must not carry
+ * quotes, brackets, or backslashes, which rules out embedding the digested
+ * selector text itself.
+ */
+const hashToBase36 = (value: string): string => {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 33 + value.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+};
+
+/*
+ * A digest of everything in the annotation's own selectors that distinguishes
+ * one cited region from another, or `undefined` when it carries no selector a
+ * reader recognises. PDF selectors go through `readPdfSelectorBox` and Office
+ * selectors through `annotationToOfficeHighlightLocations`, so the digest sees
+ * the same normalised geometry the highlights themselves are built from — and
+ * the three accepted `pdf_region`/`pdf_bbox` coordinate forms of one region
+ * digest identically.
+ */
+const annotationSelectorDigest = (
+  annotation: Annotation,
+): string | undefined => {
+  const selector = annotation.body?.selector;
+  if (selector == null) return undefined;
+  const selectors = Array.isArray(selector) ? selector : [selector];
+
+  const boxes = selectors.flatMap((s) => {
+    const box = readPdfSelectorBox(s);
+    return box != null ? [box] : [];
+  });
+  const locations = annotationToOfficeHighlightLocations(annotation);
+  if (boxes.length === 0 && locations.length === 0) return undefined;
+
+  return canonicalize([boxes, locations]);
+};
+
+/*
+ * The message-unique part of a highlight id, derived from the annotation's own
+ * identity: its `cit` tag id (when it carries an `html_tag` target selector)
+ * plus the selector digest. `undefined` when it has neither, leaving the
+ * caller's positional fallback as the only option.
+ */
+const annotationIdentityKey = (annotation: Annotation): string | undefined => {
+  const targetSelector = annotation.target?.selector;
+  const citId =
+    targetSelector?.type === 'html_tag'
+      ? (targetSelector as { id?: unknown }).id
+      : undefined;
+  const citPart = typeof citId === 'string' ? citId : undefined;
+  const digest = annotationSelectorDigest(annotation);
+  if (citPart == null && digest == null) return undefined;
+  return hashToBase36(`${citPart ?? ''}|${digest ?? ''}`);
+};
+
+/**
  * Maps a list of annotations to `InputHighlightData` entries for the PDF viewer.
- * Annotations whose `body.selector` contains no `pdf_bbox` selectors are skipped.
- * The highlight `id` is `annotation.index` when present, otherwise the position
- * in the input array.
+ * Recognizes `pdf_bbox` selectors and both `pdf_region` coordinate forms
+ * (`lt`/`wh` and legacy `left`/`top`/`width`/`height`); annotations whose
+ * `body.selector` contains none of these are skipped. The highlight `id` comes
+ * from `annotationHighlightId`, so it identifies the annotation itself rather
+ * than its position in this particular input list.
  */
 export const annotationsToPdfHighlights = (
   annotations: Annotation[],
@@ -34,123 +209,72 @@ export const annotationsToPdfHighlights = (
 
     const selectors = Array.isArray(selector) ? selector : [selector];
     const bboxes = selectors.flatMap((s) => {
-      if (s.type !== 'pdf_bbox') return [];
-      const { page, x1, y1, x2, y2 } = s as PdfBBoxSelector;
-      return [{ page, x1, y1, x2, y2 }];
+      if (!isAnnotationSelector(s)) return [];
+      const box = readPdfSelectorBox(s);
+      return box != null ? [box] : [];
     });
 
     if (bboxes.length === 0) return [];
     return [
       {
-        id: String(annotation.index ?? i),
+        id: annotationHighlightId(annotation, i),
         bboxes,
         style: CITATION_HIGHLIGHT_STYLE,
       },
     ];
   });
 
-/** Returns a stable string ID for a given annotation, matching the IDs produced by `annotationsToPdfHighlights`. */
+/**
+ * Returns a stable string ID for a given annotation, matching the IDs
+ * `annotationsToPdfHighlights` produces (it calls this function) and the ones
+ * the Office highlight path assigns.
+ *
+ * Resolved in order:
+ * 1. `annotation.index` when the wire supplied one — already unique within the
+ *    message, and short.
+ * 2. Otherwise an id derived from the annotation's own identity: its `cit` tag
+ *    id plus a digest of its selectors. Two annotations differing in either
+ *    part get different ids; two agreeing in both describe the same cited
+ *    region and may share one.
+ * 3. Otherwise `fallbackIndex` — the annotation's position in the caller's
+ *    list, for an annotation carrying neither an index, a `cit` id, nor a
+ *    recognised selector.
+ *
+ * The id is opaque: compare it, never parse it. A position-derived id is not
+ * unique beyond the list it came from, which is why it is the last resort — a
+ * caller gathering one citation group at a time would otherwise give every
+ * single-annotation group the same id, and the canvas could not tell two
+ * citations of one document apart (issue #8907). Ids are never persisted and
+ * never sent over the wire.
+ */
 export const annotationHighlightId = (
   annotation: Annotation,
   fallbackIndex: number,
-): string => String(annotation.index ?? fallbackIndex);
-
-const toNumber = (v: unknown): number | null =>
-  typeof v === 'number' ? v : null;
-
-const normalizePdfRegionToBbox = (
-  selector: unknown,
-): PdfBBoxSelector | null => {
-  if (typeof selector !== 'object' || selector === null) return null;
-  const s = selector as Record<string, unknown>;
-  if (s['type'] !== 'pdf_region') return null;
-  const bbox = s['bbox'];
-  if (typeof bbox !== 'object' || bbox === null) return null;
-  const b = bbox as Record<string, unknown>;
-  const left = toNumber(b['left']);
-  const top = toNumber(b['top']);
-  const width = toNumber(b['width']);
-  const height = toNumber(b['height']);
-  if (left === null || top === null || width === null || height === null)
-    return null;
-  const page = toNumber(s['page']) ?? 1;
-  return {
-    type: 'pdf_bbox',
-    page,
-    x1: left,
-    y1: top,
-    x2: left + width,
-    y2: top + height,
-  };
-};
+): string =>
+  annotation.index != null
+    ? String(annotation.index)
+    : (annotationIdentityKey(annotation) ?? String(fallbackIndex));
 
 /**
- * Normalizes raw annotations from the API wire format (stored in
- * `message.custom_fields.annotations`) to the internal `Annotation` model.
- *
- * The API format uses `target.source.attachment_index` (integer) and a
- * `pdf_region` selector with `{ left, top, width, height }` coordinates.
- * The internal model uses `body.source.attachment.url` (resolved URL) and a
- * `pdf_bbox` selector with `{ x1, y1, x2, y2 }` coordinates.
- *
- * Annotations whose attachment index cannot be resolved or whose selector
- * is not a recognised PDF region are omitted from the result.
+ * Returns the first positive integer PDF page in the annotation's body selectors,
+ * or `undefined` when none exists. Recognizes `pdf_bbox` selectors and both
+ * `pdf_region` coordinate forms; a page is returned only for a selector whose
+ * geometry also validates (see `readPdfSelectorBox`).
  */
-export const normalizeRawAnnotations = (
-  rawAnnotations: unknown[],
-  attachments: MessageAttachment[],
-): Annotation[] =>
-  rawAnnotations.flatMap((raw) => {
-    if (typeof raw !== 'object' || raw === null) return [];
-    const r = raw as Record<string, unknown>;
+export const getAnnotationPdfPage = (
+  annotation: Annotation,
+): number | undefined => {
+  const selector = annotation.body?.selector;
+  if (selector == null) return undefined;
 
-    const target = r['target'];
-    if (typeof target !== 'object' || target === null) return [];
-    const t = target as Record<string, unknown>;
-
-    const source = t['source'];
-    if (typeof source !== 'object' || source === null) return [];
-    const attachmentIndex = toNumber(
-      (source as Record<string, unknown>)['attachment_index'],
-    );
-    if (attachmentIndex === null) return [];
-
-    const attachment = attachments.find((a) => a.index === attachmentIndex);
-    if (attachment?.url == null) return [];
-
-    const selector = normalizePdfRegionToBbox(t['selector']);
-    if (selector === null) return [];
-
-    const body = r['body'];
-    const bodyObj =
-      typeof body === 'object' && body !== null
-        ? (body as Record<string, unknown>)
-        : {};
-    const title =
-      typeof bodyObj['title'] === 'string' ? bodyObj['title'] : undefined;
-    const quote =
-      typeof bodyObj['quote'] === 'string' ? bodyObj['quote'] : undefined;
-    const index = toNumber(r['index']) ?? undefined;
-
-    return [
-      {
-        index,
-        body: {
-          title,
-          quote,
-          source: {
-            type: 'attachment',
-            attachment: {
-              type: attachment.type ?? MIMEType.PDF,
-              url: attachment.url,
-              title: attachment.title,
-            },
-          },
-          selector,
-        },
-      },
-    ];
-  });
+  const selectors = Array.isArray(selector) ? selector : [selector];
+  for (const s of selectors) {
+    if (!isAnnotationSelector(s)) continue;
+    const box = readPdfSelectorBox(s);
+    if (box != null) return box.page;
+  }
+  return undefined;
+};
 
 /**
  * Resolves the annotation list for a message regardless of how it was loaded.
@@ -162,10 +286,12 @@ export const normalizeRawAnnotations = (
 export const resolveMessageAnnotations = (message: Message): Annotation[] => {
   const contentAnnotations = message.custom_content?.annotations;
   if (contentAnnotations?.length) {
-    return contentAnnotations.filter(
-      (a): a is Annotation =>
-        a != null && a.body?.source?.attachment?.url != null,
-    );
+    return contentAnnotations
+      .filter(
+        (a): a is Annotation =>
+          a != null && a.body?.source?.attachment?.url != null,
+      )
+      .map(normalizePersistedHtmlTagAttachmentType);
   }
 
   const customFields = (message as Record<string, unknown>)['custom_fields'];
@@ -176,8 +302,191 @@ export const resolveMessageAnnotations = (message: Message): Annotation[] => {
   return normalizeRawAnnotations(
     raw,
     message.custom_content?.attachments ?? [],
+  ).map(normalizePersistedHtmlTagAttachmentType);
+};
+
+/**
+ * Returns whether `selector` is a `docx_text_range` selector carrying every
+ * field the shape requires — a `_range`-suffixed selector missing any field
+ * (or with a wrongly-typed one) does not match.
+ */
+export const isDocxRangeSelector = (
+  selector: AnnotationSelector,
+): selector is DocxRangeSelector => {
+  if (selector.type !== 'docx_text_range') return false;
+  const s = selector as Record<string, unknown>;
+  return (
+    typeof s['story'] === 'string' &&
+    Array.isArray(s['path']) &&
+    (s['path'] as unknown[]).every((segment) => typeof segment === 'number') &&
+    typeof s['start'] === 'number' &&
+    typeof s['end'] === 'number' &&
+    typeof s['text'] === 'string'
   );
 };
 
-/* Re-export AttachmentResource so consumers of the lib can type openAnnotationAttachment callbacks. */
-export type { AttachmentResource };
+/**
+ * Returns whether `selector` is a `pptx_text_range` selector carrying every
+ * field the shape requires.
+ */
+export const isPptxRangeSelector = (
+  selector: AnnotationSelector,
+): selector is PptxRangeSelector => {
+  if (selector.type !== 'pptx_text_range') return false;
+  const s = selector as Record<string, unknown>;
+  return (
+    typeof s['slide'] === 'number' &&
+    typeof s['shape_id'] === 'string' &&
+    typeof s['start'] === 'number' &&
+    typeof s['end'] === 'number' &&
+    typeof s['text'] === 'string'
+  );
+};
+
+const isCellAddressLike = (
+  value: unknown,
+): value is { row: number; col: number } =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as Record<string, unknown>)['row'] === 'number' &&
+  typeof (value as Record<string, unknown>)['col'] === 'number';
+
+/**
+ * Returns whether `selector` is an `excel_rc_range` selector carrying every
+ * field the shape requires. `end` may be a cell address, `null`, or absent.
+ */
+export const isExcelRcRangeSelector = (
+  selector: AnnotationSelector,
+): selector is ExcelRcRangeSelector => {
+  if (selector.type !== 'excel_rc_range') return false;
+  const s = selector as Record<string, unknown>;
+  return (
+    typeof s['sheet'] === 'string' &&
+    isCellAddressLike(s['start']) &&
+    (s['end'] === undefined || s['end'] === null || isCellAddressLike(s['end']))
+  );
+};
+
+/**
+ * Converts one `docx_text_range` selector to a location, or `undefined` when
+ * any field fails validation (non-integer/negative offsets, `end < start`,
+ * a non-integer-array `path`, or a non-string `text`). `endExclusive` is the
+ * wire's `end` copied through unchanged — already exclusive, not `end + 1`
+ * (see `design.md` D3).
+ */
+const normalizeDocxSelector = (
+  selector: DocxRangeSelector,
+): OfficeHighlightLocation | undefined => {
+  const { story, path, start, end, text } = selector;
+  if (
+    !path.every((segment) => Number.isInteger(segment)) ||
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start
+  ) {
+    return undefined;
+  }
+  return {
+    type: 'docx_text_range',
+    story,
+    path,
+    start,
+    endExclusive: end,
+    text,
+  };
+};
+
+/**
+ * Converts one `pptx_text_range` selector to a location, or `undefined` when
+ * any field fails validation. `endExclusive` is the wire's `end` copied
+ * through unchanged (see `design.md` D3).
+ */
+const normalizePptxSelector = (
+  selector: PptxRangeSelector,
+): OfficeHighlightLocation | undefined => {
+  const { slide, shape_id, start, end, text } = selector;
+  if (
+    !Number.isInteger(slide) ||
+    slide < 1 ||
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start
+  ) {
+    return undefined;
+  }
+  return {
+    type: 'pptx_text_range',
+    slide,
+    shapeId: shape_id,
+    start,
+    endExclusive: end,
+    text,
+  };
+};
+
+/**
+ * Converts one `excel_rc_range` selector to a location, or `undefined` when
+ * any field fails validation: non-integer/non-positive `row`/`col`, an empty
+ * `sheet`, or an `end` naming a different row or a column before `start`.
+ * `end: null` and an omitted `end` are treated identically (both mean a
+ * single cell).
+ */
+const normalizeExcelSelector = (
+  selector: ExcelRcRangeSelector,
+): OfficeHighlightLocation | undefined => {
+  const { sheet, start, end } = selector;
+  if (
+    sheet.length === 0 ||
+    !Number.isInteger(start.row) ||
+    !Number.isInteger(start.col) ||
+    start.row < 1 ||
+    start.col < 1
+  ) {
+    return undefined;
+  }
+  if (end == null) return { type: 'excel_rc_range', sheet, start };
+
+  if (
+    !Number.isInteger(end.row) ||
+    !Number.isInteger(end.col) ||
+    end.row !== start.row ||
+    end.col < start.col
+  ) {
+    return undefined;
+  }
+  return { type: 'excel_rc_range', sheet, start, end };
+};
+
+/**
+ * Converts an annotation's `body.selector` (scalar or array) to validated
+ * `OfficeHighlightLocation` entries, skipping any selector that is not a
+ * recognised Office range or temporary table-row anchor, or that fails validation.
+ */
+export const annotationToOfficeHighlightLocations = (
+  annotation: Annotation,
+): OfficeHighlightLocation[] => {
+  const selector = annotation.body?.selector;
+  if (selector == null) return [];
+  const selectors = Array.isArray(selector) ? selector : [selector];
+
+  return selectors.flatMap((s): OfficeHighlightLocation[] => {
+    if (!isAnnotationSelector(s)) return [];
+
+    if (isDocxRangeSelector(s)) {
+      const location = normalizeDocxSelector(s);
+      return location ? [location] : [];
+    }
+    if (isPptxRangeSelector(s)) {
+      const location = normalizePptxSelector(s);
+      return location ? [location] : [];
+    }
+    if (isExcelRcRangeSelector(s)) {
+      const location = normalizeExcelSelector(s);
+      return location ? [location] : [];
+    }
+    const tableRow = normalizeOfficeTableAnchor(s);
+    return tableRow ? [tableRow] : [];
+  });
+};

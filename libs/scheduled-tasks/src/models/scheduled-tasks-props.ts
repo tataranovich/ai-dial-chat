@@ -1,6 +1,11 @@
-import { DropdownItem } from '@epam/ai-dial-ui-kit';
+import { SelectOption } from '@epam/ai-dial-ui-kit';
+import type { ReactNode } from 'react';
 import type { ScheduledTasksSortKey } from '../types/scheduled-tasks-sort-key';
-import type { ScheduledTaskCardGridLabels } from './scheduled-task-card-grid-props';
+import type {
+  ScheduledTaskCardGridLabels,
+  ScheduledTaskCardGridLayout,
+} from './scheduled-task-card-grid-props';
+import type { ScheduledTaskCardStyles } from './scheduled-task-card-props';
 import type { ScheduledTaskItem } from './scheduled-task-item';
 
 /** Localized labels used by the {@link ScheduledTasks} component. */
@@ -17,10 +22,14 @@ export interface ScheduledTasksLabels {
   searchAriaLabel: string;
   /** Accessible label for the toolbar search input's clear action. */
   clearSearchLabel: string;
-  /** Accessible label for the toolbar sort control. */
+  /** The sort control's own name, prepended to its accessible name. */
   sortLabel: string;
-  /** Options rendered in the sort control's dropdown. */
-  sortOptions: DropdownItem[];
+  /**
+   * Values the sort menu lists; each `value` is a `ScheduledTasksSortKey`.
+   * Only the values — the component owns which one is marked as applied and
+   * what a click does.
+   */
+  sortOptions: SelectOption[];
   /** Message shown when the fetched task list is empty. */
   emptyStateLabel: string;
   /** Message shown when `searchQuery` filters every task out. */
@@ -31,6 +40,7 @@ export interface ScheduledTasksLabels {
   retryLabel: string;
   /** Announced via `aria-live` while a load-more fetch is in flight (`isLoadingMore`). Optional — no announcement is made when omitted. */
   loadingMoreLabel?: string;
+  loadMoreErrorLabel?: string;
   /** Localized labels forwarded as-is to every card in the grid. */
   cardLabels?: ScheduledTaskCardGridLabels;
 }
@@ -46,7 +56,7 @@ export interface ScheduledTasksColors {
   subtitleText?: string;
   /** Sort control label/icon color. Fallback: `--text-accent`. */
   sortButtonText?: string;
-  /** Background color of the load-more placeholder skeleton bars. Fallback: `--bg-layer-4`. */
+  /** Background color of the load-more placeholder skeleton bars. Fallback: `--bg-control-disable-primary`. */
   skeletonColor?: string;
 }
 
@@ -64,8 +74,6 @@ export interface ScheduledTasksStyles {
   colors?: ScheduledTasksColors;
   /** Typography class overrides. */
   typography?: ScheduledTasksTypography;
-  /** Size (px) of the empty-state icon. Defaults to `48`. */
-  emptyStateIconSize?: number;
 }
 
 /** Props for the {@link ScheduledTasks} component. */
@@ -100,6 +108,14 @@ export interface ScheduledTasksProps {
   onLoadMore?: () => void;
   /** Called with a task id when the user activates a card's body. Omit to render cards with no added interactive root semantics. */
   onCardClick?: (id: string) => void;
+  /** Content rendered between the search/sort toolbar and the content region (e.g. a status banner). Renders nothing when omitted. */
+  banner?: ReactNode;
+  sortIcon?: ReactNode | null;
+  className?: string;
+  gridLayout?: ScheduledTaskCardGridLayout;
+  cardStyles?: ScheduledTaskCardStyles;
+  loadMoreError?: Error | null;
+  onRetryLoadMore?: () => void;
   /** Style overrides. */
   styles?: ScheduledTasksStyles;
 }

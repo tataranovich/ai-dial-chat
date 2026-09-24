@@ -1,13 +1,14 @@
+import type { ReactNode } from 'react';
+import type { BuilderFormActionsLabels } from './builder-form-actions-props';
+
 /** Localized labels used by the {@link BuilderFormHeader} component. */
-export interface BuilderFormHeaderLabels {
+export interface BuilderFormHeaderLabels extends BuilderFormActionsLabels {
   /** Title shown next to the back control. */
   title: string;
   /** Accessible label for the back control. */
   backButtonLabel: string;
-  /** Label for the cancel action. */
-  cancelButtonLabel: string;
-  /** Label for the submit action. */
-  submitButtonLabel: string;
+  /** Accessible name for the submit action's busy indicator, announced while `isSubmitting` is `true`. Defaults to `'Submitting'`. */
+  submittingLabel?: string;
 }
 
 /**
@@ -49,6 +50,10 @@ export interface BuilderFormHeaderProps {
   isCancelDisabled?: boolean;
   /** When `true`, the submit action is disabled. Defaults to `false`. */
   isSubmitDisabled?: boolean;
+  /** When `true`, the submit action shows a spinner and reports `aria-busy`. Defaults to `false`. */
+  isSubmitting?: boolean;
+  /** Optional replacement for the default back icon; `null` suppresses it. */
+  backIcon?: ReactNode;
   /** Style overrides. */
   styles?: BuilderFormHeaderStyles;
 }

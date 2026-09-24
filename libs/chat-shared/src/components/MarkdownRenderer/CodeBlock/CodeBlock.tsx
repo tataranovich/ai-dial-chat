@@ -1,11 +1,12 @@
 import {
   DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   ElementSize,
   GhostIconButton,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck, IconCopy, IconDownload } from '@tabler/icons-react';
-import { type FC, memo, type ReactNode } from 'react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { lazy, type FC, memo, type ReactNode, Suspense } from 'react';
+import { CHAT_SHARED_CLASS } from '../../../constants/public-class-names';
 import { useCodeCopy } from '../../../hooks/useCodeCopy';
 import { CodeBlockTheme } from '../../../types/code-editor';
 import { buildCssVars } from '../../../utils/build-css-vars';
@@ -45,7 +46,7 @@ export interface MarkdownCodeBlockProps {
   theme?: CodeBlockTheme;
   /** Accessible label for the copy button. Defaults to `'Copy code'`. */
   copyLabel?: string;
-  /** Accessible label for the copy button after copy completes. Defaults to `'Copied!'`. */
+  /** Message announced through the block's `aria-live="polite"` region after a copy completes. The copy button's own accessible name stays `copyLabel`. Defaults to `'Copied!'`. */
   copiedLabel?: string;
   /** Accessible label for the download button. Defaults to `'Download code'`. */
   downloadLabel?: string;
@@ -57,7 +58,7 @@ export interface MarkdownCodeBlockProps {
   headerClassName?: string;
   /** Typography class for the `<code>` element (used when no language is detected). Defaults to `'dial-code-text'`. */
   codeClassName?: string;
-  /** CSS class applied to the language label in the header. Defaults to `'dial-tiny-semi-text uppercase'` plus the module's `.languageLabel` class (`--text-secondary`). */
+  /** CSS class applied to the language label in the header. Defaults to `'dial-tiny-lead-semi-text'` plus the module's `.languageLabel` class (`--text-secondary`). */
   languageLabelClassName?: string;
   /** Header text shown in place of `language`, for blocks whose highlighting id is not the name to display (e.g. `bash` highlighted, `cURL` shown). Defaults to the `language` value. */
   title?: string;
@@ -71,6 +72,16 @@ const syntaxTheme = {
   dark: restrainedSyntaxTheme,
   light: restrainedSyntaxTheme,
 };
+
+/**
+ * Loads the Prism syntax-highlighting engine only the first time a language-tagged
+ * code block actually renders, keeping `react-syntax-highlighter` out of the
+ * initial bundle for plain-text conversations and language-less code blocks.
+ */
+const LazySyntaxHighlighter = lazy(async () => {
+  const { Prism } = await import('react-syntax-highlighter');
+  return { default: Prism };
+});
 
 /** Renders a fenced or multi-line code block with syntax highlighting and a copy button. */
 export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
@@ -86,7 +97,7 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
     containerClassName,
     headerClassName,
     codeClassName = 'dial-code-text',
-    languageLabelClassName = 'dial-tiny-semi-text uppercase',
+    languageLabelClassName = 'dial-tiny-lead-semi-text',
     title,
     titleSlot,
     colors,
@@ -96,6 +107,15 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
     const handleDownload = () => {
       downloadTextFile(value, `code.${getFileExtensionForLanguage(language)}`);
     };
+    /* Rendered for language-less blocks, and as the Suspense fallback while
+     * the syntax-highlighting engine loads for a language-tagged block. */
+    const plainCode = (
+      <pre className="p-4">
+        <code className={mergeClasses('whitespace-pre', codeClassName)}>
+          {value}
+        </code>
+      </pre>
+    );
     const cssVars = buildCssVars({
       '--cm-code-block-bg': colors?.background,
       '--cm-code-block-border': colors?.border,
@@ -109,18 +129,20 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
       <div
         style={cssVars}
         className={mergeClasses(
-          'my-4 max-w-full overflow-hidden rounded-xl border',
+          'my-4 max-w-full rounded-xl border [overflow:clip]',
           styles.container,
           isLightTheme && styles.containerLight,
           containerClassName,
+          CHAT_SHARED_CLASS.codeBlock,
         )}
       >
         <div
           className={mergeClasses(
-            'flex min-h-10 items-center justify-between border-b px-4',
+            'sticky top-0 z-10 flex min-h-10 items-center justify-between px-4',
             titleSlot != null ? 'py-0' : 'py-2',
             styles.header,
             headerClassName,
+            CHAT_SHARED_CLASS.codeBlockHeader,
           )}
         >
           {titleSlot ?? (
@@ -137,7 +159,12 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
             <div className="flex items-center gap-1">
               {!hideDownload && (
                 <GhostIconButton
-                  icon={<IconDownload size={DIAL_ICON_SIZE.SM} />}
+                  icon={
+                    <IconDownload
+                      size={DIAL_ICON_SIZE.SM}
+                      stroke={DIAL_KIT_ICON_STROKE}
+                    />
+                  }
                   aria-label={downloadLabel}
                   size={ElementSize.Small}
                   onClick={handleDownload}
@@ -150,12 +177,17 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
                       size={DIAL_ICON_SIZE.SM}
                       className={styles.copiedIcon}
                       aria-hidden
+                      stroke={DIAL_KIT_ICON_STROKE}
                     />
                   ) : (
-                    <IconCopy size={DIAL_ICON_SIZE.SM} aria-hidden />
+                    <IconCopy
+                      size={DIAL_ICON_SIZE.SM}
+                      aria-hidden
+                      stroke={DIAL_KIT_ICON_STROKE}
+                    />
                   )
                 }
-                aria-label={isCopied ? copiedLabel : copyLabel}
+                aria-label={copyLabel}
                 size={ElementSize.Small}
                 onClick={copy}
               />
@@ -170,30 +202,35 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
           dir="ltr"
         >
           {language ? (
-            <SyntaxHighlighter
-              language={language}
-              style={syntaxTheme[theme] ?? restrainedSyntaxTheme}
-              customStyle={{
-                margin: 0,
-                borderRadius: 0,
-                background: 'transparent',
-                fontSize: 14,
-                lineHeight: 1.5,
-                padding: '14px 16px',
-                letterSpacing: 0,
-              }}
-              codeTagProps={{ className: codeClassName }}
-            >
-              {value}
-            </SyntaxHighlighter>
-          ) : (
-            <pre className="p-4">
-              <code className={mergeClasses('whitespace-pre', codeClassName)}>
+            <Suspense fallback={plainCode}>
+              <LazySyntaxHighlighter
+                language={language}
+                style={syntaxTheme[theme] ?? restrainedSyntaxTheme}
+                customStyle={{
+                  margin: 0,
+                  borderRadius: 0,
+                  background: 'transparent',
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                  padding: '14px 16px',
+                  letterSpacing: 0,
+                }}
+                codeTagProps={{ className: codeClassName }}
+              >
                 {value}
-              </code>
-            </pre>
+              </LazySyntaxHighlighter>
+            </Suspense>
+          ) : (
+            plainCode
           )}
         </div>
+        {/*
+         * Copy success leaves no persistent visible text, so it is announced
+         * here; the button keeps its stable `copyLabel` accessible name.
+         */}
+        <span role="status" aria-live="polite" className="sr-only">
+          {isCopied ? copiedLabel : ''}
+        </span>
       </div>
     );
   },

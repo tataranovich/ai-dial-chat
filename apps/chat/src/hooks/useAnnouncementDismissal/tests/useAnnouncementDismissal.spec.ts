@@ -1,7 +1,10 @@
+import type {
+  AnnouncementContent,
+  AnnouncementListItem,
+} from '@epam/ai-dial-chat-hooks';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StorageKey } from '../../../types/storage-key';
-import type { AnnouncementContent } from '../../../utils/announcement-message';
 import { useAnnouncementDismissal } from '../useAnnouncementDismissal';
 
 const LEGACY_MESSAGE = 'Welcome to <b>DIAL</b>!';
@@ -12,6 +15,15 @@ const makeContent = (
   title: null,
   description: null,
   html: null,
+  ...overrides,
+});
+
+const makeItem = (
+  overrides?: Partial<AnnouncementListItem>,
+): AnnouncementListItem => ({
+  title: 'Release 1.47',
+  description: null,
+  link: null,
   ...overrides,
 });
 
@@ -55,55 +67,64 @@ describe('useAnnouncementDismissal', () => {
 
   it('keeps an unchanged announcement dismissed across remounts', () => {
     const content = makeContent({ title: 'Welcome', description: 'Explore.' });
-    const first = renderDismissal(content);
+    const { result: firstResult, unmount: unmountFirst } =
+      renderDismissal(content);
 
     act(() => {
-      first.result.current.dismiss();
+      firstResult.current.dismiss();
     });
-    first.unmount();
+    unmountFirst();
 
-    const second = renderDismissal(content);
-    expect(second.result.current.isDismissed).toBe(true);
+    const { result: secondResult } = renderDismissal(content);
+    expect(secondResult.current.isDismissed).toBe(true);
   });
 
   it('re-shows the banner when the title changes', () => {
-    const first = renderDismissal(makeContent({ title: 'Welcome' }));
+    const { result: firstResult, unmount: unmountFirst } = renderDismissal(
+      makeContent({ title: 'Welcome' }),
+    );
 
     act(() => {
-      first.result.current.dismiss();
+      firstResult.current.dismiss();
     });
-    first.unmount();
+    unmountFirst();
 
-    const second = renderDismissal(makeContent({ title: 'Welcome back' }));
-    expect(second.result.current.isDismissed).toBe(false);
+    const { result: secondResult } = renderDismissal(
+      makeContent({ title: 'Welcome back' }),
+    );
+    expect(secondResult.current.isDismissed).toBe(false);
   });
 
   it('re-shows the banner when the description changes', () => {
-    const first = renderDismissal(
+    const { result: firstResult, unmount: unmountFirst } = renderDismissal(
       makeContent({ title: 'Welcome', description: 'Explore DIAL.' }),
     );
 
     act(() => {
-      first.result.current.dismiss();
+      firstResult.current.dismiss();
     });
-    first.unmount();
+    unmountFirst();
 
-    const second = renderDismissal(
+    const { result: secondResult } = renderDismissal(
       makeContent({ title: 'Welcome', description: 'Explore DIAL today.' }),
     );
-    expect(second.result.current.isDismissed).toBe(false);
+    expect(secondResult.current.isDismissed).toBe(false);
   });
 
   it('re-shows the banner when the legacy message changes', () => {
-    const first = renderDismissal(makeContent({ html: LEGACY_MESSAGE }));
+    const { result: firstResult, unmount: unmountFirst } = renderDismissal(
+      makeContent({ html: LEGACY_MESSAGE }),
+    );
 
     act(() => {
-      first.result.current.dismiss();
+      firstResult.current.dismiss();
     });
-    first.unmount();
+    unmountFirst();
 
-    const second = renderDismissal(makeContent({ html: 'Something else' }));
-    expect(second.result.current.isDismissed).toBe(false);
+    const { result: secondResult } = renderDismissal(
+      makeContent({ html: 'Something else' }),
+    );
+    expect(secondResult.current.isDismissed).toBe(false);
   });
 
   it('stores the raw message for a legacy-only announcement', () => {
@@ -124,6 +145,115 @@ describe('useAnnouncementDismissal', () => {
     );
 
     const { result } = renderDismissal(makeContent({ html: LEGACY_MESSAGE }));
+
+    expect(result.current.isDismissed).toBe(true);
+  });
+
+  it('re-shows the banner when a popover announcement is added', () => {
+    const { result: firstResult, unmount: unmountFirst } = renderDismissal(
+      makeContent({ title: 'Welcome', items: [makeItem()] }),
+    );
+
+    act(() => {
+      firstResult.current.dismiss();
+    });
+    unmountFirst();
+
+    const { result: secondResult } = renderDismissal(
+      makeContent({
+        title: 'Welcome',
+        items: [makeItem(), makeItem({ title: 'Release 1.48' })],
+      }),
+    );
+    expect(secondResult.current.isDismissed).toBe(false);
+  });
+
+  it('re-shows the banner when a popover announcement is edited', () => {
+    const { result: firstResult, unmount: unmountFirst } = renderDismissal(
+      makeContent({ title: 'Welcome', items: [makeItem()] }),
+    );
+
+    act(() => {
+      firstResult.current.dismiss();
+    });
+    unmountFirst();
+
+    const { result: secondResult } = renderDismissal(
+      makeContent({
+        title: 'Welcome',
+        items: [makeItem({ description: 'Now with skills.' })],
+      }),
+    );
+    expect(secondResult.current.isDismissed).toBe(false);
+  });
+
+  it('re-shows the banner when a popover announcement link changes', () => {
+    const link = { label: 'Read more', href: 'https://example.com/1-47' };
+    const { result: firstResult, unmount: unmountFirst } = renderDismissal(
+      makeContent({ title: 'Welcome', items: [makeItem({ link })] }),
+    );
+
+    act(() => {
+      firstResult.current.dismiss();
+    });
+    unmountFirst();
+
+    const { result: secondResult } = renderDismissal(
+      makeContent({
+        title: 'Welcome',
+        items: [
+          makeItem({
+            link: { label: 'Read more', href: 'https://example.com/1-48' },
+          }),
+        ],
+      }),
+    );
+    expect(secondResult.current.isDismissed).toBe(false);
+  });
+
+  it('keeps an unchanged popover list dismissed', () => {
+    const content = makeContent({
+      title: 'Welcome',
+      items: [makeItem({ description: 'Now with skills.' })],
+    });
+    const { result: firstResult, unmount: unmountFirst } =
+      renderDismissal(content);
+
+    act(() => {
+      firstResult.current.dismiss();
+    });
+    unmountFirst();
+
+    const { result: secondResult } = renderDismissal(content);
+    expect(secondResult.current.isDismissed).toBe(true);
+  });
+
+  it('honours a dismissal recorded before the popover list joined the signature', () => {
+    /* What a pre-upgrade build wrote for a deployment with no popover entries:
+       the title/description pair, no `items` key. */
+    localStorage.setItem(
+      StorageKey.TextOfClosedAnnouncement,
+      JSON.stringify(JSON.stringify({ title: 'Welcome', description: '' })),
+    );
+
+    const { result } = renderDismissal(
+      makeContent({ title: 'Welcome', items: [] }),
+    );
+
+    expect(result.current.isDismissed).toBe(true);
+  });
+
+  it('ignores the popover list for a legacy-only announcement', () => {
+    /* The legacy layout renders no pill, so its entries are not content the
+       user saw and must not disturb a pre-structured dismissal. */
+    localStorage.setItem(
+      StorageKey.TextOfClosedAnnouncement,
+      JSON.stringify(LEGACY_MESSAGE),
+    );
+
+    const { result } = renderDismissal(
+      makeContent({ html: LEGACY_MESSAGE, items: [makeItem()] }),
+    );
 
     expect(result.current.isDismissed).toBe(true);
   });

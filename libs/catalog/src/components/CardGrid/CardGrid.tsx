@@ -18,12 +18,16 @@ export const CardGrid: FC<CardGridProps> = memo(
     items,
     query = '',
     onToggleFavorite,
+    isFavoriteVisible,
     onItemClick,
     titles,
     isLoading,
     selectedItemId,
     skeletonColor = styles.skeletonColor,
     skeletonCardBackground,
+    isReadonly = false,
+    isFullWidth = false,
+    featuredChipStyle,
   }) => {
     const noResultsTitle = titles?.noResultsTitle ?? 'No results';
     const featuredLabel = titles?.featuredLabel ?? 'Featured';
@@ -32,10 +36,11 @@ export const CardGrid: FC<CardGridProps> = memo(
     const removeFromFavoritesAriaLabel =
       titles?.removeFromFavoritesAriaLabel ?? 'Remove from favorites';
     const credentialsBadgeLoggedOutLabel =
-      titles?.credentialsBadgeLoggedOutLabel ?? 'LOGGED OUT';
+      titles?.credentialsBadgeLoggedOutLabel ??
+      'Authorize to use this toolset.';
 
     const { containerRef, startRow, endRow, columnCount, totalHeight } =
-      useScrollVirtualizer(items.length);
+      useScrollVirtualizer(items.length, { isFullWidth });
 
     const rowData = useMemo<CardRowData>(
       () => ({
@@ -43,24 +48,30 @@ export const CardGrid: FC<CardGridProps> = memo(
         columnCount,
         query,
         onToggleFavorite,
+        isFavoriteVisible,
         onItemClick,
         featuredLabel,
         addToFavoritesAriaLabel,
         removeFromFavoritesAriaLabel,
         selectedItemId,
         credentialsBadgeLoggedOutLabel,
+        isReadonly,
+        featuredChipStyle,
       }),
       [
         items,
         columnCount,
         query,
         onToggleFavorite,
+        isFavoriteVisible,
         onItemClick,
         featuredLabel,
         addToFavoritesAriaLabel,
         removeFromFavoritesAriaLabel,
         selectedItemId,
         credentialsBadgeLoggedOutLabel,
+        isReadonly,
+        featuredChipStyle,
       ],
     );
 

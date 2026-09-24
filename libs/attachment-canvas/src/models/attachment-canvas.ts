@@ -1,13 +1,21 @@
 import type {
   CodeBlockTheme,
   CustomVisualizerDataLayout,
+  GroupedAttachmentItem,
 } from '@epam/ai-dial-chat-shared';
 import type { SidebarPanelStyles } from '@epam/ai-dial-sidebar';
 import type { InputHighlightData } from '@epam/pdf-highlighter-kit';
+import type { McpUiHostContext } from '@mcp-ui/client';
+import type {
+  CallToolResult,
+  Implementation,
+} from '@modelcontextprotocol/sdk/types.js';
 import type { CSSProperties } from 'react';
 import {
   AttachmentContentType,
   AttachmentErrorType,
+  OoxmlFileType,
+  OoxmlHighlightKind,
 } from '../types/attachment-canvas';
 
 /** Content payload for plain-text attachments. */
@@ -34,6 +42,14 @@ export interface MarkdownCanvasContent {
   text: string;
 }
 
+/** Content payload for a Markdown table opened standalone (e.g. via a table's "open in canvas" action). */
+export interface MarkdownTableCanvasContent {
+  /** Discriminates the content type to select the correct renderer. */
+  type: AttachmentContentType.MarkdownTable;
+  /** The table serialized back to Markdown syntax. */
+  text: string;
+}
+
 /** Content payload for JSON file attachments. */
 export interface JsonCanvasContent {
   /** Discriminates the content type to select the correct renderer. */
@@ -51,6 +67,112 @@ export interface PdfCanvasContent {
   /** Highlight regions to render over the PDF pages. */
   highlights?: InputHighlightData[];
   /** ID of the highlight to scroll to and select on initial load. */
+  selectedHighlightId?: string;
+  /** 1-based page to navigate to on initial load, independent of highlight geometry. */
+  page?: number;
+}
+
+/** A cited character range inside a DOCX story, addressed by story name and source-tree path. */
+export interface OoxmlDocxHighlightLocation {
+  /** Discriminates this location within `OoxmlHighlightLocation`. */
+  kind: OoxmlHighlightKind.DocxTextRange;
+  /** Name of the DOCX story the range lives in, as an opaque string (only `'body'` is confirmed upstream). */
+  story: string;
+  /** Source-tree element indices identifying the paragraph, matched element-wise. */
+  path: number[];
+  /** Inclusive start character offset within the story's matched text. */
+  start: number;
+  /** Exclusive end character offset, already converted from the wire's inclusive `end`. */
+  endExclusive: number;
+  /** The cited text, compared against the text resolved over `[start, endExclusive)`. */
+  text: string;
+}
+
+/** A cited character range inside a single shape on one PPTX slide. */
+export interface OoxmlPptxHighlightLocation {
+  /** Discriminates this location within `OoxmlHighlightLocation`. */
+  kind: OoxmlHighlightKind.PptxTextRange;
+  /** 1-based slide number. */
+  slide: number;
+  /** Shape identifier, compared as a string against the run's own `shapeId`. */
+  shapeId: string;
+  /** Inclusive start character offset within the shape's matched text. */
+  start: number;
+  /** Exclusive end character offset, already converted from the wire's inclusive `end`. */
+  endExclusive: number;
+  /** The cited text, compared against the text resolved over `[start, endExclusive)`. */
+  text: string;
+}
+
+/** A complete table row in the DOCX body, matched by cell text. */
+export interface OoxmlDocxTableRowLocation {
+  /** Location kind. */
+  kind: OoxmlHighlightKind.DocxTableRow;
+  /** Plain text of each cell, in column order. */
+  cells: string[];
+  /** 1-based matching row in document order. */
+  occurrence: number;
+}
+
+/** A complete table row on one PPTX slide, matched by cell text. */
+export interface OoxmlPptxTableRowLocation {
+  /** Location kind. */
+  kind: OoxmlHighlightKind.PptxTableRow;
+  /** Plain text of each cell, in column order. */
+  cells: string[];
+  /** 1-based matching row on the specified slide. */
+  occurrence: number;
+  /** 1-based slide number. */
+  slide: number;
+}
+
+/** A 1-based cell address, matching `@silurus/ooxml`'s own `CellAddress`. */
+export interface OoxmlCellAddress {
+  /** 1-based row number. */
+  row: number;
+  /** 1-based column number. */
+  col: number;
+}
+
+/** A cited cell, or contiguous same-row cell range, on a named XLSX sheet. */
+export interface OoxmlXlsxHighlightLocation {
+  /** Discriminates this location within `OoxmlHighlightLocation`. */
+  kind: OoxmlHighlightKind.XlsxCellRange;
+  /** Sheet name, matched exactly against the workbook's own sheet names. */
+  sheet: string;
+  /** First cell of the range. 1-based, passed to the viewer unconverted. */
+  start: OoxmlCellAddress;
+  /** Last cell of the range, on the same row as `start`. Omitted for a single cell. */
+  end?: OoxmlCellAddress;
+}
+
+/** A cited location inside an Office document, in document coordinates. */
+export type OoxmlHighlightLocation =
+  | OoxmlDocxHighlightLocation
+  | OoxmlPptxHighlightLocation
+  | OoxmlDocxTableRowLocation
+  | OoxmlPptxTableRowLocation
+  | OoxmlXlsxHighlightLocation;
+
+/** One citation's highlight: the locations it resolved to, under a stable id. */
+export interface OoxmlHighlight {
+  /** Stable id, used to mark exactly one highlight selected. */
+  id: string;
+  /** One or more locations — a single citation may carry several selectors. */
+  locations: OoxmlHighlightLocation[];
+}
+
+/** Content payload for OOXML document and CSV spreadsheet attachments. */
+export interface OoxmlCanvasContent {
+  /** Discriminates the content type to select the correct renderer. */
+  type: AttachmentContentType.Ooxml;
+  /** Resolved download URL or object URL for the source file. */
+  url: string;
+  /** The document format used to select and configure the format-specific renderer. */
+  format: OoxmlFileType;
+  /** Cited locations to draw over the document. Omitted, never `[]`, when there is nothing to highlight. */
+  highlights?: OoxmlHighlight[];
+  /** Id of the highlight to navigate to and emphasise. Omitted when the clicked citation resolved to no location. */
   selectedHighlightId?: string;
 }
 
@@ -102,6 +224,51 @@ export interface VisualizerCanvasContent {
   requestTimeout?: number;
 }
 
+/** Content payload for an application-scoped grouped visualizer: every attachment a message's visualizer claims, rendered together inside one sandboxed iframe. */
+export interface GroupedVisualizerCanvasContent {
+  /** Discriminates the content type to select the correct renderer. */
+  type: AttachmentContentType.GroupedVisualizer;
+  /** Iframe `src`, resolved from the matching registry entry's `url`. */
+  url: string;
+  /** One item per claimed attachment, in the message's attachment order. Each `url` is absolute, resolved by the host. */
+  attachments: GroupedAttachmentItem[];
+  /** Presentation layout hints (`themeId`, `width`, `height`, `mobileHeight`) shared by every item. */
+  layout: CustomVisualizerDataLayout;
+  /** postMessage protocol namespace — MUST equal the registry entry's `title`, or the iframe never receives data. */
+  visualizerName: string;
+  /** Milliseconds to wait for a `send()` request's response before rejecting. From the registry entry; does NOT bound the handshake. */
+  requestTimeout?: number;
+}
+
+/** Display mode an MCP App can ask the host to switch to via `ui/request-display-mode` — the MCP UI protocol's `inline`/`fullscreen`/`pip` union. */
+export type McpAppDisplayMode = NonNullable<McpUiHostContext['displayMode']>;
+
+/** Content payload for an MCP App's `ui://` resource, rendered in a sandboxed iframe via an isolated-origin sandbox proxy. */
+export interface McpAppCanvasContent {
+  /** Discriminates the content type to select the correct renderer. */
+  type: AttachmentContentType.McpApp;
+  /** HTML body of the tool's `ui://` resource, fetched by the app layer — never fetched by this lib. */
+  html: string;
+  /** Isolated-origin URL of the MCP Apps sandbox-proxy page, resolved by the app layer from its own config. */
+  sandboxUrl: string;
+  /** Arguments of the original tool call that produced this resource, passed to the mounted app so it renders that invocation immediately instead of an empty initial state. */
+  toolInput?: Record<string, unknown>;
+  /** Result of the original tool call that produced this resource, passed to the mounted app so it renders that invocation immediately instead of an empty initial state. */
+  toolResult?: CallToolResult;
+  /** UI context delivered to the View during the `ui/initialize` handshake; built by the app layer from the active theme, locale, and CSS design tokens. */
+  hostContext?: McpUiHostContext;
+  /** Host identity (`name`/`version`) delivered during the `ui/initialize` handshake. Defaults to a generic `'MCP-UI Host'` identity when omitted. */
+  hostInfo?: Implementation;
+  /** Forwards a `tools/call` request issued by the mounted app to the owning MCP session via the app layer. */
+  onToolCall: (name: string, args: unknown) => Promise<CallToolResult>;
+  /** Handles the mounted app's `ui/open-link` request. Return `false` when the URL must not be opened — the app then receives an error result. When omitted, the renderer itself opens http(s) URLs in a new browser tab (other schemes are rejected). */
+  onOpenLink?: (url: string) => boolean | void;
+  /** Handles the mounted app's `ui/request-display-mode` request. Returns the mode actually applied, which may differ from the requested one; returning `undefined` (or omitting the callback) answers the app with the current mode. */
+  onRequestDisplayMode?: (mode: McpAppDisplayMode) => McpAppDisplayMode | void;
+  /** Re-fetches the resource and re-resolves the tool result from scratch, bypassing any cache the app layer keeps. Shows a reload action in the canvas header when provided; omit to hide it. */
+  onReload?: () => void;
+}
+
 /** Content payload for attachments whose format cannot be previewed. */
 export interface UnsupportedCanvasContent {
   /** Discriminates the content type to select the correct renderer. */
@@ -118,6 +285,8 @@ export interface ErrorCanvasContent {
   errorType: AttachmentErrorType;
   /** Remote URL of the file, if known. Ignored for download purposes when `errorType` is `Forbidden`. */
   url?: string;
+  /** Overrides the default `loadErrorLabel`/`forbiddenErrorLabel` message, for callers whose failed content isn't a generic "file" (e.g. an MCP App). */
+  label?: string;
 }
 
 /** The content payload passed to AttachmentCanvas. */
@@ -126,11 +295,15 @@ export type AttachmentCanvasContent =
   | ImageCanvasContent
   | AudioCanvasContent
   | MarkdownCanvasContent
+  | MarkdownTableCanvasContent
   | JsonCanvasContent
   | PdfCanvasContent
+  | OoxmlCanvasContent
   | CodeCanvasContent
   | HtmlCanvasContent
   | VisualizerCanvasContent
+  | GroupedVisualizerCanvasContent
+  | McpAppCanvasContent
   | UnsupportedCanvasContent
   | ErrorCanvasContent;
 
@@ -146,7 +319,7 @@ export interface AttachmentCanvasColors {
   openInNewTabText?: string;
   /** Border color of the JSON viewer wrapper. Defaults to `--stroke-secondary`. */
   jsonBorder?: string;
-  /** Background color of the JSON viewer wrapper. Defaults to `--bg-layer-1`. */
+  /** Background color of the JSON viewer wrapper. Defaults to `--bg-layer-base`. */
   jsonBackground?: string;
   /** JSON key/label color. Defaults to `--text-primary`. */
   jsonLabel?: string;
@@ -166,10 +339,26 @@ export interface AttachmentCanvasColors {
   jsonToggleIcon?: string;
   /** Expand/collapse triangle color on hover. Defaults to `--text-primary`. */
   jsonToggleIconHover?: string;
+  /** Background color of the OOXML/CSV viewer surface and its loading/error overlay. Defaults to `--bg-layer-raised`. */
+  ooxmlBackground?: string;
+  /** Border color of the XLSX formula panel and value field. Defaults to `--stroke-secondary`. */
+  ooxmlFormulaBorder?: string;
+  /** Background color of the XLSX formula value field. Defaults to `--bg-layer-base`. */
+  ooxmlFormulaBackground?: string;
+  /** Text color of the XLSX formula panel. Defaults to `--text-primary`. */
+  ooxmlFormulaText?: string;
+  /** Border color of a cited-location highlight rectangle. Defaults to `--stroke-accent`. */
+  ooxmlHighlightBorder?: string;
+  /** Fill color of a cited-location highlight rectangle. Defaults to `transparent`, so the cited text keeps its own contrast. */
+  ooxmlHighlightBackground?: string;
   /** Text color of the collapsed-content ellipsis. Defaults to `--text-secondary`. */
   jsonCollapsedText?: string;
   /** Background color of the collapsed-content ellipsis. Defaults to `--bg-layer-raised`. */
   jsonCollapsedBackground?: string;
+  /** Divider color between the file name and the MCP App name in the panel title. Defaults to `--text-secondary`. */
+  mcpAppDividerColor?: string;
+  /** MCP App version text color in the panel title. Defaults to `--text-secondary`. */
+  mcpAppVersionColor?: string;
 }
 
 /** Themeable typography overrides for the AttachmentCanvas plain-text content body. */
@@ -189,23 +378,33 @@ export interface AttachmentCanvasTypography {
    * individual typography fields above. When set, those fields are ignored.
    */
   fontClassName?: string;
+  /** CSS utility class applied to the JSON tree viewer. Defaults to `'dial-code-text'`. */
+  jsonClassName?: string;
+  /** CSS utility class applied to the decorative XLSX `fx` label. Defaults to `'dial-italic-text'`. */
+  xlsxFormulaLabelClassName?: string;
+  /** CSS utility class applied to the MCP App version text in the panel title. Defaults to `'dial-caption-text'`. */
+  mcpAppVersionClassName?: string;
 }
 
-/** Combined style override prop for AttachmentCanvas. */
-export interface AttachmentCanvasStyles {
+/** Style override prop for `AttachmentCanvasBody`'s content-rendering area. */
+export interface AttachmentCanvasBodyStyles {
   /** Color overrides for the content body, applied as CSS custom properties. */
   colors?: AttachmentCanvasColors;
   /** Typography overrides for the content body. */
   typography?: AttachmentCanvasTypography;
   /** Extra class name(s) merged onto the scrollable content body element. */
   bodyClassName?: string;
-  /** Extra class name(s) merged onto the panel width wrapper. */
-  className?: string;
   /**
    * Arbitrary CSS custom properties applied inline to the content body.
    * Merged after the typed color/typography vars, so they can override them.
    */
   cssVars?: CSSProperties;
+}
+
+/** Combined style override prop for AttachmentCanvas. */
+export interface AttachmentCanvasStyles extends AttachmentCanvasBodyStyles {
+  /** Extra class name(s) merged onto the panel width wrapper. */
+  className?: string;
   /** Style overrides forwarded to the underlying SidebarPanel (panel chrome). */
   panelStyles?: SidebarPanelStyles;
 }
@@ -216,6 +415,8 @@ export interface AttachmentCanvasLabels {
   ariaLabel: string;
   /** Accessible label for the close button. Defaults to `'Close'`. */
   closeLabel?: string;
+  /** Accessible label for the panel's drag-to-resize handle. Defaults to `'Resize panel'`. */
+  resizeLabel?: string;
   /** Message shown in the canvas body when the content type is `Unsupported`. Defaults to `'Preview is not supported for this file'`. */
   unsupportedLabel?: string;
   /** Message shown in the canvas body when content type is `Error` with `errorType: LoadFailed`. Defaults to `'Failed to load file'`. */
@@ -246,6 +447,40 @@ export interface AttachmentCanvasLabels {
   htmlViewSourceLabel?: string;
   /** Tooltip and `aria-label` for the toggle button when the source view is active (clicking switches back to rendered). Defaults to `'View rendered'`. */
   htmlViewRenderedLabel?: string;
+  /** Tooltip and accessible label for the MCP App reload button. Only shown when content type is `McpApp` and `content.onReload` is provided. Defaults to `'Reload'`. */
+  mcpAppReloadLabel?: string;
+  /** Accessible name for the PDF viewer's floating thumbnails panel region. Defaults to `'Thumbnails'`. */
+  pdfThumbnailsLabel?: string;
+  /** Accessible label for the FAB button that opens the PDF thumbnails panel. Defaults to `'Show thumbnails'`. */
+  pdfShowThumbnailsLabel?: string;
+  /** Accessible label for the FAB button that closes the PDF thumbnails panel. Defaults to `'Hide thumbnails'`. */
+  pdfHideThumbnailsLabel?: string;
+  /** Accessible label for the current-page number input at the top of the PDF thumbnails panel. Defaults to `'Page number'`. */
+  pdfPageNumberLabel?: string;
+  /** Accessible status text announced while the PDF viewer's dynamic import is loading. Defaults to `'Loading…'`. */
+  pdfContentLoadingLabel?: string;
+  /** Message shown when the PDF viewer's dynamic import fails to load. Defaults to `'Failed to load content'`. */
+  pdfContentErrorLabel?: string;
+  /** Label and accessible name for the retry control shown alongside `pdfContentErrorLabel`. Defaults to `'Retry'`. */
+  pdfContentRetryLabel?: string;
+  /** Accessible label for the active XLSX cell's formula panel. Defaults to `'Formula'`. */
+  xlsxFormulaLabel?: string;
+  /** Accessible status text announced while the syntax-highlighter engine's dynamic import is loading. Defaults to `'Loading…'`. */
+  codeContentLoadingLabel?: string;
+  /** Message shown when the syntax-highlighter engine's dynamic import fails to load. Defaults to `'Failed to load content'`. */
+  codeContentErrorLabel?: string;
+  /** Label and accessible name for the retry control shown alongside `codeContentErrorLabel`. Defaults to `'Retry'`. */
+  codeContentRetryLabel?: string;
+  /** Label for the copy action on a Markdown table (copies as Markdown format). */
+  tableCopyLabel?: string;
+  /** Status announced after a Markdown table has been copied. */
+  tableCopiedLabel?: string;
+  /** Label for downloading a Markdown table as CSV. */
+  tableDownloadCsvLabel?: string;
+  /** Accessible name for the OOXML citation-highlights overlay region. Defaults to `'Cited locations'`. */
+  ooxmlHighlightsLabel?: string;
+  /** Status announced once navigation to the selected OOXML citation highlight completes. Defaults to `'Scrolled to the cited location'`. */
+  ooxmlHighlightNavigatedLabel?: string;
 }
 
 /** Props for the AttachmentCanvas component. */
@@ -270,6 +505,8 @@ export interface AttachmentCanvasProps {
   onCopyMarkdown?: () => void;
   /** Called when the user activates the copy-JSON button. When omitted the button is hidden. Only relevant when content type is `Json`. */
   onCopyJson?: () => void;
+  /** Filename used when downloading a `MarkdownTable`'s content as CSV. Defaults to `'table.csv'`. */
+  tableDownloadFilename?: string;
   /** Whether the viewport is in mobile breakpoint — disables drag-to-resize. */
   isMobile?: boolean;
   /** Initial panel width in pixels (when resizable). Defaults to `min(maxWidth, 2/3 of viewport width)`. */
@@ -290,4 +527,94 @@ export interface AttachmentCanvasProps {
    * plain `fetch` if not provided.
    */
   loadPdf?: (url: string) => Promise<Blob>;
+  /**
+   * Configures `pdfjs-dist`'s worker (`GlobalWorkerOptions.workerSrc`) for the
+   * host app. Called once, the first time a PDF attachment is opened, and
+   * awaited before the viewer mounts. Concurrent PDF opens share one
+   * in-flight call; a successful call is memoized so later opens never
+   * repeat it. A rejected call is not cached — the next PDF open (or a
+   * subsequent retry) invokes it again. When omitted,
+   * `@epam/pdf-highlighter-kit`'s own CDN-hosted worker fallback is used
+   * instead, so PDF rendering still works, just without the host's own
+   * bundled worker asset.
+   */
+  configurePdfWorker?: () => void | Promise<void>;
+}
+
+/** User-visible strings for `AttachmentCanvasBody`'s content states. */
+export type AttachmentCanvasBodyLabels = Pick<
+  AttachmentCanvasLabels,
+  | 'unsupportedLabel'
+  | 'loadErrorLabel'
+  | 'forbiddenErrorLabel'
+  | 'visualizerErrorLabel'
+  | 'htmlFrameBlockedLabel'
+  | 'htmlOpenInNewTabLabel'
+  | 'pdfThumbnailsLabel'
+  | 'pdfShowThumbnailsLabel'
+  | 'pdfHideThumbnailsLabel'
+  | 'pdfPageNumberLabel'
+  | 'pdfContentLoadingLabel'
+  | 'pdfContentErrorLabel'
+  | 'pdfContentRetryLabel'
+  | 'xlsxFormulaLabel'
+  | 'codeContentLoadingLabel'
+  | 'codeContentErrorLabel'
+  | 'codeContentRetryLabel'
+  | 'tableCopyLabel'
+  | 'tableCopiedLabel'
+  | 'tableDownloadCsvLabel'
+  | 'ooxmlHighlightsLabel'
+  | 'ooxmlHighlightNavigatedLabel'
+>;
+
+/** Props for the `AttachmentCanvasBody` component. */
+export interface AttachmentCanvasBodyProps {
+  /** The attachment content to render. */
+  content: AttachmentCanvasContent;
+  /** When `true`, renders a loading spinner instead of content. Defaults to `false`. */
+  isLoading?: boolean;
+  /** File name used for image `alt` text and the audio player's accessible label. */
+  fileName?: string;
+  /**
+   * Whether an `Html` content type renders its raw source instead of the
+   * sandboxed rendered view. Ignored for every other content type. Defaults
+   * to `false`. The host owns this toggle's state since the corresponding
+   * toggle button lives outside this component.
+   */
+  isHtmlSourceView?: boolean;
+  /** User-visible strings for content states (unsupported/error/HTML-blocked messages). */
+  labels?: AttachmentCanvasBodyLabels;
+  /** Style overrides for the content body. */
+  styles?: AttachmentCanvasBodyStyles;
+  /** Syntax highlight color theme forwarded to MarkdownRenderer/CodeContent code blocks. */
+  codeBlockTheme?: CodeBlockTheme;
+  /** Filename used when downloading a `MarkdownTable`'s content as CSV. Defaults to `'table.csv'`. Only relevant when content type is `MarkdownTable`. */
+  tableDownloadFilename?: string;
+  /** Called once a mounted `McpApp` completes its `ui/initialize` handshake, with its declared name/version. Only relevant when content type is `McpApp`; omitted when the app didn't declare an `appInfo`. */
+  onAppInfo?: (appInfo: Implementation) => void;
+  /**
+   * Fetches a PDF file by URL and returns its bytes as a `Blob`. Used when
+   * content type is `Pdf` to load the file before rendering. Defaults to a
+   * plain `fetch` if not provided.
+   */
+  loadPdf?: (url: string) => Promise<Blob>;
+  /**
+   * Hides the PDF renderer's own title/zoom toolbar row for `Pdf` content —
+   * for hosts that render their own header and don't want it duplicated.
+   * Ignored for every other content type. Defaults to `false`.
+   */
+  hidePdfToolbar?: boolean;
+  /**
+   * Configures `pdfjs-dist`'s worker (`GlobalWorkerOptions.workerSrc`) for the
+   * host app. Called once, the first time a PDF attachment is opened, and
+   * awaited before the viewer mounts. Concurrent PDF opens share one
+   * in-flight call; a successful call is memoized so later opens never
+   * repeat it. A rejected call is not cached — the next PDF open (or a
+   * subsequent retry) invokes it again. When omitted,
+   * `@epam/pdf-highlighter-kit`'s own CDN-hosted worker fallback is used
+   * instead, so PDF rendering still works, just without the host's own
+   * bundled worker asset.
+   */
+  configurePdfWorker?: () => void | Promise<void>;
 }

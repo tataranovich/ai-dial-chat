@@ -1,12 +1,16 @@
-## ADDED Requirements
+# client-config-endpoint Specification
+
+## Purpose
+
+`GET /api/v1/client-config`: the client-safe configuration payload and its fully annotated response DTO.
+
+## Requirements
 
 ### Requirement: GET /api/v1/client-config returns client-safe configuration
 
 The system SHALL expose `GET /api/v1/client-config` as a versioned business endpoint (version `'1'`). It SHALL accept a required `appId` query parameter, validate it against an allowlist, and return all `visibility='client'` configuration values, including the new `dialCore.externalUrl` key added by the `config-registry-and-env-provider` capability.
 
 **Authorization:** None required. The endpoint is public and MUST work before authentication.
-
-**Rate limiting:** `@Throttle({ default: { limit: 60, ttl: 60_000 } })` — 60 requests per minute per IP (stricter than the global 100/min default for public unauthenticated endpoints).
 
 **Caching:** In-memory cache via `@nestjs/cache-manager`. Cache key: `app-config:client:{appId}:user:{userId|anonymous}:roles:{sortedRoles|none}`. TTL: 60 seconds. Identity and roles MUST be included because role-gated flags can vary by caller. Future targeting dimensions MUST also be added to the cache key before they affect evaluation.
 
@@ -69,11 +73,6 @@ The system SHALL expose `GET /api/v1/client-config` as a versioned business endp
 
 - **WHEN** `GET /api/v1/client-config?appId=unknown-app` is called
 - **THEN** the response is `400 Bad Request`
-
-#### Scenario: Rate limit exceeded returns 429
-
-- **WHEN** more than 60 requests per minute from the same IP hit `GET /api/v1/client-config`
-- **THEN** the 61st request receives `429 Too Many Requests`
 
 #### Scenario: Response does not contain server-only values
 
@@ -138,7 +137,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 ### Requirement: client-config exposes overlay eligibility
 
-`GET /api/v1/client-config` SHALL include two additional `visibility='client'` keys under `config`: `overlayEnabled: boolean` (sourced from `EnvironmentVariables.OVERLAY_ENABLED`, default `false`) and `overlayAllowedOrigins: string[]` (sourced from `EnvironmentVariables.ALLOWED_IFRAME_ORIGINS`, default `[]`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), rate limit (60/min/IP), or cache key/TTL.
+`GET /api/v1/client-config` SHALL include two additional `visibility='client'` keys under `config`: `overlayEnabled: boolean` (sourced from `EnvironmentVariables.OVERLAY_ENABLED`, default `false`) and `overlayAllowedOrigins: string[]` (sourced from `EnvironmentVariables.ALLOWED_IFRAME_ORIGINS`, default `[]`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), or cache key/TTL.
 
 `ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add `@ApiProperty` fields for both keys so the generated `@epam/chat-api-client` types them concretely.
 
@@ -158,7 +157,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 #### Scenario: Generated client type includes both fields
 
-- **WHEN** `npm run openapi` is run after this change
+- **WHEN** `npm run openapi` is run
 - **THEN** the generated `ClientConfigResponse` type's `config` property includes `overlayEnabled: boolean` and `overlayAllowedOrigins: string[]`
 
 #### Scenario: overlayAllowedOrigins never leaks server-only origins
@@ -168,7 +167,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 ### Requirement: client-config exposes enabledUiFeatures
 
-`GET /api/v1/client-config` SHALL include an additional `visibility='client'` key under `config`: `enabledUiFeatures: string[] | null` (sourced from `EnvironmentVariables.ENABLED_UI_FEATURES`, filtered to recognized `OverlayFeature` values per `config-registry-and-env-provider`, default `null`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), rate limit (60/min/IP), or cache key/TTL.
+`GET /api/v1/client-config` SHALL include an additional `visibility='client'` key under `config`: `enabledUiFeatures: string[] | null` (sourced from `EnvironmentVariables.ENABLED_UI_FEATURES`, filtered to recognized `OverlayFeature` values per `config-registry-and-env-provider`, default `null`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), or cache key/TTL.
 
 `ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `enabledUiFeatures: string[] | null` with `nullable: true` so the generated `@epam/chat-api-client` types it concretely.
 
@@ -188,13 +187,18 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 #### Scenario: Generated client type includes the new field
 
-- **WHEN** `npm run openapi` is run after this change
+- **WHEN** `npm run openapi` is run
 - **THEN** the generated `ClientConfigResponse` type's `config` property includes `enabledUiFeatures: string[] | null`
 
 #### Scenario: Response never includes unrecognized entries
 
 - **WHEN** `ENABLED_UI_FEATURES` includes a value that is not a member of `OverlayFeature`
 - **THEN** the response's `config.enabledUiFeatures` array omits that value (filtered per `config-registry-and-env-provider`)
+
+#### Scenario: A deprecated entry is returned under its current name
+
+- **WHEN** `ENABLED_UI_FEATURES` includes a deprecated value listed in `DEPRECATED_UI_FEATURE_ALIASES` (e.g. `custom-applications`)
+- **THEN** the response's `config.enabledUiFeatures` carries its replacement (`schema-apps`) exactly once, a deprecation warning is logged, and the value is not duplicated when the replacement is also supplied
 
 #### Scenario: All-unrecognized input returns null, not empty array
 
@@ -221,7 +225,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 ### Requirement: client-config exposes publicationFilterSources
 
-`GET /api/v1/client-config` SHALL include an additional `visibility='client'` key under `config`: `publicationFilterSources: string[]` (sourced from `EnvironmentVariables.PUBLICATION_FILTER_SOURCES` via the `publish.publicationFilterSources` registry entry, default `['title', 'role', 'dial_roles']`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), rate limit (60/min/IP), or cache key/TTL.
+`GET /api/v1/client-config` SHALL include an additional `visibility='client'` key under `config`: `publicationFilterSources: string[]` (sourced from `EnvironmentVariables.PUBLICATION_FILTER_SOURCES` via the `publish.publicationFilterSources` registry entry, default `['title', 'role', 'dial_roles']`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), or cache key/TTL.
 
 `ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `publicationFilterSources: string[]` so the generated `@epam/chat-api-client` types it concretely.
 
@@ -241,7 +245,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 #### Scenario: Generated client type includes the new field
 
-- **WHEN** `npm run openapi` is run after this change
+- **WHEN** `npm run openapi` is run
 - **THEN** the generated `ClientConfigResponse` type's `config` property includes `publicationFilterSources: string[]`
 
 ### Requirement: Frontend AppConfigContext exposes publicationFilterSources with a safe default
@@ -350,6 +354,10 @@ An entry with no `link` SHALL be included, rendering as an announcement without 
 
 Every rejected entry SHALL be dropped and logged with a warning naming the entry and the reason. The service SHALL cap the returned list at the supported maximum, dropping and logging the excess. A malformed value (invalid JSON, or a JSON root that is not an array) SHALL result in `announcements: []` with a logged warning. Invalid announcements configuration SHALL NEVER cause the request to fail and SHALL NEVER suppress the banner's own announcement fields.
 
+The service SHALL validate every configured entry — including entries beyond the supported maximum — before applying the cap: an entry past the maximum that is itself invalid (blank title, or a present-but-invalid link) SHALL still be dropped and logged with its own rejection warning, exactly as an invalid entry within the first N would be. The service SHALL NOT stop processing once N valid entries have been accumulated. The cap-exceeded warning, when the accepted-entry count exceeds the maximum, SHALL be logged last — after every per-entry rejection warning — and SHALL report the total number of entries that passed validation (before truncation), not the number configured or the number returned.
+
+The service SHALL NOT mutate the resolved `announcement.items` value or any of its entry or link objects while validating and normalizing them; the returned `AnnouncementItemDto[]` SHALL be built from new objects. Duplicate entries (byte-for-byte identical title/description/link) in the configured list SHALL each be evaluated independently and, if valid, SHALL each appear in the returned list — the service SHALL NOT deduplicate announcements.
+
 `AnnouncementItemDto` and `AnnouncementLinkDto` SHALL be declared as classes with `@ApiProperty` metadata on every field, so `@nestjs/swagger` emits runtime metadata and the generated client exposes the shape.
 
 #### Scenario: A complete announcement is returned
@@ -411,3 +419,94 @@ Every rejected entry SHALL be dropped and logged with a warning naming the entry
 
 - **WHEN** `ANNOUNCEMENTS` contains more entries than the supported maximum
 - **THEN** `config.announcements` contains only the first N entries in configured order and a warning names the dropped ones
+
+#### Scenario: An invalid entry beyond the cap is still individually rejected and logged
+
+- **WHEN** `ANNOUNCEMENTS` contains more valid entries than the supported maximum, and one of the entries positioned after the maximum has a blank title
+- **THEN** that entry's own rejection warning is logged, in addition to the cap-exceeded warning, and `config.announcements` contains exactly the first N valid entries
+
+#### Scenario: The cap warning is logged last and counts valid entries
+
+- **WHEN** `ANNOUNCEMENTS` contains a mix of valid entries exceeding the supported maximum and at least one invalid entry interleaved among them
+- **THEN** each invalid entry's rejection warning is logged before the cap-exceeded warning, and the cap-exceeded warning reports the total count of entries that passed validation, not the count configured or the count ultimately returned
+
+#### Scenario: Duplicate announcements are preserved
+
+- **WHEN** `ANNOUNCEMENTS` contains two entries with identical title, description, and link
+- **THEN** `config.announcements` contains both entries, neither deduplicated nor merged
+
+#### Scenario: The configured input is not mutated
+
+- **WHEN** `GET /api/v1/client-config` is called with a non-empty `ANNOUNCEMENTS` value
+- **THEN** resolving `announcement.items` again for a subsequent, independent request returns entries with the same values as the first resolution, unaffected by any normalization performed for the first request
+
+### Requirement: Custom client variables remain isolated from built-in settings
+
+The client-config response SHALL include `config.customVariables`, an arbitrary JSON object from the `customVariables` registry key. It SHALL default to `{}` when no object is resolved. It SHALL NOT be spread into built-in config, features, or metadata. Its keys are owned and validated by consuming clients, with no client-specific BFF variables or defaults. The DTO and generated OpenAPI client SHALL expose this generic map.
+
+This object is public, including before authentication, and SHALL be the same for every allowed appId; it is not a tenant-specific or secret store. Operators SHALL supply only public settings. Environment changes take effect after a BFF restart without a frontend rebuild.
+
+#### Scenario: Client keys do not override built-in configuration
+
+- **WHEN** custom variables contain keys also named like built-in config or feature flags
+- **THEN** those keys remain under `config.customVariables` and leave built-in values unchanged
+
+#### Scenario: Custom variables are unconfigured
+
+- **WHEN** no valid custom variable object is configured
+- **THEN** client-config succeeds with `config.customVariables: {}`
+
+---
+
+### Requirement: client-config response includes the welcome-screen description
+
+`GET /api/v1/client-config` SHALL include a `welcomeScreenDescription` field of type `string | null` in the `config` object of its response, sourced from the `welcomeScreen.description` registry key (env var `WELCOME_SCREEN_DESCRIPTION`). The field SHALL be `null` when the variable is not configured or resolves to a blank string.
+
+`welcomeScreenDescription` SHALL be returned as plain text — the service SHALL NOT interpret it as markup and SHALL NOT strip or escape its characters beyond trimming surrounding whitespace, matching the `announcementTitle` treatment.
+
+The `ClientConfigResponseDto` response DTO SHALL declare this field with Swagger metadata so the generated `@epam/chat-api-client` exposes it.
+
+#### Scenario: Description configured
+
+- **WHEN** `GET /api/v1/client-config?appId=chat-ui` is called and `WELCOME_SCREEN_DESCRIPTION` is set to `Your secure, all-in-one AI assistant.`
+- **THEN** the response is `200 OK` with `config.welcomeScreenDescription="Your secure, all-in-one AI assistant."`
+
+#### Scenario: Description not configured
+
+- **WHEN** `GET /api/v1/client-config?appId=chat-ui` is called and `WELCOME_SCREEN_DESCRIPTION` is not set
+- **THEN** the response is `200 OK` with `config.welcomeScreenDescription=null`
+
+#### Scenario: Blank value resolves to null
+
+- **WHEN** `WELCOME_SCREEN_DESCRIPTION` is set to an empty string or to whitespace only
+- **THEN** `config.welcomeScreenDescription` is `null` rather than an empty or whitespace string
+
+#### Scenario: Value is not treated as markup
+
+- **WHEN** `WELCOME_SCREEN_DESCRIPTION` is set to `Explore <b>everything</b> DIAL offers`
+- **THEN** the returned `config.welcomeScreenDescription` is the literal string `Explore <b>everything</b> DIAL offers`, unmodified
+
+### Requirement: client-config exposes maxAttachmentFileSizeBytes
+
+`GET /api/v1/client-config` SHALL include an additional `visibility='client'` key under `config`: `maxAttachmentFileSizeBytes: number` (sourced from `EnvironmentVariables.FILE_UPLOAD_MAX_BYTES` via the `attachments.maxFileSizeBytes` registry entry, default `536870912`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), or cache key/TTL.
+
+`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `maxAttachmentFileSizeBytes: number` so the generated `@epam/chat-api-client` types it concretely.
+
+**Generated client impact:** `operationId` `getClientConfig` is unchanged; its response type's `config` property gains `maxAttachmentFileSizeBytes: number`. Request DTO unchanged. Frontend callers continue to use the normal (non-`Raw`) generated method.
+
+**RTL impact:** None. **i18n impact:** None — a raw byte count, not localized copy.
+
+#### Scenario: Default limit returned when unconfigured
+
+- **WHEN** `GET /api/v1/client-config?appId=chat-ui` is called and `FILE_UPLOAD_MAX_BYTES` is unset
+- **THEN** the response includes `config.maxAttachmentFileSizeBytes: 536870912`
+
+#### Scenario: Operator-configured limit is returned
+
+- **WHEN** `FILE_UPLOAD_MAX_BYTES=104857600` is set
+- **THEN** the response includes `config.maxAttachmentFileSizeBytes: 104857600` — the same value that now also governs the `POST /api/v1/files` Multer limit, since both read the same environment variable
+
+#### Scenario: Generated client type includes the new field
+
+- **WHEN** `npm run openapi` is run
+- **THEN** the generated `ClientConfigResponse` type's `config` property includes `maxAttachmentFileSizeBytes: number`

@@ -27,12 +27,34 @@ export interface AttachmentCanvasContainerProps {
   maxWidth?: number;
   /** Syntax highlight color theme forwarded to MarkdownRenderer code blocks. */
   codeBlockTheme?: CodeBlockTheme;
+  /** Filename used when downloading a `MarkdownTable`'s content as CSV. Defaults to `'table.csv'`. */
+  tableDownloadFilename?: string;
+  /**
+   * Configures `pdfjs-dist`'s worker (`GlobalWorkerOptions.workerSrc`) for the
+   * host app. Called once, the first time a PDF attachment is opened, and
+   * awaited before the viewer mounts. Concurrent PDF opens share one
+   * in-flight call; a successful call is memoized so later opens never
+   * repeat it. A rejected call is not cached — the next PDF open (or a
+   * subsequent retry) invokes it again. When omitted,
+   * `@epam/pdf-highlighter-kit`'s own CDN-hosted worker fallback is used
+   * instead, so PDF rendering still works, just without the host's own
+   * bundled worker asset.
+   */
+  configurePdfWorker?: () => void | Promise<void>;
 }
 
 /** Context-connected container that renders `AttachmentCanvas` with download support. */
 export const AttachmentCanvasContainer: FC<AttachmentCanvasContainerProps> =
   memo(
-    ({ labels, isMobile = false, defaultWidth, maxWidth, codeBlockTheme }) => {
+    ({
+      labels,
+      isMobile = false,
+      defaultWidth,
+      maxWidth,
+      codeBlockTheme,
+      tableDownloadFilename,
+      configurePdfWorker,
+    }) => {
       const {
         ariaLabel = 'Attachment preview',
         closeLabel = 'Close',
@@ -50,6 +72,22 @@ export const AttachmentCanvasContainer: FC<AttachmentCanvasContainerProps> =
         htmlOpenInNewTabLabel,
         htmlViewSourceLabel,
         htmlViewRenderedLabel,
+        pdfThumbnailsLabel,
+        pdfShowThumbnailsLabel,
+        pdfHideThumbnailsLabel,
+        pdfPageNumberLabel,
+        pdfContentLoadingLabel,
+        pdfContentErrorLabel,
+        pdfContentRetryLabel,
+        xlsxFormulaLabel,
+        codeContentLoadingLabel,
+        codeContentErrorLabel,
+        codeContentRetryLabel,
+        tableCopyLabel,
+        tableCopiedLabel,
+        tableDownloadCsvLabel,
+        ooxmlHighlightsLabel,
+        ooxmlHighlightNavigatedLabel,
       } = labels ?? {};
 
       const { isOpen, isLoading, content, fileName, closeCanvas } =
@@ -105,6 +143,22 @@ export const AttachmentCanvasContainer: FC<AttachmentCanvasContainerProps> =
             htmlOpenInNewTabLabel,
             htmlViewSourceLabel,
             htmlViewRenderedLabel,
+            pdfThumbnailsLabel,
+            pdfShowThumbnailsLabel,
+            pdfHideThumbnailsLabel,
+            pdfPageNumberLabel,
+            pdfContentLoadingLabel,
+            pdfContentErrorLabel,
+            pdfContentRetryLabel,
+            xlsxFormulaLabel,
+            codeContentLoadingLabel,
+            codeContentErrorLabel,
+            codeContentRetryLabel,
+            tableCopyLabel,
+            tableCopiedLabel,
+            tableDownloadCsvLabel,
+            ooxmlHighlightsLabel,
+            ooxmlHighlightNavigatedLabel,
           }}
           onDownload={handleDownload}
           onCopyText={
@@ -123,10 +177,12 @@ export const AttachmentCanvasContainer: FC<AttachmentCanvasContainerProps> =
               ? handleCopyJson
               : undefined
           }
+          tableDownloadFilename={tableDownloadFilename}
           isMobile={isMobile}
           defaultWidth={defaultWidth}
           maxWidth={maxWidth}
           codeBlockTheme={codeBlockTheme}
+          configurePdfWorker={configurePdfWorker}
         />
       );
     },

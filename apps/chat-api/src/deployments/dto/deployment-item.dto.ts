@@ -72,6 +72,12 @@ export class DeploymentFeaturesDto {
     description: 'Whether the deployment supports chat completion requests',
   })
   chatCompletion?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the deployment supports custom skills in chat requests',
+  })
+  skillsSupported?: boolean;
 }
 
 export class DeploymentItemDto {
@@ -189,13 +195,6 @@ export class DeploymentItemDto {
       'True when this deployment is shared with the current user (READ or WRITE) and not owned by them',
   })
   sharedWithMe?: boolean;
-
-  @ApiPropertyOptional({
-    description:
-      'How many other users currently hold shared access to this deployment, for deployments the caller owns. Counts accepted invitations only — an issued but unopened share link is not counted. Absent when DIAL Core could not be consulted.',
-    example: 3,
-  })
-  recipientsCount?: number;
 
   @ApiPropertyOptional({
     description:

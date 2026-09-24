@@ -1,12 +1,22 @@
-import { CatalogEntityType } from '@epam/ai-dial-catalog';
+import { FavoriteEntityType } from '@epam/ai-dial-chat-hooks';
+import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { describe, expect, it } from 'vitest';
-import { FavoriteEntityType } from '../../context/FavoriteApplicationsContext';
 import { resolveFavoriteEntityType } from '../favorites';
 
 describe('resolveFavoriteEntityType', () => {
   it('maps a prompt to the prompts config section', () => {
     expect(resolveFavoriteEntityType(CatalogEntityType.Prompt)).toBe(
       FavoriteEntityType.Prompt,
+    );
+  });
+
+  /*
+   * Without its own entry a skill would fall through to the deployments
+   * section, writing skill resource URLs into `deployments.installed`.
+   */
+  it('maps a skill to the skills config section', () => {
+    expect(resolveFavoriteEntityType(CatalogEntityType.Skill)).toBe(
+      FavoriteEntityType.Skill,
     );
   });
 

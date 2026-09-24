@@ -16,12 +16,17 @@ Responsive starter prompt buttons that overflow into a dropdown when space is li
 }
 ```
 
+Import the stylesheet once in the consuming app:
+
+```ts
+import '@epam/ai-dial-starter-buttons/styles.css';
+```
+
 ## Peer Dependencies
 
 - `react`
 - `@epam/ai-dial-chat-shared`
 - `@epam/ai-dial-ui-kit`
-- `@tabler/icons-react`
 
 ## Components
 
@@ -34,11 +39,7 @@ import { StarterButtons } from '@epam/ai-dial-starter-buttons';
 import type { StarterButtonsProps } from '@epam/ai-dial-starter-buttons';
 
 <StarterButtons
-  starters={[
-    { const: '1', title: 'Summarize a document' },
-    { const: '2', title: 'Write a blog post' },
-    { const: '3', title: 'Explain a concept' },
-  ]}
+  starters={deployment.starters}
   isMobile={isMobile}
   labels={{
     list: 'Conversation starters',
@@ -46,6 +47,36 @@ import type { StarterButtonsProps } from '@epam/ai-dial-starter-buttons';
   }}
   onSelect={handleStarterSelect}
 />;
+```
+
+`starters` is `StarterOption[]` from `@epam/ai-dial-chat-shared` — the same shape
+a deployment's configuration schema declares, so pass it through unchanged:
+
+```tsx
+import type { StarterOption } from '@epam/ai-dial-chat-shared';
+
+const starter: StarterOption = {
+  const: 1,
+  title: 'Summarize a document',
+  'dial:widgetOptions': widgetOptions,
+};
+```
+
+The overflow behaviour is opt-out. Pass `isCollapsible={false}` and every
+starter is rendered, each on its own row, with no overflow menu — the layout a
+narrow embed wants, where the measured row fits a single starter and hides the
+rest behind the "…" button:
+
+```tsx
+<StarterButtons
+  starters={deployment.starters}
+  isCollapsible={false}
+  labels={{
+    list: 'Conversation starters',
+    overflow: 'More starter prompts',
+  }}
+  onSelect={handleStarterSelect}
+/>
 ```
 
 ## Types
@@ -83,3 +114,37 @@ Overrides the size and stroke width of the overflow menu icon.
   onSelect={onSelect}
 />
 ```
+
+## Public class names
+
+A host embedding this package cannot style it through its CSS-module locals —
+they are hashed at build time — nor through DOM order or ARIA attributes. The
+list's `aria-label` comes from `labels.list` and is localisable, so a host that
+selects by it breaks its own styling the moment the app is translated. Two
+elements therefore carry a stable public class, exported as
+`STARTER_BUTTONS_CLASS`.
+
+| Key    | Class                       | Element                                                    |
+| ------ | --------------------------- | ---------------------------------------------------------- |
+| `root` | `dial-starter-buttons-root` | The component's outer wrapper                              |
+| `list` | `dial-starter-buttons-list` | The `role="list"` box holding the buttons, in both layouts |
+
+The classes carry no declarations of their own: nothing in `styles.css` selects
+on them, so they change nothing until a host writes a rule. Renaming one, or
+moving it to a different element, is a breaking change. The convention is in
+[`openspec/lib-styling-guide.md`](../../openspec/lib-styling-guide.md).
+
+```tsx
+import { STARTER_BUTTONS_CLASS } from '@epam/ai-dial-starter-buttons';
+
+STARTER_BUTTONS_CLASS.list; // 'dial-starter-buttons-list'
+```
+
+```css
+.dial-starter-buttons-list {
+  justify-content: flex-start;
+}
+```
+
+Write host overrides with CSS logical properties (`margin-inline-start`,
+`inset-inline-end`) so they keep working under `dir="rtl"`.

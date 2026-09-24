@@ -13,6 +13,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { CspMode } from './csp';
 
 export enum ApplicationLogLevel {
   Debug = 'debug',
@@ -21,7 +22,48 @@ export enum ApplicationLogLevel {
   Error = 'error',
 }
 
+/*
+ * Matches an exact origin (scheme://host[:port]) or a single
+ * leading-wildcard-label origin pattern (scheme://*.host[:port]), with no
+ * path, query string, or fragment. Mirrors CSP's own host-source wildcard
+ * grammar so a wildcard entry can be forwarded verbatim into
+ * `frame-src`/`frame-ancestors`.
+ */
+export const IFRAME_ORIGIN_PATTERN =
+  /^(https?):\/\/(?:\*\.)?[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*(?::\d+)?$/;
+
 export class EnvironmentVariables {
+  @IsOptional()
+  @IsEnum(CspMode)
+  CSP_MODE?: CspMode = CspMode.ReportOnly;
+
+  @IsOptional()
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['https'],
+    disallow_auth: true,
+  })
+  @Matches(/^https:\/\/[^\s";,\\<>#]+$/, {
+    message: 'CSP_REPORT_URI must be an HTTPS URL safe for CSP headers',
+  })
+  CSP_REPORT_URI?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value == null || value === '') return [];
+    return String(value)
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0);
+  })
+  @Matches(IFRAME_ORIGIN_PATTERN, {
+    each: true,
+    message:
+      'Each ALLOWED_CONNECT_ORIGINS entry must be an HTTP(S) origin (scheme://host[:port]) or a single leading-wildcard-label origin, without paths, queries, or fragments',
+  })
+  ALLOWED_CONNECT_ORIGINS?: string[] = [];
+
   @IsOptional()
   @IsEnum(ApplicationLogLevel)
   LOG_LEVEL?: ApplicationLogLevel;
@@ -46,6 +88,22 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   DIAL_CORE_EXTERNAL_URL?: string;
+
+  @IsOptional()
+  @IsUrl({ require_tld: false })
+  MCP_APP_SANDBOX_URL?: string;
+
+  @IsOptional()
+  @Matches(/^(light|dark)$/)
+  MCP_APP_THEME?: 'light' | 'dark';
+
+  @IsOptional()
+  @IsString()
+  MCP_APP_USER_AGENT?: string;
+
+  @IsOptional()
+  @IsString()
+  MCP_APP_HOST_NAME?: string;
 
   @IsOptional()
   @IsString()
@@ -85,12 +143,37 @@ export class EnvironmentVariables {
   AUTH_SESSION_PREV_SECRET?: string;
 
   @IsOptional()
+  // Preserve fractional or malformed values so validation rejects them.
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+  @IsOptional()
   @IsString()
   AUTH_SESSION_COOKIE_NAME?: string = '__Host-chat.sess';
 
   @IsOptional()
   @IsString()
   AUTH_TRANSACTION_COOKIE_NAME?: string = '__Host-chat.tx';
+
+  /*
+   * Names of cookies set by a previously deployed auth stack (e.g. NextAuth's
+   * `next-auth.session-token`) that must be actively expired on this
+   * deployment. The old service is gone, so only this one can ever issue the
+   * `Max-Age=0` response that removes them from the browser.
+   */
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value == null || value === '') return undefined;
+    return String(value)
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter((s: string) => s.length > 0);
+  })
+  @IsString({ each: true })
+  AUTH_LEGACY_COOKIE_NAMES?: string[];
 
   @IsOptional()
   @Transform(({ obj, key }) => {
@@ -555,7 +638,7 @@ export class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
-  DEEP_RESEARCH_TOOL_ID?: string;
+  CUSTOM_CLIENT_VARIABLES?: string;
 
   @IsOptional()
   @IsString()
@@ -577,9 +660,13 @@ export class EnvironmentVariables {
   @IsString()
   FOOTER_HTML_MESSAGE?: string;
 
-  /* Deliberately unconstrained: this is an opaque display string that never
-   * reaches a filesystem path, an outbound URL, or a log line, and CI stamps
-   * take many shapes (0.45.0, 0.45.0-rc.3, 2026.08.10+a1b2c3d). */
+  @IsOptional()
+  @IsString()
+  WELCOME_SCREEN_DESCRIPTION?: string;
+
+  /* Deliberately unconstrained: this is an opaque display string, and CI
+   * stamps take many shapes (0.45.0, 0.45.0-rc.3, 2026.08.10+a1b2c3d).
+   * Outbound HTTP metadata uses a separately normalized representation. */
   @IsOptional()
   @IsString()
   CHAT_VERSION?: string;
@@ -664,18 +751,10 @@ export class EnvironmentVariables {
       .map((s: string) => s.trim())
       .filter((s: string) => s.length > 0);
   })
-  @IsUrl(
-    {
-      require_tld: false,
-      require_protocol: true,
-      protocols: ['https', 'http'],
-    },
-    { each: true },
-  )
-  @Matches(/^https?:\/\/[^/\s?#]+$/, {
+  @Matches(IFRAME_ORIGIN_PATTERN, {
     each: true,
     message:
-      'Each allowed iframe origin must be an origin URL with no path or query string',
+      'Each allowed iframe origin must be an origin URL (scheme://host[:port], no path or query string) or a single leading-wildcard-label pattern (scheme://*.host[:port])',
   })
   ALLOWED_IFRAME_ORIGINS?: string[] = [];
 
@@ -750,6 +829,20 @@ export class EnvironmentVariables {
   RESPONSES_API_ENABLED?: boolean = false;
 
   @IsOptional()
+  @Transform(({ obj, key }) => {
+    /* Reads the raw source value (not `value`, which class-transformer's
+     * enableImplicitConversion may have already coerced to `true` for any
+     * non-empty string, including the literal string "false") so an env var
+     * explicitly set to "false"/"0"/"no" parses to `false` as intended. */
+    const raw = (obj as Record<string, unknown>)[key];
+    if (raw == null) return undefined;
+    if (typeof raw === 'boolean') return raw;
+    return !['false', '0', 'no'].includes(String(raw).toLowerCase());
+  })
+  @IsBoolean()
+  SKILL_USAGE_ENABLED?: boolean = false;
+
+  @IsOptional()
   @Transform(({ value }) => {
     if (value == null || value === '') return [];
     return String(value)
@@ -781,6 +874,16 @@ export class EnvironmentVariables {
   SCHEDULED_TASKS_ENABLED_ROLES?: string[] = [];
 
   @IsOptional()
+  @Transform(({ obj, key }) => {
+    const raw = (obj as Record<string, unknown>)[key];
+    if (raw == null) return undefined;
+    if (typeof raw === 'boolean') return raw;
+    return !['false', '0', 'no'].includes(String(raw).toLowerCase());
+  })
+  @IsBoolean()
+  DEFAULT_DEPLOYMENT_PINNED?: boolean = false;
+
+  @IsOptional()
   @IsString()
   SCHEDULER_APP_ID?: string;
 
@@ -799,6 +902,10 @@ export class EnvironmentVariables {
   CUSTOM_VISUALIZERS?: string;
 
   @IsOptional()
+  @IsString()
+  APPLICATION_VISUALIZERS?: string;
+
+  @IsOptional()
   @Transform(({ value }) => {
     if (value == null || value === '') return [];
     return String(value)
@@ -809,4 +916,82 @@ export class EnvironmentVariables {
   @IsString({ each: true })
   @MaxLength(200, { each: true })
   PUBLICATION_FILTER_SOURCES?: string[] = [];
+
+  /*
+   * Skills domain limits (see openspec/changes/fix-skill-editor-core-contract/design.md).
+   * Defaults match DIAL Core's own real, verified `ComplexResourceService.Settings`
+   * (maxFiles=100, maxFileSizeBytes=1 MiB, maxTotalBytes=16 MiB — read directly from
+   * epam/ai-dial-core's source, not the epic issue's "~" approximations). The former
+   * `SKILL_UPLOAD_MAX_BYTES` (a compressed-ZIP Multer ingress cap) has been removed: no
+   * ZIP is ever uploaded on the create/update path since this change, so it has no
+   * remaining meaning. A deployment that still sets it has that value silently ignored
+   * (class-transformer only maps decorated properties) rather than the boot failing.
+   */
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsInt()
+  @Min(1)
+  SKILL_UPLOAD_MAX_FILES?: number = 100;
+
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsInt()
+  @Min(1)
+  SKILL_FILE_UPLOAD_MAX_BYTES?: number = 1_048_576;
+
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsInt()
+  @Min(1)
+  SKILL_UPLOAD_MAX_TOTAL_BYTES?: number = 16_777_216;
+
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsInt()
+  @Min(1000)
+  SKILL_TRANSFER_TIMEOUT_MS?: number = 60_000;
+
+  /*
+   * Compressed-ZIP ingress cap for `POST /api/v1/skills/import` (see
+   * openspec/changes/add-skill-archive-import/design.md D8). Distinct from
+   * the retired `SKILL_UPLOAD_MAX_BYTES`: that variable capped a ZIP upload
+   * on the create/update path, which no longer accepts ZIP at all; this one
+   * bounds the new, additive archive-import endpoint's compressed upload
+   * before extraction. Default (20 MiB) is deliberately larger than
+   * `SKILL_UPLOAD_MAX_TOTAL_BYTES` (16 MiB decompressed) since ZIP container
+   * overhead and poorly-compressible content (Markdown, scripts) mean the
+   * compressed size can approach the uncompressed total.
+   */
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsInt()
+  @Min(1)
+  SKILL_ARCHIVE_UPLOAD_MAX_BYTES?: number = 20_971_520;
+
+  /*
+   * Server-owned bound on how long an active generation may occupy the
+   * in-memory registry (see openspec/specs/generation-registry/spec.md),
+   * independent of the originating browser connection — a disconnect no
+   * longer aborts a generation, so this timer is what protects against a
+   * stalled upstream stream that never reaches a terminal event.
+   */
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsInt()
+  @Min(1000)
+  MAX_GENERATION_DURATION_MS?: number = 1_800_000;
+
+  /*
+   * Bounds subscriber and resource release, never ownership (see
+   * openspec/specs/generation-registry/spec.md): if a generation's terminal
+   * write has not settled this long after being dispatched, attach
+   * subscribers are released and the entry moves to the retained `settling`
+   * state, still owning its registry key so a replacement is never admitted
+   * over an unsettled write.
+   */
+  @IsOptional()
+  @Transform(({ value }) => parseInt(value, 10))
+  @IsInt()
+  @Min(1000)
+  GENERATION_FINALIZE_TIMEOUT_MS?: number = 60_000;
 }

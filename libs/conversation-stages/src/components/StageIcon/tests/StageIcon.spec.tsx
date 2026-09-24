@@ -9,10 +9,10 @@ describe('StageIcon — icon priority order', () => {
     expect(screen.getByLabelText('Running')).toBeTruthy();
   });
 
-  it('prioritizes the running spinner over a settled status when both are somehow present', () => {
+  it('uses the explicit settled status even when isLive is stale', () => {
     render(<StageIcon status={StageStatus.Failed} isLive />);
-    expect(screen.getByLabelText('Running')).toBeTruthy();
-    expect(screen.queryByText('Failed')).toBeNull();
+    expect(screen.queryByLabelText('Running')).toBeNull();
+    expect(screen.getByText('Failed')).toBeTruthy();
   });
 
   it('shows the failed (exception) icon with a visually-hidden label when not live and failed', () => {
@@ -20,6 +20,12 @@ describe('StageIcon — icon priority order', () => {
       <StageIcon status={StageStatus.Failed} isLive={false} />,
     );
     expect(screen.getByText('Failed')).toBeTruthy();
+    /*
+     * The status icon is intentionally aria-hidden and decorative (its
+     * meaning is carried by the adjacent sr-only label above), so there is
+     * no accessible role/name to query it by.
+     */
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
     expect(container.querySelector('svg[aria-hidden]')).toBeTruthy();
   });
 
@@ -27,15 +33,18 @@ describe('StageIcon — icon priority order', () => {
     const { container } = render(
       <StageIcon status={StageStatus.Completed} isLive={false} />,
     );
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- decorative aria-hidden icon, no accessible query applies
     expect(container.querySelector('svg[aria-hidden]')).toBeTruthy();
     expect(screen.queryByText('Failed')).toBeNull();
     expect(screen.queryByLabelText('Running')).toBeNull();
   });
 
-  it('falls back to the quiet check icon for a settled-but-unresolved (null, not live) stage', () => {
+  it('does not show a completed check for an unresolved stage that is not live', () => {
     const { container } = render(<StageIcon status={null} isLive={false} />);
-    expect(container.querySelector('svg[aria-hidden]')).toBeTruthy();
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- absence of the decorative completed icon has no semantic query alternative
+    expect(container.querySelector('svg[aria-hidden]')).toBeNull();
     expect(screen.queryByText('Failed')).toBeNull();
+    expect(screen.queryByLabelText('Running')).toBeNull();
   });
 
   it('supports custom running and failed labels', () => {

@@ -6,6 +6,7 @@ import { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { PublishFolderNode } from '../../../models/publish';
 import { PublishFoldersTree } from '../PublishFoldersTree';
+import styles from '../PublishFoldersTree.module.scss';
 
 const capturedProps: {
   current: ComponentProps<
@@ -369,15 +370,24 @@ describe('PublishFoldersTree', () => {
     ).toBeNull();
   });
 
-  it('cancels inline folder creation without calling onCreateFolder', async () => {
+  it('cancels inline folder creation through the public cancel action', async () => {
     const onCreateFolder = vi.fn();
     renderTree({ onCreateFolder });
     await userEvent.click(
       screen.getByRole('button', { name: 'Create new folder' }),
     );
-    act(() => capturedProps.current?.onCreateFolderCancel?.());
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(capturedProps.current?.createdFolderPath).toBeNull();
     expect(onCreateFolder).not.toHaveBeenCalled();
+  });
+
+  it('supports a custom folder-creation cancel label', async () => {
+    renderTree({ cancelCreatingFolderLabel: 'Discard folder' });
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Create new folder' }),
+    );
+
+    expect(screen.getByRole('button', { name: 'Discard folder' })).toBeTruthy();
   });
 
   it('disables the create-folder trigger when disabled', () => {
@@ -387,6 +397,19 @@ describe('PublishFoldersTree', () => {
         .getByRole('button', { name: 'Create new folder' })
         .hasAttribute('disabled'),
     ).toBe(true);
+  });
+
+  /*
+   * The tree's inline create/rename editor is rendered by DialFoldersTree, and
+   * the kit input inside it renders at its default 40px height, which the 24px
+   * tree row clips. The row-height correction is a CSS rule scoped to the
+   * element wrapping the tree, so the class has to stay on that element.
+   */
+  it('scopes the inline editor row-height rule to the element wrapping the tree', () => {
+    renderTree();
+    expect(screen.getByRole('tree').parentElement?.className).toContain(
+      styles.tree,
+    );
   });
 
   describe('root selection', () => {

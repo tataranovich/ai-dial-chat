@@ -8,8 +8,10 @@ import { UserMessageBubble } from './UserMessageBubble';
 /** Role-switching wrapper — renders `UserMessageBubble` or `AssistantMessageBubble` based on `role`. */
 export const MessageBubble: FC<MessageBubbleProps> = ({
   role,
+  beforeContent,
   onAttachmentClick,
   markdownComponents,
+  markdownUrlTransform,
   ...props
 }) => {
   if (role === MessageRole.Status) {
@@ -25,14 +27,20 @@ export const MessageBubble: FC<MessageBubbleProps> = ({
 
   if (role === MessageRole.User) {
     return (
-      <UserMessageBubble {...props} onAttachmentClick={onAttachmentClick} />
+      <UserMessageBubble
+        {...props}
+        beforeContent={beforeContent}
+        onAttachmentClick={onAttachmentClick}
+      />
     );
   }
 
   return (
     <AssistantMessageBubble
       {...props}
+      beforeContent={beforeContent}
       markdownComponents={markdownComponents}
+      markdownUrlTransform={markdownUrlTransform}
       onAttachmentClick={onAttachmentClick}
     />
   );

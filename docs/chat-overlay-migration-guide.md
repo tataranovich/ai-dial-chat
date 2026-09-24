@@ -18,7 +18,9 @@ the API, and the set of UI feature flags.
 4. Replace raw event and feature-flag strings with the exported enums.
 5. Adapt changed methods and remove calls to methods that are not supported
    yet.
-6. Verify authentication, the handshake, core operations, and resource
+6. Update every host site that reads a message or conversation field — the
+   protocol now carries narrow projections, not the chat's own entities.
+7. Verify authentication, the handshake, core operations, and resource
    cleanup.
 
 ## 1. Prepare the new chat deployment
@@ -52,6 +54,19 @@ Correct:   https://portal.example.com
 Incorrect: https://portal.example.com/support
 ```
 
+An entry may also use a single leading `*.` wildcard label to allow an entire
+subdomain family instead of listing every host:
+
+```dotenv
+ALLOWED_IFRAME_ORIGINS=https://*.example.com
+```
+
+This matches `https://portal.example.com` and `https://a.b.example.com`, but
+not the bare apex `https://example.com` — list the apex separately if it must
+also be allowed. The wildcard label must be the leftmost part of the host; a
+bare `*`, a wildcard elsewhere in the host, or a path/query on either form are
+all rejected at boot.
+
 Both settings are required:
 
 - If `OVERLAY_ENABLED=false`, the application runs in normal mode.
@@ -61,7 +76,34 @@ Both settings are required:
   that established the trusted overlay session.
 
 Do not use `*` in production. The new overlay intentionally requires an exact
-origin and does not send data with `postMessage(..., '*')`.
+origin and does not send data with `postMessage(..., '*')`. The only messages
+posted to `'*'` are the two bootstrap events, `INIT_READY` and `READY`, which
+the embedded chat emits before any host origin is known; they carry no
+payload. Every message that carries data — responses and all later events —
+is posted to the exact origin that completed the handshake.
+
+### External document previews
+
+If the embedded chat previews PDFs or Office documents hosted outside the chat
+origin, configure their trusted origins separately on `chat-api`:
+
+```dotenv
+OVERLAY_ENABLED=true
+ALLOWED_IFRAME_ORIGINS=https://portal.example.com
+ALLOWED_CONNECT_ORIGINS=https://documents.example.com
+```
+
+`ALLOWED_IFRAME_ORIGINS` controls embedding and iframe permissions; it does not
+permit the viewer's network requests. `ALLOWED_CONNECT_ORIGINS` extends CSP
+`connect-src` in both the enforced and report-only policies. If the portal also
+hosts the documents, list its origin in both settings. Restart `chat-api` and
+reload the iframe to receive the updated policy.
+
+Document requests originate from the chat iframe, so a cross-origin document
+server must allow the **chat origin**, not just the parent portal origin, through
+CORS. This setting does not change the document server's authorization. See the
+[CSP configuration reference](../apps/chat-api/README.md#content-security-policy)
+and [legacy migration notes](legacy-chat-migration-guide.md#external-document-previews).
 
 ### Authentication in the embedded chat
 
@@ -86,17 +128,38 @@ The following legacy client-side authentication options are no longer
 supported:
 
 - `signInInSameWindow`
-- `signInOptions.autoSignIn`
-- `signInOptions.signInProvider`
 - `signInOptions.logInHint`
 - `signInOptions.signInInNewWindow`
 - `signInOptions.validationUserEmail`
 - `signInOptions.explicitToken`
 
-If the host application relied on automatic provider selection, a login hint,
-or an explicit token, that flow cannot currently be migrated one-to-one. The
-user now completes the new chat's standard login flow in an external tab or
-window.
+If the host application relied on a login hint, a user-validation email, or an
+explicit token, that flow cannot currently be migrated one-to-one. The user
+completes the new chat's standard login flow instead — externally by default,
+or inside the iframe for a provider mapped to same-window login.
+
+`signInOptions.autoSignIn` and `signInOptions.signInProvider` do have a
+successor: `auth.autoSignInProvider`, described in
+[Start login automatically](#start-login-automatically).
+
+`signInOptions.explicitToken` has no replacement because the new chat
+authenticates through a BFF that keeps the OIDC session in an encrypted
+`HttpOnly` cookie: the access token never reaches the browser, and the
+embedded SPA authenticates every `/api/*` call by cookie. See
+[BFF authentication with an encrypted session cookie](./auth/auth-bff-encrypted-cookie.md).
+
+The BFF can additionally authenticate a request that carries an
+`Authorization: Bearer <token>` header, verifying it against the issuing
+provider's JWKS — see
+[Header bearer-token authentication](./auth/auth-bff-encrypted-cookie.md#61-header-bearer-token-authentication-optional-extension).
+That path is not a successor to `explicitToken` and does not restore
+host-supplied token login for the overlay: the embedded SPA sends no
+`Authorization` header (its API client is configured with
+`credentials: 'include'` only), the overlay protocol has no field to carry a
+token into the iframe, and the iframe's initial document load is a plain
+browser navigation that cannot carry a header in any case. It is intended for
+programmatic API callers, and enabling it widens the BFF's trust boundary from
+"our SPA in a browser" to "anyone holding a valid IdP token".
 
 ### Configure per-provider overlay login modes
 
@@ -205,28 +268,50 @@ overlay.destroy();
 
 ### Changes to `ChatOverlayOptions`
 
-| Legacy option                         | New option or required action                                       |
-| ------------------------------------- | ------------------------------------------------------------------- |
-| `domain`                              | Preserved. The library now derives the target origin from this URL. |
-| `hostDomain`                          | Removed. The library automatically sends `window.location.origin`.  |
-| `theme`                               | Preserved.                                                          |
-| `modelId`                             | Preserved.                                                          |
-| `overlayConversationId`               | Preserved.                                                          |
-| `auth.providerUiModes`                | New optional per-provider login mode map; defaults to `External`.   |
-| `requestTimeout`                      | Preserved; defaults to `10000` ms.                                  |
-| `loaderStyles`                        | Preserved as `Record<string, string>`.                              |
-| `loaderClass`                         | Preserved.                                                          |
-| `loaderInnerHTML`                     | Preserved. Pass trusted HTML only.                                  |
-| `loaderHideEvent`                     | Preserved, but now use `OverlayEventType`.                          |
-| `enabledFeatures`                     | Accepts only `OverlayFeature[]`.                                    |
-| `newConversationsFolderId`            | Removed because the new chat does not have conversation folders.    |
-| `enabledFeaturesData`                 | Not supported.                                                      |
-| `messageButtons`                      | Not supported.                                                      |
-| `signInOptions`, `signInInSameWindow` | Removed; see the authentication section.                            |
+| Legacy option                         | New option or required action                                                                                             |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `domain`                              | Preserved. The library now derives the target origin from this URL.                                                       |
+| `hostDomain`                          | Removed. The library automatically sends `window.location.origin`.                                                        |
+| `theme`                               | Preserved.                                                                                                                |
+| `modelId`                             | Preserved.                                                                                                                |
+| `overlayConversationId`               | Preserved.                                                                                                                |
+| `auth.providerUiModes`                | New optional per-provider login mode map; defaults to `External`.                                                         |
+| `requestTimeout`                      | Preserved; defaults to `10000` ms.                                                                                        |
+| `loaderStyles`                        | Preserved as `Record<string, string>`.                                                                                    |
+| `loaderClass`                         | Preserved.                                                                                                                |
+| `loaderInnerHTML`                     | Preserved. Pass trusted HTML only.                                                                                        |
+| `loaderHideEvent`                     | Preserved, but now use `OverlayEventType`.                                                                                |
+| `enabledFeatures`                     | Accepts only `OverlayFeature[]`.                                                                                          |
+| `newConversationsFolderId`            | Removed because the new chat does not have conversation folders.                                                          |
+| `enabledFeaturesData`                 | Not supported.                                                                                                            |
+| `messageButtons`                      | Not supported.                                                                                                            |
+| `signInOptions`, `signInInSameWindow` | Removed as an object; `autoSignIn`/`signInProvider` live on as `auth.autoSignInProvider`. See the authentication section. |
 
 `setOverlayOptions()` now accepts only fields that can be changed dynamically:
 `theme`, `modelId`, `overlayConversationId`, `enabledFeatures`, and `auth`. Do
 not pass `domain`, `hostDomain`, the request timeout, or loader settings to it.
+
+### Iframe attributes and browser permissions
+
+The library owns the `<iframe>` element and its security attributes; they are
+not configurable. Check them against the host page's own CSP and
+`Permissions-Policy` before rolling out:
+
+```text
+sandbox = allow-same-origin allow-scripts allow-modals allow-forms
+          allow-popups allow-downloads allow-popups-to-escape-sandbox
+allow    = clipboard-write
+           + microphone   when `voice-input` is in `enabledFeatures`
+           + fullscreen   after `allowFullscreen()` is called
+```
+
+`allow-popups` and `allow-popups-to-escape-sandbox` are what let the external
+login flow open in a real browser tab, and `allow-downloads` is what lets a
+user save an attachment — a host that re-frames the overlay under a stricter
+sandbox breaks both. The `allow` list only delegates a permission the host
+document already holds: if the host page's `Permissions-Policy` does not
+grant `microphone` or `fullscreen` to the chat origin, the corresponding
+feature stays blocked no matter what the overlay requests.
 
 ## 3. Account for the new handshake and error handling
 
@@ -252,10 +337,8 @@ Practical implications:
   iframe, not when it enters the queue.
 - Every request receives a `requestId` and `expiresAt`.
 - A request the embedded chat cannot execute rejects immediately with
-  `ChatOverlayRequestError`; inspect its `code` and `requestType` fields.
-- Active-conversation methods called while the empty composer is open reject
-  with `OverlayRequestErrorCode.ActiveConversationUnavailable` rather than
-  waiting for the request timeout.
+  `ChatOverlayRequestError` instead of waiting out the request timeout;
+  inspect its `code` and `requestType` fields.
 - `setOverlayOptions()` may be called before `ready()` because it participates
   in the handshake.
 - `destroy()` rejects pending requests and removes the iframe, loader, and
@@ -268,6 +351,26 @@ loaderHideEvent: OverlayEventType.ReadyToInteract;
 ```
 
 The default `loaderHideEvent` is `OverlayEventType.Ready`.
+
+### Request-level error codes
+
+`ChatOverlayRequestError.code` is one of the four values exported as
+`OverlayRequestErrorCode`:
+
+| Code                              | Raised when                                                                                                                       |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `ACTIVE_CONVERSATION_UNAVAILABLE` | An active-conversation method was called while the empty composer is open. Raised immediately instead of waiting out the timeout. |
+| `CONVERSATION_LIST_UNAVAILABLE`   | A conversation-list method was called on a screen that does not mount the conversation list.                                      |
+| `INVALID_PAYLOAD`                 | The request payload does not match the method contract, for example a missing or non-string conversation id.                      |
+| `REQUEST_EXECUTION_FAILED`        | The embedded chat accepted the request and then failed while executing it.                                                        |
+
+Before `READY_TO_INTERACT`, a request whose integration is not mounted yet is
+queued rather than rejected; the two `*_UNAVAILABLE` codes are only produced
+after the handshake completes.
+
+These request-level codes are distinct from the domain `error` field the
+conversation-list methods return (`NOT_FOUND`, `FORBIDDEN`,
+`INVALID_ARGUMENT`) — see below.
 
 ## 4. Migrate the public API
 
@@ -294,6 +397,30 @@ The following methods are available on the new `ChatOverlay`:
 | `subscribe(eventType, callback)`        | Uses `OverlayEventType` and returns an unsubscribe function.                 |
 | `allowFullscreen()`, `openFullscreen()` | Preserved.                                                                   |
 | `destroy()`                             | Idempotently releases resources.                                             |
+
+The legacy `overlay.send(type, payload)` escape hatch is gone — the new
+`send()` is private. Hosts that spoke the `@DIAL_OVERLAY` protocol directly
+through it must move to the typed methods above; there is no supported way to
+post an arbitrary request type.
+
+### Changed response payloads
+
+Several methods that resolved to `void` in the legacy overlay now resolve to a
+payload, and one that resolved to a conversation now always resolves to
+`null`:
+
+| Method                      | Legacy result      | New result                            |
+| --------------------------- | ------------------ | ------------------------------------- |
+| `sendMessage(content)`      | `void`             | `{ messages }` after the send         |
+| `setSystemPrompt(prompt)`   | `void`             | `{ systemPrompt }` that was persisted |
+| `setTemperature(value)`     | `void`             | `{ temperature }` that was persisted  |
+| `deleteConversation(id)`    | `void`             | `{ error? }`                          |
+| `createLocalConversation()` | `{ conversation }` | `{ conversation: null }` — always     |
+| `setInputContent(content)`  | `void`             | `void` (unchanged)                    |
+
+Existing code keeps compiling — the added payloads are additive — but a host
+that inferred success from "resolved with nothing" should now read the
+returned payload.
 
 ### New `createConversation` signature
 
@@ -350,6 +477,63 @@ inaccessible conversation from one that is still loading. In this case,
 `selectConversation()` may time out instead of returning an explicit
 `NOT_FOUND` error.
 
+### Changed message and conversation shapes
+
+The protocol no longer carries the chat's internal entities. It carries two
+narrow projections, `OverlayChatMessage` and `OverlayConversation`. A host
+that imports its types from the new package gets compile errors on the
+removed fields; a host that kept its own local typings, or passed the values
+through `any`, gets `undefined` at runtime instead — so audit these call
+sites even if the build stays green.
+
+`getMessages()` and `sendMessage()` return `OverlayChatMessage`:
+
+```ts
+interface OverlayChatMessage {
+  id: string;
+  role: string;
+  content: string;
+  stages?: OverlayMessageStage[];
+}
+```
+
+`stages` is the one part of `custom_content` the protocol projects: a message
+that carries agent execution stages exposes them as `OverlayMessageStage[]`,
+with `index`, `name`, `status` (`null` while running, otherwise
+`OverlayStageStatus.Completed`/`Failed`), and the optional `content` and
+`tag`. Stage attachments are not projected. There is no per-stage event yet:
+subscribe to `GPT_END_GENERATING` and call `getMessages()` to inspect what an
+agent did.
+
+Everything else the legacy `Message` carried is gone from the protocol:
+the rest of `custom_content` (attachments, state, form schema and value),
+`custom_fields.annotations`, `like`, `errorMessage`, `model`, `settings`,
+`responseId`, and `templateMapping`. A host that rendered attachments or read
+a like state from overlay messages has no replacement. `id` is new — the
+legacy `Message` had none, so messages were addressed by array index, which
+is also why `deleteMessage(index)` and `updateMessage(index, fields)` have no
+successor.
+
+`getConversations()`, `getSelectedConversations()`, `selectConversation()`,
+`createConversation()`, and `renameConversation()` return
+`OverlayConversation`:
+
+| Legacy field                                   | New field                                  |
+| ---------------------------------------------- | ------------------------------------------ |
+| `name`                                         | `title`                                    |
+| `id`                                           | `id`                                       |
+| `updatedAt`                                    | `updatedAt` (now required, epoch ms)       |
+| `sharedWithMe`, `publishedWithMe`              | Preserved.                                 |
+| —                                              | `isPinned` (new)                           |
+| —                                              | `isReadonly` (new)                         |
+| `folderId`, `bucket`, `parentPath`             | Removed — the new chat has no folders.     |
+| `model`                                        | Removed. Select an agent with `modelId`.   |
+| `isPlayback`, `isReplay`                       | Removed with the playback and replay APIs. |
+| `permissions`, `author`, `status`, `createdAt` | Removed.                                   |
+
+Grep the host for `conversation.name` first: the `name` to `title` rename is
+the substitution reviewers miss most often.
+
 ### Methods not supported yet
 
 The following methods are absent from the new overlay:
@@ -404,6 +588,11 @@ The same event may arrive multiple times, and subscribers are called each
 time. If an action must run only once, unsubscribe inside the callback or add
 your own guard.
 
+Every new event is a bare notification: the callback receives `undefined`,
+not a payload. In particular `SELECTED_CONVERSATION_LOADED` no longer carries
+`{ selectedConversationIds }` — call `getSelectedConversations()` from the
+callback when you need to know which conversation was loaded.
+
 ## 6. Migrate UI feature flags
 
 In the new API, `enabledFeatures` is an `OverlayFeature` array, not a string:
@@ -419,7 +608,8 @@ It uses **replace**, not merge, semantics:
 - A later `setOverlayOptions({ enabledFeatures })` call completely replaces
   the previous set.
 - Unknown strings are dropped with a warning, but the entire request is not
-  rejected.
+  rejected. A deprecated-but-recognized string (see [Renamed flags](#renamed-flags))
+  resolves to its replacement instead of being dropped.
 - If every supplied string is unknown, the resulting set is empty.
 - `null` is not supported as a reset-to-baseline sentinel.
 
@@ -432,20 +622,36 @@ Do not send a partial diff. Always send the complete desired set.
 | `marketplace`              | `catalog` (`OverlayFeature.Catalog`)                        |
 | `marketplace-hide-my-apps` | `catalog-hide-my-apps` (`OverlayFeature.CatalogHideMyApps`) |
 | `marketplace-table-view`   | `catalog-table-view` (`OverlayFeature.CatalogTableView`)    |
+| `custom-applications`      | `schema-apps` (`OverlayFeature.SchemaApps`)                 |
+
+The `marketplace*` renames are hard renames: the legacy strings are no longer
+recognized. `custom-applications` is accepted transitionally — it resolves to
+`schema-apps` and logs a deprecation warning (in the browser console for an
+overlay-supplied set, in the server log for `ENABLED_UI_FEATURES`) rather than
+being dropped. Migrate to `schema-apps`; the alias will be removed in a later
+release.
+
+It was renamed because the name described the wrong thing: it gates the
+catalog's **Create Quick App** entry, i.e. applications built on an
+`applicationTypeSchemaId`. Schema-less custom applications are gated by
+`custom-apps`, which also controls their editability and the custom-app editor
+route. `hide-custom-app-creation` hides both create entries regardless of
+either flag.
 
 ### Flags replaced by unconditional behavior
 
 The following legacy strings are no longer recognized. Their corresponding
 behavior is unconditional in the new chat, so you can normally remove them:
 
-| Legacy flag               | New chat behavior                                                                |
-| ------------------------- | -------------------------------------------------------------------------------- |
-| `custom-logo`             | The logo always comes from theme configuration; use `theme` to select the theme. |
-| `show-layout-dividers`    | Dividers are a permanent part of the UI.                                         |
-| `top-settings`            | The top settings panel is always rendered.                                       |
-| `top-chat-model-settings` | The model selector is rendered; use `disallow-change-agent` to restrict it.      |
-| `chat-header-border`      | The header bottom border is always rendered.                                     |
-| `chat-input-border`       | The input border is always rendered.                                             |
+| Legacy flag               | New chat behavior                                                                                                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `custom-logo`             | The logo always comes from theme configuration; use `theme` to select the theme.                                                                                                              |
+| `show-layout-dividers`    | Dividers are a permanent part of the UI.                                                                                                                                                      |
+| `top-settings`            | The top settings panel is gone; the equivalent controls (temperature, system prompt, response format) live in the chat input's "+" menu. Use `chat-settings` to remove that entry everywhere. |
+| `top-chat-model-settings` | The model selector is rendered; use `hide-change-agent` to remove it or `disallow-change-agent` to restrict it.                                                                               |
+| `chat-header-border`      | The header bottom border is always rendered.                                                                                                                                                  |
+| `chat-input-border`       | The input border is always rendered.                                                                                                                                                          |
+| `user-message-align-end`  | User messages are always aligned to the inline end.                                                                                                                                           |
 
 ### UI flags not supported yet
 
@@ -473,14 +679,13 @@ The following legacy chat flags are not included in the new `OverlayFeature`:
 | `report-an-issue`               | No equivalent toggle is available.                                            |
 | `request-api-key`               | No equivalent toggle is available.                                            |
 | `md-sidebar-overlay-breakpoint` | Requires a sidebar overlay/backdrop mode that does not exist in the new chat. |
-| `user-message-align-end`        | Inline-end alignment is already unconditional.                                |
 
 Pass only values exported by `OverlayFeature`. This also protects TypeScript
 integrations from typos and removed keys.
 
 ### Supported flags and defaults
 
-The new chat supports 32 flags.
+The new chat supports 45 flags.
 
 Enabled by default:
 
@@ -495,16 +700,39 @@ dislike-comment
 input-files
 live-chat-interaction
 empty-chat-settings
+chat-settings
+removable-tools
 conversations-sharing
 applications-sharing
 toolsets-sharing
 conversations-publishing
-custom-applications
+schema-apps
 code-apps
 catalog
+file-manager
 toolsets
+custom-apps
+prompts
+skills
 voice-input
 ```
+
+`chat-settings` and `empty-chat-settings` are not independent. `chat-settings`
+is the master switch for the "Chat settings" entry in the chat input's "+" menu
+(temperature, system prompt, response format) â turning it off removes the entry
+on every screen. `empty-chat-settings` only narrows it to the empty-chat screen,
+which renders the entry when both keys are on. To take these settings away from
+users entirely, drop `chat-settings`; naming `empty-chat-settings` as well is not
+required.
+
+`removable-tools` controls whether the deployment tools shown in the chat input
+can be taken off the input. With it on (the default) each tool chip carries a ×
+that drops it from the row, and the "+" menu gains a "Tools" entry that brings a
+dropped chip back. Drop the key and every chip becomes a persistent on/off
+toggle: no ×, no "Tools" entry — and where tools are the only thing that menu
+would hold, the "+" button disappears with it. The tools themselves are still
+derived from the deployment's configuration schema either way; the key governs
+only whether the user can add and remove their chips.
 
 Disabled by default and enabled explicitly:
 
@@ -513,6 +741,8 @@ hide-custom-app-creation
 disabled-send
 skip-focus-chat-input-onload
 disallow-change-agent
+hide-change-agent
+hide-conversations-filter
 hide-new-conversation
 hide-empty-chat-change-agent
 catalog-hide-my-apps
@@ -522,11 +752,153 @@ hide-edit-user-message
 hide-regenerate-assistant-message
 hide-user-menu
 hide-user-settings
+hide-keyboard-shortcuts
+hide-navigation-menu
+show-all-starters
+hide-footer-version
+show-agent-description
 ```
 
+`hide-navigation-menu` removes the mobile navigation menu in full â the
+header's hamburger button and the sheet behind it, which carries the nav items,
+the profile row, keyboard shortcuts, and log out. Reach for it when the host
+portal already owns sign-in and sign-out, so the sheet's log-out row would only
+mislead. It leaves the desktop navigation rail and its user menu alone; that
+surface is `hide-user-menu`'s.
+
+`disallow-change-agent` and `hide-change-agent` both act on the in-chat
+agent selector, and either one removes it: a control the user cannot open is
+not rendered at all, rather than rendered greyed out. Use
+`hide-change-agent` when the agent must stay hidden even though it is
+otherwise changeable; use `disallow-change-agent` when the restriction itself
+is the point. The empty-chat composer has its own key,
+`hide-empty-chat-change-agent`.
+
+`hide-conversations-filter` removes the conversations panel's source filter
+row (All / My chats / Shared / Organization). The list keeps every group, so
+nothing becomes unreachable — only the control is gone. Because the row is
+today the only thing that ever moves the list off the All tab, hiding it
+leaves the panel permanently showing all sources. Use it for embeds where one
+source is the whole story.
+
+`hide-keyboard-shortcuts` removes the Keyboard shortcuts entry from the user
+menu and from the mobile profile sheet. The preference it edits (Enter vs
+`⌘`/`Ctrl`+Enter to send) keeps working from its stored value, defaulting to
+Enter — hiding the entry pins users to whatever they last chose rather than
+disabling the shortcut. `hide-user-settings` also hides this entry, on both
+surfaces; use `hide-keyboard-shortcuts` when the language selector should
+stay.
+
+`show-all-starters` changes how a deployment's conversation starters are laid
+out on the empty-chat screen. By default the row keeps as many starters as the
+measured width allows — at most four — and collapses the rest into a "…"
+dropdown; in a narrow embed that usually means one visible starter and a menu.
+With the key on, every starter is rendered as its own row and the dropdown is
+gone. It does not change which starters the deployment exposes, only their
+layout.
+
+`hide-footer-version` removes the application version label from the footer
+(the `v0.45.0` text in its trailing corner). The label is diagnostic chrome
+rather than operator copy, so the operator's `footer` capability flag does not
+govern it — an embed that shows the host's own product version reaches for this
+key instead. Any footer HTML the operator configured keeps rendering.
+
+`show-agent-description` renders the selected agent's own `description` on the
+empty-chat screen, below the conversation starters, as markdown — links in it
+are clickable. It reads the same text the catalog shows on the agent's card, so
+an embed that pins one agent can put its scope note or disclaimer in front of
+the user before the first message. Nothing renders when the agent has no
+description. This is separate from the operator-wide welcome-screen
+description, which renders under the greeting for every agent alike and is not
+governed by this key.
+
 `voice-input` additionally adds `microphone` to the iframe's `allow`
-attribute. The flag itself does not provide an ASR model or replace the
+attribute. That attribute is computed once, when `ChatOverlay` is
+constructed, so `voice-input` must be present in the constructor's
+`enabledFeatures`. Adding it later through `setOverlayOptions()` shows the
+recording button but leaves the iframe without microphone permission, and
+recording fails. The flag itself does not provide an ASR model or replace the
 backend configuration required for voice input.
+
+### Start login automatically
+
+A host embedding the chat inside an already-authenticated portal can have the
+overlay start login on its own, with no **Log in** click, by naming the
+provider:
+
+```ts
+const overlay = new ChatOverlay('#chat-root', {
+  domain: 'https://chat.example.com',
+  auth: {
+    providerUiModes: { keycloak: OverlayAuthUiMode.SameWindow },
+    autoSignInProvider: 'keycloak',
+  },
+});
+```
+
+This replaces the legacy `signInOptions.autoSignIn` + `signInProvider` pair.
+There is no separate boolean: the field's presence enables the behaviour and
+its value names the provider, so the option cannot be half-specified the way
+the legacy pair could.
+
+Three conditions must hold, and the overlay falls back to the ordinary login
+gate — logging one console warning — whenever one does not:
+
+1. **The provider is mapped to `SameWindow`.** Only that mode navigates the
+   iframe itself. `External` opens a separate window through `window.open`,
+   which a browser blocks when no user gesture triggered it, so an automatic
+   `External` attempt would wait on a window that never opened. A provider
+   omitted from `providerUiModes` resolves to `External` and is therefore
+   skipped too.
+2. **The backend registers the provider.** The id must appear in
+   `GET /api/v1/auth/providers`, so a typo never navigates the iframe to an
+   unknown-provider endpoint.
+3. **No attempt for the same URL was started in the last 60 seconds.** The app
+   records each automatic attempt in `sessionStorage`; a provider that returns
+   the user still unauthenticated — expired IdP session, a consent screen, a
+   refused silent authentication — would otherwise loop the iframe. After the
+   suppression the user sees the normal gate and can log in manually.
+
+#### Migrating a legacy `signInOptions` block
+
+A host that passed the provider in from its own configuration — the common
+legacy shape — moves both fields into `auth`:
+
+```diff
+- signInOptions: {
+-   autoSignIn: true,
+-   signInProvider: hostSettings.dialSignInProvider,
+- },
++ auth: {
++   providerUiModes: {
++     [hostSettings.dialSignInProvider]: OverlayAuthUiMode.SameWindow,
++   },
++   autoSignInProvider: hostSettings.dialSignInProvider,
++ },
+```
+
+The provider is named twice on purpose: `autoSignInProvider` asks for the
+automatic start, and the `providerUiModes` entry is the host's assertion that
+this provider's login page renders inside an iframe. A legacy block without
+`signInInNewWindow` was already relying on that same in-iframe navigation, so
+the mapping records what the integration was doing all along.
+
+Two things to check while migrating:
+
+- **The id must be one the backend registers.** `GET /api/v1/auth/providers`
+  is the list; a value that is not in it is skipped with a warning instead of
+  navigating. Confirm the id your host configuration supplies still matches
+  after the move, because the legacy value came from the old chat's own
+  provider registry.
+- **An empty configuration value stays safe.** An absent, empty, or
+  whitespace-only id disables the automatic start and leaves the login gate,
+  which is how the legacy pair behaved when `signInProvider` was unset.
+
+Like the legacy option, this is worth enabling when the user already holds a
+session with the provider: the value is the silent round-trip through the IdP,
+not rendering a login form inside the frame. It does not make a provider
+frameable — a provider that refuses framing (Azure sends
+`X-Frame-Options: deny`) must stay on `External` and keep the button.
 
 ### Server baseline
 
@@ -537,8 +909,10 @@ ENABLED_UI_FEATURES=header,conversations-section,likes,input-files
 ```
 
 This is also a complete replacement set, not an addition to the defaults. If
-the variable is absent or empty, the built-in baseline containing 19
-default-on flags is used. An overlay host may replace the server baseline with
+the variable is absent or empty, the built-in baseline of 26 default-on flags
+out of the 45 supported is used. Entries the server does not recognize — including
+the renamed and retired legacy strings listed above — are logged and dropped;
+if every entry is unrecognized, the built-in baseline is used instead. An overlay host may replace the server baseline with
 its own `enabledFeatures`; the server baseline is not a security ceiling.
 
 Do not use UI flags as an authorization mechanism. The backend must restrict
@@ -581,3 +955,30 @@ Key differences:
 - Manager methods still accept `overlayId` as their first argument.
 - `destroy()` releases every overlay and all global listeners.
 - The unsupported methods listed above are also absent from the manager.
+- `createOverlay()` throws when `overlayId` is already registered, and every
+  other method throws on an unknown `overlayId`.
+
+### Changes to `ChatOverlayManagerOptions`
+
+| Legacy option                                                    | New option or required action                                                                                                           |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                                                             | Renamed to `overlayId`.                                                                                                                 |
+| `position`                                                       | Preserved; type it with the `OverlayPosition` enum instead of a raw string.                                                             |
+| `allowFullscreen`                                                | Preserved.                                                                                                                              |
+| `width`, `height`                                                | Now `number \| string`; a number is treated as px. Defaults changed from `'540px'` × `'540px'` to `380` × `600`.                        |
+| `zIndex`                                                         | Now `number`, not a string. The default changed from `'5'` to `999999`.                                                                 |
+| `iconSvg`, `iconHeight`, `iconWidth`, `iconBgColor`, `iconColor` | Removed. The toggle button's icon and colors are fixed.                                                                                 |
+| —                                                                | New: `toggleButtonAriaLabel`, `closeButtonAriaLabel`, `fullscreenButtonAriaLabel` — supply translated strings, they default to English. |
+
+The chrome is no longer assembled by the host. `createOverlayToggle()`,
+`createFullscreenButton()`, `createCloseButton()`, and `updateOverlay()` are
+gone; `createOverlay()` builds the panel, the toggle, the close button, and —
+when `allowFullscreen` is set — the fullscreen button, and re-lays them out on
+`resize` and `orientationchange`. Below a 1280px viewport the panel ignores
+`position`, `width`, and `height` and covers the full screen.
+
+One asymmetry to plan around: `ChatOverlayManager.setOverlayOptions()`
+accepts only `theme`, `modelId`, `overlayConversationId`, and
+`enabledFeatures` — not `auth`. Per-provider login modes can therefore only be
+set through `createOverlay()` for manager-created overlays; changing them at
+runtime requires a directly constructed `ChatOverlay`.

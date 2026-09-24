@@ -34,10 +34,11 @@ import { execFileSync, execSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { parseArgs } from 'util';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import {
+  collectExportFilePaths,
+  preparePublishPackageJson,
+} from './publish-lib-package-json.mjs';
 
 const { readCachedProjectGraph, workspaceRoot } = devkit;
 
@@ -127,16 +128,22 @@ function getDevelopmentVersion(packageName, baseVersion) {
   let publishedVersions;
 
   try {
-    const stdout = execFileSync('npm', ['view', packageName, 'versions', '--json'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
-    });
+    const stdout = execFileSync(
+      'npm',
+      ['view', packageName, 'versions', '--json'],
+      {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: process.platform === 'win32',
+      },
+    );
     publishedVersions = JSON.parse(stdout);
   } catch (err) {
     const stderr = String(err.stderr || '');
     if (stderr.includes('E404')) {
-      console.warn(`${packageName} has no published versions yet; using ${baseVersion}-dev.0.`);
+      console.warn(
+        `${packageName} has no published versions yet; using ${baseVersion}-dev.0.`,
+      );
       publishedVersions = [];
     } else {
       throw new Error(`Could not get published versions for ${packageName}.`);
@@ -152,7 +159,9 @@ function getDevelopmentVersion(packageName, baseVersion) {
   // Use a valid semver pre-release identifier (#.#.#-dev.N) — npm rejects a
   // bare 4th numeric segment (#.#.#.N) as an invalid version.
   const lastNumber = versions
-    .filter((publishedVersion) => publishedVersion.startsWith(`${baseVersion}-dev.`))
+    .filter((publishedVersion) =>
+      publishedVersion.startsWith(`${baseVersion}-dev.`),
+    )
     .map((publishedVersion) => publishedVersion.match(/\d+$/)?.[0])
     .filter(Boolean)
     .map((publishedVersion) => parseInt(publishedVersion, 10))
@@ -197,84 +206,46 @@ invariant(
 // ---------------------------------------------------------------------------
 
 const sourcePkgPath = path.join(projectRootAbs, 'package.json');
-invariant(existsSync(sourcePkgPath), `Source package.json not found at:\n  ${sourcePkgPath}`);
-
-// Strip "./dist/" prefix from entry-point paths so they resolve correctly
-// when npm publish runs from inside the dist/ directory.
-const stripDistPrefix = (p) =>
-  typeof p === 'string' && p.startsWith('./dist/') ? './' + p.slice(7) : p;
-
-// Recursively rewrite all string values inside an exports map, and drop the
-// "@epam/source" condition (an internal monorepo-only resolution hint).
-const rewriteExportsObj = (obj) => {
-  if (typeof obj === 'string') return stripDistPrefix(obj);
-  if (Array.isArray(obj)) return obj.map(rewriteExportsObj);
-  if (obj && typeof obj === 'object') {
-    return Object.fromEntries(
-      Object.entries(obj)
-        .filter(([k]) => k !== '@epam/source')
-        .map(([k, v]) => [k, rewriteExportsObj(v)]),
-    );
-  }
-  return obj;
-};
+invariant(
+  existsSync(sourcePkgPath),
+  `Source package.json not found at:\n  ${sourcePkgPath}`,
+);
 
 try {
-  const json = JSON.parse(readFileSync(sourcePkgPath, 'utf-8'));
+  const rawSource = readFileSync(sourcePkgPath, 'utf-8');
+  const json = JSON.parse(rawSource);
 
   if (development && !values.version) {
     version = getDevelopmentVersion(json.name, version);
     console.info(`Development version for ${json.name}: ${version}`);
   }
 
-  // Accept #.#.#, #.#.#-pre.N, or the special token "dev".
-  const validVersion = /^\d+\.\d+\.\d+(-[\w.]+)?$/;
+  preparePublishPackageJson(json, {
+    version,
+    projectRoot,
+    isWorkspaceLib,
+    rawSource,
+  });
+
+  /*
+   * npm publishes an exports map without checking that any of it resolves, so a
+   * target naming a file the build never emits ships as a package whose subpath
+   * throws ERR_MODULE_NOT_FOUND in every consumer. This is not hypothetical:
+   * nine libs declared "./styles.css": "./style.css" while Vite emits
+   * "index.css", and every embedding host had to add a bundler alias per
+   * package. "./package.json" is excluded — it is written just below.
+   */
+  const missingExports = [...collectExportFilePaths(json.exports)]
+    .filter((target) => target !== './package.json')
+    .filter((target) => !existsSync(path.join(outputPath, target)));
+
   invariant(
-    version && (validVersion.test(version) || version === 'dev'),
-    `Version did not match Semantic Versioning.\nExpected: #.#.#  |  #.#.#-pre.N  |  dev\nGot: ${version}`,
+    missingExports.length === 0,
+    `package.json "exports" names ${missingExports.length} file(s) missing from the build output at:\n` +
+      `  ${outputPath}\n` +
+      missingExports.map((target) => `  - ${target}`).join('\n') +
+      '\nPoint each export at a file the build emits (Vite lib builds emit "index.js" / "index.css").',
   );
-
-  // Set publish version
-  json.version = version;
-
-  // Remove "private" so npm allows publishing
-  delete json.private;
-
-  // npm's automatic provenance (enabled by the release workflow's
-  // "id-token: write" permission) validates "repository.url" against the
-  // "repository" claim in the OIDC token, which reflects the actual
-  // publishing repo (e.g. a fork) — publish fails with E422 if it's missing
-  // or wrong, so derive it from the CI env instead of hardcoding it.
-  const repoUrl =
-    process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY
-      ? `git+${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}.git`
-      : 'git+https://github.com/epam/ai-dial-chat.git';
-  json.repository = {
-    type: 'git',
-    url: repoUrl,
-    directory: projectRoot.split(path.sep).join('/'),
-  };
-
-  // Rewrite entry-point paths (main, module, types, exports)
-  if (json.main) json.main = stripDistPrefix(json.main);
-  if (json.module) json.module = stripDistPrefix(json.module);
-  if (json.types) json.types = stripDistPrefix(json.types);
-  if (json.exports) json.exports = rewriteExportsObj(json.exports);
-
-  // Replace workspace-lib placeholders with the publish version
-  const resolveDeps = (deps) => {
-    if (!deps) return;
-    for (const dep of Object.keys(deps)) {
-      if (isWorkspaceLib(dep)) {
-        deps[dep] = version;
-      }
-    }
-  };
-  resolveDeps(json.dependencies);
-  resolveDeps(json.peerDependencies);
-
-  // Remove dev-only nx configuration block — consumers don't need it
-  delete json.nx;
 
   if (!dry) {
     try {
@@ -303,7 +274,9 @@ try {
 // ---------------------------------------------------------------------------
 
 const dryFlag = dry ? '--dry-run' : '';
-const publishCmd = `npm publish --access public --tag ${tag} ${dryFlag}`.replace(/\s+/g, ' ').trim();
+const publishCmd = `npm publish --access public --tag ${tag} ${dryFlag}`
+  .replace(/\s+/g, ' ')
+  .trim();
 
 console.info(`\nRunning: ${publishCmd}\n  cwd: ${outputPath}\n`);
 execSync(publishCmd, { cwd: outputPath, stdio: 'inherit' });

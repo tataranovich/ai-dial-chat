@@ -2,24 +2,14 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import dts from 'vite-plugin-dts';
+import { createLibTailwindUtilities } from '../../tools/vite-lib-tailwind-utilities.mjs';
 import * as path from 'path';
 
 export default defineConfig(() => ({
   root: import.meta.dirname,
   cacheDir: '../../node_modules/.vite/libs/conversation-input',
-  resolve: {
-    alias: {
-      '@epam/ai-dial-attachment-input': path.resolve(
-        import.meta.dirname,
-        '../attachment-input/src/index.ts',
-      ),
-      '@epam/ai-dial-kit': path.resolve(
-        import.meta.dirname,
-        '../ai-dial-kit/src/index.ts',
-      ),
-    },
-  },
   plugins: [
+    createLibTailwindUtilities({ root: import.meta.dirname }),
     react(),
     dts({
       entryRoot: 'src',
@@ -48,7 +38,7 @@ export default defineConfig(() => ({
       // Don't forget to update your package.json as well.
       formats: ['es' as const],
     },
-    rollupOptions: {
+    rolldownOptions: {
       // External packages that should not be bundled into your library.
       external: [
         'react',
@@ -66,6 +56,29 @@ export default defineConfig(() => ({
     watch: false,
     globals: true,
     environment: 'jsdom',
+    /*
+     * Resolve the sibling packages from source for tests only. chat-shared's
+     * published bundle imports `.scss` modules that are not emitted to
+     * `dist`, which vitest cannot load.
+     *
+     * Both are kept out of a shared `resolve.alias`, which would also apply
+     * to the production build: `vite-plugin-dts` follows build aliases when
+     * it emits declarations, so a type imported from one of these packages
+     * lands in the published `.d.ts` as a relative path into this repo
+     * (`../../../attachment-input/src/index.ts`) that no consumer can
+     * resolve. The runtime bundle never needed the alias either — both
+     * packages are `external`.
+     */
+    alias: {
+      '@epam/ai-dial-chat-shared': path.resolve(
+        import.meta.dirname,
+        '../chat-shared/src/index.ts',
+      ),
+      '@epam/ai-dial-attachment-input': path.resolve(
+        import.meta.dirname,
+        '../attachment-input/src/index.ts',
+      ),
+    },
     setupFiles: ['./src/test-setup.ts'],
     include: ['{src,tests}/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
     reporters: ['default'],
