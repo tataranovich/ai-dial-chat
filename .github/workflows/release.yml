@@ -59,6 +59,10 @@ jobs:
   scan:
     needs: build
     if: ${{ github.event_name != 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -72,8 +76,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ACTIONS_BOT_TOKEN }}
 
-      - name: Scan built image with Trivy
+      - name: Scan built image with Trivy (${{ matrix.platform }})
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        env:
+          TRIVY_PLATFORM: ${{ matrix.platform }}
         with:
           scan-type: image
           image-ref: ${{ env.IMAGE }}:${{ env.SCAN_TAG }}
