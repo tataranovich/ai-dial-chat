@@ -42,3 +42,8 @@ jobs:
       push: ${{ github.event_name != 'pull_request' }}
       platforms: linux/amd64,linux/arm64
       meta-images: ghcr.io/tataranovich/ai-dial-chat
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ACTIONS_BOT_TOKEN }}
