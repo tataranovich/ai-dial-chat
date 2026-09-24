@@ -1,70 +1,70 @@
-# syntax=docker/dockerfile:1
+# # syntax=docker/dockerfile:1
 
-# ─────────────────────────────────────────────
-# Stage 0: install the patched package manager used by all stages
-# ─────────────────────────────────────────────
-FROM node:24.17-alpine AS node-base
+# # ─────────────────────────────────────────────
+# # Stage 0: install the patched package manager used by all stages
+# # ─────────────────────────────────────────────
+# FROM node:24.17-alpine AS node-base
 
-# npm 12.0.x still bundles vulnerable brace-expansion, ip-address, and tar.
-RUN apk upgrade --no-cache libcrypto3 libssl3 \
-    && npm install --global npm@11.19.1
+# # npm 12.0.x still bundles vulnerable brace-expansion, ip-address, and tar.
+# RUN apk upgrade --no-cache libcrypto3 libssl3 \
+#     && npm install --global npm@11.19.1
 
-# ─────────────────────────────────────────────
-# Stage 1: install all workspace dependencies
-# ─────────────────────────────────────────────
-FROM node-base AS deps
+# # ─────────────────────────────────────────────
+# # Stage 1: install all workspace dependencies
+# # ─────────────────────────────────────────────
+# FROM node-base AS deps
 
-WORKDIR /workspace
+# WORKDIR /workspace
 
-# Copy every workspace package.json (--parents preserves directory structure)
-# so npm workspaces can create the correct symlinks before any source arrives.
-COPY --parents package.json package-lock.json apps/*/package.json libs/*/package.json ./
+# # Copy every workspace package.json (--parents preserves directory structure)
+# # so npm workspaces can create the correct symlinks before any source arrives.
+# COPY --parents package.json package-lock.json apps/*/package.json libs/*/package.json ./
 
-RUN npm ci --ignore-scripts
+# RUN npm ci --ignore-scripts
 
-# ─────────────────────────────────────────────
-# Stage 2: build both apps
-# ─────────────────────────────────────────────
-FROM deps AS builder
+# # ─────────────────────────────────────────────
+# # Stage 2: build both apps
+# # ─────────────────────────────────────────────
+# FROM deps AS builder
 
-# Copy the full monorepo source on top of the installed node_modules
-COPY . .
+# # Copy the full monorepo source on top of the installed node_modules
+# COPY . .
 
-# Build the React SPA → apps/chat/dist/ and overlay sandbox → apps/chat-overlay-sandbox/dist/
-# Keep Docker builds deterministic: parallel Nx build/typecheck tasks can race
-# while reading and regenerating declaration outputs in a clean image layer.
-RUN npm exec -- nx run-many --target=build --projects=@epam/chat,chat-overlay-sandbox --parallel=1
+# # Build the React SPA → apps/chat/dist/ and overlay sandbox → apps/chat-overlay-sandbox/dist/
+# # Keep Docker builds deterministic: parallel Nx build/typecheck tasks can race
+# # while reading and regenerating declaration outputs in a clean image layer.
+# RUN npm exec -- nx run-many --target=build --projects=@epam/chat,chat-overlay-sandbox --parallel=1
 
-# Build NestJS, generate a pruned package.json/lockfile, and copy
-# workspace packages → apps/chat-api/dist/{main.js,package.json,...,workspace_modules/}
-RUN npm exec nx run chat-api:prune
+# # Build NestJS, generate a pruned package.json/lockfile, and copy
+# # workspace packages → apps/chat-api/dist/{main.js,package.json,...,workspace_modules/}
+# RUN npm exec nx run chat-api:prune
 
-# ─────────────────────────────────────────────
-# Stage 3: lean production image
-# ─────────────────────────────────────────────
+# # ─────────────────────────────────────────────
+# # Stage 3: lean production image
+# # ─────────────────────────────────────────────
 FROM node-base AS runner
 
 ENV NODE_ENV=production
 
-WORKDIR /app
+# WORKDIR /app
 
-# NestJS compiled bundle + pruned manifests + workspace packages
-COPY --from=builder /workspace/apps/chat-api/dist ./apps/chat-api/dist
+# # NestJS compiled bundle + pruned manifests + workspace packages
+# COPY --from=builder /workspace/apps/chat-api/dist ./apps/chat-api/dist
 
-# Install only production dependencies using the pruned lockfile
-# (workspace_modules are referenced via file: entries in the pruned package.json)
-WORKDIR /app/apps/chat-api/dist
-RUN npm ci --omit=dev
+# # Install only production dependencies using the pruned lockfile
+# # (workspace_modules are referenced via file: entries in the pruned package.json)
+# WORKDIR /app/apps/chat-api/dist
+# RUN npm ci --omit=dev
 
-# React SPA static files
-# static-assets.ts resolves __dirname(dist)/../../chat/dist → /app/apps/chat/dist
-COPY --from=builder /workspace/apps/chat/dist /app/apps/chat/dist
+# # React SPA static files
+# # static-assets.ts resolves __dirname(dist)/../../chat/dist → /app/apps/chat/dist
+# COPY --from=builder /workspace/apps/chat/dist /app/apps/chat/dist
 
-# Overlay sandbox static files served by chat-api at /overlay-sandbox when enabled.
-COPY --from=builder /workspace/apps/chat-overlay-sandbox/dist /app/apps/chat-overlay-sandbox/dist
+# # Overlay sandbox static files served by chat-api at /overlay-sandbox when enabled.
+# COPY --from=builder /workspace/apps/chat-overlay-sandbox/dist /app/apps/chat-overlay-sandbox/dist
 
-WORKDIR /app
+# WORKDIR /app
 
-EXPOSE 5000
+# EXPOSE 5000
 
-CMD ["node", "apps/chat-api/dist/main.js"]
+# CMD ["node", "apps/chat-api/dist/main.js"]
