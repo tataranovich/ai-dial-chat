@@ -108,8 +108,11 @@ jobs:
         uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
 
       - name: Promote scanned image to release tags
+        env:
+          AUTH_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
         run: |
           set -euo pipefail
+          echo "${AUTH_TOKEN}" | crane auth login https://ghcr.io --username ${{ github.actor }} --password-stdin
           while IFS= read -r tag; do
             [ -z "${tag}" ] && continue
             crane tag "${{ env.IMAGE }}:${{ env.SCAN_TAG }}" "${tag##*:}"
