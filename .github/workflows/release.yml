@@ -112,7 +112,7 @@ jobs:
           AUTH_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
         run: |
           set -euo pipefail
-          echo "${AUTH_TOKEN}" | crane auth login https://ghcr.io --username ${{ github.actor }} --password-stdin
+          echo "${AUTH_TOKEN}" | crane auth login ghcr.io --username ${{ github.actor }} --password-stdin
           while IFS= read -r tag; do
             [ -z "${tag}" ] && continue
             crane tag "${{ env.IMAGE }}:${{ env.SCAN_TAG }}" "${tag##*:}"
