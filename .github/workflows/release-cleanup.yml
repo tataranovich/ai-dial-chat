@@ -13,11 +13,10 @@ jobs:
   # of whether the scan/publish steps succeeded, failed, or were skipped.
   cleanup-scan-tag:
     runs-on: ubuntu-latest
-    permissions:
-      packages: admin
     steps:
       - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
         with:
           token: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          owner: tataranovich
           package: ai-dial-chat
           tags: ${{ inputs.scan-tag }}
