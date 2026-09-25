@@ -7,11 +7,12 @@ jobs:
   clean:
     name: Delete untagged images
     runs-on: ubuntu-latest
-    permissions:
-      packages: admin
     steps:
       - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
         with:
+          token: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          owner: tataranovich
+          package: ai-dial-chat
           delete-untagged: true
           delete-ghost-images: true # Delete indexes with no manifests
           delete-partial-images: true # Delete indexes which refer to at least one non-existent manifest
