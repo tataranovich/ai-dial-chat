@@ -126,16 +126,16 @@ jobs:
             crane tag "${{ env.IMAGE }}:${{ env.SCAN_TAG }}" "${tag##*:}"
           done <<< "${{ steps.meta.outputs.tags }}"
 
-  # Always removes the throwaway scan tag once the build exists, regardless
-  # of whether the scan/publish steps succeeded, failed, or were skipped.
-  cleanup-scan-tag:
-    needs: [build, scan, publish]
-    if: ${{ always() && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
-        with:
-          token: ${{ secrets.ACTIONS_BOT_TOKEN }}
-          owner: tataranovich
-          package: ai-dial-chat
-          tags: ${{ env.SCAN_TAG }}
+  # # Always removes the throwaway scan tag once the build exists, regardless
+  # # of whether the scan/publish steps succeeded, failed, or were skipped.
+  # cleanup-scan-tag:
+  #   needs: [build, scan, publish]
+  #   if: ${{ always() && needs.build.result == 'success' }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+  #       with:
+  #         token: ${{ secrets.ACTIONS_BOT_TOKEN }}
+  #         owner: tataranovich
+  #         package: ai-dial-chat
+  #         tags: ${{ env.SCAN_TAG }}
