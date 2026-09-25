@@ -35,106 +35,107 @@ env:
   SCAN_TAG: scan-${{ github.sha }}
 
 jobs:
-  # Builds and pushes the image under a throwaway scan-only tag so Trivy can
-  # scan the exact artifact that will be released, without exposing it under
-  # its real tags until the scan passes.
-  build:
-    uses: docker/github-builder/.github/workflows/build.yml@v1
-    permissions:
-      contents: read # to fetch the repository content
-      id-token: write # for signing attestations and cache entries with GitHub OIDC
-    with:
-      output: image
-      push: ${{ github.event_name != 'pull_request' }}
-      platforms: linux/amd64,linux/arm64
-      meta-images: ghcr.io/tataranovich/ai-dial-chat
-      meta-tags: |
-        type=raw,value=scan-${{ github.sha }}
-    secrets:
-      registry-auths: |
-        - registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.ACTIONS_BOT_TOKEN }}
+  # # Builds and pushes the image under a throwaway scan-only tag so Trivy can
+  # # scan the exact artifact that will be released, without exposing it under
+  # # its real tags until the scan passes.
+  # build:
+  #   uses: docker/github-builder/.github/workflows/build.yml@v1
+  #   permissions:
+  #     contents: read # to fetch the repository content
+  #     id-token: write # for signing attestations and cache entries with GitHub OIDC
+  #   with:
+  #     output: image
+  #     push: ${{ github.event_name != 'pull_request' }}
+  #     platforms: linux/amd64,linux/arm64
+  #     meta-images: ghcr.io/tataranovich/ai-dial-chat
+  #     meta-tags: |
+  #       type=raw,value=scan-${{ github.sha }}
+  #   secrets:
+  #     registry-auths: |
+  #       - registry: ghcr.io
+  #         username: ${{ github.actor }}
+  #         password: ${{ secrets.ACTIONS_BOT_TOKEN }}
 
-  scan:
-    needs: build
-    if: ${{ github.event_name != 'pull_request' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [linux/amd64, linux/arm64]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.ACTIONS_BOT_TOKEN }}
-
-      - name: Scan built image with Trivy (${{ matrix.platform }})
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        env:
-          TRIVY_PLATFORM: ${{ matrix.platform }}
-        with:
-          scan-type: image
-          image-ref: ${{ env.IMAGE }}:${{ env.SCAN_TAG }}
-          trivy-config: trivy.yaml
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-  # Promotes the already-scanned image to its real tags by copying the
-  # manifest (no rebuild, no re-push of layers) once the scan has passed.
-  publish:
-    needs: scan
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.IMAGE }}
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.ACTIONS_BOT_TOKEN }}
-
-      - name: Set up crane
-        uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
-
-      - name: Promote scanned image to release tags
-        env:
-          AUTH_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
-        run: |
-          set -euo pipefail
-          echo "${AUTH_TOKEN}" | crane auth login ghcr.io --username ${{ github.actor }} --password-stdin
-          while IFS= read -r tag; do
-            [ -z "${tag}" ] && continue
-            crane tag "${{ env.IMAGE }}:${{ env.SCAN_TAG }}" "${tag##*:}"
-          done <<< "${{ steps.meta.outputs.tags }}"
-
-  # # Always removes the throwaway scan tag once the build exists, regardless
-  # # of whether the scan/publish steps succeeded, failed, or were skipped.
-  # cleanup-scan-tag:
-  #   needs: [build, scan, publish]
-  #   if: ${{ always() && needs.build.result == 'success' }}
+  # scan:
+  #   needs: build
+  #   if: ${{ github.event_name != 'pull_request' }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform: [linux/amd64, linux/arm64]
   #   runs-on: ubuntu-latest
   #   permissions:
+  #     contents: read
+  #   steps:
+  #     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+  #     - name: Log in to GHCR
+  #       uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+  #       with:
+  #         registry: ghcr.io
+  #         username: ${{ github.actor }}
+  #         password: ${{ secrets.ACTIONS_BOT_TOKEN }}
+
+  #     - name: Scan built image with Trivy (${{ matrix.platform }})
+  #       uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+  #       env:
+  #         TRIVY_PLATFORM: ${{ matrix.platform }}
+  #       with:
+  #         scan-type: image
+  #         image-ref: ${{ env.IMAGE }}:${{ env.SCAN_TAG }}
+  #         trivy-config: trivy.yaml
+  #         severity: CRITICAL,HIGH
+  #         ignore-unfixed: true
+  #         exit-code: "1"
+
+  # # Promotes the already-scanned image to its real tags by copying the
+  # # manifest (no rebuild, no re-push of layers) once the scan has passed.
+  # publish:
+  #   needs: scan
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
   #     packages: write
   #   steps:
-  #     - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+  #     - name: Docker metadata
+  #       id: meta
+  #       uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
   #       with:
-  #         token: ${{ secrets.ACTIONS_BOT_TOKEN }}
-  #         package: ai-dial-chat
-  #         tags: ${{ env.SCAN_TAG }}
+  #         images: ${{ env.IMAGE }}
+
+  #     - name: Log in to GHCR
+  #       uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+  #       with:
+  #         registry: ghcr.io
+  #         username: ${{ github.actor }}
+  #         password: ${{ secrets.ACTIONS_BOT_TOKEN }}
+
+  #     - name: Set up crane
+  #       uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+
+  #     - name: Promote scanned image to release tags
+  #       env:
+  #         AUTH_TOKEN: ${{ secrets.ACTIONS_BOT_TOKEN }}
+  #       run: |
+  #         set -euo pipefail
+  #         echo "${AUTH_TOKEN}" | crane auth login ghcr.io --username ${{ github.actor }} --password-stdin
+  #         while IFS= read -r tag; do
+  #           [ -z "${tag}" ] && continue
+  #           crane tag "${{ env.IMAGE }}:${{ env.SCAN_TAG }}" "${tag##*:}"
+  #         done <<< "${{ steps.meta.outputs.tags }}"
+
+  # Always removes the throwaway scan tag once the build exists, regardless
+  # of whether the scan/publish steps succeeded, failed, or were skipped.
+  cleanup-scan-tag:
+    needs: [build, scan, publish]
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          token: ${{ secrets.ACTIONS_BOT_TOKEN }}
+          package: ai-dial-chat
+          # tags: ${{ env.SCAN_TAG }}
+          tags: scan-fc72c02e03dab28000bbc076fcb7e41182553fca
