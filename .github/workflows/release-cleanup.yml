@@ -5,7 +5,7 @@ on:
     inputs:
       scan-tag:
         type: string
-        default: false
+        required: true
         description: Scan tag to cleanup (scan-*)
 
 jobs:
