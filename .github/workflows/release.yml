@@ -127,8 +127,8 @@ jobs:
   # Always removes the throwaway scan tag once the build exists, regardless
   # of whether the scan/publish steps succeeded, failed, or were skipped.
   cleanup-scan-tag:
-    needs: [build, scan, publish]
-    if: ${{ always() && needs.build.result == 'success' }}
+    # needs: [build, scan, publish]
+    # if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       packages: write
