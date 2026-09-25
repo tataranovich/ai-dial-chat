@@ -138,4 +138,4 @@ jobs:
           token: ${{ secrets.ACTIONS_BOT_TOKEN }}
           owner: tataranovich
           package: ai-dial-chat
-          tags: ${{ inputs.scan-tag }}
+          tags: ${{ env.SCAN_TAG }}
