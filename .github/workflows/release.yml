@@ -50,6 +50,8 @@ jobs:
       meta-images: ghcr.io/tataranovich/ai-dial-chat
       meta-tags: |
         type=raw,value=scan-${{ github.sha }}
+      sbom: false
+      sign: "false"
     secrets:
       registry-auths: |
         - registry: ghcr.io
