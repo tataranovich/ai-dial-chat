@@ -20,8 +20,9 @@ jobs:
     with:
       promote: ${{ github.event_name == 'workflow_dispatch' && inputs.promote }}
       node-version: 24
-      maximize-build-space: true
+      maximize-build-space: false
       draft-stable-releases: true
+      platforms: linux/amd64,linux/arm64
       # Disable long running parts
       docker-build-enabled: true
       publish-enabled: false
