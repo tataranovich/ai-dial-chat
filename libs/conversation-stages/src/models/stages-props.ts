@@ -1,4 +1,4 @@
-import type { Stage } from '@epam/ai-dial-chat-shared';
+import type { DisplayAttachment, Stage } from '@epam/ai-dial-chat-shared';
 
 /** Typography class overrides for stage name and expanded content elements in `StagesPanel`. */
 export interface StageTypography {
@@ -10,9 +10,9 @@ export interface StageTypography {
   strongClassName?: string;
   /** CSS utility class applied to every heading level (`h1`–`h6`) inside expanded content. Defaults to `'dial-small-semi-text'`. */
   headingClassName?: string;
-  /** CSS utility class applied to inline code elements. Defaults to `'dial-code-text rounded-md'`. */
+  /** CSS utility class applied to inline code elements; the monospace family comes from the panel stylesheet. Defaults to `'dial-tiny-text rounded-md'`. */
   codeClassName?: string;
-  /** CSS utility class applied to fenced code blocks (`<pre>`). Defaults to `'dial-code-text'`. */
+  /** CSS utility class applied to fenced code blocks. Defaults to `'dial-code-text'`. */
   codeBlockClassName?: string;
   /** CSS utility class applied to count badges (e.g. `×N` collapsed group). Defaults to `'dial-tiny-text'`. */
   countFontClassName?: string;
@@ -40,7 +40,7 @@ export interface StagesPanelColors {
   durationTextColor?: string;
   /** Color of secondary (non-status) icons. Defaults to `--text-secondary` at 70% opacity. */
   iconSecondaryColor?: string;
-  /** Color of the completed-check icon. Defaults to `--text-tertiary`. */
+  /** Color of the completed-check icon. Defaults to `--text-success`. */
   iconCompletedColor?: string;
   /** Color of the error/exception icon. Defaults to `--text-warning`. */
   iconErrorColor?: string;
@@ -64,14 +64,22 @@ export interface StagesPanelStyles {
 
 /** User-visible strings for the `StagesPanel` component. */
 export interface StagesPanelLabels {
-  /** Accessible label for the copy button on each stage's content. Defaults to `'Copy'`. */
+  /** Accessible label for the copy button on each stage content code block. Defaults to `'Copy stage content'`. */
   copyAriaLabel?: string;
+  /** Status announced after a stage content code block has been copied. Defaults to `'Copied!'`. */
+  codeBlockCopiedLabel?: string;
+  /** Accessible label for a table's horizontally scrollable region in stage content. Defaults to `'Scrollable table'`. */
+  tableScrollRegionAriaLabel?: string;
+  /** Accessible label for a block formula's horizontally scrollable region in stage content. Defaults to `'Scrollable formula'`. */
+  mathScrollRegionAriaLabel?: string;
   /** Accessible label announced for a running stage's spinner. Defaults to `'Running'`. */
   runningAriaLabel?: string;
   /** Visually-hidden label announced alongside a failed stage's icon. Defaults to `'Failed'`. */
   failedAriaLabel?: string;
   /** Label for a single attempt given its 1-based number. Defaults to `(n) => \`Attempt ${n}\``. */
   attemptLabel?: (attemptNumber: number) => string;
+  /** Accessible label for a stage attachment tile's interactive click action. Defaults to `'Preview search result'`. */
+  attachmentClickLabel?: string;
 }
 
 /** Props accepted by the `StagesPanel` component. */
@@ -86,4 +94,6 @@ export interface StagesPanelProps {
   styles?: StagesPanelStyles;
   /** User-visible strings. */
   labels?: StagesPanelLabels;
+  /** Called when a stage attachment tile is clicked/activated. Receives the mapped display attachment. */
+  onAttachmentClick?: (attachment: DisplayAttachment) => void;
 }

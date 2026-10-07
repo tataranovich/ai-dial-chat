@@ -13,8 +13,11 @@ import {
 } from '@epam/ai-dial-chat-api-client';
 import { CatalogEntityType, formatLastUsed } from '@epam/ai-dial-chat-shared';
 import { formatCalendarDate } from '../shared/formatting';
-import { stripSurroundingSlashes } from '../shared/string-utils';
-import { SKILL_MANIFEST_FILE } from '../skill/skill';
+import {
+  safeDecodeURIComponent,
+  stripSurroundingSlashes,
+} from '../shared/string-utils';
+import { SKILL_FOLDER_MARKER, SKILL_MANIFEST_FILE } from '../skill/skill';
 import type { SkillAboutDetails } from '../skill/skill-manifest';
 import { SKILL_MANIFEST_MAX_BYTES, SkillSource } from '../skill/skill-types';
 import type { DeploymentFolderLabels } from './map-deployment-to-catalog-item';
@@ -26,18 +29,34 @@ const SOURCE_FOLDER_LABEL: Record<SkillSource, keyof DeploymentFolderLabels> = {
 };
 
 /*
- * `parentPath` is not decoded. DIAL Core returns `name`/`parentPath` as plain
- * text and percent-encodes only `url`, so decoding here rewrote a folder whose
- * name legitimately contains a percent escape — `test%20folder` was displayed
- * as `test folder` (Issue #8974).
+ * Folder segments come from `url`, not `parentPath`. DIAL Core always
+ * percent-encodes `url` (`skills/{bucket}/{...folders}/{name}`), so decoding
+ * its folder segments yields the real name either way: a published folder
+ * whose `parentPath` arrived encoded (`test%20folder` → `test folder`,
+ * [#8882](https://github.com/epam/ai-dial-chat/issues/8882)) and a folder literally named `test%20folder`, whose `url`
+ * carries `test%2520folder` ([#8974](https://github.com/epam/ai-dial-chat/issues/8974)). Decoding `parentPath` itself could
+ * not tell those two apart. When the `url` shape does not line up with
+ * `parentPath`, `parentPath` is shown verbatim.
  */
-const resolveSkillFolder = (
+const resolveSkillFolderSegments = (
+  url: string,
   parentPath: string | undefined,
+): string[] => {
+  const parentSegments = (parentPath ?? '').split('/').filter(Boolean);
+  const urlFolderSegments = url.split('/').filter(Boolean).slice(2, -1);
+
+  return urlFolderSegments.length === parentSegments.length
+    ? urlFolderSegments.map(safeDecodeURIComponent)
+    : parentSegments;
+};
+
+const resolveSkillFolder = (
+  skill: SkillMetadataItemDto,
   source: SkillSource,
   folderLabels: DeploymentFolderLabels,
 ): string[] => [
   folderLabels[SOURCE_FOLDER_LABEL[source]],
-  ...(parentPath ?? '').split('/').filter(Boolean),
+  ...resolveSkillFolderSegments(skill.url, skill.parentPath),
 ];
 
 /** Parameters for {@link mapSkillToCatalogItem}. */
@@ -69,7 +88,7 @@ export const mapSkillToCatalogItem = (
     type: CatalogEntityType.Skill,
     name: skill.name,
     /*
-     * Listing-sourced description (Core PR #1970); folders and older Cores
+     * Listing-sourced description ([ai-dial-core#1970](https://github.com/epam/ai-dial-core/pull/1970)); folders and older Cores
      * carry none, and the details fetch's manifest frontmatter stays
      * authoritative once it lands.
      */
@@ -89,7 +108,7 @@ export const mapSkillToCatalogItem = (
     isMyApp: isPersonal && (skill.isMy ?? true),
     sharedWithMe: skill.sharedWithMe ?? source === SkillSource.SharedWithMe,
     isEditable: !isPublic && (skill.canEdit ?? isPersonal),
-    folder: resolveSkillFolder(skill.parentPath, source, folderLabels),
+    folder: resolveSkillFolder(skill, source, folderLabels),
   };
 };
 
@@ -338,7 +357,9 @@ const sortContentTree = (
  * itself) contributes no node. Every folder entry is attached under its own
  * stripped path so an empty grouping folder still appears; every file entry
  * attaches under the folder chain its stripped path implies, synthesizing
- * any intermediate folder the listing never enumerated on its own. A file
+ * any intermediate folder the listing never enumerated on its own. An
+ * empty-folder marker (`.dial_folder`) only proves its folder exists and
+ * never becomes a file node. A file
  * node's `id` is the listing entry's own (unstripped) path, so it round-trips
  * back to `downloadSkillFile` without being re-derived; a folder node's `id`
  * is the stripped path and only keys client-side expand/collapse state.
@@ -361,6 +382,10 @@ export const buildSkillContentTree = (
 
     const lastSlash = displayPath.lastIndexOf('/');
     const parentPath = lastSlash === -1 ? '' : displayPath.slice(0, lastSlash);
+    if (entry.name === SKILL_FOLDER_MARKER) {
+      getOrCreateFolderChain(parentPath, folderNodesByPath, roots);
+      continue;
+    }
     const parentItems = getOrCreateFolderChain(
       parentPath,
       folderNodesByPath,

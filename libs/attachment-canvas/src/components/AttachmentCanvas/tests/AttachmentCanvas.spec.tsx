@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ATTACHMENT_CANVAS_CLASS } from '../../../constants/public-class-names';
 import type { AttachmentCanvasContent } from '../../../models/attachment-canvas';
@@ -32,6 +33,7 @@ vi.mock('@epam/ai-dial-visualizer-connector', () => ({
       ready: vi.fn().mockReturnValue(new Promise(() => undefined)),
       send: vi.fn(),
       destroy: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
     };
   }),
 }));
@@ -81,6 +83,22 @@ describe('AttachmentCanvas', () => {
     render(<AttachmentCanvas {...defaultProps} />);
     fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(defaultProps.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders host-supplied leftActions in the header', async () => {
+    const onBack = vi.fn();
+    render(
+      <AttachmentCanvas
+        {...defaultProps}
+        leftActions={
+          <button type="button" onClick={onBack}>
+            Open panel
+          </button>
+        }
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Open panel' }));
+    expect(onBack).toHaveBeenCalledOnce();
   });
 
   it('does not render a download button when onDownload is not provided', () => {
@@ -272,12 +290,6 @@ const closestWithClass = (from: Element, className: string): Element | null =>
   from.closest(`.${className}`);
 
 describe('AttachmentCanvas — public class names', () => {
-  /*
-   * A lost public class fails silently: the build passes and a host's
-   * stylesheet simply stops applying. The panel itself is drawn by
-   * `@epam/ai-dial-sidebar`, so the class travels as `styles.className` and
-   * this covers the whole path to the element a host selects.
-   */
   it('stamps the canvas panel, open or closed', () => {
     const { unmount } = render(<AttachmentCanvas {...defaultProps} />);
     expect(

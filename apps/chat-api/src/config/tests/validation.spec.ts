@@ -8,6 +8,35 @@ const baseConfig: Record<string, unknown> = {
 };
 
 describe('validate', () => {
+  it('leaves event selection absent unless UI_EVENT is configured', () => {
+    expect(validate({ ...baseConfig }).UI_EVENT).toBeUndefined();
+  });
+
+  it.each(['none', 'halloween', 'new-year', 'product-launch-2027'])(
+    'accepts the lowercase event ID %s',
+    (eventId) => {
+      expect(validate({ ...baseConfig, UI_EVENT: eventId }).UI_EVENT).toBe(
+        eventId,
+      );
+    },
+  );
+
+  it.each([
+    '',
+    ' ',
+    'Halloween',
+    'new_year',
+    '-event',
+    'event-',
+    'new--year',
+    '../halloween',
+    'new year',
+  ])('rejects invalid UI_EVENT %j at startup', (eventId) => {
+    expect(() => validate({ ...baseConfig, UI_EVENT: eventId })).toThrow(
+      /UI_EVENT/,
+    );
+  });
+
   it('defaults external connections to an empty allowlist', () => {
     expect(validate({ ...baseConfig }).ALLOWED_CONNECT_ORIGINS).toEqual([]);
     expect(
@@ -66,6 +95,7 @@ describe('validate', () => {
       ).toThrow(/AUTH_SESSION_MAX_AGE_SECONDS/);
     },
   );
+
   it('defaults CSP rollout to report-only and accepts explicit enforcement', () => {
     expect(validate({ ...baseConfig }).CSP_MODE).toBe('report-only');
     expect(validate({ ...baseConfig, CSP_MODE: 'enforce' }).CSP_MODE).toBe(
@@ -158,6 +188,36 @@ describe('validate', () => {
     ).not.toThrow();
   });
 
+  it('defaults AUTH_POST_LOGOUT_REDIRECT_URI to AUTH_CALLBACK_BASE_URL when unset', () => {
+    const config = validate({ ...baseConfig });
+    expect(config.AUTH_POST_LOGOUT_REDIRECT_URI).toBe(
+      baseConfig['AUTH_CALLBACK_BASE_URL'],
+    );
+  });
+
+  it('keeps an explicit AUTH_POST_LOGOUT_REDIRECT_URI over the AUTH_CALLBACK_BASE_URL default', () => {
+    const config = validate({
+      ...baseConfig,
+      AUTH_POST_LOGOUT_REDIRECT_URI: 'https://accounts.example.com/signed-out',
+    });
+    expect(config.AUTH_POST_LOGOUT_REDIRECT_URI).toBe(
+      'https://accounts.example.com/signed-out',
+    );
+  });
+
+  it('defaults CORS_ORIGIN to AUTH_CALLBACK_BASE_URL when unset', () => {
+    const config = validate({ ...baseConfig });
+    expect(config.CORS_ORIGIN).toBe(baseConfig['AUTH_CALLBACK_BASE_URL']);
+  });
+
+  it('keeps an explicit CORS_ORIGIN over the AUTH_CALLBACK_BASE_URL default', () => {
+    const config = validate({
+      ...baseConfig,
+      CORS_ORIGIN: 'https://chat.example.com',
+    });
+    expect(config.CORS_ORIGIN).toBe('https://chat.example.com');
+  });
+
   it('parses AUTH_COOKIE_SECURE=false as false', () => {
     const config = validate({
       ...baseConfig,
@@ -200,6 +260,24 @@ describe('validate', () => {
     expect(config.RESPONSES_API_ENABLED).toBe(expected);
   });
 
+  it('defaults RESPONSES_BACKGROUND_ENABLED to false when unset', () => {
+    const config = validate({ ...baseConfig });
+    expect(config.RESPONSES_BACKGROUND_ENABLED).toBe(false);
+  });
+
+  it.each([
+    ['true', true],
+    ['false', false],
+    ['0', false],
+    ['no', false],
+  ])('parses RESPONSES_BACKGROUND_ENABLED=%s as %s', (rawValue, expected) => {
+    const config = validate({
+      ...baseConfig,
+      RESPONSES_BACKGROUND_ENABLED: rawValue,
+    });
+    expect(config.RESPONSES_BACKGROUND_ENABLED).toBe(expected);
+  });
+
   it('defaults DEFAULT_DEPLOYMENT_PINNED to false when unset', () => {
     const config = validate({ ...baseConfig });
     expect(config.DEFAULT_DEPLOYMENT_PINNED).toBe(false);
@@ -218,6 +296,32 @@ describe('validate', () => {
     expect(config.DEFAULT_DEPLOYMENT_PINNED).toBe(expected);
   });
 
+  it('defaults ALLOW_VISUALIZER_SEND_MESSAGES to false when unset', () => {
+    const config = validate({ ...baseConfig });
+    expect(config.ALLOW_VISUALIZER_SEND_MESSAGES).toBe(false);
+  });
+
+  it.each([
+    ['true', true],
+    ['TRUE', true],
+    ['1', true],
+    ['yes', true],
+    [' true ', true],
+    ['false', false],
+    ['false ', false],
+    ['0', false],
+    ['no', false],
+    ['off', false],
+    ['disabled', false],
+    ['', false],
+  ])('parses ALLOW_VISUALIZER_SEND_MESSAGES=%j as %s', (rawValue, expected) => {
+    const config = validate({
+      ...baseConfig,
+      ALLOW_VISUALIZER_SEND_MESSAGES: rawValue,
+    });
+    expect(config.ALLOW_VISUALIZER_SEND_MESSAGES).toBe(expected);
+  });
+
   it('defaults OVERLAY_SANDBOX_ENABLED to false when unset', () => {
     const config = validate({ ...baseConfig });
     expect(config.OVERLAY_SANDBOX_ENABLED).toBe(false);
@@ -232,6 +336,27 @@ describe('validate', () => {
       OVERLAY_SANDBOX_ENABLED: rawValue,
     });
     expect(config.OVERLAY_SANDBOX_ENABLED).toBe(expected);
+  });
+
+  describe.each([
+    'SCHEDULED_TASKS_ENABLED',
+    'LIVE_CHAT_INTERACTION_ENABLED',
+    'LLM_CONVERSATION_NAMING_ENABLED',
+  ] as const)('%s', (key) => {
+    it('defaults to false when unset', () => {
+      const config = validate({ ...baseConfig });
+      expect(config[key]).toBe(false);
+    });
+
+    it.each([
+      ['true', true],
+      ['false', false],
+      ['0', false],
+      ['no', false],
+    ])('parses %s as %s', (rawValue, expected) => {
+      const config = validate({ ...baseConfig, [key]: rawValue });
+      expect(config[key]).toBe(expected);
+    });
   });
 
   it('parses publication filter sources up to 200 characters', () => {

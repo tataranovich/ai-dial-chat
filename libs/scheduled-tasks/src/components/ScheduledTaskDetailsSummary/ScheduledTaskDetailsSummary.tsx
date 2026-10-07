@@ -11,10 +11,13 @@ export const ScheduledTaskDetailsSummary: FC<
   ScheduledTaskDetailsSummaryProps
 > = ({
   modelLabel,
+  skillLabel,
+  skillDisplayNames,
   instructionsLabel,
   modelDisplayName,
   instructionsMarkdown,
   renderInstructions,
+  markdownLabels,
   styles,
 }) => {
   const fieldLabelClassName =
@@ -26,7 +29,7 @@ export const ScheduledTaskDetailsSummary: FC<
     renderInstructions ? (
       renderInstructions(markdown)
     ) : (
-      <MDMessageViewer content={markdown} />
+      <MDMessageViewer content={markdown} {...markdownLabels} />
     );
 
   return (
@@ -38,6 +41,18 @@ export const ScheduledTaskDetailsSummary: FC<
         </div>
       )}
 
+      {Boolean(skillDisplayNames?.length) && (
+        <div className="flex min-w-0 flex-col gap-2">
+          <span className={fieldLabelClassName}>{skillLabel}</span>
+          <p className={`${fieldValueClassName} whitespace-normal break-all`}>
+            {skillDisplayNames?.map((name, index) => (
+              <span className="block" key={`${index}:${name}`}>
+                {name}
+              </span>
+            ))}
+          </p>
+        </div>
+      )}
       {instructionsMarkdown && (
         <div className="flex flex-col gap-2">
           <span className={fieldLabelClassName}>{instructionsLabel}</span>

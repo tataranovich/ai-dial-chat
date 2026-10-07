@@ -24,6 +24,10 @@ export interface UseCitationMarkdownComponentsCallbacks {
   isPreviewable?(annotation: Annotation): boolean;
   /** Called when a citation marker's open-in-browser action is invoked. */
   onOpenInBrowser(annotation: Annotation): void;
+  /** Whether citation cards show the "Download" button for a previewable file. Defaults to `true`. */
+  isDownloadEnabled?: boolean;
+  /** Whether the host's preview panel is open; a marker click then previews directly instead of showing the card. Defaults to `false`. */
+  isPreviewOpen?: boolean;
   /** Builds the translated label bundles used by a given citation group's card and marker. */
   buildLabels(group: AnnotationGroup): {
     cardLabels: CitationCardLabels;
@@ -38,6 +42,19 @@ export interface UseCitationMarkdownComponentsCallbacks {
  * catch-all variant (`{ type: string; [key: string]: unknown }`) also
  * satisfies `type === 'html_tag'` and would otherwise widen `.id` to `unknown`.
  */
+/*
+ * Shared empty map for messages without citations: a fresh `{}` per render would
+ * break the memo on MarkdownRenderer and re-parse every assistant message.
+ */
+const NO_CITATION_COMPONENTS: Components = {};
+
+/*
+ * Shared empty array for callers that omit `fallbackGroups`: a default
+ * parameter value is a fresh `[]` on every call, which would break the
+ * `markdownComponents` memo on every re-render even when nothing changed.
+ */
+const EMPTY_FALLBACK_GROUPS: AnnotationGroup[] = [];
+
 const citTagId = (group: AnnotationGroup): string | undefined => {
   const selector = group.primaryAnnotation.target?.selector;
   return selector?.type === 'html_tag'
@@ -81,6 +98,12 @@ const renderCitTagAsText = (
  * `isCompactTypography` drops the paragraph class one type-scale step, matching
  * `COMPACT_MARKDOWN_CLASS_NAMES` so cited and uncited paragraphs stay the same
  * size.
+ *
+ * `fallbackGroups` is an optional pool of groups that do not belong to this
+ * message, consulted only to resolve a `<cit data-id="…">` element the
+ * message's own `groups` do not cover. It never affects sentinel injection or
+ * `processedContent`, so a foreign group cannot shift a marker position in
+ * this message's text; a colliding id is always resolved from `groups`.
  */
 export const useCitationMarkdownComponents = (
   content: string,
@@ -88,8 +111,16 @@ export const useCitationMarkdownComponents = (
   callbacks: UseCitationMarkdownComponentsCallbacks,
   isStreaming = false,
   isCompactTypography = false,
+  fallbackGroups: AnnotationGroup[] = EMPTY_FALLBACK_GROUPS,
 ): { processedContent: string; markdownComponents: Components } => {
-  const { onPreview, isPreviewable, onOpenInBrowser, buildLabels } = callbacks;
+  const {
+    onPreview,
+    isPreviewable,
+    onOpenInBrowser,
+    isDownloadEnabled = true,
+    isPreviewOpen = false,
+    buildLabels,
+  } = callbacks;
 
   const processedContent = useMemo(() => {
     if (isStreaming) return stripCitTagsWhileStreaming(content);
@@ -101,7 +132,15 @@ export const useCitationMarkdownComponents = (
   const hasCitElement = processedContent.includes('<cit');
 
   const markdownComponents = useMemo((): Components => {
+    /*
+     * Pool groups are inserted first so a message's own groups (inserted
+     * after) overwrite them on a colliding id — message groups always win.
+     */
     const citGroupsByTagId = new Map<string, AnnotationGroup>();
+    for (const group of fallbackGroups) {
+      const tagId = citTagId(group);
+      if (tagId != null) citGroupsByTagId.set(tagId, group);
+    }
     for (const group of groups) {
       const tagId = citTagId(group);
       if (tagId != null) citGroupsByTagId.set(tagId, group);
@@ -117,6 +156,8 @@ export const useCitationMarkdownComponents = (
           onPreview={(annotation) => onPreview(annotation, group)}
           isPreviewable={isPreviewable}
           onOpenInBrowser={onOpenInBrowser}
+          isDownloadEnabled={isDownloadEnabled}
+          isPreviewOpen={isPreviewOpen}
           cardLabels={cardLabels}
           markerLabels={markerLabels}
         />
@@ -148,8 +189,8 @@ export const useCitationMarkdownComponents = (
       },
     } as Components;
 
-    if (groups.length === 0) {
-      return hasCitElement ? citComponent : {};
+    if (groups.length === 0 && fallbackGroups.length === 0) {
+      return hasCitElement ? citComponent : NO_CITATION_COMPONENTS;
     }
 
     return {
@@ -175,9 +216,12 @@ export const useCitationMarkdownComponents = (
     };
   }, [
     groups,
+    fallbackGroups,
     onPreview,
     isPreviewable,
     onOpenInBrowser,
+    isDownloadEnabled,
+    isPreviewOpen,
     buildLabels,
     isCompactTypography,
     hasCitElement,

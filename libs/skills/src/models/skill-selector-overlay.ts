@@ -1,9 +1,11 @@
 import type { RequestSkill } from '@epam/ai-dial-chat-shared';
 import type {
   CommandMenuConfig,
+  HighlightedTextRange,
   MenuOverlayConfig,
 } from '@epam/ai-dial-conversation-input';
 import type { ComponentType, ReactNode } from 'react';
+import type { ChatSkillDetailsTrigger } from './chat-skill-props';
 import type { SkillListingEntry } from './favorite-skill-item';
 import type { FavoriteSkillsPanelLabels } from './favorite-skills-panel-props';
 
@@ -34,8 +36,20 @@ export interface SkillSelectorOverlayLabels {
    */
   emptyQueryHintLabel?: string;
   /**
-   * Message shown alone in the selected skill chip's error-state tooltip
-   * while the current deployment does not support skills.
+   * History tooltip message shown, with a trash-can icon, for a history
+   * entry whose url is the viewer's own bucket but resolves to no loaded
+   * listing entry. Defaults to `ChatSkill`'s own default text.
+   */
+  deletedTooltipLabel?: string;
+  /**
+   * History tooltip message shown, with a lock icon, for a history entry
+   * whose url is a foreign bucket and resolves to no loaded listing entry.
+   * Defaults to `ChatSkill`'s own default text.
+   */
+  notSharedTooltipLabel?: string;
+  /**
+   * Tooltip message shown on an active `/name` mention while the selected
+   * model does not support skills. Defaults to `ChatSkill`'s own default text.
    */
   unsupportedTooltipLabel?: string;
   /** Labels forwarded to the favorites panel rendered as the overlay. */
@@ -45,16 +59,15 @@ export interface SkillSelectorOverlayLabels {
 /** Options accepted by `useSkillSelectorOverlay`. */
 export interface UseSkillSelectorOverlayOptions {
   /**
-   * Whether the skill flow is enabled. While `false` the hook returns empty
-   * outputs: no menu entry, no modal, no panel, no chips.
-   */
-  isEnabled: boolean;
-  /**
    * Whether the input's current deployment supports skills. While `false`
-   * (with the flow enabled) the entry points are omitted — no Add-menu item
-   * and no slash menu — but an already-selected skill chip stays rendered in
-   * its error state with its removal gesture and "View details" panel
-   * available. The host resolves this from its own deployment data.
+   * the entry points are omitted — no Add-menu item and no slash menu — but
+   * a tracked mention stays in the draft text and folds into
+   * `isSkillUnsupported` for the host's own send-disabled condition. The
+   * host resolves this from its own deployment data. Note: a live-composing
+   * mention has no per-mention error styling of its own (it renders as a
+   * plain highlighted run, not a `ChatSkill`); only the sent
+   * `custom_content.skills`/history rendering, and this boolean fold,
+   * reflect the unsupported state.
    */
   isSkillsSupported: boolean;
   /** The user's own skills. */
@@ -65,6 +78,16 @@ export interface UseSkillSelectorOverlayOptions {
   publicSkills?: SkillListingEntry[];
   /** Ids (`skills/{bucket}/{path}` URLs) of the user's favorited skills. */
   favoriteIds: ReadonlySet<string>;
+  /**
+   * The viewer's own DIAL Core storage bucket (as it appears in a
+   * `skills/{bucket}/{path}` url). Used only to tell "the viewer's own skill
+   * was deleted" apart from "a foreign skill was never shared with the
+   * viewer" when a history entry's url resolves to no loaded listing entry
+   * (see `renderHistorySkillSegments`/`renderHistorySkills`'s
+   * `unresolvedReason`). A plain resolved value — this lib reads no
+   * auth/user context of its own.
+   */
+  viewerBucket: string;
   /** Removes a skill from favorites; fired by a row's star button. */
   onToggleFavorite: (id: string) => void;
   /** Localizable string overrides. */
@@ -77,6 +100,17 @@ export interface UseSkillSelectorOverlayOptions {
    * to that line. Unset falls back to the chip's own default label class.
    */
   historyChipLabelClassName?: string;
+  /**
+   * Trigger used by mentions rendered in an active composer. Unset retains
+   * `ChatSkill`'s hover-and-focus default; history chips are unaffected.
+   */
+  activeMentionDetailsTrigger?: ChatSkillDetailsTrigger;
+  /**
+   * Trigger used by history chips (sent user and assistant messages). Unset
+   * retains `ChatSkill`'s hover-and-focus default; pass `'click'` on touch
+   * layouts, where hover never fires.
+   */
+  historyDetailsTrigger?: ChatSkillDetailsTrigger;
   /**
    * Renders the browse modal's picker content (e.g. a host catalog view);
    * receives the selection and close callbacks to wire into it, and is
@@ -94,7 +128,7 @@ export interface UseSkillSelectorOverlayOptions {
 export interface UseSkillSelectorOverlayResult {
   /**
    * The Skills entry for the `menuOverlays` prop of
-   * `ConversationInput`/`Input`. `undefined` while the flow is disabled or the
+   * `ConversationInput`/`EditMessageInput`/`Input`. `undefined` while the
    * current deployment does not support skills: the host omits the entry
    * entirely when this is `undefined`, so a stub renderer would leave the
    * menu item in place with nothing behind it.
@@ -102,72 +136,129 @@ export interface UseSkillSelectorOverlayResult {
   skillMenuOverlay?: MenuOverlayConfig;
   /**
    * The Skills entry for the `commandMenu` prop of
-   * `ConversationInput`/`Input`: typing `/` into an empty textarea opens the
-   * favorites panel in search mode above the input. `undefined` while the
-   * flow is disabled or the current deployment does not support skills,
+   * `ConversationInput`/`EditMessageInput`/`Input`: typing `/` into an empty
+   * textarea opens the favorites panel in search mode above the input.
+   * `undefined` while the current deployment does not support skills,
    * disabling the slash menu entirely.
    */
   commandMenu?: CommandMenuConfig;
   /**
    * The browse modal element. Render at a stable level outside the popover
-   * (e.g. next to the input); `null` while `isEnabled` is `false`.
+   * (e.g. next to the input).
    */
   skillCatalogModal: ReactNode;
   /**
    * The skill details side panel opened by a row tooltip's "View details".
-   * `null` while `isEnabled` is `false`.
    */
   skillDetailsPanel: ReactNode;
   /**
-   * The selected skill as a `ChatSkill` element for the conversation input's
-   * `inlineStartSlot` — at most one, replaced on every selection, carrying
-   * the shared tooltip (the listing-sourced description, same as the favorite
-   * rows), or the error state while the current deployment does not support
-   * skills. The element has no remove control of its own; removal is the
-   * input's Backspace-at-start gesture, wired through `removeSelectedSkill`.
-   * `null` while `isEnabled` is `false` or nothing is selected.
+   * The composer's message text after the most recent skill selection, with
+   * every `/{name}` mention spliced in. Pass straight through to
+   * `ConversationInput`/`EditMessageInput`'s own `message` prop alongside
+   * `messageRevision` — like that prop's existing "populated by a starter
+   * selection" use, this is a one-shot push applied on a `messageRevision`
+   * bump, not a value the host feeds back on every keystroke (ordinary typing
+   * is tracked separately through `onDraftChange`).
    */
-  selectedSkillElement: ReactNode;
+  message: string;
   /**
-   * Whether a skill is selected while the current deployment does not
-   * support skills — the chip renders in its error state and hosts must fold
-   * this into their send-disabled conditions. Always `false` while
-   * `isEnabled` is `false`.
+   * Token that forces `message` to re-apply even when its string value is
+   * unchanged from the last push (e.g. the same skill selected again).
+   * Bumped on every call to the selection handlers backing `skillMenuOverlay`
+   * and `commandMenu`. Pass straight through to the composer's own
+   * `messageRevision` prop.
+   */
+  messageRevision: number;
+  /**
+   * Every currently-tracked skill mention's character range within the
+   * composer's live draft text, for `ConversationInput`/`EditMessageInput`/
+   * `Input`'s `activeMentions` prop (the live-composing highlighted-run
+   * render). Empty while nothing is mentioned.
+   */
+  activeMentions: HighlightedTextRange[];
+  /**
+   * Reconciles tracked mentions against an external edit to the composer's
+   * draft text (ordinary typing, deleting, pasting, undo/redo). Wire to the
+   * composer's own `onChange` callback, in addition to whatever the host
+   * already does with that value — this keeps `activeMentions`/
+   * `selectedSkills` in sync with live edits between selections.
+   */
+  onDraftChange: (nextValue: string) => void;
+  /**
+   * Looks up the mention whose run ends exactly at `caretPosition`, without
+   * mutating any state. Pass straight through to the composer's
+   * `onBackspaceAtCaret` prop, which performs the actual whole-mention
+   * deletion through the textarea's native editing pipeline and reports the
+   * result back through `onDraftChange`. Returns `undefined` when the caret
+   * isn't at a mention boundary.
+   */
+  onBackspaceAtCaret: (
+    caretPosition: number,
+  ) => HighlightedTextRange | undefined;
+  /**
+   * Caret offset to place the cursor at immediately after the most recent
+   * skill selection applies `message`/`messageRevision` — the position right
+   * after the inserted mention's text. Pass straight through to the
+   * composer's `caretPositionOverride` prop. `undefined` before any selection
+   * has been made this session.
+   */
+  caretPositionOverride: number | undefined;
+  /**
+   * Whether at least one skill is mentioned while the current deployment does
+   * not support skills — hosts must fold this into their send-disabled
+   * conditions.
    */
   isSkillUnsupported: boolean;
   /**
-   * The selected skill's resource URL (`skills/{bucket}/{path}`) — the value
-   * the host sends as a `{ url }` entry in the outgoing message's
-   * `custom_content.skills`. `null` while nothing is selected or the flow is
-   * disabled.
-   */
-  selectedSkillPath: string | null;
-  /**
-   * The selected skill as the send-time `custom_content.skills` payload —
-   * `[{ url: selectedSkillPath }]`, or `undefined` while nothing is selected
-   * or the flow is disabled, so `custom_content.skills` is omitted entirely.
+   * Every currently-tracked mention as the send-time `custom_content.skills`
+   * payload, in left-to-right text order — `undefined` while nothing is
+   * mentioned, so `custom_content.skills` is omitted entirely. Cleared to
+   * `undefined` by `resetSkillMentions` after a successful send.
    */
   selectedSkills: RequestSkill[] | undefined;
   /**
-   * Selects a skill by its resource URL (`skills/{bucket}/{path}`), replacing
-   * any prior selection.
+   * Clears every tracked mention and the draft text alongside it. Call after
+   * a successful send, matching the per-message selection-clears semantics of
+   * `custom_content.skills`.
    */
-  selectSkill: (skillId: string) => void;
+  resetSkillMentions: () => void;
   /**
-   * Clears the selected skill. Wire to the input's `onInlineStartRemove` —
-   * Backspace with the caret collapsed at position 0 while the selected
-   * skill's element is shown.
+   * Seeds the draft and its tracked mentions from a persisted message — runs
+   * `matchSkillMentions` once against `content`/`skills` and initializes
+   * `message`/`activeMentions` from the result (bumping `messageRevision`).
+   * Call once when entering edit mode on a message that carries
+   * `custom_content.skills`.
    */
-  removeSelectedSkill: () => void;
+  seedSkillMentions: (
+    content: string,
+    skills: RequestSkill[] | undefined,
+  ) => void;
   /**
-   * Renders a message's `custom_content.skills` entries as `ChatSkill`
-   * elements beside the message bubble's first text line, with the text
-   * word-flowing after them — one per entry, sharing the "View details"
-   * details panel with the favorite rows and the input chip. Each entry's
-   * name comes from the listing pools matched on its url, falling back to
-   * the url's last non-empty segment, and its description from the same
-   * match (absent when no pool carries the url). Returns `null` while
-   * `isEnabled` is `false` or the array is empty.
+   * Renders a user message's `content` and `custom_content.skills` as an
+   * ordered array interleaving plain-text runs and `ChatSkill` elements at
+   * each mention's actual text position — for `UserMessageBubble`'s
+   * `textSegments` prop. Resolves each entry's name from the listing pools
+   * matched on its url, falling back to the url's last non-empty segment;
+   * when a url matches no pool, the rendered `ChatSkill` also carries
+   * `unresolvedReason` (`'deleted'` when the url's bucket equals
+   * `viewerBucket`, `'not-shared'` otherwise), replacing the tooltip's
+   * description and "View details" button with a fixed icon-plus-message.
+   * Shares the "View details" panel with the favorite rows for resolved
+   * entries. Returns `null` while `skills` is empty/absent; a mention
+   * `matchSkillMentions` cannot locate in `content` is simply omitted from
+   * the render (see `matchSkillMentions`'s own doc for that heuristic).
+   */
+  renderHistorySkillSegments: (
+    content: string,
+    skills: RequestSkill[] | undefined,
+  ) => ReactNode[] | null;
+  /**
+   * Renders every entry of `skills` as a flat list of `ChatSkill` elements,
+   * ignoring text position — for `AssistantMessageBubble`'s `beforeContent`
+   * slot, since assistant text is model-generated markdown and never
+   * authors positioned mentions. Each entry's name/description/
+   * `unresolvedReason` resolve the same way as `renderHistorySkillSegments`.
+   * Returns `null` while the array is empty/absent.
    */
   renderHistorySkills: (skills: RequestSkill[] | undefined) => ReactNode;
 }

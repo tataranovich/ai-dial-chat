@@ -1,4 +1,4 @@
-# Spec: scheduled-tasks-page-ui
+# scheduled-tasks-page-ui Specification
 
 ## Purpose
 
@@ -32,7 +32,8 @@ Every user-visible string on the Scheduled Tasks page (title, subtitle, create b
 #### Scenario: Scheduled Tasks keys are present in en.json
 
 - **WHEN** the change is applied
-- **THEN** `en.json` contains `scheduledTasks.page.title`, `scheduledTasks.page.subtitle`, `scheduledTasks.page.navLabel`, `scheduledTasks.toolbar.searchPlaceholder`, `scheduledTasks.toolbar.searchAriaLabel`, `scheduledTasks.toolbar.clearSearchLabel`, `scheduledTasks.toolbar.sortLabel`, and `scheduledTasks.emptyState.label`
+- **THEN** `en.json` contains `scheduledTasks.page.title`, `scheduledTasks.page.subtitle`, `scheduledTasks.page.navLabel`, `scheduledTasks.toolbar.createButtonLabel`, `scheduledTasks.toolbar.searchPlaceholder`, `scheduledTasks.toolbar.searchAriaLabel`, `scheduledTasks.toolbar.clearSearchLabel`, the four `scheduledTasks.toolbar.sort*` option keys, and `scheduledTasks.emptyState.label`
+- **AND** the sort control's label reuses the generic `ButtonsI18nKeys.Sort` ("Sort"); no `scheduledTasks.toolbar.sortLabel` key exists
 
 #### Scenario: Lib receives strings, not translation keys
 
@@ -60,20 +61,20 @@ All directional layout in the Scheduled Tasks header, toolbar, and empty state M
 
 ### Requirement: ScheduledTasks lib component renders header, toolbar, and data-driven content states
 
-`libs/scheduled-tasks` SHALL export a presentational `ScheduledTasks` root component accepting `texts`, `onCreateClick`, `searchQuery`/`onSearchQueryChange`, `sortKey`/`onSortChange`, `items: ScheduledTaskItem[]`, `isLoading` (default `false`), `hasMore: boolean` (default `false`), `isLoadingMore?: boolean` (default `false`), `skeletonCount?: number` (default `6`), `onLoadMore?: () => void`, and optional `error`/`onRetry`. It SHALL render, in order: a header (title, subtitle, primary "create" action button), a toolbar (search input, sort control with options), and a content region whose rendering depends on state:
+`libs/scheduled-tasks` SHALL export a presentational `ScheduledTasks` root component accepting `labels`, `onCreateClick`, `searchQuery`/`onSearchQueryChange`, `sortKey`/`onSortChange`, `items: ScheduledTaskItem[]`, `isLoading` (default `false`), `hasMore: boolean` (default `false`), `isLoadingMore?: boolean` (default `false`), `skeletonCount?: number` (default `6`), `onLoadMore?: () => void`, optional `error`/`onRetry`, optional `loadMoreError`/`onRetryLoadMore`, `onCardClick`, `banner`, and the styling props `styles`, `sortIcon`, `className`, `gridLayout` and `cardStyles`. It SHALL render, in order: a header (title, subtitle, primary "create" action button), a toolbar (search input, sort control with options), and a content region whose rendering depends on state:
 
 - `isLoading` is `true` (initial load) → the content region renders a `Spinner` and no other content-region markup.
 - `error` is set → the content region renders an error message with a retry action that invokes `onRetry`.
-- `isLoading` is `false`, `error` is unset, and `items` is empty because the source list itself is empty (no `searchQuery` in effect) → the content region renders the shared `PanelEmptyState` component (from `@epam/ai-dial-chat-shared`) with `texts.emptyStateLabel`.
-- `isLoading` is `false`, `error` is unset, `items` is empty, and a non-empty `searchQuery` is in effect → the content region renders a distinct "no results" state (not `PanelEmptyState`, not the card grid) using `texts.noResultsLabel`. Because search is server-driven, this state reflects the server returning zero matches, not a client-side filter reducing a non-empty array to zero.
-- `isLoading` is `false`, `error` is unset, and `items` is non-empty → the content region renders a single flat `ScheduledTaskCardGrid` of `ScheduledTaskCard`s, **in the order they were received** (no client-side reordering by `sortKey` — sort order is now applied server-side, see the "Server-driven search and sort over the full remote dataset" requirement). There is no grouping/sectioning of any kind — no section heading, no count badge — regardless of task ownership. When `isLoadingMore` is `true`, exactly `skeletonCount` `ScheduledTaskCardSkeleton` elements render as **trailing children inside that same `ScheduledTaskCardGrid`** (via its `trailingSkeletonCount` prop) — not in a separate grid container — so they continue filling the current CSS grid row (via `grid-auto-flow`) instead of unconditionally starting a new row and leaving a gap in a partially-filled last row.
-- A scroll sentinel is rendered at the end of the content region's scrollable area; when it becomes visible and `hasMore && !isLoadingMore && !isLoading`, `onLoadMore` is invoked (if provided).
+- `isLoading` is `false`, `error` is unset, and `items` is empty because the source list itself is empty (no `searchQuery` in effect) → the content region renders the shared `PanelEmptyState` component (from `@epam/ai-dial-chat-shared`) with `labels.emptyStateLabel`.
+- `isLoading` is `false`, `error` is unset, `items` is empty, and a non-empty `searchQuery` is in effect → the content region renders a distinct "no results" state (not `PanelEmptyState`, not the card grid) using `labels.noResultsLabel`. Because search is server-driven, this state reflects the server returning zero matches, not a client-side filter reducing a non-empty array to zero.
+- `isLoading` is `false`, `error` is unset, and `items` is non-empty → the content region renders a single flat `ScheduledTaskCardGrid` of `ScheduledTaskCard`s, **in the order they were received** (no client-side reordering by `sortKey` — sort order is now applied server-side, see the "Server-driven search and sort over the full remote dataset" requirement). There is no grouping/sectioning of any kind — no section heading, no count badge — regardless of task ownership. When `isLoadingMore` is `true`, exactly `skeletonCount` `ScheduledTaskCardSkeleton` elements render as **trailing children inside that same `ScheduledTaskCardGrid`** (via its `trailingSkeletonCount` prop) — not in a separate grid container — so they continue filling the current CSS grid row instead of unconditionally starting a new row and leaving a gap in a partially-filled last row. When `loadMoreError` is set, a `role="alert"` row with `labels.loadMoreErrorLabel` (falling back to `labels.errorLabel`) and a retry `GhostButton` calling `onRetryLoadMore` renders below the grid, without removing the loaded cards.
+- A scroll sentinel is rendered at the end of the content region's scrollable area; when it becomes visible and `hasMore && !isLoadingMore && !isLoading && !loadMoreError`, `onLoadMore` is invoked (if provided).
 
 The component MUST NOT import from `apps/chat`, `server-api`, any generated API client, routing, feature-flag context, auth, env, or analytics — all such knowledge is passed in via props. Fetching, pagination-state management, sort-state management, and DTO mapping happen in the app; the lib performs no sorting of `items` itself — `sortKey`/`onSortChange` are used only to drive the toolbar control's UI state (selected option, `aria-selected`), not to reorder rendered cards.
 
 #### Scenario: Header and toolbar render from props
 
-- **WHEN** `ScheduledTasks` renders with `texts.title = 'Scheduled tasks'` and `texts.createButtonLabel = 'New task'`
+- **WHEN** `ScheduledTasks` renders with `labels.title = 'Scheduled tasks'` and `labels.createButtonLabel = 'New task'`
 - **THEN** the page shows a heading with that title and a button with that accessible name
 
 #### Scenario: Loading state shows a spinner
@@ -89,12 +90,12 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 #### Scenario: Empty source list with no active search shows PanelEmptyState
 
 - **WHEN** `ScheduledTasks` renders with `isLoading={false}`, no `error`, `items = []`, and no `searchQuery`
-- **THEN** the content region renders `PanelEmptyState` with `texts.emptyStateLabel`, and no card/grid/section markup is present
+- **THEN** the content region renders `PanelEmptyState` with `labels.emptyStateLabel`, and no card/grid/section markup is present
 
 #### Scenario: Empty items with an active search shows no-results state, not empty state
 
 - **WHEN** `ScheduledTasks` renders with `items = []` and a non-empty `searchQuery`
-- **THEN** the content region renders the no-results state with `texts.noResultsLabel`, distinct from `PanelEmptyState`
+- **THEN** the content region renders the no-results state with `labels.noResultsLabel`, distinct from `PanelEmptyState`
 
 #### Scenario: Non-empty items render a flat card grid in received order
 
@@ -147,11 +148,11 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 
 ### Requirement: ScheduledTaskCard renders a single task with highlighted search matches
 
-`libs/scheduled-tasks` SHALL export a `ScheduledTaskCard` component rendering: a title (highlighting the current search match via the shared `Highlight` component from `@epam/ai-dial-chat-shared`, per `.claude/rules/search-results-highlight.md`), an optional "N NEW"-style badge when `isNew`/a new-count is set, an optional description/prompt-preview line, a schedule/status pill, and an optional location breadcrumb built from `locationSegments` (outermost segment first, chevron separator between segments). The card exposes an overflow-menu trigger only when at least one action callback is supplied; the menu renders only the actions for which a corresponding callback prop (`onEdit`, `onRunNow`, `onDelete`) was provided by the caller.
+`libs/scheduled-tasks` SHALL export a `ScheduledTaskCard` component, rendered on the kit's `CardShell`, showing: a title (highlighting the current search match via the shared `Highlight` component from `@epam/ai-dial-ui-kit`, per `.claude/rules/search-results-highlight.md`), an optional "NEW" badge when `item.isNew` is set, an optional description/prompt-preview line (clamped to four lines), a schedule/status pill, and an optional location breadcrumb built from `locationSegments` through the kit's `FolderPath` (outermost segment first). The card has no overflow menu and no per-task action callbacks: its only callback is `onCardClick`; Edit and Delete are offered only in the detail page header (see `scheduled-task-detail-page`).
 
 The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` when `item.isActive` is `true` or `undefined`, and a "Paused" badge (with a pause icon) in that same position when `item.isActive` is explicitly `false`. The two are mutually exclusive — the card never renders both at once. This is a display-only distinction; the card issues no pause/resume request and takes no other action based on `isActive` (the mutating pause/resume switch is confined to the detail page — see `scheduled-task-detail-page`).
 
-`ScheduledTaskCard` SHALL accept an optional `onCardClick?: (id: string) => void` prop. When supplied, the card's root SHALL be an activatable element (clickable and keyboard-operable) that calls `onCardClick(id)` when activated by click or Enter/Space. The overflow-menu trigger button, and every action inside the opened overflow menu, MUST call `event.stopPropagation()` so activating the trigger or any menu action never also invokes `onCardClick`. When `onCardClick` is not supplied, the card renders exactly as before (no added interactive root semantics).
+`ScheduledTaskCard` SHALL accept an optional `onCardClick?: (id: string) => void` prop. When supplied, the card's root SHALL be `role="button"` with `tabIndex={0}` that calls `onCardClick(id)` on click or on Enter/Space. When `onCardClick` is not supplied, the root is `role="group"` with no click or keyboard handlers. In both cases the root's accessible name is `item.displayName`.
 
 #### Scenario: Title highlights the active search query
 
@@ -161,7 +162,7 @@ The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` 
 #### Scenario: Schedule pill and location breadcrumb render from pre-formatted values
 
 - **WHEN** `ScheduledTaskCard` renders with `scheduleLabel="Every Monday 12:00"`, `isActive` omitted, and `locationSegments=["Public", "Project folder"]`
-- **THEN** the schedule pill renders the label verbatim and the breadcrumb renders each segment in order with a chevron separator between them; the component performs no date formatting or trigger-shape parsing itself
+- **THEN** the schedule pill renders the label verbatim and `FolderPath` renders each segment in order; the component performs no date formatting or trigger-shape parsing itself
 
 #### Scenario: Paused badge replaces the schedule pill when isActive is false
 
@@ -173,25 +174,25 @@ The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` 
 - **WHEN** `ScheduledTaskCard` renders with `isActive: true`
 - **THEN** the schedule pill renders as usual and no "Paused" badge is shown
 
-#### Scenario: Overflow menu only shows actions with a supplied handler
+#### Scenario: Card renders no overflow menu
 
-- **WHEN** `ScheduledTaskCard` renders with only `onDelete` supplied (no `onEdit`, no `onRunNow`)
-- **THEN** the overflow menu, when opened, shows exactly one action item, and activating it calls `onDelete` with the card's `id`
+- **WHEN** `ScheduledTaskCard` renders
+- **THEN** no overflow-menu trigger and no Edit, Run now or Delete action is present on the card
 
 #### Scenario: Clicking the card body invokes onCardClick
 
-- **WHEN** `onCardClick` is supplied and the user clicks anywhere on the card body outside the overflow-menu trigger
+- **WHEN** `onCardClick` is supplied and the user clicks anywhere on the card
 - **THEN** `onCardClick` is called exactly once with the card's `id`
 
-#### Scenario: Clicking the overflow-menu trigger or an action does not invoke onCardClick
+#### Scenario: Keyboard activation invokes onCardClick
 
-- **WHEN** `onCardClick` and at least one action callback are both supplied, and the user clicks the overflow-menu trigger, or opens the menu and clicks an action item
-- **THEN** `onCardClick` is not called, and only the trigger's open behavior (or the clicked action's own callback) fires
+- **WHEN** `onCardClick` is supplied, the card has focus, and the user presses Enter or Space
+- **THEN** `onCardClick` is called exactly once with the card's `id`
 
 #### Scenario: Card without onCardClick has no added interactive semantics
 
 - **WHEN** `ScheduledTaskCard` renders without `onCardClick`
-- **THEN** the card root is not exposed as a button/clickable element and clicking it invokes no navigation-related callback
+- **THEN** the card root is `role="group"`, is not focusable, and clicking it invokes no callback
 
 ### Requirement: Card click navigates to the task detail route
 
@@ -202,11 +203,6 @@ The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` 
 - **WHEN** the user clicks a task card's body on `/scheduled-tasks`
 - **THEN** the app navigates to `/scheduled-tasks/{id}` for that card's task id
 
-#### Scenario: Overflow menu actions do not trigger navigation
-
-- **WHEN** the user clicks the overflow-menu trigger on a card, or an action inside the opened menu (Edit/Run/Delete)
-- **THEN** the app does not navigate away from `/scheduled-tasks`, and only the corresponding action callback (if any) is invoked
-
 #### Scenario: Intermediate components forward the callback without transformation
 
 - **WHEN** `ScheduledTasks`/`ScheduledTaskCardGrid` source is statically analyzed
@@ -214,27 +210,31 @@ The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` 
 
 ### Requirement: List page fetches scheduled tasks and refreshes after create
 
-`ScheduledTasksPage` SHALL fetch the list via a `useScheduledTasks` hook (`apps/chat/src/hooks/scheduled-tasks/useScheduledTasks.ts`) that owns pagination, search, and sort state, and exposes `{ items, searchQuery, setSearchQuery, sortKey, setSortKey, isLoading, isLoadingMore, error, hasMore, loadMore, refetch }`. On mount, whenever `searchQuery` changes (debounced ~300ms), and whenever `sortKey` changes (immediately, no debounce — it's a discrete toolbar selection, not free text), the hook SHALL reset accumulated `items` and call `listScheduledTasks({ limit, offset: 0, search: searchQuery, sort: sortKey, signal })` from `apps/chat/src/server-api/scheduled-tasks.api.ts`, using `AbortController` to cancel any prior in-flight request for that same trigger and a cancelled flag to guard against post-unmount/post-superseded state updates. Calling `loadMore()` SHALL, only when `hasMore && !isLoadingMore && !isLoading`, fetch the next page at `offset = items.length` with the current `search` and `sort` and append the mapped, deduplicated-by-`id` results to `items` — the appended page is not locally reordered, since it is already in the same server-chosen order as page 0. The page SHALL map each `ScheduledTaskDto` to `ScheduledTaskItem` (locale-aware label formatting happens here, not in the lib) and pass `items`, `hasMore` (derived from the response's `next !== null`), `isLoadingMore`, and `loadMore` into `ScheduledTasks`. When the user navigates back to `/scheduled-tasks` from the create flow, the page SHALL call `refetch()`, which resets to page 0 with the current `search` and `sort`, so a newly created task appears without a full page reload.
+`ScheduledTasksPage` SHALL fetch the list via the app hook `useScheduledTasks(isEnabled)` (`apps/chat/src/hooks/scheduled-tasks/useScheduledTasks.ts`), a thin adapter over the shared `useScheduledTasks(client, options)` from `@epam/ai-dial-chat-hooks/scheduled-tasks` (`libs/chat-hooks/src/scheduled-task/use-scheduled-tasks.ts`). The adapter passes the app's configured `schedulerClient` (`apps/chat/src/server-api/scheduled-tasks.api.ts`) and `initialSort: ScheduledTasksSortKey.FirstToRun`, and returns the shared result with `sortKey` typed as `ScheduledTasksSortKey` and `error` mapped from the shared hook's `initialError`; it also exposes `loadMoreError` and `retryLoadMore`.
+
+The shared hook owns pagination, search, and sort state (page size 20). On mount, whenever the debounced `searchQuery` changes (300ms), whenever `sortKey` changes (immediately — it is a discrete toolbar selection), and on `refetch()`, it SHALL reset accumulated items and errors and call `client.listScheduledTasks({ limit, offset: 0, search, sort, signal })`, aborting the previous request through an `AbortController` and discarding any settlement from a superseded generation (a generation counter bumped on every reset and on unmount). Calling `loadMore()` SHALL, only when enabled and `hasMore && !isLoading` and no load-more is in flight, fetch the next page at the accumulated server offset with the current `search` and `sort` and append the results, deduplicated by `id`, in server order. A load-more failure sets `loadMoreError` without clearing loaded items; `retryLoadMore` is `loadMore`. `hasMore` is derived from the response's `next != null`. When the flag is disabled the hook issues no request.
+
+The page SHALL map the hook's `ScheduledTaskDto[]` to `ScheduledTaskItem[]` with `mapScheduledTaskDtosToItems(taskDtos, t, language)` (locale-aware label formatting happens here, not in the lib) and pass `items`, `hasMore`, `isLoadingMore`, `loadMoreError`, `onLoadMore`, `onRetryLoadMore`, and `onRetry={refetch}` into `ScheduledTasks`. When the page is navigated to with `location.state.refresh === true` (as the create page does after a successful create), it SHALL call `refetch()` and clear that state, so a newly created task appears without a full page reload.
 
 #### Scenario: List fetches page 0 on mount
 
 - **WHEN** `ScheduledTasksPage` mounts with the feature flag enabled
-- **THEN** `listScheduledTasks({ offset: 0, sort: sortKey, ... })` is called exactly once, and the resolved items are passed to `ScheduledTasks` as `items`
+- **THEN** `listScheduledTasks({ offset: 0, sort: sortKey, ... })` is called exactly once, and the resolved items are mapped and passed to `ScheduledTasks` as `items`
 
 #### Scenario: Unmount before fetch resolves does not update state
 
 - **WHEN** `ScheduledTasksPage` unmounts while a `listScheduledTasks()` call is still in flight
-- **THEN** the in-flight request is aborted and no state update is attempted after unmount
+- **THEN** the in-flight request is aborted and its settlement is discarded by the generation guard
 
 #### Scenario: Returning from create refetches page 0 with the current search and sort
 
-- **WHEN** the user creates a task via the create flow and is navigated back to `/scheduled-tasks` with an active `searchQuery` and `sortKey`
-- **THEN** `useScheduledTasks.refetch()` is invoked, resetting to `offset = 0` with the current `search` and `sort`, and the newly created task is visible once the refetch resolves (if it matches the current search), without a full page reload
+- **WHEN** the user creates a task via the create flow and is navigated back to `/scheduled-tasks` with `state.refresh` set
+- **THEN** `refetch()` is invoked, resetting to `offset = 0` with the current `search` and `sort`, and the newly created task is visible once the refetch resolves (if it matches the current search), without a full page reload
 
 #### Scenario: Fetch failure surfaces an error with retry
 
-- **WHEN** `listScheduledTasks()` rejects
-- **THEN** `useScheduledTasks` exposes a non-null `error`, and `ScheduledTasksPage` passes an `onRetry` that calls `refetch()` into `ScheduledTasks`
+- **WHEN** the page-0 `listScheduledTasks()` call rejects
+- **THEN** the app hook exposes a non-null `error` (the shared hook's `initialError`), and `ScheduledTasksPage` passes an `onRetry` that calls `refetch()` into `ScheduledTasks`
 
 #### Scenario: Load more appends the next page in server order without resetting existing items
 
@@ -267,11 +267,11 @@ The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` 
 
 ### Requirement: Card active state is populated from the BFF isActive field
 
-`map-scheduled-task-dto.ts` SHALL map `ScheduledTaskDto.isActive` to `ScheduledTaskItem.isActive` in `mapScheduledTaskDtoToItem`, with no reinterpretation of the value — the frontend SHALL NOT re-derive active/paused state from `nextRunTime`, `triggerType`, or any other field itself; that derivation is owned entirely by the BFF mapper (see `scheduled-tasks-api`'s "Scheduled task active-state field"). When `ScheduledTaskDto.isActive` is `undefined`, `ScheduledTaskItem.isActive` SHALL be `undefined`, which `ScheduledTaskCard` renders identically to `true` (schedule pill shown, no "Paused" badge).
+`map-scheduled-task-dto.ts` SHALL map `ScheduledTaskDto.isActive` to `ScheduledTaskItem.isActive` and `ScheduledTaskDto.isCompleted` to `ScheduledTaskItem.isCompleted` in `mapScheduledTaskDtoToItem`, with no reinterpretation of either value — the frontend SHALL NOT re-derive active/paused/completed state from `nextRunTime`, `triggerType`, run history, or any other field itself; both derivations are owned entirely by the BFF (see `scheduled-tasks-api`'s "Scheduled task active state field" and "Scheduled task completed-state field"). When `ScheduledTaskDto.isActive` is `undefined`, `ScheduledTaskItem.isActive` SHALL be `undefined`; when `ScheduledTaskDto.isCompleted` is `undefined` or `false`, the card resolves its status exactly as it does today — `isActive: true` or `undefined` renders the schedule pill, `isActive: false` renders the "Paused" badge, and only `isCompleted: true` renders the "Completed" badge.
 
 #### Scenario: isActive false maps through to the card
 
-- **WHEN** a `ScheduledTaskDto` with `isActive: false` is mapped and rendered
+- **WHEN** a `ScheduledTaskDto` with `isActive: false, isCompleted: false` is mapped and rendered
 - **THEN** the resulting `ScheduledTaskItem.isActive` is `false`, and the card shows the "Paused" badge
 
 #### Scenario: isActive true maps through to the card
@@ -284,6 +284,16 @@ The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` 
 - **WHEN** a `ScheduledTaskDto` omits `isActive`
 - **THEN** the resulting `ScheduledTaskItem.isActive` is `undefined`, mapping does not throw, and the card shows the schedule pill (not the "Paused" badge)
 
+#### Scenario: isCompleted true maps through and renders the Completed badge
+
+- **WHEN** a `ScheduledTaskDto` with `isCompleted: true, isActive: false` is mapped and rendered
+- **THEN** the resulting `ScheduledTaskItem.isCompleted` is `true` and the card shows the "Completed" badge (not the "Paused" badge, not the schedule pill)
+
+#### Scenario: isCompleted false or omitted leaves today's behavior untouched
+
+- **WHEN** a `ScheduledTaskDto` with `isCompleted: false` or without `isCompleted` is mapped and rendered
+- **THEN** the card renders exactly as it does before this change (schedule pill or "Paused" badge per `isActive`)
+
 ### Requirement: Server-driven search and sort over the full remote dataset
 
 Both search and sort SHALL be server-driven and SHALL apply to the full remote dataset, not just loaded pages — the upstream DIAL Scheduler list endpoint supports `order_by`/`order_dir` in addition to pagination and the name filter (see the modified `scheduled-tasks-api` "List scheduled tasks" requirement), superseding the prior design decision that treated sort as a client-side-only, loaded-pages-only concern.
@@ -292,7 +302,7 @@ Both search and sort SHALL be server-driven and SHALL apply to the full remote d
 
 The frontend SHALL NOT reimplement "missing `nextRunAt` sorts last" logic — when `sortKey` is `firstToRun` or `lastToRun`, the upstream service already places schedules with no next run time (paused/inactive) last, and the frontend trusts the server-returned order as-is.
 
-`map-scheduled-task-dto.ts`'s `formatCronScheduleLabel` SHALL convert the stored UTC `cron.fields.hour`/`minute` (and `day_of_week`/`day` when present) back to the current browser's local time before formatting the display label, using the same reference-`Date` conversion technique (inverse direction) as the submit-side conversion in `buildCronFields`, so the displayed recurring schedule time always matches the wall-clock time that will actually execute. This mirrors the existing local-display behavior already used for "once" schedules via `Intl.DateTimeFormat(undefined, ...)`.
+`buildScheduleLabel` in `apps/chat/src/utils/map-scheduled-task-dto.ts` SHALL build the card's schedule label from the shared trigger descriptor `describeScheduledTaskTrigger(task.trigger, { timeZone })` (`@epam/ai-dial-chat-hooks/scheduled-tasks`), passing the browser's timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`). The descriptor converts the stored UTC `cron.fields.hour`/`minute` (and `day_of_week`/`day`, shifting the day when the conversion crosses midnight) to that timezone, so the displayed recurring schedule time matches the wall-clock time that will actually execute. `buildScheduleLabel` then localizes the descriptor per kind (`OneTime` via `Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' })`, `EveryNMinutes`, `Hourly`, `Daily`, `Weekly` with a localized weekday name, `Monthly`, `Invalid` → `scheduledTasks.edit.invalidScheduleLabel`, otherwise `scheduledTasks.card.scheduleRecurringFallback`).
 
 #### Scenario: Search sends a server request instead of filtering locally
 
@@ -322,12 +332,12 @@ The frontend SHALL NOT reimplement "missing `nextRunAt` sorts last" logic — wh
 #### Scenario: Recurring schedule label shows the local equivalent of the stored UTC time
 
 - **WHEN** a task's `trigger.cron.fields` stores UTC `hour = '7'`, `minute = '0'`, and the browser's timezone is UTC+2
-- **THEN** `formatCronScheduleLabel` renders a label showing `09:00`, not `07:00`
+- **THEN** `buildScheduleLabel` renders a label showing `09:00`, not `07:00`
 
 #### Scenario: Weekly recurring label shows the local day, not the stored UTC day
 
 - **WHEN** a task's `trigger.cron.fields` stores UTC `day_of_week` for Tuesday with `hour = '21'`, `minute = '30'`, and the browser's timezone is UTC+2 (so the local equivalent is Monday `23:30`)
-- **THEN** `formatCronScheduleLabel` renders a label showing Monday `23:30`, not Tuesday `21:30`
+- **THEN** `buildScheduleLabel` renders a label showing Monday `23:30`, not Tuesday `21:30`
 
 ### Requirement: Scheduled Tasks card and list strings flow through react-i18next
 
@@ -336,7 +346,7 @@ New user-visible strings introduced for card/grid/loading/error/no-results state
 #### Scenario: New keys are present in en.json
 
 - **WHEN** the change is applied
-- **THEN** `en.json` contains `scheduledTasks.list.noResultsLabel`, `scheduledTasks.list.errorLabel`, `scheduledTasks.list.retryLabel`, and card-facing keys for menu action labels
+- **THEN** `en.json` contains `scheduledTasks.list.noResultsLabel`, `scheduledTasks.list.errorLabel`, `scheduledTasks.list.retryLabel`, `scheduledTasks.list.loadingMoreLabel`, and the card-facing `scheduledTasks.card.newBadgeLabel`, `scheduledTasks.card.completedBadgeLabel` and `scheduledTasks.card.schedule*` label keys
 
 #### Scenario: Lib receives strings, not translation keys
 
@@ -345,7 +355,7 @@ New user-visible strings introduced for card/grid/loading/error/no-results state
 
 ### Requirement: Card grid and states support RTL and meet AAA accessibility defaults
 
-All directional layout in the card, grid, loading, error, and no-results surfaces MUST use Tailwind logical properties per `.claude/rules/rtl.md`. The location breadcrumb's chevron separator MUST be mirrored in RTL via `rtl:scale-x-[-1]` or an equivalent. Each card's root MUST expose `role="group"` with an accessible name derived from its title (per `.claude/rules/a11y.md` author/role identification pattern). The overflow-menu trigger MUST have an accessible name and expose `aria-expanded`; the retry action in the error state MUST be a real, keyboard-activatable control (not a non-interactive element with a click handler). Dynamic transitions between loading/error/empty/no-results/grid states MUST be announced via an `aria-live="polite"` status region so screen-reader users are notified when results appear or change.
+All directional layout in the card, grid, loading, error, and no-results surfaces MUST use Tailwind logical properties per `.claude/rules/rtl.md`. The location breadcrumb's chevron separator MUST be mirrored in RTL via `rtl:scale-x-[-1]` or an equivalent. Each card's root MUST carry an accessible name equal to its title (`aria-label={item.displayName}`); it is `role="button"` (focusable, Enter/Space-activatable) when `onCardClick` is supplied — always the case on `ScheduledTasksPage` — and `role="group"` otherwise. The retry action in the error state MUST be a real, keyboard-activatable control (not a non-interactive element with a click handler). Dynamic transitions between loading/error/empty/no-results/grid states MUST be announced via an `aria-live="polite"` status region so screen-reader users are notified when results appear or change.
 
 #### Scenario: Card grid mirrors under RTL
 
@@ -357,10 +367,15 @@ All directional layout in the card, grid, loading, error, and no-results surface
 - **WHEN** the content region transitions from loading to a populated card grid
 - **THEN** an `aria-live="polite"` region announces the change (e.g. a result-count summary)
 
-#### Scenario: Card is identifiable as a named group
+#### Scenario: Card is identifiable by its title
 
-- **WHEN** a screen reader user navigates into a `ScheduledTaskCard`
-- **THEN** the card's root exposes `role="group"` with an accessible name matching (or derived from) its title
+- **WHEN** a screen reader user reaches a `ScheduledTaskCard` on `ScheduledTasksPage`
+- **THEN** the card's root exposes `role="button"` with an accessible name equal to its title
+
+#### Scenario: Non-interactive card is a named group
+
+- **WHEN** a `ScheduledTaskCard` renders without `onCardClick`
+- **THEN** the card's root exposes `role="group"` with an accessible name equal to its title
 
 ### Requirement: Server-driven search triggers refetch from page 0
 
@@ -452,6 +467,73 @@ ScheduledTaskItem SHALL support an optional exported Active/Paused/Completed sta
 - **WHEN** a task lacks nextRunTime but the host has not supplied Completed
 - **THEN** the library does not introduce a Completed badge.
 
+### Requirement: Card status is derived by getScheduledTaskStatus and rendered by a status pill
+
+`libs/scheduled-tasks` SHALL export `ScheduledTaskStatus` (`Scheduled = 'scheduled' | Paused = 'paused' | Completed = 'completed'`) and `getScheduledTaskStatus(item: ScheduledTaskItem): ScheduledTaskStatus`, which resolves visual status with fixed precedence: an explicit `item.presentationStatus` (the pre-existing override field, restored unchanged from the pre-change card) wins; else `item.isCompleted` → `Completed`; else `item.isActive === false` → `Paused`; else `Scheduled` (`isActive: true` and `undefined` both resolve to `Scheduled`). `ScheduledTaskCard` SHALL render exactly one status element via an internal `ScheduledTaskStatusPill` component taking pre-resolved `status`, `text`, and optional class props — the card SHALL NOT inline per-status branches.
+
+#### Scenario: Completed item resolves to the completed status
+
+- **WHEN** `getScheduledTaskStatus` is called with `{ isCompleted: true, isActive: false }`
+- **THEN** it returns `ScheduledTaskStatus.Completed` (completed wins over paused)
+
+#### Scenario: An explicit presentationStatus wins over the derived statuses
+
+- **WHEN** `getScheduledTaskStatus` is called with `{ presentationStatus: 'active', isCompleted: true }` or `{ presentationStatus: 'paused', isCompleted: true }`
+- **THEN** it returns the status matching `presentationStatus`, not the derived one
+
+#### Scenario: Paused item resolves to the paused status
+
+- **WHEN** `getScheduledTaskStatus` is called with `{ isCompleted: false, isActive: false }`
+- **THEN** it returns `ScheduledTaskStatus.Paused`
+
+#### Scenario: Active or undefined-active item resolves to the scheduled status
+
+- **WHEN** `getScheduledTaskStatus` is called with `{ isCompleted: undefined, isActive: true }` or with `isActive` omitted
+- **THEN** it returns `ScheduledTaskStatus.Scheduled`
+
+### Requirement: Completed card shows a Completed badge in place of the schedule pill
+
+When a card's status is `Completed`, `ScheduledTaskStatusPill` SHALL render a rounded-full badge (matching the Paused badge's shape and layout) containing a check icon and the `labels.completedBadgeLabel` text (English default `'Completed'`). The check icon SHALL be `aria-hidden` with `stroke={DIAL_KIT_ICON_STROKE}` and `DIAL_ICON_SIZE.SM` — the badge text is the accessible signal. The badge SHALL NOT include a date. The card's status area SHALL render exactly one element — never a badge and a schedule pill together.
+
+#### Scenario: Completed card renders badge-only, no schedule pill
+
+- **WHEN** a `ScheduledTaskItem` with `isCompleted: true` and a populated `scheduleLabel` is rendered
+- **THEN** the "Completed" badge is shown and the schedule pill text is not rendered
+
+#### Scenario: Completed badge icon is hidden from assistive technology
+
+- **WHEN** the completed badge renders
+- **THEN** its check icon carries `aria-hidden` and the badge's accessible name is exactly the label text
+
+#### Scenario: Completed badge label is localized
+
+- **WHEN** the Scheduled Tasks page renders a completed card
+- **THEN** the badge text comes from `labels.completedBadgeLabel`, which `ScheduledTasksPage` populates from a new `ScheduledTasksI18nKeys` member whose value is defined in `en.json` and every other locale file, following the existing `scheduledTasks.card.*` key pattern
+
+#### Scenario: Completed badge mirrors in RTL without code changes
+
+- **WHEN** the page renders with `dir="rtl"` and a completed card is present
+- **THEN** the badge lays out mirrored via the same logical-property cascade as the paused badge (it is a centered inline pill with a symmetric check icon, so no icon mirroring applies), with no dedicated RTL code path
+
+### Requirement: Completed badge theming mirrors the Paused badge contract
+
+`ScheduledTaskCardColors` SHALL gain `completedBadgeBackground`, `completedBadgeBorder`, and `completedBadgeText` (CSS vars `--stc-completed-bg` / `--stc-completed-border` / `--stc-completed-text`, set on the card root via `buildCssVars` and consumed by the status pill's stylesheet), and `ScheduledTaskCardTypography` SHALL gain `completedBadgeClassName` (default a `dial-*-text` scale class). The badge background SHALL default to transparent (both the Paused and Completed badges — only the schedule pill keeps a filled background), with the badge-text fallback chain `var(--stc-completed-text, var(--text-secondary, #57647a))` treating the badge as muted/secondary UI text (the repo's documented secondary-text exception), matching the Paused badge's treatment.
+
+#### Scenario: Color overrides reach the completed badge
+
+- **WHEN** a card is rendered with `styles.colors.completedBadgeText` set
+- **THEN** the completed badge's text color resolves from `--stc-completed-text`
+
+#### Scenario: Defaults apply without overrides
+
+- **WHEN** a completed card is rendered with no `styles` prop
+- **THEN** the badge renders with the stylesheet's token fallbacks and the default typography class
+
+#### Scenario: Completed badge text uses the secondary text token by default
+
+- **WHEN** the completed badge renders with no color overrides
+- **THEN** its text and icon color resolves from `var(--text-secondary, #57647a)`, the same muted treatment as the Paused badge
+
 ### Requirement: Dashboard incremental failure does not replace loaded content
 
 ScheduledTasks SHALL support distinct incremental error/retry props and preserve its cards while a later page fails. The app SHALL consume common trigger descriptions for schedule text, preserving next-run information as a separate product concept. Search highlighting, unread badges, banner and card navigation SHALL remain intact.
@@ -465,3 +547,27 @@ ScheduledTasks SHALL support distinct incremental error/retry props and preserve
 
 - **WHEN** a task's trigger is supported but optional model/prompt is absent
 - **THEN** its recurring description remains meaningful and does not become Custom merely because edit metadata is absent.
+
+### Requirement: Scheduled Tasks list toolbar adapts to mobile
+
+Below 768px (a phone-width cutoff inside the `mobile` band — tablets keep both controls), focusing the toolbar's search input SHALL hide the sort control and let the search field expand to the full toolbar width; blurring the search input SHALL restore the sort control. From 768px up, the toolbar SHALL be unchanged by search focus. When the sort control is hidden while its menu is open (e.g. focus arrives via keyboard rather than a tap, so no outside-click closes it), the menu SHALL be closed so no portaled popup lingers on screen without its trigger.
+
+#### Scenario: Mobile search focus expands the field and hides the sort control
+
+- **WHEN** the viewport is below 768px and the search input receives focus
+- **THEN** the sort control is hidden and the search field occupies the full toolbar width
+
+#### Scenario: Mobile search blur restores the sort control
+
+- **WHEN** the search input loses focus
+- **THEN** the sort control is visible again beside the search field
+
+#### Scenario: Sort menu does not linger when its trigger is hidden
+
+- **WHEN** the sort menu is open and the search input then receives focus below 768px
+- **THEN** the sort menu closes together with its hidden trigger
+
+#### Scenario: Toolbar at 768px and up is unchanged
+
+- **WHEN** the viewport is 768px or wider (tablet band and desktop alike)
+- **THEN** focusing the search input changes nothing — the sort control stays visible beside the field

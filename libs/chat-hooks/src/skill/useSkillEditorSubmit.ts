@@ -10,9 +10,12 @@ import { getApiErrorDetails, getApiErrorStatus } from '../api-error/api-error';
 import {
   buildSkillFilesPayload,
   buildSkillManifestForSubmit,
+  getSkillFieldLengthViolations,
   isValidSkillRelativePath,
   normalizeSkillName,
+  SKILL_TEXT_FIELD_MAX_LENGTHS,
   startsWithFrontmatterBlock,
+  type SkillTextField,
 } from './skill';
 import type { SkillFileContent } from './skill-file-preview';
 
@@ -72,6 +75,8 @@ export interface SkillEditorSubmitClient {
 export interface SkillEditorSubmitMessages {
   /** Shown when a required field is empty. */
   required: string;
+  /** Shown when a name, description or instructions value exceeds its length limit, given that limit. */
+  tooLong: (maxLength: number) => string;
   /**
    * Shown when the Instructions value opens with its own YAML frontmatter
    * block — pasting a whole `SKILL.md` in there would otherwise produce a
@@ -132,6 +137,8 @@ export interface UseSkillEditorSubmitParams {
   etagRef: React.MutableRefObject<string | undefined>;
   /** Where to navigate on a successful save. */
   returnUrl: string;
+  /** Resolves the destination after creation from the normalized skill path. Defaults to `returnUrl`. */
+  getCreateReturnUrl?: (path: string) => string;
   /** Refetches the host's skill listing after a successful save. */
   refetchSkills: () => Promise<void>;
   /** Already-configured create/update operations. */
@@ -152,6 +159,10 @@ export interface UseSkillEditorSubmitResult {
   errors: SkillEditorErrors;
   /** General submit-time error, distinct from a stale-edit `conflict`. */
   submitError: string | undefined;
+  /** Whether `submitError` was caused by something a plain re-send can clear, rather than by the submission itself. */
+  isSubmitErrorRetryable: boolean;
+  /** Re-submits the values of the attempt that produced `submitError`. No-op before the first submit. */
+  retrySubmit: () => void;
   /** Present when the last save hit a stale-ETag conflict. */
   conflict: { message: string } | undefined;
   /** Clears `conflict`, e.g. once the host has reloaded the latest skill. */
@@ -181,6 +192,7 @@ export const useSkillEditorSubmit = ({
   loadedPathRef,
   etagRef,
   returnUrl,
+  getCreateReturnUrl,
   refetchSkills,
   client,
   messages,
@@ -189,9 +201,11 @@ export const useSkillEditorSubmit = ({
 }: UseSkillEditorSubmitParams): UseSkillEditorSubmitResult => {
   const [errors, setErrors] = useState<SkillEditorErrors>({});
   const [submitError, setSubmitError] = useState<string | undefined>();
+  const [isSubmitErrorRetryable, setIsSubmitErrorRetryable] = useState(false);
   const [conflict, setConflict] = useState<{ message: string } | undefined>();
   const [phase, setPhase] = useState<SubmitPhase>('idle');
   const lastAttemptRef = useRef<LastAttempt | null>(null);
+  const lastValuesRef = useRef<SkillEditorValues | null>(null);
 
   const applyUploadErrorStatus = useCallback(
     async (err: unknown) => {
@@ -214,7 +228,14 @@ export const useSkillEditorSubmit = ({
           setSubmitError(messages.archiveTooLarge);
           return;
         case 503:
+          /*
+           * Nothing about the submission was wrong, so the message is only
+           * half the answer — the form still holds everything needed to send
+           * it again, and the caller is offered a retry rather than being
+           * left to find the Save button again.
+           */
           setSubmitError(messages.serviceUnavailable);
+          setIsSubmitErrorRetryable(true);
           return;
         case 400: {
           /*
@@ -304,7 +325,7 @@ export const useSkillEditorSubmit = ({
           title: messages.saveSuccessTitle,
           message: messages.createSuccess(normalizedName),
         });
-        onNavigate(returnUrl);
+        onNavigate(getCreateReturnUrl?.(path) ?? returnUrl);
       } catch (err) {
         setPhase('failure');
         await applyUploadErrorStatus(err);
@@ -320,6 +341,7 @@ export const useSkillEditorSubmit = ({
       onNotify,
       onNavigate,
       returnUrl,
+      getCreateReturnUrl,
       refetchSkills,
       applyUploadErrorStatus,
     ],
@@ -395,21 +417,41 @@ export const useSkillEditorSubmit = ({
   const handleValuesChange = useCallback(
     (values: SkillEditorValues) => {
       const hasFrontmatter = startsWithFrontmatterBlock(values.instructions);
+      const violations = getSkillFieldLengthViolations(values);
       setErrors((prev) => {
         /*
-         * Touch only this one message: a required-field or any other
-         * host-set `instructions` message must survive, and the other
-         * fields' errors are none of this check's business.
+         * Touch only the messages these live checks own (too long, and the
+         * instructions frontmatter one): a required-field or any other
+         * host-set message must survive until the next submit.
          */
-        const isShowing =
-          prev.instructions === messages.instructionsFrontmatter;
-        if (hasFrontmatter === isShowing) return prev;
-        if (hasFrontmatter) {
-          return { ...prev, instructions: messages.instructionsFrontmatter };
-        }
         const next = { ...prev };
-        delete next.instructions;
-        return next;
+        for (const field of Object.keys(
+          SKILL_TEXT_FIELD_MAX_LENGTHS,
+        ) as SkillTextField[]) {
+          const tooLongMessage = messages.tooLong(
+            SKILL_TEXT_FIELD_MAX_LENGTHS[field],
+          );
+          if (violations[field]) {
+            next[field] = tooLongMessage;
+          } else if (next[field] === tooLongMessage) {
+            delete next[field];
+          }
+        }
+        if (!violations.instructions) {
+          const isShowing =
+            next.instructions === messages.instructionsFrontmatter;
+          if (hasFrontmatter && !isShowing) {
+            next.instructions = messages.instructionsFrontmatter;
+          } else if (!hasFrontmatter && isShowing) {
+            delete next.instructions;
+          }
+        }
+        const isUnchanged =
+          Object.keys(next).length === Object.keys(prev).length &&
+          (Object.keys(next) as (keyof SkillEditorErrors)[]).every(
+            (key) => next[key] === prev[key],
+          );
+        return isUnchanged ? prev : next;
       });
     },
     [messages],
@@ -437,6 +479,12 @@ export const useSkillEditorSubmit = ({
          */
         nextErrors.instructions = messages.instructionsFrontmatter;
       }
+      const violations = getSkillFieldLengthViolations(values);
+      for (const field of Object.keys(violations) as SkillTextField[]) {
+        nextErrors[field] ??= messages.tooLong(
+          SKILL_TEXT_FIELD_MAX_LENGTHS[field],
+        );
+      }
       if (Object.keys(nextErrors).length > 0) {
         setErrors(nextErrors);
         return;
@@ -444,7 +492,9 @@ export const useSkillEditorSubmit = ({
 
       setErrors({});
       setSubmitError(undefined);
+      setIsSubmitErrorRetryable(false);
       setConflict(undefined);
+      lastValuesRef.current = values;
 
       if (isEditMode) {
         await handleSubmitEdit(values);
@@ -455,10 +505,23 @@ export const useSkillEditorSubmit = ({
     [phase, bucket, messages, isEditMode, handleSubmitEdit, handleSubmitCreate],
   );
 
+  /*
+   * Re-submits the values the failed attempt carried. `handleSubmit`
+   * fingerprints them and reuses the payload it already built, so a retry
+   * costs no rebuild of the manifest or the file blobs.
+   */
+  const retrySubmit = useCallback(() => {
+    const values = lastValuesRef.current;
+    if (values == null) return;
+    void handleSubmit(values);
+  }, [handleSubmit]);
+
   return {
     phase,
     errors,
     submitError,
+    isSubmitErrorRetryable,
+    retrySubmit,
     conflict,
     clearConflict: () => setConflict(undefined),
     handleSubmit,

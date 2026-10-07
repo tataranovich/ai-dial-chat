@@ -10,20 +10,30 @@ import {
   Matches,
   ValidateIf,
   ValidateNested,
+  MaxLength,
 } from 'class-validator';
 import { LocaleTextEntryDto } from '../../common/dto/locale-text-entry.dto';
 import { LOCALIZED_TEXT_SCHEMA } from '../../common/types/localized-text';
 import type { LocalizedText } from '../../common/types/localized-text';
 import {
+  ENTITY_DESCRIPTION_MAX_LENGTH,
+  ENTITY_NAME_MAX_LENGTH,
+} from '../../common/validators/entity-field-limits';
+import {
   LOCALE_CODE_PATTERN,
   LOCALE_CODE_VALIDATION_MESSAGE,
 } from '../../common/validators/locale-code.pattern';
 import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
+import {
+  SEMVER_VERSION_PATTERN,
+  SEMVER_VERSION_VALIDATION_MESSAGE,
+} from '../../common/validators/semver-version.pattern';
 
 export class CreateApplicationBodyDto {
-  @ApiProperty({ example: 'My App' })
+  @ApiProperty({ example: 'My App', maxLength: ENTITY_NAME_MAX_LENGTH })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(ENTITY_NAME_MAX_LENGTH)
   @Matches(/^[a-zA-Z0-9 _.-]+$/, {
     message:
       'name must contain only letters, digits, spaces, underscores, dots, and dashes',
@@ -39,9 +49,13 @@ export class CreateApplicationBodyDto {
   @IsOptional()
   type?: string;
 
-  @ApiPropertyOptional({ example: 'A custom application.' })
+  @ApiPropertyOptional({
+    example: 'A custom application.',
+    maxLength: ENTITY_DESCRIPTION_MAX_LENGTH,
+  })
   @IsString()
   @IsOptional()
+  @MaxLength(ENTITY_DESCRIPTION_MAX_LENGTH)
   description?: string;
 
   @ApiPropertyOptional({
@@ -55,12 +69,11 @@ export class CreateApplicationBodyDto {
   @IsValidResourceReference()
   iconUrl?: string;
 
-  @ApiPropertyOptional({ example: '1.0' })
+  @ApiPropertyOptional({ example: '1.0.0' })
   @IsString()
   @IsOptional()
-  @Matches(/^[a-zA-Z0-9._-]+$/, {
-    message:
-      'version must contain only letters, digits, dots, underscores, and dashes',
+  @Matches(SEMVER_VERSION_PATTERN, {
+    message: SEMVER_VERSION_VALIDATION_MESSAGE,
   })
   version?: string;
 

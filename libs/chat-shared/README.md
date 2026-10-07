@@ -1,5 +1,20 @@
 # @epam/ai-dial-chat-shared
 
+## Skill capability predicate
+
+`isSkillSelectionUnsupported(skillUrl, isSkillsSupported)` returns true when a
+nonblank reference exists and support is not explicitly `true`. It accepts an
+optional/null reference and optional boolean, with no deployment, metadata,
+feature-flag, or UI dependency. Chat selection and scheduled-task validation
+use this same predicate.
+
+```ts
+import { isSkillSelectionUnsupported } from '@epam/ai-dial-chat-shared';
+
+isSkillSelectionUnsupported('skills/public/report', false); // true
+isSkillSelectionUnsupported(undefined, false); // false
+```
+
 Shared domain models, utilities, and UI components used across all AI DIAL Chat libraries.
 
 ## Overview
@@ -18,7 +33,7 @@ Shared domain models, utilities, and UI components used across all AI DIAL Chat 
 
 ## Peer Dependencies
 
-`react` (`^19.2.8`) and `@epam/ai-dial-ui-kit` (`^0.15.0-dev.12`) are the mandatory peers,
+`react` (`^19.2.8`) and `@epam/ai-dial-ui-kit` (`^0.15.0-dev.39`) are the mandatory peers,
 required by every entry point below. The markdown stack is **not** a peer any more: the root
 entry imports it unconditionally, so this package installs it itself and a consumer never
 names it.
@@ -33,8 +48,8 @@ entry's own imports.
 Peers:
 
 - `react` ^19.2.8
-- `@epam/ai-dial-ui-kit` ^0.15.0-dev.12
-- `@epam/ai-dial-react-file-manager` ^0.3.0-dev.4 \*
+- `@epam/ai-dial-ui-kit` ^0.15.0-dev.39
+- `@epam/ai-dial-react-file-manager` ^0.3.0-dev.25 \*
 - `ag-grid-community` ^35.3.0 \*
 
 Installed for you as dependencies: `@tabler/icons-react`, `react-markdown`,
@@ -68,6 +83,53 @@ above is genuinely optional for a host that imports anything else from this pack
 ([issue #8719](https://github.com/epam/ai-dial-chat/issues/8719)). Scoped feature
 entries limit resolution to their own peer sets; they do not remove peers required by
 that feature.
+
+## Text refinement lifecycle
+
+`useTextRefinement({ value, onChange, onRefine?, disabled?, resetKey? })` owns one field's request, feedback, and session-local Undo baseline. `onRefine` is a host-supplied `(value: string, signal: AbortSignal) => Promise<string>` callback; transport and purpose selection stay in the host. `disabled` defaults to false. Change `resetKey` on draft identity changes even if text is equal.
+
+The result exposes `state` (`TextRefinementState`), `isPending`, `canRefine`, `canUndo`, `refine()`, `undo()`, and `reset()`. Public types are `TextRefinementCallback`, `UseTextRefinementOptions`, and `TextRefinementResult`. The host must acknowledge changes through its controlled `value`, and coordinate multiple fields so only one request runs per form and submission is blocked while pending.
+
+Successful changes retain the original baseline across repeated refinements. Undo restores it exactly; manual/external value changes, reset, callback removal, disabling, and unmount invalidate the session state. Identical output does not write a value. Errors and blank output preserve text and any existing baseline; cancellation is silent. Late results cannot overwrite a replaced draft, even if the callback ignores cancellation. No baseline persists after leaving the editing session.
+
+```tsx
+import { useState } from 'react';
+import {
+  useTextRefinement,
+  type TextRefinementCallback,
+} from '@epam/ai-dial-chat-shared';
+
+function RefinableDraft({ onRefine }: { onRefine: TextRefinementCallback }) {
+  const [value, setValue] = useState('Original draft');
+  const refinement = useTextRefinement({ value, onChange: setValue, onRefine });
+  return (
+    <div>
+      <textarea
+        aria-label="Draft"
+        value={value}
+        onChange={(event) => {
+          refinement.reset();
+          setValue(event.target.value);
+        }}
+      />
+      <button
+        type="button"
+        disabled={!refinement.canRefine}
+        onClick={refinement.refine}
+      >
+        Refine
+      </button>
+      <button
+        type="button"
+        disabled={!refinement.canUndo || refinement.isPending}
+        onClick={refinement.undo}
+      >
+        Undo
+      </button>
+    </div>
+  );
+}
+```
 
 ## Optional file-manager entry
 
@@ -115,6 +177,7 @@ import type {
   Message,
   Stage,
   Annotation,
+  BackgroundGeneration,
 } from '@epam/ai-dial-chat-shared';
 import type {
   DeploymentItem,
@@ -123,12 +186,48 @@ import type {
 import type { Theme, UserProfile, DialModel } from '@epam/ai-dial-chat-shared';
 import type { EntityHeaderItem } from '@epam/ai-dial-chat-shared';
 import {
+  BackgroundGenerationStatus,
   CatalogEntityType,
   MessageRole,
   MessageRating,
   StageStatus,
 } from '@epam/ai-dial-chat-shared';
 ```
+
+### Background generation marker
+
+`Message.backgroundGeneration?: BackgroundGeneration` is present only on an assistant message produced by a DIAL Core background Responses job. It carries `generationId` (the message's identity across saves), `status` (`BackgroundGenerationStatus`: `Pending`, `Completed`, `Stopped`, `Failed`) and `startedAt` (epoch ms). The backend owns it; a message whose status is `Pending` is still being generated.
+
+### Stage parent references
+
+`Stage.parent_stage_index?: number` names the `index` of the stage that
+produced this one, in the same message's stage array. Omitted means a
+top-level stage; `0` is a valid parent. The model stays a flat array — there is
+no `children` field — and renderers derive the hierarchy.
+
+```tsx
+import { StageStatus } from '@epam/ai-dial-chat-shared';
+import type { Stage } from '@epam/ai-dial-chat-shared';
+
+const stages: Stage[] = [
+  { index: 0, name: 'Plan', status: StageStatus.Completed },
+  {
+    index: 1,
+    name: 'Search',
+    status: StageStatus.Completed,
+    parent_stage_index: 0,
+  },
+];
+```
+
+In a streaming delta the field refers to the parent's streaming `index` and is
+sent only on the chunk that opens the child; in a complete non-streaming array
+without indexes it refers to the parent's array position (see `mapStages` in
+`@epam/ai-dial-chat-hooks`).
+
+### Conversation custom view state
+
+`Conversation.customViewState?: Record<string, unknown>` is an open, feature-keyed container for conversation-level view state that rides the existing save/read of the conversation. It is absent on every conversation that has none. A host reads and writes individual keys of this record at the application edge; the model itself imposes no schema on the keys.
 
 ### Annotation selectors
 
@@ -191,14 +290,14 @@ import type {
 ```
 
 - `CustomVisualizer` — one MIME → visualizer mapping. `contentType` is **required** and accepts a comma-separated MIME list. One attachment per iframe.
-- `ApplicationVisualizer` — one application → grouped visualizer mapping, keyed in `ApplicationVisualizerRegistry` by application id. `contentType` is **optional**: when omitted, the entry claims every attachment that carries a URL. Every claimed attachment goes to one iframe together.
+- `ApplicationVisualizer` — one application → grouped visualizer mapping, keyed in `ApplicationVisualizerRegistry` by application id. `contentType` is **optional**: when omitted, the entry claims every attachment that carries a URL. Every claimed attachment goes to one iframe together. Optional `borderless` and `withoutTitle` tell the host to render the inline frame without its border chrome, or without its header title text.
 - `GroupedAttachmentsData` / `GroupedAttachmentItem` — the grouped payload the host builds from the claimed attachments. Each item's `url` is absolute, resolved by the host before sending.
 
 In both types, `title` is the postMessage protocol namespace rather than a display label: the iframe-side application must be constructed with the identical string as its `appName`, so it must never be localised. `passAuthInfo` and `passExplicitToken` are accepted for configuration parity and are inert — auth is server-side and the browser holds no access token.
 
 ### ConversationTransfer
 
-Types for the queued export/import job model. Consumed by `@epam/ai-dial-conversation-panel`'s `ImportExportQueue` component.
+Types for the queued export/import job model. The host maps these jobs onto the UI kit's `TransferQueue` items to render the export/import queue.
 
 ```tsx
 import {
@@ -270,6 +369,10 @@ reachable instead of being clipped; each container becomes a labelled,
 focusable `role="region"` only while it actually overflows. Pass
 `tableScrollRegionAriaLabel` and `mathScrollRegionAriaLabel` to translate those
 labels — they default to `'Scrollable table'` and `'Scrollable formula'`.
+Code blocks take `codeBlockCopyLabel`, `codeBlockCopiedLabel` and
+`codeBlockDownloadLabel` for their copy button, copied announcement and
+download button — they default to `'Copy code'`, `'Copied!'` and
+`'Download code'`.
 Supplying `tableActionLabels` opts a table into copy/download actions,
 rendered through the built-in `TableHeader`. Each icon-only action has a
 UI-kit tooltip using its localized label and a stable accessible name;
@@ -307,9 +410,13 @@ Renders a chat message body as markdown. `classNames` selects the type scale and
 defaults to `DEFAULT_MARKDOWN_CLASS_NAMES`; pass `COMPACT_MARKDOWN_CLASS_NAMES`
 to drop the body copy (`p`, `strong`) one step while leaving headings, code, and
 tables untouched. The component is memoised, so pass a stable reference rather
-than an inline object. It forwards the code-block and table action labels to
+than an inline object. It forwards the code-block labels (`codeBlockCopyLabel`,
+`codeBlockCopiedLabel`, `codeBlockDownloadLabel`), the table action labels and
+the `tableScrollRegionAriaLabel`/`mathScrollRegionAriaLabel` region labels to
 `MarkdownRenderer`. Pass `urlTransform` to rewrite markdown `href`/`src` values
-the same way as `MarkdownRenderer`.
+the same way as `MarkdownRenderer`. Pass `isPlainText` to render the body
+through `PlainTextRenderer` instead — the conversation's `plain_text` response
+format — in which case the markdown-only props are ignored.
 
 ```tsx
 import {
@@ -325,6 +432,35 @@ import {
 />;
 ```
 
+### PlainTextRenderer
+
+Renders a chat message body verbatim, for a conversation whose response format
+is `plain_text`: no Markdown pipeline, no raw HTML, no syntax highlighting, so
+a table, a heading, or `**bold**` reaches the reader exactly as the model wrote
+it and can be pasted into an e-mail or a ticket unchanged. Newlines and runs of
+whitespace are preserved. `classNames` takes the same object a Markdown message
+is styled with — only its `p` entry is read — so both formats stay on one type
+scale. `isStreaming` reveals appended content gradually and shows
+`thinkingLabel` until the first token arrives, matching `MarkdownRenderer`.
+
+Reach for `MDMessageViewer` with `isPlainText` rather than this component
+directly when the format is a per-conversation setting: the viewer picks the
+renderer and keeps one call site.
+
+```tsx
+import {
+  DEFAULT_MARKDOWN_CLASS_NAMES,
+  PlainTextRenderer,
+} from '@epam/ai-dial-chat-shared';
+
+<PlainTextRenderer
+  content={message.content}
+  isStreaming={isStreaming}
+  classNames={DEFAULT_MARKDOWN_CLASS_NAMES}
+  thinkingLabel={t('Thinking')}
+/>;
+```
+
 ### MarkdownCodeBlock
 
 Syntax-highlighted code block with copy and download buttons. `language` and
@@ -336,6 +472,10 @@ times; `copiedLabel` is announced through the block's own
 behind a `Suspense` boundary — `value` is shown immediately as plain,
 unhighlighted text via the fallback, then swapped for the highlighted output
 once the engine resolves. A language-less block never loads the engine at all.
+Blocks exceeding 50,000 UTF-16 code units overall or 2,000 on any line also
+bypass the engine and display complete plain text. Copy and download retain
+the original content, and the language label is preserved. This size guard
+reduces expensive highlighting; it is not an execution timeout.
 
 ```tsx
 import { MarkdownCodeBlock } from '@epam/ai-dial-chat-shared';
@@ -347,6 +487,19 @@ import { MarkdownCodeBlock } from '@epam/ai-dial-chat-shared';
   copyLabel="Copy code"
   copiedLabel="Copied!"
 />;
+```
+
+### isSyntaxHighlightingAllowed
+
+`isSyntaxHighlightingAllowed(text: string): boolean` is the shared size guard
+for synchronous syntax highlighting. It permits up to 50,000 UTF-16 code units
+overall and 2,000 per line, inclusively, recognizing LF, CRLF, and CR endings.
+Callers render complete plain text when it returns `false`.
+
+```ts
+import { isSyntaxHighlightingAllowed } from '@epam/ai-dial-chat-shared';
+
+const canHighlight = isSyntaxHighlightingAllowed('const answer = 42;');
 ```
 
 ### MarkdownTable
@@ -434,7 +587,7 @@ import { DeploymentIcon } from '@epam/ai-dial-chat-shared';
 
 ### InitialsAvatar
 
-Generates an avatar from a user's display name with a consistent background color.
+A square initials badge for an entity without an icon, drawn by the UI kit's `Avatar`: the initials come from `name`, and the same name always gets the same colour from the theme's visual tokens. `textClassName` replaces the default semibold initials sized at 40% of `size`.
 
 ```tsx
 import { InitialsAvatar } from '@epam/ai-dial-chat-shared';
@@ -444,12 +597,20 @@ import { InitialsAvatar } from '@epam/ai-dial-chat-shared';
 
 ### PanelEmptyState
 
-Generic empty-state placeholder used inside panels.
+Generic empty-state placeholder used inside panels. Without `icon` it shows the
+kit's default `NoDataContent` document mark; pass a decorative feature
+illustration to replace it.
 
 ```tsx
 import { PanelEmptyState } from '@epam/ai-dial-chat-shared';
+import { IconClockHour3 } from '@tabler/icons-react';
 
 <PanelEmptyState label="No conversations" />;
+
+<PanelEmptyState
+  label="No scheduled tasks yet"
+  icon={<IconClockHour3 size={48} stroke={1} aria-hidden />}
+/>;
 ```
 
 ### ItemHeader
@@ -484,8 +645,8 @@ import { CatalogEntityType, EntityTypeLabel } from '@epam/ai-dial-chat-shared';
 
 ### FeaturedChip
 
-Featured badge whose text and background colors follow the entity type by
-default. Pass `style` to override any of the chip's own style properties
+Featured badge, drawn as the UI kit's filled `Badge`, whose text and
+background colors follow the entity type by default. Pass `style` to override any of the chip's own style properties
 (e.g. `backgroundColor`, `color`, `border`) — it is merged on top of the
 per-entity-type default, so it always wins.
 
@@ -547,6 +708,187 @@ inline after the name instead, or pass `children` to render arbitrary content
 in the row instead of the entity header. The legacy top-level `colors` prop is
 still accepted; new consumers should use `styles.colors`.
 
+### ConfirmationIdentityCard
+
+Tinted card echoing the resource a confirmation is about, so the user sees
+exactly what the action will affect. Defaults to the `Info` surface; pass
+`ConfirmationPopupVariant.Danger` for destructive messaging. Pass `children`
+instead of `item` for a resource that is not an `EntityHeaderItem`.
+
+```tsx
+import { ConfirmationIdentityCard } from '@epam/ai-dial-chat-shared';
+import { ConfirmationPopupVariant } from '@epam/ai-dial-ui-kit';
+
+<ConfirmationIdentityCard
+  item={item}
+  variant={ConfirmationPopupVariant.Danger}
+/>;
+```
+
+### ConfirmationView
+
+Body of an in-place confirmation step: the identity card, the confirmation
+copy, and an optional consequence list. Presentational only — the caller owns
+the state and the action itself. Pair it with
+[`ConfirmationFooter`](#confirmationfooter). `@epam/ai-dial-catalog`'s details
+panel renders the two as an in-panel sub-view, which is why they are two
+components rather than one; a caller with no panel to host the step wants
+[`ConfirmationDialog`](#confirmationdialog), which composes them into a
+centered dialog.
+
+```tsx
+import { ConfirmationView } from '@epam/ai-dial-chat-shared';
+import { ConfirmationPopupVariant } from '@epam/ai-dial-ui-kit';
+
+<ConfirmationView
+  item={item}
+  variant={ConfirmationPopupVariant.Danger}
+  message={
+    <>
+      Are you sure you want to delete <strong>{item.name}</strong>? This action
+      is permanent and cannot be undone.
+    </>
+  }
+  consequences={['Users who rely on it will lose access', 'Cannot be undone']}
+/>;
+```
+
+Pass `identity` to replace the default card for a resource that has no
+`EntityHeaderItem`, and `children` for a step that needs an input before it can
+be confirmed — the caller owns that input's state and disables confirming
+until it is satisfied. With neither `item` nor `identity` the card is omitted,
+which suits a confirmation that is not about a particular resource.
+
+### ConfirmationFooter
+
+Action row for a confirmation step: a text Cancel and a confirm button colored
+by `variant`, which for `Danger` also carries a leading trash icon. `isLoading`
+swaps that icon for a spinner, disables both actions, and announces
+`loadingStatusLabel` politely; `isConfirmDisabled` blocks only confirming, so a
+step whose input is unsatisfied can still be cancelled.
+
+```tsx
+import { ConfirmationFooter } from '@epam/ai-dial-chat-shared';
+import { ConfirmationPopupVariant } from '@epam/ai-dial-ui-kit';
+
+<ConfirmationFooter
+  confirmLabel="Delete"
+  cancelLabel="Cancel"
+  variant={ConfirmationPopupVariant.Danger}
+  loadingStatusLabel="Deleting"
+  onConfirm={handleDelete}
+  onCancel={handleCancel}
+/>;
+```
+
+### ConfirmationIdentityRow
+
+Identity of a resource that has no `EntityHeaderItem` — a conversation or a
+scheduled task, say — laid out as icon, type and name for
+[`ConfirmationIdentityCard`](#confirmationidentitycard)'s `children`, so those
+resources get the same card as a catalog entity. The icon comes from the host,
+which owns the glyph set; pass `typeLabel` in sentence case, since the default
+class uppercases it.
+
+```tsx
+import {
+  ConfirmationIdentityCard,
+  ConfirmationIdentityRow,
+} from '@epam/ai-dial-chat-shared';
+import { ConfirmationPopupVariant } from '@epam/ai-dial-ui-kit';
+
+<ConfirmationIdentityCard variant={ConfirmationPopupVariant.Danger}>
+  <ConfirmationIdentityRow
+    icon={<IconMessage aria-hidden />}
+    typeLabel="Chat"
+    name={conversation.title}
+  />
+</ConfirmationIdentityCard>;
+```
+
+### ConfirmationDialog
+
+[`ConfirmationView`](#confirmationview) and
+[`ConfirmationFooter`](#confirmationfooter) inside the kit's `Popup` — the same
+content block the catalog's details panel shows in place, for a surface with no
+panel to host it. It takes every `ConfirmationView` prop plus the dialog's own,
+and while `isLoading` is set it blocks every route out, not only the two
+buttons the footer disables: the header close control, Escape and an outside
+click all stop working, because dismissing mid-request would leave the surface
+behind contradicting an action that is still running.
+
+`title` is a string rather than a node so the kit names the dialog with it; a
+node header would open the dialog unnamed.
+
+```tsx
+import { ConfirmationDialog } from '@epam/ai-dial-chat-shared';
+import { ConfirmationPopupVariant } from '@epam/ai-dial-ui-kit';
+
+<ConfirmationDialog
+  open={isDeleteOpen}
+  title="Delete chat"
+  variant={ConfirmationPopupVariant.Danger}
+  item={item}
+  message={
+    <>
+      Are you sure you want to delete <strong>{item.name}</strong>? This action
+      is permanent and cannot be undone.
+    </>
+  }
+  consequences={['Cannot be undone']}
+  confirmLabel="Delete"
+  cancelLabel="Cancel"
+  loadingStatusLabel="Deleting…"
+  isLoading={isDeleting}
+  onConfirm={handleDelete}
+  onClose={closeDelete}
+/>;
+```
+
+### TextRefinementField
+
+Label row with kit `GhostButton` "Refine with AI" / Undo actions, plus a polite
+status region and an error alert, around one field driven by
+[`useTextRefinement`](#text-refinement-lifecycle). The group is named by the
+label and described by the error while one is shown; Undo returns focus to the
+Refine action. With `isEnabled={false}` it renders `children` alone, so the
+host keeps its own label. Copy comes from `labels` (`TextRefinementLabels`),
+each key with an English default.
+
+```tsx
+import { useState } from 'react';
+import {
+  TextRefinementField,
+  useTextRefinement,
+  type TextRefinementCallback,
+} from '@epam/ai-dial-chat-shared';
+
+function DescriptionField({ onRefine }: { onRefine?: TextRefinementCallback }) {
+  const [value, setValue] = useState('');
+  const refinement = useTextRefinement({ value, onChange: setValue, onRefine });
+  return (
+    <TextRefinementField
+      isEnabled={Boolean(onRefine)}
+      fieldId="description"
+      label="Description"
+      required
+      refinement={refinement}
+      disabled={false}
+      labels={{ refineWithAiLabel: 'Refine with AI' }}
+    >
+      <textarea
+        id="description"
+        value={value}
+        onChange={(event) => {
+          refinement.reset();
+          setValue(event.target.value);
+        }}
+      />
+    </TextRefinementField>
+  );
+}
+```
+
 ## Hooks
 
 ### useAvailableHeightCap
@@ -585,6 +927,33 @@ import { useIsMobile } from '@epam/ai-dial-chat-shared';
 const isMobile = useIsMobile();
 ```
 
+### useUnsavedChangesGuard
+
+`useUnsavedChangesGuard(isDirty)` defers a "leave the form" action until the user confirms discarding. `guard(action)` runs `action` at once when `isDirty` is `false`; otherwise it stores the action and sets `isConfirmOpen`. `confirm()` closes the confirmation and runs the stored action, `dismiss()` closes it and drops the action. While `isDirty` is `true` the hook also registers a `beforeunload` listener so the browser warns before the page unloads. The hook renders nothing — pair it with a confirmation such as `ConfirmationDialog`, and compute `isDirty` yourself.
+
+```tsx
+import {
+  ConfirmationDialog,
+  useUnsavedChangesGuard,
+} from '@epam/ai-dial-chat-shared';
+
+const { guard, isConfirmOpen, confirm, dismiss } =
+  useUnsavedChangesGuard(isDirty);
+
+<button type="button" onClick={() => guard(goBack)}>
+  Cancel
+</button>;
+<ConfirmationDialog
+  open={isConfirmOpen}
+  title="Discard unsaved changes?"
+  message="You have unsaved changes. Leaving now will discard them."
+  confirmLabel="Discard changes"
+  cancelLabel="Keep editing"
+  onConfirm={confirm}
+  onClose={dismiss}
+/>;
+```
+
 ## Utilities
 
 ```tsx
@@ -613,6 +982,11 @@ import {
   MARKDOWN_TABLE_CSV_MIME_TYPE,
   getUtf8ByteLength,
   truncateToUtf8Bytes,
+  ENTITY_NAME_MAX_LENGTH,
+  ENTITY_DESCRIPTION_MAX_LENGTH,
+  ENTITY_INSTRUCTIONS_MAX_LENGTH,
+  exceedsMaxLength,
+  hasControlCharacters,
   sanitizeConversationName,
   stripTrailingDots,
   PROHIBITED_CONVERSATION_NAME_CHARS_RE,
@@ -620,6 +994,11 @@ import {
   resolvePromptParams,
   buildPromptParamDefaults,
 } from '@epam/ai-dial-chat-shared';
+
+// Length limits shared by every entity editor (prompts, skills, toolsets,
+// applications, scheduled tasks): name 256, description 2000, instructions 50000.
+const isNameTooLong = exceedsMaxLength(name.trim(), ENTITY_NAME_MAX_LENGTH);
+const isNameMultiline = hasControlCharacters(name); // line breaks, tabs, NUL, …
 
 // Merge conditional class names — the only supported way to compose classes.
 // Conflicting utilities collapse to the last one, including the workspace
@@ -713,6 +1092,7 @@ import {
   RESIZABLE_TEXTAREA_CLASS_NAME,
   RESIZABLE_FIELD_MAX_HEIGHT_CSS_VARIABLE,
   MARKDOWN_EDITOR_MAX_HEIGHT_CLASS_NAME,
+  MARKDOWN_EDITOR_FILL_HEIGHT_CLASS_NAME,
   MARKDOWN_EDITOR_PREVIEW_LIST_CLASS_NAME,
   SELECT_LIST_MAX_HEIGHT_PX,
   SELECT_LIST_MAX_HEIGHT_CLASS_NAME,
@@ -726,19 +1106,21 @@ import {
 | `MIME_TYPE_WILDCARD`                         | `*/*`, the "any type accepted" sentinel in attachment allowlists          |
 | `MIME_TYPE_AUDIO_PREFIX`                     | `audio/`, used to detect transcription-capable attachment types           |
 | `HIDDEN_FILE`                                | `.dial_folder`, the marker file DIAL Core writes into folders             |
+| `PUBLIC_BUCKET`                              | `public`, the DIAL Core bucket holding organization-wide resources        |
 | `BASE_MD_ICON_PROPS` / `BASE_LG_ICON_PROPS`  | Default `size`/`stroke` pairs for Tabler icons at each scale step         |
 | `ENTITY_TYPE_COLOR` / `ENTITY_TYPE_BG_COLOR` | `CatalogEntityType` → text and surface color tokens                       |
 | `TAG_INPUT_TAG_CLASS_NAME`                   | `tagClassName` for `TagInput`, so its tags stay visible in the field      |
 | `RESIZABLE_TEXTAREA_CLASS_NAME`              | `className` for a resizable `Textarea`, capping drag height at `50vh`     |
 | `RESIZABLE_FIELD_MAX_HEIGHT_CSS_VARIABLE`    | Custom property `useAvailableHeightCap` writes the measured cap to        |
 | `MARKDOWN_EDITOR_MAX_HEIGHT_CLASS_NAME`      | `className` capping `MarkdownEditor`'s drag bar at that measured cap      |
+| `MARKDOWN_EDITOR_FILL_HEIGHT_CLASS_NAME`     | `className` stretching `MarkdownEditor` to that measured cap, bar hidden  |
 | `MARKDOWN_EDITOR_PREVIEW_LIST_CLASS_NAME`    | `className` restoring list markers in the `MarkdownEditor` preview        |
 | `SELECT_LIST_MAX_HEIGHT_PX`                  | `344`, the design's maximum select-list length, for a measured cap        |
 | `SELECT_LIST_MAX_HEIGHT_CLASS_NAME`          | `max-h-[344px]`, the same cap for an options scroll box                   |
 
 ## Stylesheet
 
-The package ships Tailwind-generated CSS for its components (`DialFileManagerShell`, `OperationLoaderModal`, `UploadProgressModal`, etc.). Import it once in the host application's entry point:
+The package ships Tailwind-generated CSS for its components (`DialFileManagerShell`, `OperationLoaderModal`, etc.). Import it once in the host application's entry point:
 
 ```ts
 import '@epam/ai-dial-chat-shared/styles.css';
@@ -778,7 +1160,9 @@ import { DialFileManagerShell } from '@epam/ai-dial-chat-shared/file-manager';
 
 ### FileManagerController
 
-Structural interface consumed by `DialFileManagerShell`. Contains exactly the fields of `UseDialFileManagerResult` that the shell reads. A `UseDialFileManagerResult` value is structurally assignable to this interface without a cast. Tabs, active tab, selection, destination picker, and host callbacks are outside this contract.
+Structural interface consumed by `DialFileManagerShell`. Contains exactly the fields of `UseDialFileManagerResult` that the shell reads. A `UseDialFileManagerResult` (or `UseDialFileManagerSectionsResult`) value is structurally assignable to this interface without a cast. Tabs, active tab, selection, destination picker, and host callbacks are outside this contract.
+
+The optional `sectionTab` is the source tab of the browsed folder when the host shows the combined All tab. The shell gates its per-tab behaviour — the upload-archive toolbar entry, the root empty state — on `sectionTab ?? activeTab`, while `activeTab` stays the tab-strip value and the `treeHeaderByTab` key.
 
 ```ts
 import type { FileManagerController } from '@epam/ai-dial-chat-shared';
@@ -786,7 +1170,7 @@ import type { FileManagerController } from '@epam/ai-dial-chat-shared';
 
 ### DialFileManagerShellLabels
 
-Pre-translated strings the shell renders as-is. The shell never calls `useTranslation` — every host passes these via its own i18n.
+Pre-translated strings the shell renders as-is. The shell never calls `useTranslation` — every host passes these via its own i18n. `treeHeaderByTab` and `emptyStateByTab` are keyed by every `DialFileManagerTabs` member, `all` included. The optional `searchPlaceholderByTab` sets the search field placeholder for the browsed folder's source tab (`sectionTab ?? activeTab`); a tab without an entry keeps the file manager's default.
 
 ```ts
 import type { DialFileManagerShellLabels } from '@epam/ai-dial-chat-shared';
@@ -909,15 +1293,24 @@ const { handleGridApiChange, reset } = useGridEditingScroll();
 // Call reset() when the data source changes (e.g. on a tab switch).
 ```
 
-### OperationLoaderModal / UploadProgressModal
+### OperationLoaderModal
 
-Internal modals already rendered by `DialFileManagerShell`. Exported for hosts that need to compose them independently outside the shell.
+Internal modal already rendered by `DialFileManagerShell`. Exported for hosts that need to compose it independently outside the shell.
 
 ```tsx
-import {
-  OperationLoaderModal,
-  UploadProgressModal,
-} from '@epam/ai-dial-chat-shared';
+import { OperationLoaderModal } from '@epam/ai-dial-chat-shared';
+```
+
+### Upload queue
+
+`DialFileManagerShell` shows uploads in the UI kit's `TransferQueue`, fixed to the bottom-end corner. Its heading comes from `labels.getUploadQueueTitle(count)` and its strings from `labels.uploadQueueLabels`. Closing it aborts whatever is still uploading. Two helpers are exported for hosts that render the queue themselves — `isUploadInProgress` from the root entry, and `toUploadQueueItems` from `./file-manager`, since it is a value import of the kit:
+
+```ts
+import { isUploadInProgress } from '@epam/ai-dial-chat-shared';
+import { toUploadQueueItems } from '@epam/ai-dial-chat-shared/file-manager';
+
+const items = toUploadQueueItems(uploadBatchState?.files ?? []);
+const isBusy = isUploadInProgress(uploadBatchState);
 ```
 
 ## Building

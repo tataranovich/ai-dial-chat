@@ -2,6 +2,10 @@ import type {
   AvatarPickerFileManagerModalProps,
   DeploymentCreationFormLocaleOption,
 } from '@epam/ai-dial-builder-form';
+import type {
+  TextRefinementCallback,
+  TextRefinementLabels,
+} from '@epam/ai-dial-chat-shared';
 import type { ComponentType } from 'react';
 import type { GeneralFormLabels } from './general-form-props';
 import type { SettingsFormLabels } from './settings-form-props';
@@ -16,7 +20,13 @@ import type { ToolsetOAuthLoginHandler } from './toolset-oauth-login';
 export interface ToolsetEditorValidationLabels {
   /** Message for a missing name. Defaults to `'Name is required'`. */
   nameRequired?: string;
-  /** Message for a malformed version. Defaults to `'Version may only contain letters, digits, dots, underscores, and dashes'`. */
+  /** Message for a name over the shared length limit. Defaults to `'Use 256 characters or fewer.'`. */
+  nameTooLong?: string;
+  /** Message for a name containing control characters. Defaults to `'Remove line breaks, tabs and other control characters.'`. */
+  nameControlCharacters?: string;
+  /** Message for a description over the shared length limit. Defaults to `'Use 2000 characters or fewer.'`. */
+  descriptionTooLong?: string;
+  /** Message for a malformed version. Defaults to `'Version must follow semantic versioning (e.g., 1.0.0)'`. */
   versionInvalid?: string;
   /** Message for a missing endpoint. Defaults to `'Endpoint is required'`. */
   endpointRequired?: string;
@@ -60,6 +70,8 @@ export interface ToolsetEditorLayoutLabels {
  * defaults.
  */
 export interface ToolsetEditorLabels {
+  /** Refine-with-AI action, status, and error copy for the Description field. */
+  refinement?: TextRefinementLabels;
   /** Header/action/section labels. */
   layout?: ToolsetEditorLayoutLabels;
   /** Labels threaded to the embedded general (metadata) form. */
@@ -145,6 +157,8 @@ export interface ToolsetEditorProps {
   maxFileSizeBytes: number;
   /** Locale options offered by the "Add locale" popup. */
   availableLocaleOptions: DeploymentCreationFormLocaleOption[];
+  /** Optional Description rewrite callback; omission hides the Refine with AI action. */
+  onRefineDescription?: TextRefinementCallback;
   /** Pre-translated labels; each group falls back to English defaults. */
   labels?: ToolsetEditorLabels;
 }

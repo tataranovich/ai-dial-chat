@@ -133,6 +133,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     placeholder,
     disabled,
     showTimezone,
+    minDate,
   }: {
     id?: string;
     labelProps?: { label: ReactNode; required?: boolean };
@@ -142,6 +143,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     placeholder?: string;
     disabled?: boolean;
     showTimezone?: boolean;
+    minDate?: Date;
   }) => (
     /* The timezone hint renders outside the label, mirroring the kit's
        trailing-edge adornment, so it does not pollute the input's
@@ -162,6 +164,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
         />
       </label>
       {showTimezone && <span>(GMT+00:00) (UTC) UTC</span>}
+      {minDate && <span>hasMinDate</span>}
     </>
   ),
   Select: ({
@@ -197,17 +200,19 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   Spinner: () => <div>Loading</div>,
   Label: ({
     id,
+    htmlFor,
     label,
     required,
   }: {
     id?: string;
+    htmlFor?: string;
     label: ReactNode;
     required?: boolean;
   }) => (
-    <span id={id}>
+    <label id={id} htmlFor={htmlFor}>
       {label}
       {required && ' *'}
-    </span>
+    </label>
   ),
 }));
 
@@ -312,6 +317,37 @@ const getCancelButtons = () =>
   screen.getAllByRole('button', { name: 'Cancel' });
 
 describe('ScheduledTaskCreateForm', () => {
+  it('renders a self-labelled skill slot and allows skill-only saves unless invalid, including hidden skills', () => {
+    const props = buildFormProps({
+      values: {
+        ...baseValues,
+        displayName: 'Task',
+        modelId: 'model',
+        skillUrls: ['skills/public/report'],
+      },
+      skillSelector: <button aria-label="Skill">Pick</button>,
+    });
+    props.labels.skillLabel = 'Skill';
+    const { rerender } = render(<ScheduledTaskCreateForm {...props} />);
+    expect(screen.getByRole('button', { name: 'Skill' })).toBeTruthy();
+    expect(
+      (screen.getAllByRole('button', { name: 'Save' })[0] as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    rerender(
+      <ScheduledTaskCreateForm
+        {...props}
+        skillSelector={undefined}
+        errors={{ skillUrls: 'Unsupported' }}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Skill' })).toBeNull();
+    expect(screen.getByText('Unsupported')).toBeTruthy();
+    expect(
+      (screen.getAllByRole('button', { name: 'Save' })[0] as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
   it('renders the action pair in both the header and the mobile sticky footer', async () => {
     await renderForm();
 
@@ -597,7 +633,22 @@ describe('ScheduledTaskCreateForm', () => {
   it('names the Instructions editor through a real label association', async () => {
     await renderForm();
 
-    expect(screen.getByRole('textbox', { name: 'Instructions' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /^Instructions/ })).toBeTruthy();
+  });
+
+  it('marks Instructions as required while no skill is selected', async () => {
+    await renderForm();
+
+    expect(screen.getByText('Instructions *')).toBeTruthy();
+  });
+
+  it('drops the required marker once a skill is selected', async () => {
+    await renderForm({
+      values: { ...baseValues, skillUrls: ['skills/a'] },
+    });
+
+    expect(screen.getByText('Instructions')).toBeTruthy();
+    expect(screen.queryByText('Instructions *')).toBeNull();
   });
 
   it('renders Details and Configuration as two distinct regions', async () => {
@@ -820,6 +871,14 @@ describe('ScheduledTaskCreateForm', () => {
 
     expect(screen.getByPlaceholderText('Pick start date')).toBeTruthy();
     expect(screen.getByPlaceholderText('Pick end date')).toBeTruthy();
+  });
+
+  it('passes a minimum selectable date to both date pickers', async () => {
+    await renderForm();
+
+    /* Only the start/end date pickers forward a minDate in a recurring form
+       (the time and day-of-week calendars do not), so exactly two markers. */
+    expect(screen.getAllByText('hasMinDate').length).toBe(2);
   });
 
   it('calls onFieldChange via calendarValueToDateValue when the start-date calendar changes', async () => {

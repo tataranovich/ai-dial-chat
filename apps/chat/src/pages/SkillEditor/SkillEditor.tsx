@@ -1,8 +1,8 @@
 import { useAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
+import { TextRefinementPurpose } from '@epam/ai-dial-chat-api-client';
 import {
   isValidSkillRelativePath,
   parseSkillResourceUrl,
-  PUBLIC_SKILL_BUCKET,
   SkillEditorLoadState,
   SKILL_MANIFEST_FILE,
   useSkillEditorLoad,
@@ -11,8 +11,13 @@ import {
   type SkillEditorLoadClient,
   type SkillEditorSubmitClient,
   type SkillEditorSubmitMessages,
+  type SkillEditorSubmitNotification,
   type SkillFileActionsMessages,
 } from '@epam/ai-dial-chat-hooks';
+import {
+  PUBLIC_BUCKET,
+  useUnsavedChangesGuard,
+} from '@epam/ai-dial-chat-shared';
 import {
   SkillEditor as SkillEditorForm,
   type SkillEditorLabels,
@@ -22,6 +27,7 @@ import {
   ConfirmationPopupVariant,
   EditorThemes,
   ErrorText,
+  NotificationVariant,
   PrimaryButton,
 } from '@epam/ai-dial-ui-kit';
 import type { FC } from 'react';
@@ -29,9 +35,10 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router';
 import { SkillFilePreview } from '../../components/SkillFilePreview/SkillFilePreview';
-import { isSafeReturnUrl } from '../../constants/routes';
+import SkillFileSystemModal from '../../components/SkillFileSystemModal/SkillFileSystemModal';
 import {
   ButtonsI18nKeys,
+  EditorI18nKeys,
   SkillEditorI18nKeys,
 } from '../../constants/translation-keys';
 import { useUser } from '../../context/auth/UserContext';
@@ -39,6 +46,9 @@ import { useNotification } from '../../context/NotificationContext';
 import { useSkills } from '../../context/SkillsContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useSkillFilePreviewSync } from '../../hooks/attachment/useSkillFilePreviewSync';
+import { useSkillFileSystemPicker } from '../../hooks/skills/useSkillFileSystemPicker';
+import { useTextRefinementCallback } from '../../hooks/useTextRefinementCallback';
+import { useTextRefinementLabels } from '../../hooks/useTextRefinementLabels';
 import {
   createSkill,
   downloadSkill,
@@ -47,8 +57,13 @@ import {
   updateSkill,
 } from '../../server-api/skills.api';
 import { EditorQuery } from '../../types/editor-query';
+import {
+  EntityOperation,
+  NotifiableEntity,
+} from '../../types/entity-notification';
 import { ROUTES } from '../../types/routes';
 import { ThemeId } from '../../types/theme-id';
+import { ENTITY_OPERATION_NOTIFICATIONS } from '../../utils/entity-notification';
 
 const skillEditorLoadClient: SkillEditorLoadClient = {
   downloadSkill,
@@ -71,22 +86,35 @@ const NEW_SKILL_CANVAS_SCOPE = '<new>';
  * to end with this character and absorb the next key's leading path segment. */
 const CANVAS_SCOPE_SEPARATOR = '#';
 
+const SKILL_NOTIFICATIONS =
+  ENTITY_OPERATION_NOTIFICATIONS[NotifiableEntity.Skill];
+
 const SkillEditorPage: FC = () => {
   const { t } = useTranslation();
+  const onRefineDescription = useTextRefinementCallback(
+    TextRefinementPurpose.SkillDescription,
+  );
+  const onRefineInstructions = useTextRefinementCallback(
+    TextRefinementPurpose.SkillInstructions,
+  );
+  const refinementLabels = useTextRefinementLabels();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useUser();
   const { refetchSkills } = useSkills();
   const { currentTheme } = useTheme();
   const { closeCanvas } = useAttachmentCanvas();
-  const { showNotification } = useNotification();
+  const { showSuccessNotification, showErrorNotification } = useNotification();
 
-  const rawReturnUrl = searchParams.get(EditorQuery.ReturnUrl);
-  const returnUrl =
-    rawReturnUrl != null && isSafeReturnUrl(rawReturnUrl)
-      ? rawReturnUrl
-      : ROUTES.Catalog;
+  const handleSubmitNotification = useCallback(
+    ({ variant, ...notification }: SkillEditorSubmitNotification) =>
+      variant === NotificationVariant.Success
+        ? showSuccessNotification(notification)
+        : showErrorNotification(notification),
+    [showSuccessNotification, showErrorNotification],
+  );
 
+  const returnUrl = ROUTES.Catalog;
   const personalBucket = user?.bucket;
 
   const rawId = searchParams.get(EditorQuery.Id);
@@ -101,7 +129,7 @@ const SkillEditorPage: FC = () => {
       const decoded = decodeURIComponent(rawId);
       const parsed = parseSkillResourceUrl(decoded);
       if (parsed != null) {
-        return parsed.bucket === PUBLIC_SKILL_BUCKET ? null : parsed;
+        return parsed.bucket === PUBLIC_BUCKET ? null : parsed;
       }
       return personalBucket && isValidSkillRelativePath(decoded)
         ? { bucket: personalBucket, path: decoded }
@@ -112,6 +140,13 @@ const SkillEditorPage: FC = () => {
   }, [isEditMode, personalBucket, rawId]);
   const bucket = skillResource?.bucket;
   const skillPath = skillResource?.path;
+  const getCreateReturnUrl = useCallback(
+    (path: string) =>
+      `${ROUTES.Catalog}?${new URLSearchParams({
+        itemId: `skills/${bucket}/${path}`,
+      }).toString()}`,
+    [bucket],
+  );
 
   const {
     loadState,
@@ -133,7 +168,12 @@ const SkillEditorPage: FC = () => {
 
   const [selectedPath, setSelectedPath] = useState(SKILL_MANIFEST_FILE);
   const [isDirty, setIsDirty] = useState(false);
-  const [pendingCancel, setPendingCancel] = useState(false);
+  const {
+    guard: guardLeave,
+    isConfirmOpen: isLeaveConfirmOpen,
+    confirm: confirmLeave,
+    dismiss: dismissLeave,
+  } = useUnsavedChangesGuard(isDirty);
   const [pendingReload, setPendingReload] = useState(false);
   const [hasReturnedToManifest, setHasReturnedToManifest] = useState(false);
 
@@ -192,6 +232,8 @@ const SkillEditorPage: FC = () => {
     [t],
   );
 
+  const fileSystemPicker = useSkillFileSystemPicker(bucket);
+
   const { fileActions, pendingManifestImport, resolveManifestImport } =
     useSkillFileActions({
       files,
@@ -204,11 +246,13 @@ const SkillEditorPage: FC = () => {
       isDirty,
       setSelectedPath,
       messages: fileActionsMessages,
+      pickFromFileSystem: fileSystemPicker.pickFromFileSystem,
     });
 
   const submitMessages = useMemo<SkillEditorSubmitMessages>(
     () => ({
       required: t(SkillEditorI18nKeys.ErrorRequired),
+      tooLong: (count) => t(EditorI18nKeys.FieldTooLong, { count }),
       instructionsFrontmatter: t(
         SkillEditorI18nKeys.ErrorInstructionsFrontmatter,
       ),
@@ -218,10 +262,17 @@ const SkillEditorPage: FC = () => {
       serviceUnavailable: t(SkillEditorI18nKeys.ErrorServiceUnavailable),
       pathInvalid: t(SkillEditorI18nKeys.ErrorPathInvalid),
       saveError: t(SkillEditorI18nKeys.ErrorSave),
-      saveSuccessTitle: t(SkillEditorI18nKeys.SaveSuccessTitle),
-      createSuccess: (name) => t(SkillEditorI18nKeys.CreateSuccess, { name }),
-      updateSuccessTitle: t(SkillEditorI18nKeys.UpdateSuccessTitle),
-      updateSuccess: (name) => t(SkillEditorI18nKeys.UpdateSuccess, { name }),
+      /* Success wording comes from the shared entity-operation map, like every other "X created/edited" toast. */
+      saveSuccessTitle: t(
+        SKILL_NOTIFICATIONS[EntityOperation.Created].titleKey,
+      ),
+      createSuccess: (name) =>
+        t(SKILL_NOTIFICATIONS[EntityOperation.Created].messageKey, { name }),
+      updateSuccessTitle: t(
+        SKILL_NOTIFICATIONS[EntityOperation.Edited].titleKey,
+      ),
+      updateSuccess: (name) =>
+        t(SKILL_NOTIFICATIONS[EntityOperation.Edited].messageKey, { name }),
       conflictMessage: t(SkillEditorI18nKeys.ConflictMessage),
     }),
     [t],
@@ -231,6 +282,8 @@ const SkillEditorPage: FC = () => {
     phase,
     errors,
     submitError,
+    isSubmitErrorRetryable,
+    retrySubmit,
     conflict,
     clearConflict,
     handleSubmit,
@@ -244,11 +297,12 @@ const SkillEditorPage: FC = () => {
     loadedPathRef,
     etagRef,
     returnUrl,
+    getCreateReturnUrl,
     refetchSkills,
     client: skillEditorSubmitClient,
     messages: submitMessages,
     onNavigate: navigate,
-    onNotify: showNotification,
+    onNotify: handleSubmitNotification,
   });
 
   /*
@@ -267,17 +321,6 @@ const SkillEditorPage: FC = () => {
     });
   }, [loadState, loadedValues, handleValuesChange]);
 
-  // Warn on a full page unload while there are unsaved changes — the
-  // in-app Cancel/Back guards below cover in-app navigation.
-  useEffect(() => {
-    if (!isDirty) return;
-    const handler = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-    };
-    window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
-  }, [isDirty]);
-
   // Reset selection and close any open preview when switching between
   // resources (create <-> edit, or editing a different skill).
   useEffect(() => {
@@ -292,12 +335,8 @@ const SkillEditorPage: FC = () => {
   }, [navigate, returnUrl]);
 
   const handleCancel = useCallback(() => {
-    if (isDirty) {
-      setPendingCancel(true);
-      return;
-    }
-    navigateAway();
-  }, [isDirty, navigateAway]);
+    guardLeave(navigateAway);
+  }, [guardLeave, navigateAway]);
 
   /*
    * Back is preview-aware: while a supporting file is selected it is a return
@@ -326,10 +365,31 @@ const SkillEditorPage: FC = () => {
 
   const labels = useMemo<SkillEditorLabels>(
     () => ({
+      ...refinementLabels,
       filesHeading: t(SkillEditorI18nKeys.FilesHeading),
       filesTreeAriaLabel: t(SkillEditorI18nKeys.FilesTreeAriaLabel),
-      addUploadLabel: t(SkillEditorI18nKeys.AddUploadLabel),
-      removeLabel: t(SkillEditorI18nKeys.RemoveLabel),
+      addLabel: t(ButtonsI18nKeys.Add),
+      createFolderLabel: t(SkillEditorI18nKeys.CreateFolder),
+      uploadFilesLabel: t(SkillEditorI18nKeys.UploadDialogTitle),
+      uploadArchiveLabel: t(SkillEditorI18nKeys.UploadArchive),
+      openFileSystemLabel: t(SkillEditorI18nKeys.OpenFileSystem),
+      addChildLabel: t(SkillEditorI18nKeys.AddChild),
+      addSiblingLabel: t(SkillEditorI18nKeys.AddSibling),
+      deleteLabel: t(ButtonsI18nKeys.Delete),
+      newFolderDefaultName: t(SkillEditorI18nKeys.NewFolderDefaultName),
+      folderNameRequiredError: t(SkillEditorI18nKeys.FolderNameRequired),
+      folderNameInvalidError: t(SkillEditorI18nKeys.FolderNameInvalid),
+      folderNameDuplicateError: t(SkillEditorI18nKeys.FolderNameDuplicate),
+      uploadArchiveDialogTitle: t(SkillEditorI18nKeys.UploadArchive),
+      uploadArchiveDropZoneLabel: t(SkillEditorI18nKeys.UploadArchiveDropZone),
+      uploadArchiveDropZoneMobileLabel: t(
+        SkillEditorI18nKeys.UploadArchiveDropZoneMobile,
+      ),
+      uploadArchiveErrorMessage: t(SkillEditorI18nKeys.UploadArchiveError),
+      uploadArchiveEmptyMessage: t(SkillEditorI18nKeys.UploadArchiveEmpty),
+      uploadArchiveExtractingAriaLabel: t(
+        SkillEditorI18nKeys.UploadArchiveExtractingAriaLabel,
+      ),
       editingFileLabel: t(SkillEditorI18nKeys.EditingFileLabel),
       nameLabel: t(SkillEditorI18nKeys.NameLabel),
       namePlaceholder: t(SkillEditorI18nKeys.NamePlaceholder),
@@ -374,7 +434,7 @@ const SkillEditorPage: FC = () => {
       dropOverlayTitle: t(SkillEditorI18nKeys.DropOverlayTitle),
       dropOverlaySubtitle: t(SkillEditorI18nKeys.DropOverlaySubtitle),
     }),
-    [t, isEditMode, loadState],
+    [t, isEditMode, loadState, refinementLabels],
   );
 
   if (!bucket) {
@@ -406,6 +466,9 @@ const SkillEditorPage: FC = () => {
       </span>
 
       <SkillEditorForm
+        key={`${bucket}/${skillPath ?? NEW_SKILL_CANVAS_SCOPE}`}
+        onRefineDescription={onRefineDescription}
+        onRefineInstructions={onRefineInstructions}
         initialValues={loadedValues}
         files={files}
         selectedPath={selectedPath}
@@ -419,6 +482,7 @@ const SkillEditorPage: FC = () => {
         isSubmitting={phase === 'submitting'}
         errors={errors}
         submitError={submitError}
+        onRetrySubmit={isSubmitErrorRetryable ? retrySubmit : undefined}
         conflict={conflict}
         onReloadLatest={handleReloadLatestClick}
         isNameReadOnly={isEditMode}
@@ -449,18 +513,15 @@ const SkillEditorPage: FC = () => {
       />
 
       <ConfirmationPopup
-        open={pendingCancel}
+        open={isLeaveConfirmOpen}
         header={t(SkillEditorI18nKeys.UnsavedChangesTitle)}
         description={t(SkillEditorI18nKeys.UnsavedChangesMessage)}
         confirmLabel={t(SkillEditorI18nKeys.UnsavedChangesConfirmLabel)}
         cancelLabel={t(SkillEditorI18nKeys.UnsavedChangesCancelLabel)}
         variant={ConfirmationPopupVariant.Danger}
-        onConfirm={() => {
-          setPendingCancel(false);
-          navigateAway();
-        }}
-        onCancel={() => setPendingCancel(false)}
-        onClose={() => setPendingCancel(false)}
+        onConfirm={confirmLeave}
+        onCancel={dismissLeave}
+        onClose={dismissLeave}
       />
 
       <ConfirmationPopup
@@ -473,6 +534,13 @@ const SkillEditorPage: FC = () => {
         onConfirm={confirmReloadLatest}
         onCancel={() => setPendingReload(false)}
         onClose={() => setPendingReload(false)}
+      />
+
+      <SkillFileSystemModal
+        isOpen={fileSystemPicker.isOpen}
+        bucket={bucket}
+        onAttach={fileSystemPicker.handleAttach}
+        onClose={fileSystemPicker.handleClose}
       />
 
       <ConfirmationPopup

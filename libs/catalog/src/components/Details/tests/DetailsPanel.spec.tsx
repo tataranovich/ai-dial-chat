@@ -8,7 +8,7 @@ import {
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CatalogItem } from '../../../models/catalog-item';
 import type {
   CatalogContentFilePreview,
@@ -24,6 +24,20 @@ import {
   ToolsetAuthenticationType,
 } from '../../../types/toolset-auth';
 import { DetailsPanel } from '../DetailsPanel';
+
+/* jsdom has no layout; report every table as wider than its scroll container
+ * so `MarkdownTable` exposes its labelled scroll region. */
+const mockOverflowingTables = () => {
+  vi.spyOn(HTMLDivElement.prototype, 'scrollWidth', 'get').mockReturnValue(400);
+  vi.spyOn(HTMLDivElement.prototype, 'clientWidth', 'get').mockReturnValue(200);
+  vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    left: 0,
+    right: 200,
+  } as DOMRect);
+  vi.spyOn(HTMLTableElement.prototype, 'getBoundingClientRect').mockReturnValue(
+    { left: 0, right: 400 } as DOMRect,
+  );
+};
 
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@epam/ai-dial-ui-kit')>()),
@@ -143,9 +157,11 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
   ),
 }));
 vi.mock('@tabler/icons-react', () => ({
+  IconCheck: () => <svg />,
   IconChevronLeft: () => <svg />,
   IconChevronDown: () => <svg />,
   IconCopy: () => <svg />,
+  IconDownload: () => <svg />,
   IconFolder: () => <svg />,
   IconKey: () => <svg />,
   IconLogin: () => <svg />,
@@ -521,7 +537,7 @@ describe('DetailsPanel — publish credentials opt-in', () => {
     );
   });
 
-  /* GH #5074: the option survived a publish and the next open started ticked. */
+  /* [#5074](https://github.com/epam/ai-dial-chat/issues/5074): the option survived a publish and the next open started ticked. */
   it('clears the option when the panel is reopened after a publish', async () => {
     const eligibleItem = toolsetWithCredentials({
       authenticationType: ToolsetAuthenticationType.OAuth,
@@ -933,6 +949,7 @@ describe('DetailsPanel — Content file selector', () => {
   });
 });
 
+/* The panel is the kit `SideDrawer`, portalled into <body>, so preview text is read from there. */
 describe('DetailsPanel — file preview', () => {
   const files: CatalogContentTreeNode[] = [
     { type: CatalogContentNodeType.File, id: 'SKILL.md', name: 'SKILL.md' },
@@ -1010,7 +1027,7 @@ describe('DetailsPanel — file preview', () => {
       text: 'print(1)',
       language: 'python',
     } satisfies CatalogContentFilePreview);
-    const { container } = renderPanel({
+    renderPanel({
       item: skillWithFiles(),
       onLoadContentFile,
       onLoadContentFilePreview,
@@ -1019,7 +1036,9 @@ describe('DetailsPanel — file preview', () => {
     await openSelector();
     await userEvent.click(screen.getByText('run.py'));
 
-    await waitFor(() => expect(container.textContent).toContain('print(1)'));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain('print(1)'),
+    );
     expect(onLoadContentFilePreview).toHaveBeenCalledWith('run.py');
     expect(onLoadContentFile).not.toHaveBeenCalled();
   });
@@ -1036,7 +1055,7 @@ describe('DetailsPanel — file preview', () => {
               text: 'run.py body',
             } satisfies CatalogContentFilePreview),
       );
-    const { container } = renderPanel({
+    renderPanel({
       item: skillWithFiles(),
       onLoadContentFilePreview,
     });
@@ -1046,7 +1065,9 @@ describe('DetailsPanel — file preview', () => {
     await openSelector('analyzer.md');
     await userEvent.click(screen.getByText('run.py'));
 
-    await waitFor(() => expect(container.textContent).toContain('run.py body'));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain('run.py body'),
+    );
 
     analyzerDeferred.resolve({
       type: CatalogContentPreviewType.Text,
@@ -1056,9 +1077,9 @@ describe('DetailsPanel — file preview', () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain('run.py body');
+    expect(document.body.textContent).toContain('run.py body');
 
-    expect(container.textContent).not.toContain('stale analyzer body');
+    expect(document.body.textContent).not.toContain('stale analyzer body');
   });
 
   it('discards a pending preview request when the panel switches to a different item', async () => {
@@ -1162,7 +1183,7 @@ describe('DetailsPanel — file preview', () => {
               text: 'run.py body',
             } satisfies CatalogContentFilePreview),
       );
-    const { container } = renderPanel({
+    renderPanel({
       item: skillWithFiles(),
       onLoadContentFilePreview,
     });
@@ -1172,7 +1193,9 @@ describe('DetailsPanel — file preview', () => {
     await openSelector('analyzer.md');
     await userEvent.click(screen.getByText('run.py'));
 
-    await waitFor(() => expect(container.textContent).toContain('run.py body'));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain('run.py body'),
+    );
 
     staleDeferred.resolve({
       type: CatalogContentPreviewType.Image,
@@ -2479,6 +2502,56 @@ describe('DetailsPanel — Unpublish', () => {
     expect(getPublishHistory).toHaveBeenCalledTimes(2);
   });
 
+  it('requests the history up front for an item the host calls unpublishable', async () => {
+    const getPublishHistory = vi
+      .fn()
+      .mockResolvedValue([historyEntry(['Shared'])]);
+    renderPanel({
+      getPublishHistory,
+      onUnpublish: vi.fn(),
+      isUnpublishVisible: () => true,
+    });
+
+    expect(
+      await screen.findByRole('button', { name: 'UnpublishTrigger' }),
+    ).toBeTruthy();
+    expect(getPublishHistory).toHaveBeenCalledOnce();
+  });
+
+  it('requests the history up front again for the next unpublishable item', async () => {
+    const getPublishHistory = vi.fn().mockResolvedValue([]);
+    const props = {
+      getPublishHistory,
+      onUnpublish: vi.fn(),
+      isUnpublishVisible: () => true,
+    };
+    const { rerender } = renderPanel(props);
+    await waitFor(() => expect(getPublishHistory).toHaveBeenCalledOnce());
+
+    const nextItem = { ...item, id: `${item.id}-next` };
+    rerender(
+      <DetailsPanel
+        item={nextItem}
+        isOpen
+        onClose={vi.fn()}
+        publishFolderItems={folderItems}
+        onPublish={vi.fn().mockResolvedValue(undefined)}
+        {...props}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(getPublishHistory).toHaveBeenLastCalledWith(nextItem),
+    );
+  });
+
+  it('leaves the history unrequested until reached for when the host has no unpublish rule', () => {
+    const getPublishHistory = vi.fn().mockResolvedValue([]);
+    renderPanel({ getPublishHistory, onUnpublish: vi.fn() });
+
+    expect(getPublishHistory).not.toHaveBeenCalled();
+  });
+
   it('issues the history lookup once per item across the menu and the publish view', async () => {
     const getPublishHistory = vi
       .fn()
@@ -2666,5 +2739,48 @@ describe('DetailsPanel host credential slot', () => {
       />,
     );
     expect(renderCredentials).not.toHaveBeenCalled();
+  });
+});
+
+describe('DetailsPanel — markdown code-block labels', () => {
+  it('names the Details tab code-block buttons with the texts code labels', () => {
+    renderPanel({
+      item: makeItem({
+        type: CatalogEntityType.Prompt,
+        details: {
+          promptContent: { content: '```ts\nconst a = 1;\n```' },
+        },
+      }),
+      texts: {
+        copyCodeAriaLabel: 'Kopieren',
+        downloadCodeAriaLabel: 'Herunterladen',
+      },
+    });
+
+    expect(screen.getByRole('button', { name: 'Kopieren' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Herunterladen' })).toBeTruthy();
+  });
+});
+
+describe('DetailsPanel — markdown table label', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('names an overflowing Details tab table scroll region with the texts label', () => {
+    mockOverflowingTables();
+    renderPanel({
+      item: makeItem({
+        type: CatalogEntityType.Prompt,
+        details: {
+          promptContent: { content: '| a | b |\n| - | - |\n| 1 | 2 |' },
+        },
+      }),
+      texts: { tableScrollRegionAriaLabel: 'Scrollbare Tabelle' },
+    });
+
+    expect(
+      screen.getByRole('region', { name: 'Scrollbare Tabelle' }),
+    ).toBeTruthy();
   });
 });

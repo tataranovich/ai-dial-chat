@@ -4,17 +4,17 @@ import {
   SELECT_LIST_MAX_HEIGHT_PX,
 } from '@epam/ai-dial-chat-shared';
 import {
+  Button,
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   Dropdown,
   GhostIconButton,
-  Tooltip,
 } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown } from '@tabler/icons-react';
 import { type CSSProperties, type FC, ReactNode, useState } from 'react';
 import { CONVERSATION_INPUT_CLASS } from '../../constants/public-class-names';
 import { useModelSelector } from '../../hooks/useModelSelector';
-import type { ModelSelectorLabels } from '../../models/Input';
+import type { ModelMenuStyles, ModelSelectorLabels } from '../../models/Input';
 import { BottomSheetShell } from '../BottomSheetShell/BottomSheetShell';
 import { ModelSelectorBottomSheet } from '../ModelSelectorBottomSheet/ModelSelectorBottomSheet';
 import styles from './Input.module.scss';
@@ -24,6 +24,8 @@ interface Props {
   selectedDeploymentId?: string | null;
   onDeploymentChange?: (id: string) => void;
   modelSelectorLabels?: ModelSelectorLabels;
+  /** Host styling hooks for the menu panel, search row and deployment rows. */
+  menuStyles?: ModelMenuStyles;
   isStreaming: boolean;
   isMobile: boolean;
   /**
@@ -49,6 +51,7 @@ export const ModelSelectorControl: FC<Props> = ({
   selectedDeploymentId,
   onDeploymentChange,
   modelSelectorLabels,
+  menuStyles,
   isStreaming,
   isMobile,
   isDisabled = false,
@@ -67,22 +70,27 @@ export const ModelSelectorControl: FC<Props> = ({
     selectedVersion,
     menuItems,
     menuHeader,
+    menuStyle,
     onOpenChange: handleModelSelectorOpenChange,
   } = useModelSelector({
     deployments,
     selectedDeploymentId,
     onDeploymentChange,
     modelSelectorLabels,
+    styles: menuStyles,
   });
 
   if (!deployments) {
     return null;
   }
 
-  const disabledIconClassName =
-    isStreaming || isDisabled
-      ? 'pointer-events-none opacity-50 cursor-not-allowed'
-      : undefined;
+  /* Streaming blocks the selector exactly like `isDisabled`, in every
+   * presentation: the class only stops pointer input, so each path also
+   * guards its keyboard activation and exposes `aria-disabled`. */
+  const isBlocked = isStreaming || isDisabled;
+  const disabledIconClassName = isBlocked
+    ? 'pointer-events-none opacity-50 cursor-not-allowed'
+    : undefined;
 
   const caretIcon = (
     <IconChevronDown
@@ -115,26 +123,26 @@ export const ModelSelectorControl: FC<Props> = ({
   if (isMobile) {
     return (
       <>
-        <Tooltip tooltip={selectedLabel}>
-          <GhostIconButton
-            icon={
-              <div className="flex items-center gap-1">
-                {iconNode}
-                {caretIcon}
-              </div>
-            }
-            aria-label={selectorAriaLabel}
-            onClick={() => {
-              if (!isDisabled) setIsModelSheetOpen(true);
-            }}
-            className={mergeClasses(
-              'w-[50px]',
-              styles.modelSelectorButton,
-              disabledIconClassName,
-              CONVERSATION_INPUT_CLASS.modelSelectorButton,
-            )}
-          />
-        </Tooltip>
+        <GhostIconButton
+          tooltipProps={{ tooltip: selectedLabel }}
+          icon={
+            <div className="flex items-center gap-1">
+              {iconNode}
+              {caretIcon}
+            </div>
+          }
+          aria-label={selectorAriaLabel}
+          aria-disabled={isBlocked || undefined}
+          onClick={() => {
+            if (!isBlocked) setIsModelSheetOpen(true);
+          }}
+          className={mergeClasses(
+            'w-[50px]',
+            styles.modelSelectorButton,
+            disabledIconClassName,
+            CONVERSATION_INPUT_CLASS.modelSelectorButton,
+          )}
+        />
         {modelPickerOverlay ? (
           <BottomSheetShell
             isOpen={isModelSheetOpen}
@@ -142,7 +150,10 @@ export const ModelSelectorControl: FC<Props> = ({
             closeLabel={modelSelectorLabels?.closeLabel ?? 'Close'}
             onClose={() => setIsModelSheetOpen(false)}
             style={style}
-            className={CONVERSATION_INPUT_CLASS.modelMenu}
+            className={mergeClasses(
+              menuStyles?.className,
+              CONVERSATION_INPUT_CLASS.modelMenu,
+            )}
           >
             {modelPickerOverlay(() => setIsModelSheetOpen(false))}
           </BottomSheetShell>
@@ -162,6 +173,7 @@ export const ModelSelectorControl: FC<Props> = ({
             errorLabel={modelSelectorLabels?.error}
             emptyLabel={modelSelectorLabels?.empty}
             style={style}
+            menuStyles={menuStyles}
           />
         )}
       </>
@@ -186,28 +198,34 @@ export const ModelSelectorControl: FC<Props> = ({
         }
         listClassName={mergeClasses(
           '!w-[368px] !bg-layer-raised',
+          menuStyles?.className,
           CONVERSATION_INPUT_CLASS.modelMenu,
         )}
       >
-        <Tooltip tooltip={chipTooltip}>
-          <button
-            type="button"
-            aria-label={selectorAriaLabel}
-            aria-disabled={isDisabled || undefined}
-            className={mergeClasses(
-              'flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pe-2 ps-1.5',
-              styles.modelSelectorButton,
-              disabledIconClassName,
-              isDisabled && styles.modelSelectorButtonDisabled,
-              CONVERSATION_INPUT_CLASS.modelSelectorButton,
-            )}
-            onClick={() => {
-              if (!isStreaming && !isDisabled) {
-                onPickerToggle?.();
-              }
-            }}
-          >
-            {iconNode}
+        {/* No `variant`: the `--ci-model-selector-*` properties keep the
+            colours. The geometry classes replace the kit's 40px height and
+            padding, and `!border-0` drops its transparent border so the chip
+            stays the size it was. */}
+        <Button
+          aria-label={selectorAriaLabel}
+          aria-disabled={isBlocked || undefined}
+          tooltipProps={{ tooltip: chipTooltip }}
+          className={mergeClasses(
+            'h-auto min-w-0 gap-1.5 !rounded-full !border-0 px-0 py-1.5 pe-2 ps-1.5',
+            styles.modelSelectorButton,
+            disabledIconClassName,
+            isBlocked && styles.modelSelectorButtonDisabled,
+            CONVERSATION_INPUT_CLASS.modelSelectorButton,
+          )}
+          onClick={() => {
+            if (!isBlocked) {
+              onPickerToggle?.();
+            }
+          }}
+          iconBefore={iconNode}
+          iconAfter={caretIcon}
+          textClassName="min-w-0"
+          label={
             <span className="flex min-w-0 max-w-[180px] items-baseline gap-1">
               <span
                 className={mergeClasses(
@@ -228,17 +246,16 @@ export const ModelSelectorControl: FC<Props> = ({
                 </span>
               )}
             </span>
-            {caretIcon}
-          </button>
-        </Tooltip>
+          }
+        />
       </Dropdown>
     );
   }
 
   return (
     <div
-      className={mergeClasses(isDisabled && disabledIconClassName)}
-      aria-disabled={isDisabled || undefined}
+      className={mergeClasses(disabledIconClassName)}
+      aria-disabled={isBlocked || undefined}
     >
       <Dropdown
         items={menuItems}
@@ -252,27 +269,26 @@ export const ModelSelectorControl: FC<Props> = ({
         maxDropdownHeight={SELECT_LIST_MAX_HEIGHT_PX}
         listClassName={mergeClasses(
           '!w-[240px]',
+          menuStyles?.className,
           CONVERSATION_INPUT_CLASS.modelMenu,
         )}
-        disabled={isDisabled}
-        onOpenChange={isDisabled ? undefined : handleModelSelectorOpenChange}
+        listStyle={menuStyle}
+        disabled={isBlocked}
+        onOpenChange={isBlocked ? undefined : handleModelSelectorOpenChange}
       >
-        <Tooltip tooltip={selectedLabel}>
-          <button
-            type="button"
-            aria-label={selectorAriaLabel}
-            aria-disabled={isDisabled || undefined}
-            className={mergeClasses(
-              'flex items-center gap-1 rounded-full p-1.5',
-              styles.modelSelectorButton,
-              isDisabled && styles.modelSelectorButtonDisabled,
-              CONVERSATION_INPUT_CLASS.modelSelectorButton,
-            )}
-          >
-            {iconNode}
-            {caretIcon}
-          </button>
-        </Tooltip>
+        <Button
+          aria-label={selectorAriaLabel}
+          aria-disabled={isBlocked || undefined}
+          tooltipProps={{ tooltip: selectedLabel }}
+          iconBefore={iconNode}
+          iconAfter={caretIcon}
+          className={mergeClasses(
+            'h-auto gap-1 !rounded-full !border-0 p-1.5',
+            styles.modelSelectorButton,
+            isBlocked && styles.modelSelectorButtonDisabled,
+            CONVERSATION_INPUT_CLASS.modelSelectorButton,
+          )}
+        />
       </Dropdown>
     </div>
   );

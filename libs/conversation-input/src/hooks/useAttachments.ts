@@ -35,6 +35,13 @@ interface UseAttachmentsParams {
   pendingDropFiles: File[];
   /** Called after `pendingDropFiles` have been consumed. */
   onDropFilesConsumed?: () => void;
+  /**
+   * When `true`, `pendingDropFiles` are consumed (and `onDropFilesConsumed`
+   * fires) without being added to the tray, so a drop made while the input
+   * is disabled is discarded rather than applied once it is re-enabled.
+   * Defaults to `false`.
+   */
+  isDropDisabled?: boolean;
   /** Already-uploaded attachments supplied by the host awaiting insertion. */
   pendingAttachments: Attachment[];
   /** Called after `pendingAttachments` have been inserted. */
@@ -80,6 +87,7 @@ export const useAttachments = ({
   validateAttachment,
   pendingDropFiles,
   onDropFilesConsumed,
+  isDropDisabled = false,
   pendingAttachments,
   onPendingAttachmentsConsumed,
   onExpandPastedText,
@@ -268,12 +276,28 @@ export const useAttachments = ({
     ],
   );
 
+  const consumedFiles = useRef(new WeakSet<File>());
   useEffect(() => {
-    if (pendingDropFiles.length === 0) return;
-    const built = buildAttachments(pendingDropFiles);
-    addAttachments(built);
+    if (pendingDropFiles.length === 0) {
+      consumedFiles.current = new WeakSet<File>();
+      return;
+    }
+    const files = pendingDropFiles.filter(
+      (file) => !consumedFiles.current.has(file),
+    );
+    if (files.length === 0) return;
+    files.forEach((file) => consumedFiles.current.add(file));
+    if (!isDropDisabled) {
+      addAttachments(buildAttachments(files));
+    }
     onDropFilesConsumed?.();
-  }, [addAttachments, buildAttachments, onDropFilesConsumed, pendingDropFiles]);
+  }, [
+    addAttachments,
+    buildAttachments,
+    isDropDisabled,
+    onDropFilesConsumed,
+    pendingDropFiles,
+  ]);
 
   useEffect(() => {
     if (pendingAttachments.length === 0) return;

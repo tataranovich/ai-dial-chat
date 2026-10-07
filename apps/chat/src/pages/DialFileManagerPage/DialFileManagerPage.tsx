@@ -1,16 +1,20 @@
 import {
-  DialFileManagerActionProfile,
-  DialFileManagerVariant,
-  useDialFileManager,
+  DIAL_FILE_MANAGER_SECTION_TABS,
+  useDialFileManagerSections,
   useDialFileManagerTabConfig,
+  type DialFileManagerSection,
 } from '@epam/ai-dial-chat-hooks';
 import {
+  DialFileManagerActionProfile,
+  DialFileManagerVariant,
   formatFileSize,
   type DialFileManagerShellLabels,
 } from '@epam/ai-dial-chat-shared';
-import { useDialFileManagerTabs } from '@epam/ai-dial-react-file-manager';
 import {
   DialFileManagerTabs,
+  useDialFileManagerTabs,
+} from '@epam/ai-dial-react-file-manager';
+import {
   NOT_ALLOWED_SYMBOLS,
   NOT_ALLOWED_SYMBOLS_REGEXP,
   NotificationVariant,
@@ -19,6 +23,8 @@ import { memo, useCallback, useMemo, useState, type FC } from 'react';
 import { useTranslation } from 'react-i18next';
 import DialFileManagerShell from '../../components/DialFileManagerShell/DialFileManagerShell';
 import { useDialFileManagerHostOptions } from '../../components/DialFileManagerShell/useDialFileManagerHostOptions';
+import { getFileDeleteConfirmTitle } from '../../components/FileDeleteConfirmContent/file-delete-confirm-title';
+import FileDeleteConfirmContent from '../../components/FileDeleteConfirmContent/FileDeleteConfirmContent';
 import {
   BasicI18nKeys,
   ButtonsI18nKeys,
@@ -26,6 +32,8 @@ import {
 } from '../../constants/translation-keys';
 import { useAppConfig } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
+import { useSearchPlaceholderByTab } from '../../hooks/files/useSearchPlaceholderByTab';
+import { useUploadQueueLabels } from '../../hooks/files/useUploadQueueLabels';
 
 const DialFileManagerPage: FC = () => {
   const { t } = useTranslation();
@@ -39,6 +47,7 @@ const DialFileManagerPage: FC = () => {
 
   const tabLabels = useMemo(
     () => ({
+      [DialFileManagerTabs.All]: t(DialFileManagerI18nKeys.TabAll),
       [DialFileManagerTabs.MyFiles]: t(DialFileManagerI18nKeys.TabMyFiles),
       [DialFileManagerTabs.Shared]: t(DialFileManagerI18nKeys.TabShared),
       [DialFileManagerTabs.Organization]: t(BasicI18nKeys.Organization),
@@ -51,10 +60,18 @@ const DialFileManagerPage: FC = () => {
     activeTab,
     handleTabChange,
     tabs: allTabs,
-  } = useDialFileManagerTabs(tabLabels, DialFileManagerTabs.MyFiles);
+  } = useDialFileManagerTabs(tabLabels, DialFileManagerTabs.All);
 
-  const rootLabel =
-    tabLabels[activeTab] || tabLabels[DialFileManagerTabs.MyFiles];
+  // Every configured source tab becomes a top-level folder of the All tab.
+  const sections = useMemo((): DialFileManagerSection[] => {
+    // The Shared root folder uses a shorter name than its "Shared with Me" tab.
+    const rootLabels: Partial<Record<DialFileManagerTabs, string>> = {
+      [DialFileManagerTabs.Shared]: t(DialFileManagerI18nKeys.SharedRootFolder),
+    };
+    return DIAL_FILE_MANAGER_SECTION_TABS.filter(
+      (tab) => fileManagerTabs == null || fileManagerTabs.includes(tab),
+    ).map((tab) => ({ tab, rootLabel: rootLabels[tab] ?? tabLabels[tab] }));
+  }, [fileManagerTabs, tabLabels, t]);
 
   const { tabs } = useDialFileManagerTabConfig(
     activeTab,
@@ -63,11 +80,11 @@ const DialFileManagerPage: FC = () => {
     fileManagerTabs,
   );
 
-  const hookResult = useDialFileManager({
+  const hookResult = useDialFileManagerSections({
     ...hostOptions,
     bucket,
     activeTab,
-    rootLabel,
+    sections,
     variant: DialFileManagerVariant.Standalone,
     actionProfile: DialFileManagerActionProfile.Full,
     forbiddenSymbolsRegExp: NOT_ALLOWED_SYMBOLS_REGEXP,
@@ -77,6 +94,15 @@ const DialFileManagerPage: FC = () => {
     () => new Set(),
   );
 
+  /* Moving between All-tab sections changes the listing under the selection, so drop it. */
+  const [selectionSectionTab, setSelectionSectionTab] = useState(
+    hookResult.sectionTab,
+  );
+  if (selectionSectionTab !== hookResult.sectionTab) {
+    setSelectionSectionTab(hookResult.sectionTab);
+    setSelectedPaths(new Set());
+  }
+
   const handleTabChangeWithReset = useCallback(
     (tab: DialFileManagerTabs) => {
       setSelectedPaths(new Set());
@@ -85,12 +111,15 @@ const DialFileManagerPage: FC = () => {
     [handleTabChange],
   );
 
-  const emptyStateByTab = useMemo(
-    () => ({
-      [DialFileManagerTabs.MyFiles]: {
-        title: t(DialFileManagerI18nKeys.MyFilesEmptyStateTitle),
-        description: t(DialFileManagerI18nKeys.MyFilesEmptyStateDescription),
-      },
+  const emptyStateByTab = useMemo(() => {
+    const myFilesEmptyState = {
+      title: t(DialFileManagerI18nKeys.MyFilesEmptyStateTitle),
+      description: t(DialFileManagerI18nKeys.MyFilesEmptyStateDescription),
+    };
+    return {
+      // Never shown: the shell picks the empty state of the browsed section.
+      [DialFileManagerTabs.All]: myFilesEmptyState,
+      [DialFileManagerTabs.MyFiles]: myFilesEmptyState,
       [DialFileManagerTabs.Shared]: {
         title: t(DialFileManagerI18nKeys.SharedEmptyStateTitle),
         description: t(DialFileManagerI18nKeys.SharedEmptyStateDescription),
@@ -102,12 +131,12 @@ const DialFileManagerPage: FC = () => {
         ),
       },
       [DialFileManagerTabs.Review]: { title: '', description: '' },
-    }),
-    [t],
-  );
+    };
+  }, [t]);
 
   const treeHeaderByTab: Record<DialFileManagerTabs, string> = useMemo(
     () => ({
+      [DialFileManagerTabs.All]: t(DialFileManagerI18nKeys.MyFilesTreeHeader),
       [DialFileManagerTabs.MyFiles]: t(
         DialFileManagerI18nKeys.MyFilesTreeHeader,
       ),
@@ -164,6 +193,9 @@ const DialFileManagerPage: FC = () => {
     [t],
   );
 
+  const uploadQueueLabels = useUploadQueueLabels();
+  const searchPlaceholderByTab = useSearchPlaceholderByTab();
+
   const labels: DialFileManagerShellLabels = useMemo(
     () => ({
       errorMessage: t(DialFileManagerI18nKeys.Error),
@@ -179,7 +211,7 @@ const DialFileManagerPage: FC = () => {
       downloadLabel: t(ButtonsI18nKeys.Download),
       downloadingLabel: t(DialFileManagerI18nKeys.Downloading),
       deleteLabel: t(ButtonsI18nKeys.Delete),
-      deletingLabel: t(DialFileManagerI18nKeys.DeletingLabel),
+      deletingLabel: t(BasicI18nKeys.DeletingStatus),
       renameLabel: t(ButtonsI18nKeys.Rename),
       renamingLabel: t(DialFileManagerI18nKeys.RenamingLabel),
       copyLabel: t(DialFileManagerI18nKeys.CopyAction),
@@ -216,38 +248,14 @@ const DialFileManagerPage: FC = () => {
         DialFileManagerI18nKeys.OperationLoaderMoveTitle,
       ),
       operationLoaderCancelLabel: t(ButtonsI18nKeys.Cancel),
-      deleteConfirmTitle: (names) =>
-        names.length === 1
-          ? t(DialFileManagerI18nKeys.DeleteConfirmTitleSingle)
-          : t(DialFileManagerI18nKeys.DeleteConfirmTitleMultiple),
-      deleteConfirmBody: (names) => (
-        <div className="dial-small-text px-6 py-3">
-          <p className="mb-3 text-secondary">
-            {names.length === 1 ? (
-              <>
-                {t(BasicI18nKeys.DeleteConfirmDescription)}{' '}
-                <span className="break-words text-primary">
-                  &quot;{names[0].split('/').pop()}&quot;?
-                </span>
-              </>
-            ) : (
-              <>
-                {t(DialFileManagerI18nKeys.DeleteConfirmBodyMultiple)}{' '}
-                <span className="text-primary">
-                  {names.length}{' '}
-                  {t(DialFileManagerI18nKeys.DeleteConfirmBodyItems)}
-                </span>
-              </>
-            )}
-          </p>
-        </div>
-      ),
+      deleteConfirmTitle: (_names, items) =>
+        getFileDeleteConfirmTitle(t, items),
+      deleteConfirmBody: (names) => <FileDeleteConfirmContent names={names} />,
       deleteConfirmLabel: t(ButtonsI18nKeys.Delete),
       deleteCancelLabel: t(ButtonsI18nKeys.Cancel),
-      uploadProgressTitle: t(DialFileManagerI18nKeys.UploadProgressTitle),
-      cancelLabel: t(ButtonsI18nKeys.Cancel),
-      getUploadProgressText: (done, total) =>
-        t(DialFileManagerI18nKeys.UploadProgressSummary, { done, total }),
+      deleteCloseLabel: t(ButtonsI18nKeys.Close),
+      ...uploadQueueLabels,
+      searchPlaceholderByTab,
       searchEmptyStateTitle: t(BasicI18nKeys.NoResults),
       folderEmptyStateTitle: t(DialFileManagerI18nKeys.Empty),
       forbiddenSymbolsTooltip: t(
@@ -278,6 +286,8 @@ const DialFileManagerPage: FC = () => {
       treeHeaderByTab,
       renameValidationMessages,
       conflictResolutionPopupOptions,
+      uploadQueueLabels,
+      searchPlaceholderByTab,
     ],
   );
 

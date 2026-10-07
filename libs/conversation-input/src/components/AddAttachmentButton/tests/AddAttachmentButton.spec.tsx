@@ -1,6 +1,17 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AddAttachmentButton } from '../AddAttachmentButton';
+
+const { mockUseIsMobile } = vi.hoisted(() => ({
+  mockUseIsMobile: vi.fn(() => false),
+}));
+
+vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@epam/ai-dial-chat-shared')>();
+  return { ...actual, useIsMobile: mockUseIsMobile };
+});
 
 const defaultProps = {
   onAttachClick: vi.fn(),
@@ -11,6 +22,10 @@ const defaultProps = {
 };
 
 describe('AddAttachmentButton', () => {
+  beforeEach(() => {
+    mockUseIsMobile.mockReturnValue(false);
+  });
+
   it('renders only "Attach file" when extraMenuItems is absent', async () => {
     render(<AddAttachmentButton {...defaultProps} />);
     fireEvent.click(screen.getByLabelText('Add'));
@@ -55,5 +70,74 @@ describe('AddAttachmentButton', () => {
     fireEvent.click(screen.getByLabelText('Add'));
     fireEvent.click(await screen.findByText('DIAL file system'));
     expect(handleClick).toHaveBeenCalledOnce();
+  });
+
+  it("passes the caret position from getCaretPosition into a menuOverlays entry's renderOverlay", async () => {
+    mockUseIsMobile.mockReturnValue(true);
+    const renderOverlay = vi.fn(() => <div>Skills overlay</div>);
+    render(
+      <AddAttachmentButton
+        {...defaultProps}
+        getCaretPosition={() => 7}
+        menuOverlays={[
+          { key: 'skills', title: 'Skills', icon: null, renderOverlay },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Add'));
+    fireEvent.click(await screen.findByText('Skills'));
+
+    expect(await screen.findByText('Skills overlay')).toBeTruthy();
+    expect(renderOverlay).toHaveBeenCalledWith(expect.any(Function), 7);
+  });
+
+  it('passes 0 when getCaretPosition is absent', async () => {
+    mockUseIsMobile.mockReturnValue(true);
+    const renderOverlay = vi.fn(() => <div>Skills overlay</div>);
+    render(
+      <AddAttachmentButton
+        {...defaultProps}
+        menuOverlays={[
+          { key: 'skills', title: 'Skills', icon: null, renderOverlay },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Add'));
+    fireEvent.click(await screen.findByText('Skills'));
+
+    expect(await screen.findByText('Skills overlay')).toBeTruthy();
+    expect(renderOverlay).toHaveBeenCalledWith(expect.any(Function), 0);
+  });
+
+  it('does not open the desktop menu when isDisabled is true', async () => {
+    render(<AddAttachmentButton {...defaultProps} isDisabled />);
+    await userEvent.click(screen.getByLabelText('Add'));
+    expect(screen.queryByText('Attach file')).toBeNull();
+  });
+
+  it('does not open the desktop menu with overlays when isDisabled is true', async () => {
+    render(
+      <AddAttachmentButton
+        {...defaultProps}
+        isDisabled
+        menuOverlays={[
+          {
+            key: 'prompts',
+            title: 'Prompts',
+            icon: null,
+            renderOverlay: () => null,
+          },
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByLabelText('Add'));
+    expect(screen.queryByText('Prompts')).toBeNull();
+  });
+
+  it('does not open the mobile sheet when isDisabled is true', async () => {
+    mockUseIsMobile.mockReturnValue(true);
+    render(<AddAttachmentButton {...defaultProps} isDisabled />);
+    await userEvent.click(screen.getByLabelText('Add'));
+    expect(screen.queryByText('Attach file')).toBeNull();
   });
 });

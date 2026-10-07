@@ -1,3 +1,7 @@
+/* The catalog renders the publish flow, so its documented stylesheet includes
+ * the CSS Modules of its publish-panel dependency. */
+import '@epam/ai-dial-publish-panel/styles.css';
+
 // Headless catalog enums and catalog-item-mapping functions — see
 // `./entry-points/mapping.ts`; import `@epam/ai-dial-catalog/mapping`
 // directly to avoid resolving the catalog/publish-panel UI.
@@ -7,12 +11,10 @@ export * from './entry-points/mapping';
 export { CodeLanguage } from './types/code-language';
 export { CatalogDetailsTab } from './types/detail-tab';
 export { CatalogLimitStatus } from './models/item-details-data';
-export {
-  DetailsConfirmationKind,
-  DetailsConfirmationVariant,
-} from './types/details-confirmation';
+export { DetailsConfirmationKind } from './types/details-confirmation';
 export { DeploymentSize } from './types/deployment-icon-size';
 export { CatalogViewMode } from './types/view-mode';
+export { LimitRowLayout } from './types/limit-row-layout';
 export {
   CatalogContentNodeType,
   CatalogContentPreviewType,
@@ -20,6 +22,7 @@ export {
 
 // Models
 export type {
+  CatalogCreateSearch,
   CatalogEmptyStateContext,
   CatalogProps,
   CatalogTitles,
@@ -34,6 +37,7 @@ export type {
   ApiResource,
   CatalogContentFileNode,
   CatalogContentFolderNode,
+  CatalogContentFileTreeRenderProps,
   CatalogContentTreeNode,
   CatalogContentFilePreview,
   CatalogContentMarkdownPreview,
@@ -133,9 +137,6 @@ export type {
   TopicTagProps,
 } from './components/TopicTag/TopicTag';
 
-export { InfoCard } from './components/InfoCard/InfoCard';
-export type { InfoCardProps } from './components/InfoCard/InfoCard';
-
 export { CredentialsBadge } from './components/CredentialsBadge/CredentialsBadge';
 export type {
   CredentialsBadgeColors,
@@ -144,6 +145,9 @@ export type {
 
 export { ContentTab } from './components/Details/TabsContent/Content';
 export type { ContentTabProps } from './components/Details/TabsContent/Content';
+
+export { LimitsTab } from './components/Details/TabsContent/Limits/Limits';
+export type { LimitsTabColors, LimitsTabProps } from './models/limits-props';
 
 export { DetailsPanel } from './components/Details/DetailsPanel';
 

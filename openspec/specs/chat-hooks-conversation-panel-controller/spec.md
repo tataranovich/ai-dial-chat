@@ -3,20 +3,25 @@
 ## Purpose
 
 Reusable conversation-panel controller hooks and utilities exported by `@epam/ai-dial-chat-hooks`, covering item mapping, lookup maps, active-conversation sync, async-confirm dialog state, row-action state derivation, and a file-picker helper — all without any app-specific imports (no i18n, no routing, no application Contexts).
-
 ## Requirements
-
 ### Requirement: `useConversationPanelItems` maps conversation DTOs to panel items via injected resolvers
 
 `@epam/ai-dial-chat-hooks` SHALL export `useConversationPanelItems(params: { items:
 ConversationListItemDto[]; deployments: DeploymentItemDto[]; isDeploymentsLoading: boolean;
 toPanelConversationId: (id: string) => string;
 resolveIconUrl: (deployment: DeploymentItemDto | undefined) => string | undefined; resolveIconTooltip:
-(deployment: DeploymentItemDto | undefined, fallback: string) => string; resolveHref: (conversationId:
-string) => string; resolveTaskBadge?: (item: ConversationListItemDto) => { label: string; isUnread:
-boolean } | undefined }): ConversationItem[]`. The hook SHALL NOT import `react-i18next`, an application
-Context, or an app routing module — every app-specific resolution (icon URL, localized tooltip text,
-route construction, task-badge presentation) SHALL be supplied through the resolver parameters.
+(deployment: DeploymentItemDto | undefined, fallback: string) => string | undefined; resolveHref: (panelConversationId:
+string) => string; resolveTaskPresentation?: (item: ConversationListItemDto) => { leadingIcon?: ReactNode;
+isUnread: boolean } | undefined })` (`UseConversationPanelItemsParams`), returning an inferred array of
+`ConversationItem`-compatible objects (`id`, `title`, `isPinned`, `iconUrl`, `iconTooltip`, `isIconLoading`,
+`source`, `href`, plus `leadingIcon`/`isUnread` when task presentation applies) — the hook does not import the
+panel lib's `ConversationItem` type. The hook SHALL NOT import `react-i18next`, an application
+Context, an app routing module, or any UI-kit/icon component — every app-specific resolution (icon URL, localized
+tooltip text, route construction, task-row presentation including the rendered icon node) SHALL be supplied through
+the resolver parameters. When `resolveTaskPresentation` returns a value, the hook SHALL copy `leadingIcon` and
+`isUnread` onto the resulting `ConversationItem` unchanged; when it returns `undefined` or is omitted, both fields
+SHALL be absent. The hook maps exactly the `items` it is given — it does not group, collapse, or filter scheduled-task
+runs (that display rule belongs to the host; see `scheduled-task-conversation-grouping`).
 
 #### Scenario: Mapping produces one panel item per conversation
 - **WHEN** `items` has 3 entries
@@ -32,6 +37,16 @@ route construction, task-badge presentation) SHALL be supplied through the resol
 - **GIVEN** `isDeploymentsLoading` is `true`
 - **WHEN** the hook computes every item
 - **THEN** every item's `isIconLoading` is `true`
+
+#### Scenario: Task presentation is copied onto the item
+- **GIVEN** `resolveTaskPresentation` returns `{ leadingIcon: <span data-testid="task-icon" />, isUnread: true }` for one item
+- **WHEN** the hook maps that item
+- **THEN** the resulting `ConversationItem` has that same `leadingIcon` node and `isUnread: true`, and no `showTaskBadge`/`taskBadgeLabel` property
+
+#### Scenario: Several runs of one task are all mapped
+- **GIVEN** `items` contains three runs with the same `scheduleId`
+- **WHEN** the hook maps them
+- **THEN** it returns three `ConversationItem`s (collapsing is not the hook's job)
 
 #### Scenario: Result recomputes only when inputs change
 - **WHEN** the hook is called again with the same `items`/`deployments`/`isDeploymentsLoading` reference
@@ -72,11 +87,13 @@ row-action call sites.
 `@epam/ai-dial-chat-hooks` SHALL export `useActiveConversationSync(params: { activeConversationId:
 string | undefined; items: ConversationListItemDto[]; refreshConversations: () => Promise<void>;
 markConversationViewed: (id: string) => Promise<void>; conversationIdsMatch: (a: string, b: string) =>
-boolean; toPanelConversationId: (id: string) => string })`. The hook SHALL run two effects: (1) if the
+boolean; toPanelConversationId: (id: string) => string }): string | undefined`, returning the active
+conversation's panel-space id. The hook SHALL run two effects: (1) if the
 active conversation is not found in `items`, call `refreshConversations()`, deliberately excluding
 `items`/`refreshConversations` from its own dependency array to avoid a refetch loop — this omission
-SHALL be documented in the hook's JSDoc with the same rationale as the code it replaces; (2) when the
-matching raw item changes, call `markConversationViewed(activeItem.id)`.
+SHALL be documented in the hook's JSDoc with the same rationale as the code it replaces; (2) once per
+matching active identity (keyed on the active panel id and the matching item's raw id, so a list refresh
+or rollback does not retry the write), call `markConversationViewed(activeItemId)`.
 
 #### Scenario: Missing active conversation triggers exactly one refresh, not a loop
 - **GIVEN** `activeConversationId` does not match any entry in `items`
@@ -89,11 +106,15 @@ matching raw item changes, call `markConversationViewed(activeItem.id)`.
 
 ### Requirement: `useAsyncConfirmDialog` is a generic single-slot pending/loading/error state machine
 
-`@epam/ai-dial-chat-hooks` SHALL export `useAsyncConfirmDialog<T>(): { pending: T | null; isPending:
-boolean; isRunning: boolean; error: string | null; open: (value: T) => void; close: () => void; confirm:
-(run: (value: T) => Promise<void>, onError: (error: unknown) => string) => Promise<void> }`. `confirm`
-SHALL be a no-op re-entry guard while `isRunning` is `true`; on failure it SHALL set `error` to
-`onError(caughtError)` and leave `pending` set; on success it SHALL call `close()`.
+`@epam/ai-dial-chat-hooks` SHALL export `useAsyncConfirmDialog<T>(): AsyncConfirmDialogControls<T>`, i.e.
+`{ pending: T | null; isPending: boolean; isRunning: boolean; error: string | null; open: (value: T,
+returnFocusTo?: HTMLElement | null) => void; close: () => void; confirm: (run: (value: T) => Promise<void>,
+onError: (error: unknown) => string) => Promise<void> }`. `confirm`
+SHALL be a no-op while `isRunning` is `true` or `pending` is `null`; on failure it SHALL set `error` to
+`onError(caughtError)` and leave `pending` set; on success it SHALL reset `pending`, `error` and `isRunning`
+as `close()` does. A result that settles after `open`/`close` started a newer cycle SHALL be ignored.
+When `pending` returns to `null`, the hook SHALL restore focus to `returnFocusTo`, or to the element that
+held focus when `open` was called, if it is still connected.
 
 #### Scenario: Opening sets pending and clears any previous error
 - **WHEN** `open(value)` is called
@@ -116,12 +137,12 @@ SHALL be a no-op re-entry guard while `isRunning` is `true`; on failure it SHALL
 
 `@epam/ai-dial-chat-hooks` SHALL export `deriveConversationRowActionState(item: Pick<
 ConversationListItemDto, 'sharedWithMe' | 'publishedWithMe' | 'isReadonly'>, publishHistory:
-PublishHistoryEntry[] | undefined, recipients: RecipientsCountState): ConversationRowActionState` where
+PublishHistoryEntry[] | undefined, recipients: RecipientsCountEntry): ConversationRowActionState` where
 `ConversationRowActionState` is `{ isReadonly: boolean; publishedFolders: string[]; isRevokeVisible:
 boolean; isPublishApplicable: boolean; isUnpublishApplicable: boolean }`. `isReadonly` SHALL be `true`
 when `item.isReadonly`, `item.sharedWithMe`, or `item.publishedWithMe` is `true`. `publishedFolders` SHALL
 be `publishHistory`'s folder paths deduplicated by their joined path, computed only when `isReadonly` is
-`false`. `isRevokeVisible` SHALL be `true` when `recipients.status` is `Unknown`, or `Resolved` with a
+`false` and `publishHistory` is defined. `isRevokeVisible` SHALL be `true` when `recipients.status` is `RecipientsCountStatus.Unknown`, or `Resolved` with a
 count greater than `0`. `isPublishApplicable`/`isUnpublishApplicable` SHALL be mutually exclusive,
 keyed on whether `publishedFolders` is empty.
 
@@ -170,7 +191,7 @@ value and remove the attribute when that value is omitted; it SHALL NOT decide b
 Every hook and utility introduced by this capability SHALL have zero imports from `apps/**`, zero direct
 `react-i18next` imports, zero React Router imports, zero application Context imports, zero feature-flag
 imports, and zero translation-key imports. Each SHALL work correctly when any optional capability
-(publishing, sharing, organization conversations, scheduled-task badges) it touches is absent from its
+(publishing, sharing, organization conversations, scheduled-task presentation) it touches is absent from its
 input.
 
 #### Scenario: Architecture guard — no app or i18n imports in controller hooks
@@ -179,6 +200,44 @@ input.
   application Context
 
 #### Scenario: Mapping hook works with no scheduled-task capability
-- **WHEN** `resolveTaskBadge` is omitted from `useConversationPanelItems`'s params
-- **THEN** every returned `ConversationItem` has `showTaskBadge`/`taskBadgeLabel`/`isUnread` all
-  `undefined`, with no error thrown
+- **WHEN** `resolveTaskPresentation` is omitted from `useConversationPanelItems`'s params
+- **THEN** every returned `ConversationItem` has `leadingIcon`/`isUnread` both `undefined`, with no error thrown
+
+### Requirement: `useConversationPanelItems` keeps item identity for unchanged DTOs and resolves deployments in constant time
+
+`useConversationPanelItems` (`libs/chat-hooks/src/conversation/useConversationPanelItems/useConversationPanelItems.ts`) SHALL resolve each item's deployment through lookup maps built once per `deployments` array reference:
+
+- one map keyed on `id`;
+- one map keyed on `reference`, keeping the first deployment for a duplicated reference.
+
+The id map SHALL be consulted first and the reference map only on a miss. This reproduces `findDeploymentByIdOrReference`'s precedence and first-match semantics exactly. The per-item lookup is therefore O(1), and the whole mapping is O(N) instead of O(N × D).
+
+The hook SHALL keep a per-DTO cache. When it recomputes because `items` changed, any DTO object that is referentially identical to one mapped in the previous computation SHALL produce the same `ConversationItem` object as before. This holds only while every other input is referentially unchanged: `deployments`, `isDeploymentsLoading`, `toPanelConversationId`, `resolveIconUrl`, `resolveIconTooltip`, `resolveHref` and `resolveTaskPresentation`. A change to any of those inputs SHALL rebuild every item. The cache SHALL hold entries only for the DTOs of the latest `items`, so it does not grow with list churn.
+
+The mapping output per item is unchanged. So are the existing guarantees: every given item is mapped, no collapsing happens, and the returned array reference is the same when all inputs are unchanged.
+
+The hook remains host-agnostic. Deployments, icon URLs, tooltips, hrefs and task presentation still arrive through the existing parameters, and no import of app code, i18n or network code is added. This adds no user-visible string, feature flag, cache TTL or telemetry.
+
+#### Scenario: An unchanged DTO keeps its item across a list change
+
+- **GIVEN** the hook has mapped `items = [a, b]` into `[A, B]`
+- **WHEN** it is called with `items = [a, c]`, where `a` is the same object, and all other inputs are unchanged
+- **THEN** the first returned item is the same object `A`, and the second is a new object mapped from `c`
+
+#### Scenario: Changing a resolver rebuilds every item
+
+- **GIVEN** the hook has mapped `items = [a]` into `[A]`
+- **WHEN** it is called with the same `items` and a new `resolveHref` function
+- **THEN** the returned item is a new object whose `href` comes from the new resolver
+
+#### Scenario: Id match wins over reference match
+
+- **GIVEN** deployment `X` with `id: "m1"` and deployment `Y` with `reference: "m1"`
+- **WHEN** an item whose model id is `m1` is mapped
+- **THEN** its icon and tooltip resolve from `X`
+
+#### Scenario: Reference match is used when no id matches
+
+- **GIVEN** a deployment with `id: "gpt-4o-2024"` and `reference: "gpt-4o"`, and no deployment with `id: "gpt-4o"`
+- **WHEN** an item whose model id is `gpt-4o` is mapped
+- **THEN** its icon and tooltip resolve from that deployment

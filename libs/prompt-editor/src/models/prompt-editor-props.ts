@@ -1,3 +1,7 @@
+import type {
+  TextRefinementCallback,
+  TextRefinementLabels,
+} from '@epam/ai-dial-chat-shared';
 import type { EditorThemes } from '@epam/ai-dial-ui-kit';
 
 /** One selectable folder in the prompt editor's folder picker. */
@@ -44,7 +48,7 @@ export interface PromptFolderActions {
 }
 
 /** Text overrides for `PromptEditor`. Every field has an English default. */
-export interface PromptEditorLabels {
+export interface PromptEditorLabels extends TextRefinementLabels {
   /** Heading shown in create mode. Defaults to `'Create prompt'`. */
   createTitle?: string;
   /** Heading shown in edit mode. Defaults to `'Edit prompt'`. */
@@ -81,7 +85,9 @@ export interface PromptEditorLabels {
   folderDeleteConfirmTitle?: string;
   /** Builds the delete-folder confirmation message. Defaults to a sentence naming the folder. */
   folderDeleteConfirmMessage?: (folderId: string) => string;
-  /** Save button label. Defaults to `'Save'`. */
+  /** Primary button label in create mode. Defaults to `'Create'`. */
+  createLabel?: string;
+  /** Primary button label in edit mode. Defaults to `'Save'`. */
   saveLabel?: string;
   /** Cancel button label. Defaults to `'Cancel'`. */
   cancelLabel?: string;
@@ -123,7 +129,7 @@ export interface PromptEditorStyles {
 
 /** Props for `PromptEditor`. */
 export interface PromptEditorProps {
-  /** Whether the form edits an existing prompt (changes the heading only). Defaults to `false`. */
+  /** Whether the form edits an existing prompt (changes the heading and the primary button label). Defaults to `false`. */
   isEditMode?: boolean;
   /**
    * Values to seed the fields with. Changing this object's identity re-seeds
@@ -153,6 +159,8 @@ export interface PromptEditorProps {
   onBack?: () => void;
   /** Called when the retry button in the load-error state is activated. */
   onRetry?: () => void;
+  /** Optional Description rewrite callback; omission hides the Refine with AI action. */
+  onRefineDescription?: TextRefinementCallback;
   /** Text overrides. */
   labels?: PromptEditorLabels;
   /** Theme applied to the prompt markdown editor. Defaults to the editor's own default (`EditorThemes.light`). */

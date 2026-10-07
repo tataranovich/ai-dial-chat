@@ -41,8 +41,14 @@ export interface InlineGroupedVisualizerProps {
   errorLabel?: string;
   /** CSS class applied to the header title. Defaults to `'dial-small-semi-text'`. */
   titleClassName?: string;
+  /** Renders the frame without its border, rounded corners, background, and header divider. Defaults to `false`. */
+  isBorderless?: boolean;
+  /** Hides the header title text while keeping the header actions. Defaults to `false`. */
+  isTitleHidden?: boolean;
   /** Color overrides applied as CSS custom properties. */
   colors?: InlineGroupedVisualizerColors;
+  /** Called with the message text when the visualizer iframe posts `SEND_MESSAGE`. Forwarded to `VisualizerCanvasRenderer` as `onSendMessage`; when omitted, those messages are ignored. */
+  onVisualizerSendMessage?: (content: string) => void;
 }
 
 const InlineGroupedVisualizerBase: FC<InlineGroupedVisualizerProps> = ({
@@ -55,18 +61,22 @@ const InlineGroupedVisualizerBase: FC<InlineGroupedVisualizerProps> = ({
   loadingLabel,
   errorLabel,
   titleClassName = 'dial-small-semi-text',
+  isBorderless = false,
+  isTitleHidden = false,
   colors,
+  onVisualizerSendMessage,
 }) => {
   /* `visualizerName` is an opaque postMessage namespace, so it can legitimately
    * be whitespace — rendering that as a heading would leave a blank line, and
    * using it as the iframe's accessible name would leave the region unnamed. */
   const displayTitle = content.visualizerName.trim();
+  const isTitleShown = !isTitleHidden && displayTitle !== '';
 
   return (
     <div
       className={mergeClasses(
-        'flex w-full min-w-0 flex-col overflow-hidden rounded-xl border',
-        styles.frame,
+        'flex w-full min-w-0 flex-col overflow-hidden',
+        !isBorderless && ['rounded-xl border', styles.frame],
       )}
       style={buildCssVars({
         '--igv-bg': colors?.background,
@@ -81,19 +91,22 @@ const InlineGroupedVisualizerBase: FC<InlineGroupedVisualizerProps> = ({
        */}
       <div
         className={mergeClasses(
-          'flex min-h-10 items-center justify-between gap-2 border-b px-4 py-2',
-          styles.header,
+          'flex min-h-10 items-center gap-2 py-2',
+          isTitleShown ? 'justify-between' : 'justify-end',
+          !isBorderless && ['border-b px-4', styles.header],
         )}
       >
-        <span
-          className={mergeClasses(
-            'min-w-0 truncate',
-            titleClassName,
-            styles.title,
-          )}
-        >
-          {displayTitle}
-        </span>
+        {isTitleShown && (
+          <span
+            className={mergeClasses(
+              'min-w-0 truncate',
+              titleClassName,
+              styles.title,
+            )}
+          >
+            {displayTitle}
+          </span>
+        )}
         <div
           role="toolbar"
           aria-label={actionsGroupAriaLabel}
@@ -121,6 +134,7 @@ const InlineGroupedVisualizerBase: FC<InlineGroupedVisualizerProps> = ({
           loadingLabel={loadingLabel}
           errorLabel={errorLabel}
           frameTitle={frameTitle}
+          onSendMessage={onVisualizerSendMessage}
         />
       </div>
     </div>

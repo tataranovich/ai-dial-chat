@@ -4,7 +4,7 @@ import type {
   DeploymentCreationFormLabels,
   DeploymentCreationFormLocaleOption,
 } from '@epam/ai-dial-builder-form';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import type {
   DeploymentGeneralFormData,
   ToolsetFormErrors,
@@ -14,6 +14,7 @@ import type {
  * Pre-translated labels for the general (metadata) form. Each group is
  * optional and replaced as a whole; omitting one falls back to the library's
  * English defaults.
+ * @deprecated Use `MetadataFormLabels` from `@epam/ai-dial-builder-form`.
  */
 export interface GeneralFormLabels {
   /** Labels for the embedded `DeploymentCreationForm` fields. */
@@ -22,7 +23,10 @@ export interface GeneralFormLabels {
   avatarPicker?: AvatarPickerModalLabels;
 }
 
-/** Props of the general (metadata) form shared by the Toolset and Custom App editors. */
+/**
+ * Props of the general (metadata) form shared by the Toolset and Custom App editors.
+ * @deprecated Use `MetadataFormProps` from `@epam/ai-dial-builder-form`.
+ */
 export interface GeneralFormProps {
   /** Current general form values. */
   form: DeploymentGeneralFormData;
@@ -46,6 +50,8 @@ export interface GeneralFormProps {
   onNameBlur?: () => void;
   /** Called when the Version field loses focus. */
   onVersionBlur?: () => void;
+  /** Wraps the Description textarea; see `MetadataFormProps.renderDescription`. */
+  renderDescription?: (textarea: ReactNode, fieldId: string) => ReactNode;
   /** Pre-translated labels; each group falls back to English defaults. */
   labels?: GeneralFormLabels;
 }

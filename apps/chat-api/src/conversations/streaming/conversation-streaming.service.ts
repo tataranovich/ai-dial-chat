@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import type { AppConfigEvalContext } from '../../app-config/app-config.types';
 import { FeatureFlagsService } from '../../app-config/feature-flags/feature-flags.service';
 import { FeatureKey } from '../../app-config/feature-flags/feature-key.enum';
@@ -15,18 +20,31 @@ import {
 import { StringUtils } from '../../common/utils/string-utils';
 import { DeploymentsService } from '../../deployments/deployments.service';
 import { DialClientService } from '../../dial/dial-client.service';
+import type { ConversationResponseDto } from '../../openapi/openapi-response.dto';
 import {
   ConversationGenerationService,
   GenerationCancelReason,
   GenerationStatus,
   type GenerationLease,
 } from '../conversation-generation.service';
+import type { VersionedConversation } from '../conversation-persistence.port';
 import {
   ConversationMessageDto,
   ConversationMessageRole,
 } from '../dto/conversation-message.dto';
 import { MessageCustomContentDto } from '../dto/message-custom-content.dto';
 import { CompletionMode } from '../dto/send-completion.dto';
+import {
+  BackgroundGenerationService,
+  BackgroundStartResult,
+  GENERATION_ACTIVE_MESSAGE,
+  type BackgroundAttachPlan,
+  type BackgroundStopResult,
+} from '../generation/background-generation.service';
+import {
+  findPendingBackgroundMessage,
+  neutralizeForeignPendingMessages,
+} from '../generation/background-message';
 import {
   GenerationApi,
   resolveGenerationApi,
@@ -38,6 +56,7 @@ import {
   generationTimeToFirstDelta,
 } from '../generation/generation-metrics';
 import type { GenerationRelayTiming } from '../generation/generation.types';
+import { GENERATION_PERSISTENCE_ERROR } from '../generation/persistence-error';
 import { ResponsesAdapter } from '../generation/responses.adapter';
 import { ConversationPersistenceService } from '../persistence/conversation-persistence.service';
 import {
@@ -46,6 +65,7 @@ import {
   type DialStreamErrorPayload,
 } from '../utils/apply-chunk.server';
 import { buildConversationHistory } from '../utils/conversation-history-builder';
+import { mergeHtmlTagAnnotationsIntoViewState } from '../utils/conversation-view-state.server';
 import {
   buildConversationUrl,
   qualifySessionConversationPath,
@@ -53,6 +73,9 @@ import {
 } from '../utils/conversation.utils';
 
 const SERVER_APP_CONFIG_CONTEXT: AppConfigEvalContext = { appId: 'chat-api' };
+
+/** DIAL Core interface name advertising full Responses support, including background jobs. */
+const OPENAI_RESPONSES_INTERFACE = 'openaiResponses';
 
 const getValidAttachments = (
   customContent?: ConversationMessageDto['custom_content'],
@@ -89,6 +112,8 @@ type RelayOutcome =
   | {
       outcome: 'error';
       error: unknown;
+      /** User-facing upstream text; unset for transport/runtime failures. */
+      displayMessage?: string;
       assembledMessage: ConversationMessageDto;
     };
 
@@ -103,6 +128,7 @@ export class ConversationStreamingService {
     private readonly deploymentsService: DeploymentsService,
     private readonly responsesAdapter: ResponsesAdapter,
     private readonly featureFlagsService: FeatureFlagsService,
+    private readonly backgroundGeneration: BackgroundGenerationService,
   ) {}
 
   private async resolveGenerationApiForDeployment(
@@ -111,6 +137,7 @@ export class ConversationStreamingService {
     token: string,
   ): Promise<{
     generationApi: GenerationApi;
+    isBackground: boolean;
     temperatureSupported: boolean;
     reasoningEfforts?: string[];
   }> {
@@ -121,13 +148,18 @@ export class ConversationStreamingService {
      * Responses API. Resolved concurrently with the feature flag so a
      * disabled (default) flag adds no sequential latency.
      */
-    const [details, responsesApiEnabled] = await Promise.all([
-      this.deploymentsService.getDeploymentDetails(sub, model, token),
-      this.featureFlagsService.isEnabled(
-        FeatureKey.ResponsesApiEnabled,
-        SERVER_APP_CONFIG_CONTEXT,
-      ),
-    ]);
+    const [details, responsesApiEnabled, responsesBackgroundEnabled] =
+      await Promise.all([
+        this.deploymentsService.getDeploymentDetails(sub, model, token),
+        this.featureFlagsService.isEnabled(
+          FeatureKey.ResponsesApiEnabled,
+          SERVER_APP_CONFIG_CONTEXT,
+        ),
+        this.featureFlagsService.isEnabled(
+          FeatureKey.ResponsesBackgroundEnabled,
+          SERVER_APP_CONFIG_CONTEXT,
+        ),
+      ]);
 
     if (details.type === 'toolset') {
       const safeModel = StringUtils.sanitizeForLog(model);
@@ -145,16 +177,134 @@ export class ConversationStreamingService {
       ? resolveGenerationApi(features)
       : GenerationApi.ChatCompletions;
 
+    /*
+     * Background mode is a sub-mode of Responses: `interfaces` is read only when
+     * Responses is already selected and the background flag is on, so a disabled
+     * flag adds no Core call.
+     */
+    const isBackground =
+      generationApi === GenerationApi.Responses &&
+      responsesBackgroundEnabled &&
+      (await this.readDeploymentInterfaces(sub, model, token)).includes(
+        OPENAI_RESPONSES_INTERFACE,
+      );
+
     const safeModel = StringUtils.sanitizeForLog(model);
     this.logger.debug(
-      `Generation API resolved for "${safeModel}" — api: ${generationApi}, responsesApiEnabled: ${responsesApiEnabled}, deployment.responsesApi: ${features?.responsesApi ?? false}`,
+      `Generation API resolved for "${safeModel}" — api: ${generationApi}, background: ${isBackground}, responsesApiEnabled: ${responsesApiEnabled}, responsesBackgroundEnabled: ${responsesBackgroundEnabled}, deployment.responsesApi: ${features?.responsesApi ?? false}`,
     );
 
     return {
       generationApi,
+      isBackground,
       temperatureSupported: features?.temperature === true,
       reasoningEfforts: features?.reasoningEfforts,
     };
+  }
+
+  /**
+   * Reads the deployment's DIAL Core `interfaces`; any failure means "not eligible for
+   * the background path" and never fails the completion request.
+   * @param sub - caller's subject
+   * @param model - deployment id
+   * @param token - caller's bearer token
+   */
+  private async readDeploymentInterfaces(
+    sub: string,
+    model: string,
+    token: string,
+  ): Promise<string[]> {
+    try {
+      return await this.deploymentsService.getDeploymentInterfaces(
+        sub,
+        model,
+        token,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Deployment interfaces lookup failed for "${StringUtils.sanitizeForLog(model)}"; using the stateless path`,
+        err,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Plans `completions/attach` for a conversation that contains a pending background
+   * message (DIAL Core replay, recovery finalization, or an interrupted start); `null`
+   * when the conversation has none.
+   * @param conversationPath - conversation path relative to `bucket`
+   * @param token - attaching request's bearer token
+   * @param bucket - caller's session bucket
+   * @param signal - aborted when the attaching client disconnects
+   */
+  resolveBackgroundAttach(
+    conversationPath: string,
+    token: string,
+    bucket: string,
+    signal: AbortSignal,
+  ): Promise<BackgroundAttachPlan | null> {
+    return this.backgroundGeneration.resolveAttach(
+      { conversationPath, token, bucket },
+      signal,
+    );
+  }
+
+  /**
+   * Stops a pending background generation identified by `generationId` through DIAL
+   * Core; `NotBackground` when no background message carries that id.
+   * @param conversationPath - conversation path relative to `bucket`
+   * @param token - stopping request's bearer token
+   * @param bucket - caller's session bucket
+   * @param generationId - generation id posted by the client
+   * @param shownContent - answer text the client has shown so far, if sent
+   */
+  stopBackgroundGeneration(
+    conversationPath: string,
+    token: string,
+    bucket: string,
+    generationId: string,
+    shownContent?: string,
+  ): Promise<BackgroundStopResult> {
+    return this.backgroundGeneration.stop(
+      { conversationPath, token, bucket },
+      generationId,
+      shownContent,
+    );
+  }
+
+  /**
+   * Saves a conversation body sent by a client with a conditional write that protects
+   * a pending background message (see `BackgroundGenerationService.saveClientConversation`).
+   * A new conversation, or storage without an `ETag`, keeps the unconditional save.
+   * @param conversationPath - conversation path relative to `bucket`
+   * @param token - saving request's bearer token
+   * @param bucket - caller's session bucket
+   * @param conversation - body sent by the client
+   */
+  async saveClientConversation(
+    conversationPath: string,
+    token: string,
+    bucket: string,
+    conversation: ConversationResponseDto,
+  ): Promise<ConversationResponseDto> {
+    const protectedSave =
+      await this.backgroundGeneration.saveClientConversation(
+        { conversationPath, token, bucket },
+        conversation,
+      );
+    return (
+      protectedSave ??
+      this.persistenceService.saveConversation(
+        conversationPath,
+        token,
+        bucket,
+        {
+          ...conversation,
+          messages: neutralizeForeignPendingMessages(conversation.messages),
+        },
+      )
+    );
   }
 
   async watchConversation(
@@ -278,8 +428,14 @@ export class ConversationStreamingService {
          * i18n. A non-null streamErrorMessage (even '') still signals the
          * terminal error state for resume detection.
          */
+        /*
+         * Every upstream-derived message — SDK-parsed, JSON-extracted, or raw
+         * text — is sanitized before it reaches the log line; the returned
+         * `errorMessage` itself stays unmodified for the client.
+         */
+        const safeErrorMessage = StringUtils.sanitizeForLog(errorMessage, 500);
         this.logger.error(
-          `DIAL Core rejected completion request — model: ${model}, status: ${dialResult.response.status}${errorMessage ? `: ${errorMessage}` : ''}`,
+          `DIAL Core rejected completion request — model: ${StringUtils.sanitizeForLog(model)}, status: ${dialResult.response.status}${safeErrorMessage ? `: ${safeErrorMessage}` : ''}`,
         );
         return {
           outcome: 'rejected',
@@ -385,9 +541,12 @@ export class ConversationStreamingService {
         this.logger.debug(
           `relayModelCompletion outcome: error (in-band stream error chunk) — model: ${model}: ${streamError.message}`,
         );
+        const displayMessage =
+          streamError.displayMessage ?? streamError.message;
         return {
           outcome: 'error',
-          error: new Error(streamError.displayMessage ?? streamError.message),
+          error: new Error(displayMessage),
+          displayMessage,
           assembledMessage,
         };
       }
@@ -425,11 +584,10 @@ export class ConversationStreamingService {
 
   /**
    * Streams a chat completion as raw SSE bytes. The caller (controller) is
-   * responsible for the HTTP transport: it must call `onReadyToStream` at
-   * the point the caller wants SSE response headers sent — mirroring the
-   * exact point the pre-split implementation used to call
-   * `res.setHeader(...)`/`res.flushHeaders()` — then write each yielded
-   * chunk to the response and end it once iteration completes.
+   * responsible for the HTTP transport: this service invokes
+   * `onReadyToStream` when the SSE response headers should be sent
+   * (`res.setHeader(...)` / `res.flushHeaders()`); the caller then writes
+   * each yielded chunk to the response and ends it once iteration completes.
    */
   async *streamCompletion(
     conversationPath: string,
@@ -459,10 +617,11 @@ export class ConversationStreamingService {
     );
 
     let generationApi: GenerationApi;
+    let isBackground: boolean;
     let temperatureSupported: boolean;
     let reasoningEfforts: string[] | undefined;
     try {
-      ({ generationApi, temperatureSupported, reasoningEfforts } =
+      ({ generationApi, isBackground, temperatureSupported, reasoningEfforts } =
         await this.resolveGenerationApiForDeployment(sub, model, token));
       generationCapabilityResolutionTotal.add(1, {
         outcome: 'resolved',
@@ -478,12 +637,22 @@ export class ConversationStreamingService {
     }
 
     let startState: ReturnType<typeof buildConversationHistory>;
+    let storedConversation: VersionedConversation | undefined;
     try {
-      const fetchedConversation = await this.persistenceService.getConversation(
-        qualifySessionConversationPath(conversationPath, bucket),
-        token,
-        bucket,
-      );
+      const { conversation: fetchedConversation, stored } =
+        await this.persistenceService.getConversationWithStoredVersion(
+          qualifySessionConversationPath(conversationPath, bucket),
+          token,
+          bucket,
+        );
+      storedConversation = stored;
+      /*
+       * One pending background generation per conversation, whatever the flags: a
+       * background job keeps running in DIAL Core without a registry entry here.
+       */
+      if (findPendingBackgroundMessage(fetchedConversation)) {
+        throw new ConflictException(GENERATION_ACTIVE_MESSAGE);
+      }
       startState = buildConversationHistory(
         mode,
         fetchedConversation,
@@ -503,6 +672,40 @@ export class ConversationStreamingService {
         err instanceof Error ? err.message : undefined,
       );
       throw err;
+    }
+
+    if (isBackground) {
+      this.generationService.setBackground(lease, true);
+      let backgroundResult: BackgroundStartResult;
+      try {
+        backgroundResult = yield* this.backgroundGeneration.startAndRelay({
+          lease,
+          conversationPath,
+          token,
+          bucket,
+          generationId,
+          mode,
+          message,
+          messageIndex,
+          model,
+          customContent,
+          temperatureSupported,
+          reasoningEfforts,
+          onReadyToStream,
+          clientChannelId,
+          timezone,
+          jobTitle,
+          storedConversation,
+        });
+      } catch (err) {
+        this.generationService.error(
+          lease,
+          err instanceof Error ? err.message : undefined,
+        );
+        throw err;
+      }
+      if (backgroundResult === BackgroundStartResult.Handled) return;
+      this.generationService.setBackground(lease, false);
     }
 
     const { conversation: startConversation, assistantMessageIndex } =
@@ -587,6 +790,7 @@ export class ConversationStreamingService {
       this.generationService.applyChunk(lease, rawChunk, message);
     };
 
+    let persistenceFailed = false;
     const finalize = async (
       status:
         | GenerationStatus.Done
@@ -594,12 +798,26 @@ export class ConversationStreamingService {
         | GenerationStatus.Error,
       partialMessage: ConversationMessageDto,
     ): Promise<void> => {
+      let customViewState = startConversation.customViewState;
+      try {
+        customViewState = mergeHtmlTagAnnotationsIntoViewState(
+          startConversation.customViewState,
+          partialMessage.custom_content?.annotations,
+        );
+      } catch (err) {
+        this.logger.warn(
+          'Failed to merge annotations into customViewState',
+          err,
+        );
+      }
+
       const finalConversation = {
         ...startConversation,
         messages: [
           ...startConversation.messages.slice(0, assistantMessageIndex),
           partialMessage,
         ],
+        ...(customViewState !== undefined ? { customViewState } : {}),
       };
       /*
        * Record that the terminal write has been dispatched before awaiting
@@ -617,6 +835,9 @@ export class ConversationStreamingService {
         );
       } catch (err) {
         this.logger.warn(`Failed to save ${status} conversation`, err);
+        persistenceFailed = true;
+        this.generationService.persistenceFailed(lease);
+        return;
       }
       if (status === GenerationStatus.Done) {
         this.generationService.complete(lease);
@@ -723,15 +944,22 @@ export class ConversationStreamingService {
             'DIAL Core streamCompletion failed',
             relayResult.error,
           );
-          const errorMessage =
-            relayResult.error instanceof Error ? relayResult.error.message : '';
+          /*
+           * Only upstream-supplied text reaches the user. A thrown error's
+           * message (e.g. undici's `terminated`) is transport detail: it is
+           * logged above and persisted as '' so the frontend shows its
+           * localized fallback ([#8979](https://github.com/epam/ai-dial-chat/issues/8979)).
+           */
           const partialMsg = {
             ...relayResult.assembledMessage,
-            streamErrorMessage: errorMessage,
+            streamErrorMessage: relayResult.displayMessage ?? '',
           } as ConversationMessageDto;
           await finalize(GenerationStatus.Error, partialMsg);
           break;
         }
+      }
+      if (persistenceFailed) {
+        yield `data: ${JSON.stringify({ error: GENERATION_PERSISTENCE_ERROR })}\n\n`;
       }
     } finally {
       /*

@@ -62,10 +62,16 @@ const UNKNOWN_GENERATION_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 describe('POST /conversations/completions (integration)', () => {
   let app: INestApplication;
-  let mockService: { streamCompletion: ReturnType<typeof vi.fn> };
+  let mockService: {
+    streamCompletion: ReturnType<typeof vi.fn>;
+    resolveBackgroundAttach?: ReturnType<typeof vi.fn>;
+    stopBackgroundGeneration?: ReturnType<typeof vi.fn>;
+  };
   let mockGenerationService: {
     register: ReturnType<typeof vi.fn>;
     abort: ReturnType<typeof vi.fn>;
+    hasLocalForegroundGeneration: ReturnType<typeof vi.fn>;
+    setBackground: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
     error: ReturnType<typeof vi.fn>;
     getStatus: ReturnType<typeof vi.fn>;
@@ -73,6 +79,8 @@ describe('POST /conversations/completions (integration)', () => {
 
   beforeEach(async () => {
     mockService = {
+      resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
+      stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
       streamCompletion: vi.fn().mockImplementation(async function* (
         _path,
         _at,
@@ -95,6 +103,8 @@ describe('POST /conversations/completions (integration)', () => {
     mockGenerationService = {
       register: vi.fn().mockReturnValue(new AbortController()),
       abort: vi.fn().mockReturnValue(true),
+      hasLocalForegroundGeneration: vi.fn().mockReturnValue(false),
+      setBackground: vi.fn(),
       complete: vi.fn(),
       error: vi.fn(),
       getStatus: vi.fn().mockReturnValue(GenerationStatus.Active),
@@ -158,7 +168,7 @@ describe('POST /conversations/completions (integration)', () => {
 
   /* Firefox keeps the fetch() promise pending until the first body byte
    * arrives, so the stream has to open with a comment rather than waiting for
-   * the model's first token — see issue #8587. */
+   * the model's first token — see [#8587](https://github.com/epam/ai-dial-chat/issues/8587). */
   it('opens the stream with the init comment before the first model chunk', async () => {
     mockService.streamCompletion.mockImplementation(async function* (
       ...args: unknown[]
@@ -222,7 +232,7 @@ describe('POST /conversations/completions (integration)', () => {
    * `generationService.register()` call that rejects a duplicate active
    * generation — does not run until the controller's `for await` pulls the
    * first chunk. The rejection therefore surfaces from inside the consuming
-   * loop, after SSE headers may or may not have been sent. Before issue #8688
+   * loop, after SSE headers may or may not have been sent. Before [#8688](https://github.com/epam/ai-dial-chat/issues/8688)
    * the controller's `finally` ended the response unconditionally, flushing an
    * empty 200 and leaving the exception filter nothing to write: a second
    * browser tab submitting into the same conversation saw an empty LLM answer
@@ -451,6 +461,8 @@ describe('POST /conversations/completions — backpressure-driven detachment (di
     const totalChunks = 20; // 20 * 64 KiB = 1.25 MiB, past the 1 MiB limit
     let reachedNaturalEnd = false;
     const mockService = {
+      resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
+      stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
       streamCompletion: vi.fn().mockImplementation(async function* (
         ...args: unknown[]
       ) {
@@ -464,6 +476,8 @@ describe('POST /conversations/completions — backpressure-driven detachment (di
     const mockGenerationService = {
       register: vi.fn().mockReturnValue(new AbortController()),
       abort: vi.fn().mockReturnValue(true),
+      hasLocalForegroundGeneration: vi.fn().mockReturnValue(false),
+      setBackground: vi.fn(),
       complete: vi.fn(),
       error: vi.fn(),
       getStatus: vi.fn().mockReturnValue(GenerationStatus.Active),
@@ -519,16 +533,24 @@ describe('POST /conversations/completions/stop (integration)', () => {
   let mockGenerationService: {
     register: ReturnType<typeof vi.fn>;
     abort: ReturnType<typeof vi.fn>;
+    hasLocalForegroundGeneration: ReturnType<typeof vi.fn>;
+    setBackground: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
     error: ReturnType<typeof vi.fn>;
     getStatus: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
-    const mockService = { streamCompletion: vi.fn() };
+    const mockService = {
+      resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
+      stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
+      streamCompletion: vi.fn(),
+    };
     mockGenerationService = {
       register: vi.fn().mockReturnValue(new AbortController()),
       abort: vi.fn().mockReturnValue(true),
+      hasLocalForegroundGeneration: vi.fn().mockReturnValue(false),
+      setBackground: vi.fn(),
       complete: vi.fn(),
       error: vi.fn(),
       getStatus: vi.fn().mockReturnValue(GenerationStatus.Active),
@@ -636,10 +658,16 @@ describe('POST /conversations/completions/stop (integration)', () => {
 
 describe('completions endpoints — header-authenticated (bearer) caller', () => {
   let app: INestApplication;
-  let mockService: { streamCompletion: ReturnType<typeof vi.fn> };
+  let mockService: {
+    streamCompletion: ReturnType<typeof vi.fn>;
+    resolveBackgroundAttach?: ReturnType<typeof vi.fn>;
+    stopBackgroundGeneration?: ReturnType<typeof vi.fn>;
+  };
   let mockGenerationService: {
     register: ReturnType<typeof vi.fn>;
     abort: ReturnType<typeof vi.fn>;
+    hasLocalForegroundGeneration: ReturnType<typeof vi.fn>;
+    setBackground: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
     error: ReturnType<typeof vi.fn>;
     getStatus: ReturnType<typeof vi.fn>;
@@ -647,6 +675,8 @@ describe('completions endpoints — header-authenticated (bearer) caller', () =>
 
   beforeEach(async () => {
     mockService = {
+      resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
+      stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
       streamCompletion: vi.fn().mockImplementation(async function* (
         ...args: unknown[]
       ) {
@@ -658,6 +688,8 @@ describe('completions endpoints — header-authenticated (bearer) caller', () =>
     mockGenerationService = {
       register: vi.fn().mockReturnValue(new AbortController()),
       abort: vi.fn().mockReturnValue(true),
+      hasLocalForegroundGeneration: vi.fn().mockReturnValue(false),
+      setBackground: vi.fn(),
       complete: vi.fn(),
       error: vi.fn(),
       getStatus: vi.fn().mockReturnValue(GenerationStatus.Active),
@@ -787,6 +819,8 @@ describe('generation ownership isolation (real registry)', () => {
      * the conflict, stop and attach assertions that follow.
      */
     const mockService = {
+      resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
+      stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
       streamCompletion: vi.fn().mockImplementation(async function* (
         ...args: unknown[]
       ) {

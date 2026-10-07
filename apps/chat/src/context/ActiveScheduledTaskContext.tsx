@@ -27,6 +27,13 @@ import { useConversations } from './ConversationsContext';
 
 interface ActiveScheduledTaskContextType {
   /**
+   * The traversal-guarded conversation id derived from the current route, or
+   * `null` outside `/conversations/*` or on a malformed path. Exposed on the
+   * value so consumers re-render only when the id itself changes — not on
+   * every location change a `useLocation` subscription would fire on.
+   */
+  routeConversationId: string | null;
+  /**
    * `'resolving'` while the conversation list hasn't loaded once yet and no
    * matching item was found; `'not-a-task-conversation'` once resolved and
    * either no match exists or the match isn't scheduler-created (or the
@@ -197,10 +204,15 @@ export const ActiveScheduledTaskProvider = ({
     setTaskRetryToken((token) => token + 1);
   }, []);
 
-  const history = useScheduledTaskRuns(scheduleId ?? '', Boolean(scheduleId));
+  const history = useScheduledTaskRuns(
+    scheduleId ?? '',
+    Boolean(scheduleId),
+    task?.nextRunTime,
+  );
 
   const value = useMemo(
     () => ({
+      routeConversationId,
       status,
       scheduleId,
       runId,
@@ -213,6 +225,7 @@ export const ActiveScheduledTaskProvider = ({
       history,
     }),
     [
+      routeConversationId,
       status,
       scheduleId,
       runId,

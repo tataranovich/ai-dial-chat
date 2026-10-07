@@ -12,7 +12,7 @@ The system SHALL expose `GET /api/v1/client-config` as a versioned business endp
 
 **Authorization:** None required. The endpoint is public and MUST work before authentication.
 
-**Caching:** In-memory cache via `@nestjs/cache-manager`. Cache key: `app-config:client:{appId}:user:{userId|anonymous}:roles:{sortedRoles|none}`. TTL: 60 seconds. Identity and roles MUST be included because role-gated flags can vary by caller. Future targeting dimensions MUST also be added to the cache key before they affect evaluation.
+**Caching:** In-memory cache via `@nestjs/cache-manager`. Cache key: `app-config:client:{encodedAppId}:user:{encodedUserId|anonymous}:roles:{sortedEncodedRoles|none}`, where each segment (and each role) is `encodeURIComponent`-encoded before joining. TTL: 60 seconds. Identity and roles MUST be included because role-gated flags can vary by caller. Future targeting dimensions MUST also be added to the cache key before they affect evaluation.
 
 **operationId:** `getClientConfig` (handler method name on the controller).
 
@@ -59,6 +59,17 @@ The system SHALL expose `GET /api/v1/client-config` as a versioned business endp
 - **WHEN** `GET /api/v1/client-config?appId=chat-ui` is called and `DIAL_CORE_EXTERNAL_URL` is not set
 - **THEN** the response is `200 OK` with `config.dialCoreExternalUrl=null`
 
+#### Scenario: External connection origins
+
+- **WHEN** `GET /api/v1/client-config?appId=chat-ui` is called with
+  `ALLOWED_CONNECT_ORIGINS` configured
+- **THEN** the `200 OK` JSON response includes `config.allowedConnectOrigins`
+  as a string array preserving the configured exact origins and wildcard patterns
+- **AND** an unset value resolves to `[]`; the field is optional in the generated
+  response contract so clients can default to `[]` against an older backend
+- **AND** the public endpoint, required `appId` query, `400` validation responses,
+  private no-store HTTP header, and 60-second server cache remain unchanged
+
 #### Scenario: Always returns 200 even on resolution failure
 
 - **WHEN** all providers fail to resolve a non-critical key
@@ -93,7 +104,7 @@ The system SHALL expose `GET /api/v1/client-config` as a versioned business endp
 
 ### Requirement: Response DTO is fully annotated for Swagger and generated client
 
-`ClientConfigResponseDto` in `apps/chat-api/src/app-config/dto/client-config-response.dto.ts` SHALL use `@ApiProperty` on every field, including the new `config.dialCoreExternalUrl` field, so that the generated `@epam/chat-api-client` produces strongly-typed `AppConfigApi.getClientConfig()` with a concrete response type (not `void` or `any`).
+`ClientConfigResponseDto` in `apps/chat-api/src/app-config/dto/client-config-response.dto.ts` SHALL use `@ApiProperty` on every field, including the new `config.dialCoreExternalUrl` field, so that the generated `@epam/ai-dial-chat-api-client` produces strongly-typed `AppConfigApi.getClientConfig()` with a concrete response type (not `void` or `any`).
 
 **Generated client impact:**
 - `operationId`: `getClientConfig`
@@ -108,12 +119,12 @@ The system SHALL expose `GET /api/v1/client-config` as a versioned business endp
 
 - **WHEN** `npm run openapi` is run after the endpoint is added
 - **THEN** `libs/chat-api-client/src/generated/src/apis/AppConfigApi.ts` EXISTS
-- **AND** the `getClientConfig` method has a return type of `Promise<ClientConfigResponse>` (not `Promise<void>` or `Promise<any>`)
+- **AND** the `getClientConfig` method has a return type of `Promise<ClientConfigResponseDto>` (not `Promise<void>` or `Promise<any>`)
 
 #### Scenario: Generated response type includes the new field
 
 - **WHEN** `npm run openapi` is run after the endpoint is added
-- **THEN** the generated `ClientConfigResponse` type's `config` property includes `dialCoreExternalUrl: string | null`
+- **THEN** the generated `ClientConfigDto` type (the `config` property of `ClientConfigResponseDto`) includes `dialCoreExternalUrl: string | null`
 
 ---
 
@@ -131,7 +142,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 #### Scenario: New server-api wrapper uses generated client
 
 - **WHEN** `getClientConfig()` is called from the frontend server-api layer
-- **THEN** it uses `AppConfigApi` from `@epam/chat-api-client`, not the hand-rolled `base.ts` `get()` helper
+- **THEN** it uses `AppConfigApi` from `@epam/ai-dial-chat-api-client`, not the hand-rolled `base.ts` `get()` helper
 
 ---
 
@@ -139,7 +150,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 `GET /api/v1/client-config` SHALL include two additional `visibility='client'` keys under `config`: `overlayEnabled: boolean` (sourced from `EnvironmentVariables.OVERLAY_ENABLED`, default `false`) and `overlayAllowedOrigins: string[]` (sourced from `EnvironmentVariables.ALLOWED_IFRAME_ORIGINS`, default `[]`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), or cache key/TTL.
 
-`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add `@ApiProperty` fields for both keys so the generated `@epam/chat-api-client` types them concretely.
+`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add `@ApiProperty` fields for both keys so the generated `@epam/ai-dial-chat-api-client` types them concretely.
 
 **Generated client impact:** `operationId` `getClientConfig` is unchanged; its response type's `config` property gains `overlayEnabled: boolean` and `overlayAllowedOrigins: string[]`.
 
@@ -158,7 +169,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 #### Scenario: Generated client type includes both fields
 
 - **WHEN** `npm run openapi` is run
-- **THEN** the generated `ClientConfigResponse` type's `config` property includes `overlayEnabled: boolean` and `overlayAllowedOrigins: string[]`
+- **THEN** the generated `ClientConfigDto` type (the `config` property of `ClientConfigResponseDto`) includes `overlayEnabled: boolean` and `overlayAllowedOrigins: string[]`
 
 #### Scenario: overlayAllowedOrigins never leaks server-only origins
 
@@ -169,7 +180,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 `GET /api/v1/client-config` SHALL include an additional `visibility='client'` key under `config`: `enabledUiFeatures: string[] | null` (sourced from `EnvironmentVariables.ENABLED_UI_FEATURES`, filtered to recognized `OverlayFeature` values per `config-registry-and-env-provider`, default `null`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), or cache key/TTL.
 
-`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `enabledUiFeatures: string[] | null` with `nullable: true` so the generated `@epam/chat-api-client` types it concretely.
+`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `enabledUiFeatures: string[] | null` with `nullable: true` so the generated `@epam/ai-dial-chat-api-client` types it concretely.
 
 **Generated client impact:** `operationId` `getClientConfig` is unchanged; its response type's `config` property gains `enabledUiFeatures: string[] | null`. Request DTO unchanged. Frontend callers continue to use the normal (non-`Raw`) generated method.
 
@@ -188,7 +199,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 #### Scenario: Generated client type includes the new field
 
 - **WHEN** `npm run openapi` is run
-- **THEN** the generated `ClientConfigResponse` type's `config` property includes `enabledUiFeatures: string[] | null`
+- **THEN** the generated `ClientConfigDto` type (the `config` property of `ClientConfigResponseDto`) includes `enabledUiFeatures: string[] | null`
 
 #### Scenario: Response never includes unrecognized entries
 
@@ -209,7 +220,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 ### Requirement: client-config response includes the announcement message
 
-`GET /api/v1/client-config` SHALL include an `announcementHtml` field of type `string | null` in the `config` object of its response, sourced from the `announcement.html` registry key. The field SHALL carry the operator-configured message when set and SHALL be `null` when `ANNOUNCEMENT_HTML_MESSAGE` is not configured. The `ClientConfigDto` response DTO SHALL declare this field with Swagger metadata so the generated `@epam/chat-api-client` exposes it.
+`GET /api/v1/client-config` SHALL include an `announcementHtml` field of type `string | null` in the `config` object of its response, sourced from the `announcement.html` registry key. The field SHALL carry the operator-configured message when set and SHALL be `null` when `ANNOUNCEMENT_HTML_MESSAGE` is not configured. The `ClientConfigDto` response DTO SHALL declare this field with Swagger metadata so the generated `@epam/ai-dial-chat-api-client` exposes it.
 
 #### Scenario: Announcement message configured
 
@@ -227,7 +238,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 `GET /api/v1/client-config` SHALL include an additional `visibility='client'` key under `config`: `publicationFilterSources: string[]` (sourced from `EnvironmentVariables.PUBLICATION_FILTER_SOURCES` via the `publish.publicationFilterSources` registry entry, default `['title', 'role', 'dial_roles']`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), or cache key/TTL.
 
-`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `publicationFilterSources: string[]` so the generated `@epam/chat-api-client` types it concretely.
+`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `publicationFilterSources: string[]` so the generated `@epam/ai-dial-chat-api-client` types it concretely.
 
 **Generated client impact:** `operationId` `getClientConfig` is unchanged; its response type's `config` property gains `publicationFilterSources: string[]`. Request DTO unchanged. Frontend callers continue to use the normal (non-`Raw`) generated method.
 
@@ -246,7 +257,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 #### Scenario: Generated client type includes the new field
 
 - **WHEN** `npm run openapi` is run
-- **THEN** the generated `ClientConfigResponse` type's `config` property includes `publicationFilterSources: string[]`
+- **THEN** the generated `ClientConfigDto` type (the `config` property of `ClientConfigResponseDto`) includes `publicationFilterSources: string[]`
 
 ### Requirement: Frontend AppConfigContext exposes publicationFilterSources with a safe default
 
@@ -272,7 +283,7 @@ The old `GET /api/v1/config` endpoint SHALL be removed in the same PR that intro
 
 `announcementDescription` SHALL be sanitized server-side before it is returned, using the announcement allowlist: tags `a`, `b`, `strong`, `em`, `br`, `span`, and attributes `href`, `target`, `rel`. This allowlist SHALL match the client-side DOMPurify pass in `AnnouncementBanner` exactly, so the server never returns markup the client silently strips. It is deliberately narrower than the footer's allowlist, which additionally permits `u` and `p` — block-level and underline markup have no place on a single truncating line. Anchors whose `href` is not a hash link SHALL be rewritten to carry `target="_blank"` and `rel="noopener noreferrer"`, reusing the footer's anchor transform. If sanitization reduces the value to an empty string, the field SHALL be `null`.
 
-The `ClientConfigDto` response DTO SHALL declare both fields with Swagger metadata so the generated `@epam/chat-api-client` exposes them.
+The `ClientConfigDto` response DTO SHALL declare both fields with Swagger metadata so the generated `@epam/ai-dial-chat-api-client` exposes them.
 
 #### Scenario: Title and description configured
 
@@ -464,7 +475,7 @@ This object is public, including before authentication, and SHALL be the same fo
 
 `welcomeScreenDescription` SHALL be returned as plain text — the service SHALL NOT interpret it as markup and SHALL NOT strip or escape its characters beyond trimming surrounding whitespace, matching the `announcementTitle` treatment.
 
-The `ClientConfigResponseDto` response DTO SHALL declare this field with Swagger metadata so the generated `@epam/chat-api-client` exposes it.
+The `ClientConfigResponseDto` response DTO SHALL declare this field with Swagger metadata so the generated `@epam/ai-dial-chat-api-client` exposes it.
 
 #### Scenario: Description configured
 
@@ -490,7 +501,7 @@ The `ClientConfigResponseDto` response DTO SHALL declare this field with Swagger
 
 `GET /api/v1/client-config` SHALL include an additional `visibility='client'` key under `config`: `maxAttachmentFileSizeBytes: number` (sourced from `EnvironmentVariables.FILE_UPLOAD_MAX_BYTES` via the `attachments.maxFileSizeBytes` registry entry, default `536870912`) — added to the same cached response `client-config-endpoint` already returns, with no change to the endpoint's existing path, query parameters, authorization (none required), or cache key/TTL.
 
-`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `maxAttachmentFileSizeBytes: number` so the generated `@epam/chat-api-client` types it concretely.
+`ClientConfigResponseDto.config` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty` field for `maxAttachmentFileSizeBytes: number` so the generated `@epam/ai-dial-chat-api-client` types it concretely.
 
 **Generated client impact:** `operationId` `getClientConfig` is unchanged; its response type's `config` property gains `maxAttachmentFileSizeBytes: number`. Request DTO unchanged. Frontend callers continue to use the normal (non-`Raw`) generated method.
 
@@ -509,4 +520,148 @@ The `ClientConfigResponseDto` response DTO SHALL declare this field with Swagger
 #### Scenario: Generated client type includes the new field
 
 - **WHEN** `npm run openapi` is run
-- **THEN** the generated `ClientConfigResponse` type's `config` property includes `maxAttachmentFileSizeBytes: number`
+- **THEN** the generated `ClientConfigDto` type (the `config` property of `ClientConfigResponseDto`) includes `maxAttachmentFileSizeBytes: number`
+
+### Requirement: client-config exposes applicationVisualizers
+
+`GET /api/v1/client-config` SHALL include an `applicationVisualizers` field on its
+response DTO (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`),
+sourced from the `applicationVisualizers` registry key.
+
+- Type: an object map of application id → `ApplicationVisualizerDto`, declared to
+  Swagger with `additionalProperties: { $ref: ApplicationVisualizerDto }` so the
+  generated client types it as a record rather than `object`.
+- `ApplicationVisualizerDto` is a class (not an interface), so Swagger emits runtime
+  metadata, and every field carries `@ApiProperty` with a description and an example.
+- Default: `{}` when `APPLICATION_VISUALIZERS` is unset — the feature is dark by
+  default.
+- The `@ApiProperty` description SHALL state that the field is sourced from
+  `APPLICATION_VISUALIZERS`, that each entry's origin must also appear in
+  `ALLOWED_IFRAME_ORIGINS`, and that `passAuthInfo` / `passExplicitToken` are accepted
+  for configuration parity but are not consumed.
+
+**Generated-client impact:** no new operation. The existing `getClientConfig`
+operation's response type gains the field, so `npm run openapi` and
+`npm run openapi:check` MUST be run and the regenerated `libs/chat-api-client` output
+committed in the same change. Frontend callers keep using the existing non-`Raw`
+generated method through `apps/chat/src/server-api`.
+
+**Authorization:** unchanged. The endpoint's existing access rules apply; no new role
+is required, and the registry is operator configuration containing no per-user data.
+
+**Caching:** unchanged. The field participates in the endpoint's existing config
+resolution and caching behaviour; no new cache key or TTL is introduced, and the value
+changes only on redeploy.
+
+Example response fragment:
+
+```json
+{
+  "config": {
+    "applicationVisualizers": {
+      "my-app-deployment-id": {
+        "title": "my-viz",
+        "url": "https://viz.example.com",
+        "contentType": "application/x-my-viz, application/x-my-viz-v2",
+        "height": 600,
+        "mobileHeight": 400
+      }
+    }
+  }
+}
+```
+
+#### Scenario: Populated registry is returned
+
+- **WHEN** `APPLICATION_VISUALIZERS` declares one entry and the client requests `GET /api/v1/client-config`
+- **THEN** the response's `config.applicationVisualizers` contains that entry under its application id
+
+#### Scenario: Unset registry returns an empty object
+
+- **WHEN** `APPLICATION_VISUALIZERS` is unset
+- **THEN** `config.applicationVisualizers` is `{}`
+
+#### Scenario: Parity fields survive the round trip
+
+- **WHEN** an entry declares `passAuthInfo: true`
+- **THEN** the response preserves `passAuthInfo: true` on that entry
+- **AND** no `accessToken` field appears anywhere in the response
+
+### Requirement: client-config response assembly separates orchestration from field mapping
+
+`AppConfigService.getClientConfig` SHALL own orchestration only. It SHALL handle the
+cache lookup and write, resolve `app.version` in advance, resolve client-visible
+definitions sequentially, apply `value ?? definition.defaultValue`, map `features.*`,
+and produce `metadata`. The default value and conversion of each non-feature `config`
+field SHALL be owned by a typed, app-local mapping module in
+`apps/chat-api/src/app-config/`. That module SHALL have exactly one mapping entry per
+client-visible non-feature registry key other than `app.version`. The module SHALL be a
+pure module. It SHALL NOT be a Nest provider, and it SHALL hold no mutable module-level
+response state.
+
+The observable contract of `GET /api/v1/client-config` SHALL be unchanged by this
+separation. That covers the HTTP method and path, the `appId` validation, the status
+codes, the `ClientConfigResponseDto` shape, the OpenAPI `operationId` `getClientConfig`,
+and the generated-client types. No regeneration of `libs/chat-api-client` and no change
+to frontend callers SHALL be required. The endpoint SHALL remain ungated by any feature
+flag. It SHALL introduce no user-visible strings and has no RTL impact.
+
+**Caching:** unchanged. The key is
+`app-config:client:{encodedAppId}:user:{encodedUserId|anonymous}:roles:{sortedEncodedRoles|none}`.
+The TTL is 60 seconds, passed to the cache as `60000` milliseconds, and entries expire
+by TTL only.
+
+**Observability:** unchanged. There is still one resolution debug log per key, emitted
+by `CompositeConfigProvider`, and the normalizer warnings are still logged under the
+`AppConfigService` logger context. Unmapped keys SHALL NOT produce any new logs,
+metrics, or exceptions.
+
+#### Scenario: Every mapped field keeps its current value policy
+
+- **WHEN** providers resolve any combination of absent, `null`, `false`, `0`, empty-string, whitespace-only, wrong-typed, or well-formed values for the client-visible keys
+- **THEN** each `config` field equals what the pre-refactor service returned for the same inputs. For example, `transcribeSizeLimitBytes` returns `0` unchanged, a non-number falls back to `5242880`, and a whitespace-only `announcement.title` becomes `null`. An empty-string `announcement.html` stays `''`, and a non-string `footer.html` becomes `''`. `mcpAppTheme` becomes `null` for any value other than `light` or `dark`. A non-object or array `customVariables` becomes `{}`. A non-array `fileManagerTabs` becomes the four default tabs `['all', 'my_files', 'shared', 'organization']`
+
+#### Scenario: Provider null falls back to the registry default before conversion
+
+- **WHEN** a provider returns `null` for `fileManager.availableTabs`
+- **THEN** the registry `defaultValue` `['all', 'my_files', 'shared', 'organization']` is converted and returned, exactly as before the refactor
+
+#### Scenario: Response field set and order are unchanged
+
+- **WHEN** `GET /api/v1/client-config?appId=chat-ui` is called with all providers returning `undefined`
+- **THEN** `Object.keys(response.config)` lists the same fields in the same order as before the refactor, starting with `aiTextRefinementAvailable`, `appVersion`, `activeEventId` and ending with `publicationFilterSources`, `maxAttachmentFileSizeBytes`
+
+#### Scenario: app.version is resolved once, first
+
+- **WHEN** the cache misses
+- **THEN** the composite provider is called with `app.version` exactly once, before any other key. Each remaining client-visible definition is then resolved exactly once in `CONFIG_DEFINITIONS` order, sequentially, and every call receives the full evaluation context
+
+#### Scenario: Footer and appVersion use the same resolved version
+
+- **WHEN** `CHAT_VERSION` resolves to `2026.08.10-a1b2c3d` and `FOOTER_HTML_MESSAGE` contains `%%VERSION%%`
+- **THEN** `config.appVersion` is `2026.08.10-a1b2c3d` and `config.footerHtmlMessage` contains that same string in place of the token
+
+#### Scenario: Field-specific text policies stay distinct
+
+- **WHEN** `announcement.html`, `announcement.title`, `announcement.description`, `welcomeScreen.description`, and `footer.html` each resolve to a string containing markup and surrounding whitespace
+- **THEN** `announcementHtml` is passed through verbatim. `announcementTitle` and `welcomeScreenDescription` are trimmed plain text. `announcementDescription` is trimmed and then passed through the announcement sanitizer. `footerHtmlMessage` gets `%%VERSION%%` substitution and the footer sanitizer
+
+#### Scenario: Normalizer warnings are unchanged
+
+- **WHEN** `ENABLED_UI_FEATURES` contains a deprecated alias and an unrecognized entry, and `ANNOUNCEMENTS` contains a rejected entry
+- **THEN** the same warning messages are logged in the same order and with the same count as before the refactor
+
+#### Scenario: A cache hit has no resolution side effects
+
+- **WHEN** a second request with the same app, user, and role set (in any role order) arrives within the TTL
+- **THEN** the cached response is returned with its original `metadata.resolvedAt`, the composite provider is not called, and no normalizer warning is logged
+
+#### Scenario: Per-call state is isolated across callers
+
+- **WHEN** two requests with different role sets resolve different values for the same key, one after the other or concurrently
+- **THEN** each response reflects only its own resolved values, and each response gets its own `config` object. A field that falls back because its value has the wrong shape gets a fresh copy of the mapping module's default. Provider-returned values, including registry `defaultValue` arrays and objects returned through `value ?? definition.defaultValue`, are still passed through by reference and never mutated, as before the refactor
+
+#### Scenario: An unmapped non-feature key is ignored silently
+
+- **WHEN** the mapping lookup receives a key that has no entry, including inherited property names such as `constructor` or `__proto__`
+- **THEN** the accumulator is left unchanged and no exception or log is produced

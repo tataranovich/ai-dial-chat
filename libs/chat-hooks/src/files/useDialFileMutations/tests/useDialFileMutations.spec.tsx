@@ -179,7 +179,7 @@ describe('useDialFileMutations', () => {
       // Simulates the host grid showing an inline error while the user
       // types "/New folder", then confirming with a path where the leading
       // "/" got absorbed as a path separator, leaving a clean derived name
-      // — see #7968.
+      // — see [#7968](https://github.com/epam/ai-dial-chat/issues/7968).
       act(() => {
         result.current.onCreateFolderValidate('/New folder', parentFolder);
       });
@@ -227,7 +227,7 @@ describe('useDialFileMutations', () => {
       expect(filesApi.createFolder).not.toHaveBeenCalled();
     });
 
-    it('does not call createFolder for a name starting with a dot', async () => {
+    it('calls createFolder for a hidden name starting with a dot', async () => {
       const { result, filesApi } = renderMutations({ folderPath: '' });
 
       await act(async () => {
@@ -238,7 +238,11 @@ describe('useDialFileMutations', () => {
         );
       });
 
-      expect(filesApi.createFolder).not.toHaveBeenCalled();
+      expect(filesApi.createFolder).toHaveBeenCalledWith({
+        bucket: BUCKET,
+        parentPath: '',
+        name: '.hidden',
+      });
     });
 
     it('does not call createFolder for the reserved marker name', async () => {
@@ -786,6 +790,7 @@ describe('useDialFileMutations', () => {
         kind: 'fileMoved',
         name: 'draft.pdf',
         count: 1,
+        isFolder: false,
         destinationFolderName: 'My files/reports',
       });
     });
@@ -962,6 +967,7 @@ describe('useDialFileMutations', () => {
         kind: 'fileCopied',
         name: 'q1.pdf',
         count: 1,
+        isFolder: false,
         destinationFolderName: 'My files/archive',
       });
     });
@@ -1201,7 +1207,53 @@ describe('useDialFileMutations', () => {
       // Source and destination share the same parent folder — invalidated once.
       expect(invalidateFolders).toHaveBeenCalledWith(['reports/']);
       expect(onOperationSuccess).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: 'fileCopied' }),
+        expect.objectContaining({ kind: 'fileDuplicated', isFolder: false }),
+      );
+    });
+
+    it('reports a multi-item same-folder copy as filesDuplicated with the first item node type', async () => {
+      const { result, onOperationSuccess, filesApi } = renderMutations();
+      vi.mocked(filesApi.copyFiles).mockResolvedValue({
+        results: [
+          {
+            sourcePath: 'reports/',
+            destinationPath: 'reports (1)/',
+            success: true,
+          },
+          {
+            sourcePath: 'a.pdf',
+            destinationPath: 'a (1).pdf',
+            success: true,
+          },
+        ],
+      });
+
+      await act(async () => {
+        result.current.onCopyFiles(
+          [
+            {
+              sourceUrl: '/My files/reports/',
+              destinationUrl: '/My files/reports (1)/',
+              nodeType: DialFileNodeType.FOLDER,
+            },
+            {
+              sourceUrl: '/My files/a.pdf',
+              destinationUrl: '/My files/a (1).pdf',
+              nodeType: DialFileNodeType.ITEM,
+            },
+          ],
+          '/My files',
+        );
+      });
+
+      await waitFor(() =>
+        expect(onOperationSuccess).toHaveBeenCalledWith({
+          kind: 'filesDuplicated',
+          name: 'reports (1)',
+          count: 2,
+          isFolder: true,
+          destinationFolderName: 'My files',
+        }),
       );
     });
 
@@ -1482,6 +1534,82 @@ describe('useDialFileMutations', () => {
       expect(onNotification).toHaveBeenCalledWith({
         variant: NotificationVariant.Error,
         reason: FileManagerNotificationReason.DeleteFailed,
+      });
+    });
+
+    describe('current-folder navigation', () => {
+      const deleteAndGetFolderPath = async (
+        folderPath: string,
+        deletedItems: Parameters<
+          ReturnType<typeof useDialFileMutations>['onDeleteFiles']
+        >[0],
+      ): Promise<string> => {
+        const { result, filesApi } = renderMutations({ folderPath });
+        vi.mocked(filesApi.deleteFiles).mockResolvedValue({
+          results: deletedItems.map((item) => ({
+            path: item.sourceUrl,
+            success: true,
+          })),
+        });
+
+        await act(async () => {
+          result.current.onDeleteFiles(deletedItems, '/My files');
+        });
+
+        return result.current.folderPath;
+      };
+
+      it('navigates to root when an ancestor of the browsed folder is deleted', async () => {
+        await expect(
+          deleteAndGetFolderPath('a/b/', [
+            { sourceUrl: '/My files/a/', nodeType: DialFileNodeType.FOLDER },
+          ]),
+        ).resolves.toBe('');
+      });
+
+      it('navigates to the parent of the deleted ancestor when it is nested', async () => {
+        await expect(
+          deleteAndGetFolderPath('x/a/b/c/', [
+            { sourceUrl: '/My files/x/a/', nodeType: DialFileNodeType.FOLDER },
+          ]),
+        ).resolves.toBe('x/');
+      });
+
+      it('navigates above the outermost deleted folder when several contain the browsed folder', async () => {
+        await expect(
+          deleteAndGetFolderPath('a/b/c/', [
+            { sourceUrl: '/My files/a/b/', nodeType: DialFileNodeType.FOLDER },
+            { sourceUrl: '/My files/a/', nodeType: DialFileNodeType.FOLDER },
+          ]),
+        ).resolves.toBe('');
+      });
+
+      it('navigates to the parent when the browsed folder itself is deleted', async () => {
+        await expect(
+          deleteAndGetFolderPath('a/b/', [
+            { sourceUrl: '/My files/a/b/', nodeType: DialFileNodeType.FOLDER },
+          ]),
+        ).resolves.toBe('a/');
+      });
+
+      it('keeps the browsed folder when an unrelated folder is deleted', async () => {
+        await expect(
+          deleteAndGetFolderPath('a/b/', [
+            { sourceUrl: '/My files/a/bc/', nodeType: DialFileNodeType.FOLDER },
+            { sourceUrl: '/My files/z/', nodeType: DialFileNodeType.FOLDER },
+          ]),
+        ).resolves.toBe('a/b/');
+      });
+
+      it('keeps the browsed folder when a file inside it is deleted', async () => {
+        await expect(
+          deleteAndGetFolderPath('a/b/', [
+            {
+              sourceUrl: '/My files/a/b/report.pdf',
+              nodeType: DialFileNodeType.ITEM,
+            },
+          ]),
+        ).resolves.toBe('a/b/');
       });
     });
   });

@@ -1,8 +1,7 @@
 import type { DialToolsetDto } from '@epam/ai-dial-chat-api-client';
 import {
   getExternalServiceFallbackName,
-  isPublicToolsetId,
-  ToolsetCredentialsLevel,
+  resolveToolsetCredentialsLevel,
 } from '@epam/ai-dial-chat-hooks';
 import type { ResolvedRowInfo } from '../models/signin-interrupt';
 import type { GetExternalServiceResponseDto } from '../server-api/external-services';
@@ -22,9 +21,7 @@ export const resolveToolsetInfo = (
   displayVersion: toolset?.displayVersion,
   authenticationType: toolset?.authSettings?.authenticationType as
     RowAuthType | undefined,
-  credentialsLevel: isPublicToolsetId(toolsetId)
-    ? ToolsetCredentialsLevel.User
-    : ToolsetCredentialsLevel.Global,
+  credentialsLevel: resolveToolsetCredentialsLevel(toolsetId),
   oauthSettings: {
     clientId: toolset?.authSettings?.clientId,
     authorizationEndpoint: toolset?.authSettings?.authorizationEndpoint,
@@ -42,7 +39,7 @@ export const resolveExternalServiceInfo = (
     service?.displayName || getExternalServiceFallbackName(serviceName),
   authenticationType: service?.authenticationType as RowAuthType | undefined,
   /*
-   * Best-effort default per design.md Open Question 2 — Core does not yet
+   * Best-effort default per `openspec/changes/archive/2026-07-30-interactive-external-service-login-chat/design.md` Open Question 2 — Core does not yet
    * document how a *pushed* event determines credentials level; USER
    * unless the service is only signed out at GLOBAL level.
    */

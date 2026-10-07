@@ -14,9 +14,26 @@ import { CustomVisualizerDto } from './custom-visualizer.dto';
  * has to be registered explicitly or the reference dangles. */
 @ApiExtraModels(ApplicationVisualizerDto)
 export class ClientConfigDto {
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      'Whether a text refinement model is configured. Missing means unavailable.',
+    example: false,
+  })
+  aiTextRefinementAvailable?: boolean;
+
   @ApiProperty({
     description:
-      'Version string of the running chat application. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Always a non-empty string.',
+      'Active start-page celebration module ID selected by UI_EVENT. Null when UI_EVENT is absent or none. Event IDs are open-ended; clients ignore IDs not present in their local registry.',
+    type: String,
+    nullable: true,
+    example: 'new-year',
+  })
+  activeEventId!: string | null;
+
+  @ApiProperty({
+    description:
+      'Version string of the running chat application. Sourced from CHAT_VERSION; falls back to the workspace root package.json version — the one the release pipeline stamps — when that env var is unset or blank. Always a non-empty string.',
     type: String,
     example: '0.45.0',
   })
@@ -84,7 +101,7 @@ export class ClientConfigDto {
 
   @ApiPropertyOptional({
     description:
-      'Host application identifier sent to MCP App Views in hostContext.userAgent. Null when MCP_APP_USER_AGENT is not configured — defaults to "ai-dial-chat" on the client.',
+      "Host application identifier sent to MCP App Views in hostContext.userAgent. Null when MCP_APP_USER_AGENT is not configured — the client then falls back to the browser's navigator.userAgent.",
     type: String,
     nullable: true,
   })
@@ -104,9 +121,9 @@ export class ClientConfigDto {
 
   @ApiProperty({
     description:
-      'Which File Manager tabs are shown to users. Defaults to all three currently-supported tabs.',
+      'Which File Manager tabs are shown to users. Defaults to the All tab plus the three source tabs.',
     type: [String],
-    example: ['my_files', 'shared', 'organization'],
+    example: ['all', 'my_files', 'shared', 'organization'],
   })
   fileManagerTabs!: string[];
 
@@ -124,6 +141,15 @@ export class ClientConfigDto {
     example: ['https://partner.example.com'],
   })
   overlayAllowedOrigins!: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Trusted HTTP(S) connection origins from ALLOWED_CONNECT_ORIGINS, including leading *. subdomain patterns. PDF previews use browser credentials for matching external origins and reject redirects. Empty by default; upstream credentialed CORS and browser cookie policy still apply.',
+    type: [String],
+    default: [],
+    example: ['https://documents.example.com'],
+  })
+  allowedConnectOrigins?: string[];
 
   @ApiProperty({
     description:

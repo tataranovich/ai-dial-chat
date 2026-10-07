@@ -22,10 +22,12 @@ Import the stylesheet once in the consuming app:
 import '@epam/ai-dial-catalog/styles.css';
 ```
 
+It already includes the styles of the publish flow from `@epam/ai-dial-publish-panel`, so a host that renders the catalog does not import that package's stylesheet separately.
+
 ## Peer Dependencies
 
 - `react`
-- `@epam/ai-dial-ui-kit` ^0.15.0-dev.12 (requires the public `/grid` entry)
+- `@epam/ai-dial-ui-kit` ^0.15.0-dev.39 (requires the public `/grid` entry)
 - `@epam/ai-dial-chat-shared`
 
 `ag-grid-community` and `@epam/ai-dial-publish-panel` are normal package
@@ -428,20 +430,20 @@ import { EntityTypeLabel, CatalogEntityType } from '@epam/ai-dial-chat-shared';
 <EntityTypeLabel type={CatalogEntityType.Model} />;
 ```
 
-### InfoCard
+### Item identity card
 
-Tinted card showing a catalog item's identity, used to anchor a message to the
-item it is about. Defaults to the `Info` surface; pass `Danger` for destructive
+The tinted card that anchors a confirmation to the item it is about is
+`ConfirmationIdentityCard` from `@epam/ai-dial-chat-shared` — the catalog does
+not re-export it. It accepts any `EntityHeaderItem`, of which `CatalogItem` is
+one, and defaults to the `Info` surface; pass `Danger` for destructive
 messaging.
 
 ```tsx
-import {
-  InfoCard,
-  DetailsConfirmationVariant,
-} from '@epam/ai-dial-catalog';
+import { ConfirmationIdentityCard } from '@epam/ai-dial-chat-shared';
+import { ConfirmationPopupVariant } from '@epam/ai-dial-ui-kit';
 
-<InfoCard item={item} />
-<InfoCard item={item} variant={DetailsConfirmationVariant.Danger} />
+<ConfirmationIdentityCard item={item} />
+<ConfirmationIdentityCard item={item} variant={ConfirmationPopupVariant.Danger} />
 ```
 
 ### DetailsPanel
@@ -474,9 +476,11 @@ section below; a skills-scoped wrapper lives in `@epam/ai-dial-skills`.
 
 #### The Manage menu, and the last action standing
 
-Secondary actions collect behind the header's `...` trigger: Edit, Download,
-Publish/Unpublish, Delete, "Revoke access", "Remove from My List", and Share
-where `isSharePrimary` returns `false`. When filtering leaves exactly one of
+Secondary actions collect behind the header's `...` trigger: Share where
+`isSharePrimary` returns `false`, then Edit, Download, Publish/Unpublish,
+"Revoke access", "Remove from My List", and Delete. Delete comes last by
+design — the destructive entry closes the menu rather than sitting between
+two recoverable ones. When filtering leaves exactly one of
 them, it renders as a button in the action row instead and the trigger goes
 away — a menu of one costs a click for nothing and leaves the header looking
 empty until it is opened. A destructive action keeps its danger styling on
@@ -490,6 +494,88 @@ item with `onOpenUnpublish` that `isUnpublishVisible` does not reject) and
 hover that starts a lookup turn the button back into the trigger under the
 pointer that was reaching for it. The menu likewise stays put while it is
 open.
+
+`Unpublish` is released from that hold for an item `isUnpublishVisible`
+returns `true` for: `DetailsPanel` requests that item's publish history as
+soon as it shows it, and once the history has resolved the lone `Unpublish`
+of a published copy renders as a button like any other last action. An item
+the rule is absent for keeps the hold.
+
+### LimitsTab
+
+The usage-limits list `DetailsPanel` renders on its `Limits` tab, exported so
+a host can render the same rows on another surface — the conversation input's
+usage popover in AI DIAL Chat is one. It takes a `CatalogItemLimits` value and
+renders `null` when `limits` is absent or every group has no rows.
+
+It is presentation-only: it parses and formats nothing, and it never sees a
+locale, a timezone, a raw timestamp, or a backend DTO. Every visible string on
+a row — the used/total figures, the value label, the spent caption, the reset
+line, and the `aria-valuetext` of each progress bar — is preformatted by the
+host. Capped rows get a progress bar whose fill turns warning at 75% of the
+limit and danger at 100%; a row with `isUnlimited` gets its `noteLabel`
+instead.
+
+```tsx
+import { LimitsTab } from '@epam/ai-dial-catalog';
+
+<LimitsTab
+  limits={{
+    groups: [
+      {
+        label: 'Token limits',
+        rows: [
+          {
+            label: 'Today',
+            used: 2500,
+            total: 10000,
+            usedLabel: '2.5K',
+            totalLabel: '10K',
+            valueLabel: '2.5K / 10K',
+            captionLabel: '$1.20 spent',
+            ariaLabel: 'Today: 2,500 of 10,000 used',
+            resetLabel: 'Resets Sep 16, 2026, 2:00 AM GMT+2',
+            resetIsoValue: '2026-09-16T00:00:00Z',
+            resetAriaLabel:
+              'Usage resets Sep 16, 2026, 2:00 AM Central European Summer Time',
+          },
+        ],
+      },
+    ],
+  }}
+  footerNote="View full usage limits"
+/>;
+```
+
+`resetLabel`, `resetIsoValue`, and `resetAriaLabel` are optional and behave as
+one trio: supply all three or none. When present the row renders a
+`<time dateTime={resetIsoValue}>` line under its label, hidden from the
+accessibility tree in favour of a visually-hidden sibling carrying
+`resetAriaLabel` — `<time>` has no implicit ARIA role, so `aria-label` on it is
+not reliably supported. Omit `resetAriaLabel` and the visible line stays its
+own accessible name. A row with none of the three renders exactly as it did
+before reset lines existed.
+
+`layout` (`LimitRowLayout`) picks the row arrangement and defaults to
+`LimitRowLayout.Inline`, which is what the catalog details panel renders: the
+label column sits beside a fixed-width column holding the used/total pair above
+a narrow progress bar. `LimitRowLayout.Stacked` puts the label and the value on
+one line, with a full-width progress bar and the reset caption beneath it, and
+colors the value with `valueDanger` once the row has reached its limit — the
+arrangement the AI DIAL Chat conversation-input popover uses in its narrow
+panel.
+
+```tsx
+import { LimitRowLayout, LimitsTab } from '@epam/ai-dial-catalog';
+
+<LimitsTab limits={limits} layout={LimitRowLayout.Stacked} />;
+```
+
+Typography and colors are overridable: `labelClassName`, `captionClassName`,
+`valueClassName`, `noteValueClassName`, `noteClassName`, `sectionClassName`,
+and `footerClassName` each default to a `dial-*-text` scale class, and
+`colors` (`LimitsTabColors`) maps to the CSS custom properties the stylesheet
+reads. See `LimitsTabProps` in the Types section.
 
 ## Enums
 
@@ -505,11 +591,14 @@ import {
   CredentialsUiState,
   DeploymentSize,
   DetailsConfirmationKind,
-  DetailsConfirmationVariant,
+  LimitRowLayout,
   ToolsetAuthenticationType,
 } from '@epam/ai-dial-catalog';
 
-/* CatalogEntityType is owned by @epam/ai-dial-chat-shared, not this lib. */
+/*
+ * CatalogEntityType is owned by @epam/ai-dial-chat-shared, not this lib, and
+ * confirmation variants use the kit's ConfirmationPopupVariant directly.
+ */
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 
 CatalogEntityType.Model; // 'MODEL'
@@ -538,6 +627,10 @@ Every confirmation replaces the panel's details content in place - there is
 no modal. `DetailsConfirmationKind` names the active step, and each kind
 resolves its title, copy, consequence bullets, confirm label, loading status
 text, and palette from `detailsTexts`.
+
+The step itself is rendered by `ConfirmationView` and `ConfirmationFooter` from
+`@epam/ai-dial-chat-shared`, so a confirmation shown outside this panel can
+reuse the same content and action row.
 
 `Delete`, `RevokeAccess`, and `Unpublish` render with the danger palette;
 `Unshare` and `Logout` with the info one. `DeleteApiKey` is the only kind
@@ -588,15 +681,9 @@ gate. For every other item the argument is always `false`. It is cleared on
 every open, including immediately after a publication that carried it.
 
 Its copy travels through the existing `publishLabels` prop as
-`credentialsLabel` and `credentialsHint`.
-
-`historySharedCredentialsLabel` travels the same way, for the marker
-`PublishHistoryList` puts on a past publication that carried shared
-credentials — but **it has no visible effect today**: `PublishPanel` keeps its
-versions-history section behind a `TODO`, so the marker (like
-`historyLoadingLabel` and `historyErrorLabel` beside it) only appears once
-that section is re-enabled. The data path is wired and unit-tested; supplying
-the label now simply means nothing else has to change then.
+`credentialsLabel` and `credentialsHint`. The publish sub-view shows no
+versions history; `getPublishHistory` is still called, because its result
+drives the Unpublish action.
 
 ```tsx
 <DetailsPanel
@@ -614,9 +701,6 @@ the label now simply means nothing else has to change then.
   publishLabels={{
     credentialsLabel: t('catalog.publish.credentialsLabel'),
     credentialsHint: t('catalog.publish.credentialsHint'),
-    historySharedCredentialsLabel: t(
-      'catalog.publish.historySharedCredentials',
-    ),
   }}
 />
 ```
@@ -650,6 +734,64 @@ Through `Catalog`, the same two callbacks are `onUnpublish` and
   detailsTexts={{ unpublishLabel: t('buttons.unpublish') }}
 />
 ```
+
+### Markdown code-block labels
+
+Item descriptions (on cards and in the About tab) and the Content tab body are
+rendered as markdown, so they can contain fenced code blocks, tables and block
+formulas. Five `ItemDetailsTexts` fields name those controls, on
+`DetailsPanel`'s `texts` and on `Catalog`'s `detailsTexts` (which also reaches
+the cards):
+
+| Field                        | Names                                      | Default on markdown    |
+| ---------------------------- | ------------------------------------------ | ---------------------- |
+| `copyCodeAriaLabel`          | The copy button (also on API snippets)     | `'Copy code'`          |
+| `copiedCodeStatusLabel`      | The copied announcement (also on snippets) | `'Copied!'`            |
+| `downloadCodeAriaLabel`      | The download button                        | `'Download code'`      |
+| `tableScrollRegionAriaLabel` | A wide table's scroll region               | `'Scrollable table'`   |
+| `mathScrollRegionAriaLabel`  | A wide block formula's scroll region       | `'Scrollable formula'` |
+
+```tsx
+<Catalog
+  items={items}
+  favorites={favorites}
+  detailsTexts={{
+    copyCodeAriaLabel: t('buttons.copy'),
+    copiedCodeStatusLabel: t('buttons.copied'),
+    downloadCodeAriaLabel: t('buttons.download'),
+    tableScrollRegionAriaLabel: t('chat.scrollableTable'),
+    mathScrollRegionAriaLabel: t('chat.scrollableFormula'),
+  }}
+/>
+```
+
+A plain-text file preview in the Content tab uses the copy and copied labels
+too; it has no download control.
+
+### API key header hint
+
+For an `API_KEY` toolset whose `credentials.apiKeyHeader` is set, every API key
+input the details panel renders — the header's personal API-key popover and
+both `Personal credentials` / `Organization credentials` rows of the
+credentials-management sub-view — shows a hint naming that header under the
+input and links it to the field with `aria-describedby`. Without
+`apiKeyHeader` no hint is rendered. The text comes from
+`ItemDetailsTexts.apiKeyHeaderHint`, a function of the header name that
+defaults to `` (header) => `Enter your API key value for "${header}" header` ``:
+
+```tsx
+<Catalog
+  items={items}
+  favorites={favorites}
+  detailsTexts={{
+    apiKeyHeaderHint: (header) =>
+      t('catalog.details.credentials.apiKeyHeaderHint', { header }),
+  }}
+/>
+```
+
+`ApplicationCredentials` rows show no header hint: `ApplicationCredential`
+carries no header name.
 
 ### Prompt entities
 
@@ -799,6 +941,34 @@ basename; fetching, MIME handling, state, and rendering remain host-owned.
 />
 ```
 
+#### Custom file tree
+
+`renderContentFileTree(props)` replaces the built-in tree inside the file
+selector overlay — e.g. with a file-manager tree, which is how
+`@epam/ai-dial-skills`' `SkillDetailsSidePanel` matches the skill editor. The
+catalog itself never imports a file manager. The panel keeps owning the
+trigger, the file count, expansion, selection and the overlay's open state;
+the renderer receives `CatalogContentFileTreeRenderProps` — `nodes`,
+`selectedFileId`, `expandedFolderIds`, `onToggleFolder`, `onSelectFile`
+(which also closes the overlay), `onClose` (for Escape), `ariaLabel`, and
+`rowNameClassName` — and is expected to keep the tree contract: `role="tree"`,
+`aria-selected` on the displayed file, focus on it when mounted, and Escape
+calling `onClose`. Omitted, the built-in tree renders. `Catalog` forwards the
+same prop to its details panel.
+
+```tsx
+import type { CatalogContentFileTreeRenderProps } from '@epam/ai-dial-catalog';
+
+<DetailsPanel
+  item={skillItem}
+  isOpen
+  onClose={handleClose}
+  renderContentFileTree={(props: CatalogContentFileTreeRenderProps) => (
+    <HostFileTree {...props} />
+  )}
+/>;
+```
+
 `onLoadContentFilePreview` is an additive, richer alternative to
 `onLoadContentFile`: instead of a plain string always rendered as Markdown, it
 resolves a `CatalogContentFilePreview` — `{ type: 'markdown', text }`,
@@ -935,8 +1105,20 @@ import type {
   ToolDefinition,
   PricingRow,
   UsageLimitRow,
+  UsageLimitGroup,
+  UsageLimitProgressRow,
+  CatalogItemLimits,
+  LimitsTabProps,
+  LimitsTabColors,
 } from '@epam/ai-dial-catalog';
 ```
+
+`UsageLimitProgressRow` is one row of a `LimitsTab` group: `label`, `used`, and
+`total` are required, and everything else is an optional preformatted display
+string — `valueLabel`, `usedLabel`, `totalLabel`, `ariaLabel`, `noteLabel`,
+`captionLabel`, plus the `resetLabel` / `resetIsoValue` / `resetAriaLabel`
+trio described under `LimitsTab`. `isUnlimited` marks a row whose `total` is a
+sentinel rather than a cap, so it renders its note instead of a progress bar.
 
 ## Utilities
 

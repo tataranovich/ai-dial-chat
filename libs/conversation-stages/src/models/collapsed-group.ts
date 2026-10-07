@@ -1,4 +1,4 @@
-import type { Stage } from '@epam/ai-dial-chat-shared';
+import type { DisplayAttachment, Stage } from '@epam/ai-dial-chat-shared';
 import type { StagesPanelColors } from './stages-props';
 
 /** Color overrides for the `CollapsedGroup` component applied as CSS custom properties. */
@@ -7,8 +7,6 @@ export interface CollapsedGroupColors {
   labelColor?: string;
   /** Color of the toggle button label and icon on hover. */
   labelHoverColor?: string;
-  /** Color of the execution time. */
-  stepsCountColor?: string;
   /** Color of the leading check icon in the finished-and-successful summary. */
   doneColor?: string;
   /** Color of the "N failed" text in the failed summary. */
@@ -39,16 +37,22 @@ export interface CollapsedGroupLabels {
   stepsLabel?: (count: number) => string;
   /** Returns the "N failed" text in the failed summary. Defaults to `(n) => \`${n} failed\``. */
   failedCountLabel?: (failedCount: number) => string;
-  /** Returns the "Step X of Y" text in the running summary. Defaults to `(current, total) => \`Step ${current} of ${total}\``. */
-  runningStepLabel?: (current: number, total: number) => string;
   /** Accessible label announced for the running summary's spinner. Defaults to `'Running'`. */
   runningAriaLabel?: string;
-  /** Accessible label for the copy button on each stage's content. Defaults to `'Copy'`. */
+  /** Accessible label for the copy button on each stage content code block. Defaults to `'Copy stage content'`. */
   copyAriaLabel?: string;
+  /** Status announced after a stage content code block has been copied. Defaults to `'Copied!'`. */
+  codeBlockCopiedLabel?: string;
+  /** Accessible label for a table's horizontally scrollable region in stage content. Defaults to `'Scrollable table'`. */
+  tableScrollRegionAriaLabel?: string;
+  /** Accessible label for a block formula's horizontally scrollable region in stage content. Defaults to `'Scrollable formula'`. */
+  mathScrollRegionAriaLabel?: string;
   /** Visually-hidden label announced alongside a failed stage's icon. Defaults to `'Failed'`. */
   failedAriaLabel?: string;
   /** Returns the label for a single attempt inside a collapsed `×N` group. Defaults to `(n) => \`Attempt ${n}\``. */
   attemptLabel?: (attemptNumber: number) => string;
+  /** Accessible label for a stage attachment tile's interactive click action. Defaults to `'Preview search result'`. */
+  attachmentClickLabel?: string;
 }
 
 /** Props accepted by the `CollapsedGroup` component. */
@@ -63,4 +67,6 @@ export interface CollapsedGroupProps {
   className?: string;
   /** Color and typography overrides applied as CSS custom properties. */
   styles?: CollapsedGroupStyles;
+  /** Called when a stage attachment tile is clicked/activated. Forwarded unchanged to the inner `StagesPanel`. */
+  onAttachmentClick?: (attachment: DisplayAttachment) => void;
 }

@@ -1,0 +1,30 @@
+import baseConfig from '../../eslint.config.mjs';
+
+export default [
+  ...baseConfig,
+  {
+    files: ['**/*.json'],
+    rules: {
+      '@nx/dependency-checks': [
+        'error',
+        {
+          ignoredFiles: [
+            '{projectRoot}/eslint.config.{js,cjs,mjs,ts,cts,mts}',
+            '{projectRoot}/vite.config.{js,ts,mjs,mts}',
+            '{projectRoot}/.storybook/**',
+            '{projectRoot}/src/**/*.stories.{ts,tsx}',
+            '{projectRoot}/src/stories/**',
+            /* Dev-only Playwright baseline; its tools are root devDependencies. */
+            '{projectRoot}/browser-tests/**',
+          ],
+        },
+      ],
+    },
+    languageOptions: {
+      parser: await import('jsonc-eslint-parser'),
+    },
+  },
+  {
+    ignores: ['**/out-tsc', '**/storybook-static'],
+  },
+];

@@ -1,12 +1,48 @@
 import { AttachmentType, RequestStatus } from '@epam/ai-dial-chat-shared';
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONVERSATION_INPUT_CLASS } from '../../constants/public-class-names';
 import { ConversationInput } from './ConversationInput';
 
 describe('ConversationInput', () => {
+  it('forwards focus requests without replacing the draft or its caret', () => {
+    const { rerender } = render(<ConversationInput />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'Existing draft' } });
+    textarea.setSelectionRange(3, 3);
+    textarea.blur();
+    rerender(<ConversationInput focusRequestId={1} />);
+    // eslint-disable-next-line testing-library/no-node-access -- The public focus-request contract is observable through the active element.
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe('Existing draft');
+    expect(textarea.selectionStart).toBe(3);
+  });
   it('should render with welcome text', () => {
     render(<ConversationInput welcomeText="How can I help you?" />);
     expect(screen.getByText('How can I help you?')).toBeTruthy();
+  });
+
+  it('renders the below-welcome slot between the welcome heading and the input', () => {
+    render(
+      <ConversationInput
+        welcomeText="How can I help you?"
+        belowWelcomeSlot={<button type="button">Starter</button>}
+      />,
+    );
+    const heading = screen.getByRole('heading', {
+      name: 'How can I help you?',
+    });
+    const starter = screen.getByRole('button', { name: 'Starter' });
+    const textarea = screen.getByRole('textbox');
+    expect(
+      heading.compareDocumentPosition(starter) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      starter.compareDocumentPosition(textarea) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('should keep welcome text visible when typing', () => {
@@ -215,5 +251,29 @@ describe('ConversationInput — attachment tray styles', () => {
     expect(
       screen.getByRole('list', { name: 'Attached files' }).classList,
     ).toContain('host-tray');
+  });
+});
+
+describe('ConversationInput — model menu styles', () => {
+  it('forwards styles.modelMenu to the model menu', async () => {
+    const user = userEvent.setup({ delay: null });
+    render(
+      <ConversationInput
+        deployments={[{ id: 'gpt-4o', displayName: 'GPT-4o', type: 'model' }]}
+        selectedDeploymentId="gpt-4o"
+        styles={{ modelMenu: { className: 'host-menu' } }}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Select model/ }));
+
+    /* The panel carries no role of its own, so the row is found by role and
+       walked up to it. */
+    expect(
+      screen
+        .getByRole('menuitemradio', { name: 'GPT-4o' })
+        // eslint-disable-next-line testing-library/no-node-access
+        .closest(`.${CONVERSATION_INPUT_CLASS.modelMenu}`)?.classList,
+    ).toContain('host-menu');
   });
 });

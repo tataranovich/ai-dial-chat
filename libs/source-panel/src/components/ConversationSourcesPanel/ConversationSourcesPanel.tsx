@@ -142,6 +142,11 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
               colors={styles?.colors}
               copyLabel={labels.copySourceLabel}
               copiedLabel={labels.sourceCopiedLabel}
+              codeBlockCopyLabel={labels.codeBlockCopyLabel}
+              codeBlockCopiedLabel={labels.codeBlockCopiedLabel}
+              codeBlockDownloadLabel={labels.codeBlockDownloadLabel}
+              tableScrollRegionAriaLabel={labels.tableScrollRegionAriaLabel}
+              mathScrollRegionAriaLabel={labels.mathScrollRegionAriaLabel}
               onSourceClick={onSourceClick}
             />
           </>
@@ -170,13 +175,13 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
       maxWidth={maxWidth}
       onResizeStop={onResizeStop}
       rightActions={
-        hasFilesOrSources && (
+        hasFilesOrSources &&
+        onDownloadAll && (
           <GhostIconButton
             icon={<IconDownload {...BASE_LG_ICON_PROPS} />}
             aria-label={labels.downloadAllLabel}
             tooltipProps={{ tooltip: labels.downloadAllLabel }}
             onClick={onDownloadAll}
-            disabled={!onDownloadAll}
           />
         )
       }

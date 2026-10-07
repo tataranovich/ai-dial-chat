@@ -1,6 +1,7 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   BadGatewayException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -28,13 +29,19 @@ import {
   getResourceName,
   stripPublicTargetFolder,
 } from '../publish/publish-target.util';
+import type { ConversationMessageDto } from './dto/conversation-message.dto';
 import { PublishConversationResultDto } from './dto/publish-conversation-result.dto';
 import { UnpublishConversationResultDto } from './dto/unpublish-conversation-result.dto';
+import { findPendingBackgroundMessage } from './generation/background-message';
 
 const CONVERSATION_RESOURCE_PREFIX = 'conversations';
 
 const historyCacheKey = (sourceUrl: string) =>
   `conversation-publish-history:${sourceUrl}`;
+
+/** Returned when a conversation is published while one of its answers is still generating. */
+export const PUBLISH_WHILE_GENERATING_MESSAGE =
+  'The answer is still being generated. Publish the conversation after it finishes.';
 
 /**
  * Publishes conversations to an Organization folder and reads their publish
@@ -42,7 +49,7 @@ const historyCacheKey = (sourceUrl: string) =>
  * `getPublications`) — this service holds no persistence of its own, the
  * same non-persistence property as `apps/chat-api/src/publish/publish.service.ts`,
  * whose shared target-folder helpers this service reuses via
- * `publish-target.util.ts` (see design.md D1 for why this is a dedicated
+ * `publish-target.util.ts` (see `openspec/changes/archive/2026-07-15-add-conversation-publish/design.md` D1 for why this is a dedicated
  * service rather than an extension of the catalog `entityType` enum).
  *
  * The conversation path is always resolved against the caller's own session
@@ -91,7 +98,7 @@ export class ConversationPublishService {
     } = (await this.dialClient.client.getConversation(bucket, encodedPath, {
       headers: getBearerAuthHeaders(accessToken),
     })) as {
-      data?: { name: string };
+      data?: { name: string; messages?: ConversationMessageDto[] };
       error?: unknown;
       response: globalThis.Response;
     };
@@ -102,6 +109,14 @@ export class ConversationPublishService {
         this.logger,
         getResponse,
       );
+    }
+
+    /*
+     * DIAL Core copies the stored file itself, so a copy published now would keep
+     * a `pending` background message that no viewer can ever resolve.
+     */
+    if (findPendingBackgroundMessage(conversation)) {
+      throw new ConflictException(PUBLISH_WHILE_GENERATING_MESSAGE);
     }
 
     const publicTargetFolder = getPublicTargetFolder(folderPath);

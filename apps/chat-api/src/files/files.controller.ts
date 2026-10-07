@@ -13,6 +13,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBody,
@@ -24,6 +25,9 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import type { SessionUser } from '../auth/session/session.types';
+import { ApiDialCoreErrors } from '../common/dial/api-dial-core-errors.decorator';
+import { createHtmlPreviewCspHeader } from '../config/csp';
+import type { EnvironmentVariables } from '../config/environment.config';
 import { ArchiveUploadInterceptor } from './archive-upload.interceptor';
 import { CopyFilesDto, CopyFilesResponseDto } from './dto/copy-files.dto';
 import {
@@ -59,11 +63,15 @@ import {
 import { FileUploadResponseDto } from './dto/upload-file-response.dto';
 import { UploadFileDto } from './dto/upload-file.dto';
 import { FilesService } from './files.service';
+import { HTML_PREVIEW_FRAME_DOCUMENT } from './html-preview-frame';
 
 @ApiTags('files')
 @Controller({ path: 'files', version: '1' })
 export class FilesController {
-  constructor(private readonly filesService: FilesService) {}
+  constructor(
+    private readonly filesService: FilesService,
+    private readonly configService: ConfigService<EnvironmentVariables, true>,
+  ) {}
 
   @Post()
   @HttpCode(201)
@@ -86,6 +94,7 @@ export class FilesController {
       },
     },
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 201, type: FileUploadResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid bucket or path' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
@@ -134,6 +143,7 @@ export class FilesController {
     summary:
       'Upload a ZIP archive and extract its contents to a destination folder',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: UploadArchiveResponseDto })
   @ApiResponse({
     status: 400,
@@ -178,6 +188,7 @@ export class FilesController {
     description:
       'Returns a page of file and folder items from DIAL Core storage, normalized for FileManager compatibility.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     type: ListFilesResponseDto,
@@ -223,6 +234,7 @@ export class FilesController {
       'Returns files from the fixed public bucket. Permissions are always false — users cannot write to the public bucket.',
     operationId: 'listPublicFiles',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     type: ListFilesResponseDto,
@@ -259,6 +271,7 @@ export class FilesController {
       'Proxies the DIAL Core sharing API to return files shared with the authenticated user.',
     operationId: 'listSharedFiles',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     type: ListFilesResponseDto,
@@ -291,9 +304,11 @@ export class FilesController {
     summary: 'List files and folders shared by the caller with others',
     operationId: 'listSharedByMe',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: ListFilesResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid query parameters' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
+  @ApiResponse({ status: 429, description: 'DIAL Core rate limit exceeded' })
   @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
   @ApiResponse({
     status: 503,
@@ -313,6 +328,7 @@ export class FilesController {
     description:
       'Returns metadata for a single named file from DIAL Core. Path must not end with /.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     type: FileMetadataResponseDto,
@@ -341,6 +357,7 @@ export class FilesController {
   @Post('folders')
   @HttpCode(201)
   @ApiOperation({ summary: 'Create a folder' })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 201, type: CreateFolderResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid bucket, path, or name' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
@@ -369,6 +386,7 @@ export class FilesController {
   @HttpCode(200)
   @ApiProduces('application/zip')
   @ApiOperation({ summary: 'Download files and folders as a ZIP archive' })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Streamed ZIP archive',
@@ -499,6 +517,7 @@ export class FilesController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Revoke all shared access to files and folders' })
   @ApiBody({ type: RevokeAccessDto })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: RevokeAccessResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid request body' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
@@ -507,6 +526,7 @@ export class FilesController {
     description: 'Caller does not own one or more resources',
   })
   @ApiResponse({ status: 404, description: 'A resource does not exist' })
+  @ApiResponse({ status: 429, description: 'DIAL Core rate limit exceeded' })
   @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
   @ApiResponse({
     status: 503,
@@ -524,6 +544,7 @@ export class FilesController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Discard resources shared with the caller' })
   @ApiBody({ type: DiscardSharedDto })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: DiscardSharedResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid request body' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
@@ -532,6 +553,7 @@ export class FilesController {
     description: 'Resource is not shared with the caller',
   })
   @ApiResponse({ status: 404, description: 'A resource does not exist' })
+  @ApiResponse({ status: 429, description: 'DIAL Core rate limit exceeded' })
   @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
   @ApiResponse({
     status: 503,
@@ -545,8 +567,40 @@ export class FilesController {
     return this.filesService.discardShared(body.items, at);
   }
 
+  @Get('html-preview-frame')
+  @ApiOperation({
+    summary:
+      'Bootstrap document that renders in-memory HTML under the sandboxed preview CSP',
+  })
+  @ApiProduces('text/html')
+  @ApiResponse({
+    status: 200,
+    description: 'Static HTML preview bootstrap document',
+    schema: { type: 'string' },
+  })
+  @ApiResponse({ status: 401, description: 'Not authenticated' })
+  getHtmlPreviewFrame(@Res() res: Response): void {
+    /*
+     * HTML with no file URL (inline attachment `data`) cannot be previewed
+     * via `/download`. The preview iframe loads this document via `src=`
+     * instead of using `srcdoc`, so the HTML it is then handed over
+     * `postMessage` renders under this response's own sandboxed policy
+     * rather than the SPA shell's enforced one.
+     */
+    const allowedIframeOrigins =
+      this.configService.get('ALLOWED_IFRAME_ORIGINS', { infer: true }) ?? [];
+    res.setHeader(
+      'Content-Security-Policy',
+      createHtmlPreviewCspHeader(allowedIframeOrigins),
+    );
+    res.removeHeader('Content-Security-Policy-Report-Only');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('html').send(HTML_PREVIEW_FRAME_DOCUMENT);
+  }
+
   @Get('download')
   @ApiProduces('application/octet-stream')
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Binary file content',
@@ -575,6 +629,46 @@ export class FilesController {
 
     for (const [key, value] of Object.entries(headers)) {
       res.setHeader(key, value);
+    }
+
+    /*
+     * HTML previews render via `src=` against this route (not `srcdoc`), so
+     * this response needs its own relaxed CSP instead of inheriting the SPA
+     * shell's strict/enforced policy. The `sandbox` directive baked into
+     * `createHtmlPreviewCspHeader` is what makes that safe on its own — it
+     * forces the response to render at an opaque origin regardless of how
+     * it's loaded (the preview iframe's own `sandbox` attribute is
+     * additional defense-in-depth, not the primary control).
+     */
+    if (headers['content-type']?.toLowerCase().startsWith('text/html')) {
+      const allowedIframeOrigins =
+        this.configService.get('ALLOWED_IFRAME_ORIGINS', { infer: true }) ?? [];
+      res.setHeader(
+        'Content-Security-Policy',
+        createHtmlPreviewCspHeader(allowedIframeOrigins),
+      );
+      /*
+       * `SAFE_DOWNLOAD_HEADERS` never forwards this today, but strip it
+       * defensively so a future widening of that allowlist can't leave a
+       * stale report-only policy sitting alongside the enforced one above.
+       */
+      res.removeHeader('Content-Security-Policy-Report-Only');
+
+      /*
+       * DIAL Core forwards `Content-Disposition: attachment` verbatim even
+       * for HTML files, which makes the browser download the file instead
+       * of rendering it in the `src=` iframe. Rewrite it to `inline` for the
+       * preview response; an explicit "download to disk" action elsewhere
+       * uses a same-origin `<a download>` element, which browsers honor
+       * regardless of this header.
+       */
+      const disposition = headers['content-disposition'];
+      if (disposition != null) {
+        res.setHeader(
+          'Content-Disposition',
+          disposition.replace(/^attachment/i, 'inline'),
+        );
+      }
     }
 
     await pipeline(Readable.fromWeb(stream as ReadableStream), res).catch(

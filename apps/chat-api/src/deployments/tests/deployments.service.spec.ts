@@ -5,7 +5,7 @@ import { DeploymentsService } from '../deployments.service';
  * DeploymentsService is a pure delegation facade — its business logic now
  * lives in DeploymentsListingService, DeploymentsLookupService, and
  * DeploymentsDetailsService (see
- * openspec/changes/split-deployments-toolsets-services/design.md). These
+ * openspec/changes/archive/2026-08-07-split-deployments-toolsets-services/design.md). These
  * tests only verify each facade method forwards to the right sub-service
  * unchanged; behavior is covered by that sub-service's own spec.
  */
@@ -25,6 +25,7 @@ describe('DeploymentsService facade', () => {
       getUserLimits: vi.fn().mockResolvedValue('details-user-limits'),
       getUserUsage: vi.fn().mockResolvedValue('details-user-usage'),
       invalidateDetailsCache: vi.fn().mockResolvedValue(undefined),
+      getDeploymentInterfaces: vi.fn().mockResolvedValue(['openaiResponses']),
     };
 
     const service = new DeploymentsService(
@@ -155,5 +156,22 @@ describe('DeploymentsService facade', () => {
       'user1',
       'gpt-4o',
     );
+  });
+
+  it('delegates getDeploymentInterfaces to DeploymentsDetailsService', async () => {
+    const { service, detailsService } = makeService();
+
+    const result = await service.getDeploymentInterfaces(
+      'user1',
+      'gpt-4o',
+      'token',
+    );
+
+    expect(detailsService.getDeploymentInterfaces).toHaveBeenCalledWith(
+      'user1',
+      'gpt-4o',
+      'token',
+    );
+    expect(result).toEqual(['openaiResponses']);
   });
 });

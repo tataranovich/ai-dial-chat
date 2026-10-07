@@ -19,6 +19,8 @@ import type {
   ListScheduledTaskRunsResponseDto,
   ListScheduledTasksResponseDto,
   ScheduledTaskDto,
+  ScheduledTaskRunDto,
+  ScheduledTaskValidationErrorDto,
   UpdateScheduledTaskBodyDto,
   UpdatedScheduledTaskDto,
 } from '../models/index';
@@ -33,6 +35,11 @@ export interface DeleteScheduledTaskRequest {
 
 export interface GetScheduledTaskRequest {
   scheduleId: string;
+}
+
+export interface GetScheduledTaskRunRequest {
+  scheduleId: string;
+  runId: string;
 }
 
 export interface ListScheduledTaskRunsRequest {
@@ -56,6 +63,10 @@ export interface ResumeScheduledTaskRequest {
   scheduleId: string;
 }
 
+export interface StartScheduledTaskRequest {
+  scheduleId: string;
+}
+
 export interface UpdateScheduledTaskRequest {
   scheduleId: string;
   updateScheduledTaskBodyDto: UpdateScheduledTaskBodyDto;
@@ -66,7 +77,7 @@ export interface UpdateScheduledTaskRequest {
  */
 export class ScheduledTasksApi extends runtime.BaseAPI {
   /**
-   * Creates a DIAL Scheduler schedule that runs a chat completion on the given model and prompt, using the OAuth external-service id configured via SCHEDULER_SERVICE_ID. Invalidates the scheduled tasks list cache on success.
+   * Creates a DIAL Scheduler schedule that runs a chat completion on the given model and prompt or skill, using the OAuth external-service id configured via SCHEDULER_SERVICE_ID. Invalidates the scheduled tasks list cache on success.
    * Create a scheduled task
    */
   async createScheduledTaskRaw(
@@ -86,6 +97,15 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
 
     headerParameters['Content-Type'] = 'application/json';
 
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
     let urlPath = `/api/v1/scheduled-tasks`;
 
     const response = await this.request(
@@ -103,7 +123,7 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
   }
 
   /**
-   * Creates a DIAL Scheduler schedule that runs a chat completion on the given model and prompt, using the OAuth external-service id configured via SCHEDULER_SERVICE_ID. Invalidates the scheduled tasks list cache on success.
+   * Creates a DIAL Scheduler schedule that runs a chat completion on the given model and prompt or skill, using the OAuth external-service id configured via SCHEDULER_SERVICE_ID. Invalidates the scheduled tasks list cache on success.
    * Create a scheduled task
    */
   async createScheduledTask(
@@ -135,6 +155,15 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
     const queryParameters: runtime.HTTPQuery = {};
 
     const headerParameters: runtime.HTTPHeaders = {};
+
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
 
     let urlPath = `/api/v1/scheduled-tasks/{scheduleId}`;
     urlPath = urlPath.replace(
@@ -185,6 +214,15 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
 
     const headerParameters: runtime.HTTPHeaders = {};
 
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
     let urlPath = `/api/v1/scheduled-tasks/{scheduleId}`;
     urlPath = urlPath.replace(
       `{${'scheduleId'}}`,
@@ -220,6 +258,79 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
   }
 
   /**
+   * Returns one DIAL Scheduler run for an owned schedule, proxying the Scheduler using the session access token. Not cached.
+   * Get one scheduled task run
+   */
+  async getScheduledTaskRunRaw(
+    requestParameters: GetScheduledTaskRunRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<runtime.ApiResponse<ScheduledTaskRunDto>> {
+    if (requestParameters['scheduleId'] == null) {
+      throw new runtime.RequiredError(
+        'scheduleId',
+        'Required parameter "scheduleId" was null or undefined when calling getScheduledTaskRun().',
+      );
+    }
+
+    if (requestParameters['runId'] == null) {
+      throw new runtime.RequiredError(
+        'runId',
+        'Required parameter "runId" was null or undefined when calling getScheduledTaskRun().',
+      );
+    }
+
+    const queryParameters: runtime.HTTPQuery = {};
+
+    const headerParameters: runtime.HTTPHeaders = {};
+
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
+    let urlPath = `/api/v1/scheduled-tasks/{scheduleId}/runs/{runId}`;
+    urlPath = urlPath.replace(
+      `{${'scheduleId'}}`,
+      encodeURIComponent(String(requestParameters['scheduleId'])),
+    );
+    urlPath = urlPath.replace(
+      `{${'runId'}}`,
+      encodeURIComponent(String(requestParameters['runId'])),
+    );
+
+    const response = await this.request(
+      {
+        path: urlPath,
+        method: 'GET',
+        headers: headerParameters,
+        query: queryParameters,
+      },
+      initOverrides,
+    );
+
+    return new runtime.JSONApiResponse<ScheduledTaskRunDto>(response);
+  }
+
+  /**
+   * Returns one DIAL Scheduler run for an owned schedule, proxying the Scheduler using the session access token. Not cached.
+   * Get one scheduled task run
+   */
+  async getScheduledTaskRun(
+    requestParameters: GetScheduledTaskRunRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<ScheduledTaskRunDto> {
+    const response = await this.getScheduledTaskRunRaw(
+      requestParameters,
+      initOverrides,
+    );
+    return await response.value();
+  }
+
+  /**
    * Returns the paginated run history for a single DIAL Scheduler schedule, proxying DIAL Scheduler using the session user\'s access token. Always requests upstream ordering of created_at desc explicitly. Not cached.
    * List a scheduled task run history
    */
@@ -245,6 +356,15 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
     }
 
     const headerParameters: runtime.HTTPHeaders = {};
+
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
 
     let urlPath = `/api/v1/scheduled-tasks/{scheduleId}/runs`;
     urlPath = urlPath.replace(
@@ -310,6 +430,15 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
 
     const headerParameters: runtime.HTTPHeaders = {};
 
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
     let urlPath = `/api/v1/scheduled-tasks`;
 
     const response = await this.request(
@@ -358,6 +487,15 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
     const queryParameters: runtime.HTTPQuery = {};
 
     const headerParameters: runtime.HTTPHeaders = {};
+
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
 
     let urlPath = `/api/v1/scheduled-tasks/{scheduleId}/pause`;
     urlPath = urlPath.replace(
@@ -412,6 +550,15 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
 
     const headerParameters: runtime.HTTPHeaders = {};
 
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
     let urlPath = `/api/v1/scheduled-tasks/{scheduleId}/resume`;
     urlPath = urlPath.replace(
       `{${'scheduleId'}}`,
@@ -447,7 +594,69 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
   }
 
   /**
-   * Updates an existing DIAL Scheduler schedule for the authenticated session user. Invalidates the scheduled tasks list cache on success.
+   * Starts the saved DIAL Scheduler definition immediately for the authenticated session user. The request has no body, does not wait for completion, and does not change the schedule.
+   * Start a scheduled task immediately
+   */
+  async startScheduledTaskRaw(
+    requestParameters: StartScheduledTaskRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<runtime.ApiResponse<ScheduledTaskRunDto>> {
+    if (requestParameters['scheduleId'] == null) {
+      throw new runtime.RequiredError(
+        'scheduleId',
+        'Required parameter "scheduleId" was null or undefined when calling startScheduledTask().',
+      );
+    }
+
+    const queryParameters: runtime.HTTPQuery = {};
+
+    const headerParameters: runtime.HTTPHeaders = {};
+
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
+    let urlPath = `/api/v1/scheduled-tasks/{scheduleId}/run`;
+    urlPath = urlPath.replace(
+      `{${'scheduleId'}}`,
+      encodeURIComponent(String(requestParameters['scheduleId'])),
+    );
+
+    const response = await this.request(
+      {
+        path: urlPath,
+        method: 'POST',
+        headers: headerParameters,
+        query: queryParameters,
+      },
+      initOverrides,
+    );
+
+    return new runtime.JSONApiResponse<ScheduledTaskRunDto>(response);
+  }
+
+  /**
+   * Starts the saved DIAL Scheduler definition immediately for the authenticated session user. The request has no body, does not wait for completion, and does not change the schedule.
+   * Start a scheduled task immediately
+   */
+  async startScheduledTask(
+    requestParameters: StartScheduledTaskRequest,
+    initOverrides?: RequestInit | runtime.InitOverrideFunction,
+  ): Promise<ScheduledTaskRunDto> {
+    const response = await this.startScheduledTaskRaw(
+      requestParameters,
+      initOverrides,
+    );
+    return await response.value();
+  }
+
+  /**
+   * Updates an existing DIAL Scheduler schedule for the authenticated session user. Omitting skillUrls preserves saved references; [] removes them. Invalidates the scheduled tasks list cache on success.
    * Update a scheduled task
    */
   async updateScheduledTaskRaw(
@@ -474,6 +683,15 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
 
     headerParameters['Content-Type'] = 'application/json';
 
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
     let urlPath = `/api/v1/scheduled-tasks/{scheduleId}`;
     urlPath = urlPath.replace(
       `{${'scheduleId'}}`,
@@ -495,7 +713,7 @@ export class ScheduledTasksApi extends runtime.BaseAPI {
   }
 
   /**
-   * Updates an existing DIAL Scheduler schedule for the authenticated session user. Invalidates the scheduled tasks list cache on success.
+   * Updates an existing DIAL Scheduler schedule for the authenticated session user. Omitting skillUrls preserves saved references; [] removes them. Invalidates the scheduled tasks list cache on success.
    * Update a scheduled task
    */
   async updateScheduledTask(

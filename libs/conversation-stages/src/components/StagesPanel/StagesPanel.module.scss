@@ -12,6 +12,27 @@
   background: var(--cs-button-bg, transparent);
 }
 
+/*
+ * Stage headers are the kit `Accordion` button, whose hover tint and caret
+ * colour are single-class utilities. The doubled class keeps the panel's own
+ * custom properties ahead of them whichever stylesheet loads last.
+ */
+.stageHeader.stageHeader {
+  &:hover {
+    background: var(--cs-row-hover, var(--bg-layer-sunken, #eef1f7));
+  }
+
+  > svg {
+    color: var(--cs-icon-secondary, var(--text-secondary, #57647a));
+    opacity: 0.7;
+  }
+}
+
+/* The kit region paints `text-primary`; stage content inherits `--cs-text`. */
+.stageRegion.stageRegion {
+  color: inherit;
+}
+
 .stageName {
   color: var(--cs-stage-text, var(--text-secondary, #57647a));
 }
@@ -44,7 +65,7 @@
 }
 
 .iconCompleted {
-  color: var(--cs-icon-completed, var(--text-tertiary, #848e9c));
+  color: var(--cs-icon-completed, var(--text-success, #007274));
 }
 
 .iconError {
@@ -61,7 +82,16 @@
   color: var(--cs-code-text, var(--text-primary, #161b2d));
 }
 
+/* Sized by the same `dial-tiny-text` class as the text around it (the kit's
+   `dial-code-text` is 14px), so only the family is set here — the kit's own
+   mono stack. */
 .codeInline {
+  font-family: var(
+    --theme-font-mono,
+    var(--font-fira-code, 'Fira Code'),
+    ui-monospace,
+    monospace
+  );
   background: var(--cs-code-bg, var(--bg-layer-raised, #fcfcfc));
   border: 1px solid var(--cs-code-border, var(--stroke-secondary, #d1dbea));
   color: var(--cs-code-text, var(--text-primary, #161b2d));

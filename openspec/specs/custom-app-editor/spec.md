@@ -3,17 +3,19 @@
 ## Purpose
 
 The Custom App editor page: its settings form, create and edit flows, validation, and the loading and saving overlays.
-
 ## Requirements
-
 ### Requirement: Custom App editor page
-The system SHALL provide a `CustomAppEditor` page that reuses `ToolsetEditorHeader` and a new `CustomAppEditorView`. The editor has two steps: General and Settings. The General step reuses `GeneralForm`, imported from `@epam/ai-dial-toolset-editor` (the toolset-editor lib exports it precisely so non-toolset editors can share the Metadata field set). The Settings step renders `CustomAppSettingsForm`. The editor supports both **create** and **edit** modes; edit mode is entered when `ToolsetEditorQuery.Id` is present in the URL.
+The system SHALL render the Custom App editor through the generic `ApplicationEditorPage` with `kind = ApplicationEditorKind.CustomApp` (see `application-editor-registry`), on the unchanged route `ROUTES.CustomAppEditor` (`/custom-app-editor`). There is no dedicated `CustomAppEditor` component: the behaviour below is the shared `ApplicationFormEditor` (`apps/chat/src/pages/ApplicationEditor/ApplicationFormEditor.tsx`) driven by `customAppDefinition` (`apps/chat/src/pages/ApplicationEditor/definitions/customAppDefinition.tsx`); "`CustomAppEditor`" in this spec names that combination.
 
-`CustomAppEditor`'s page root SHALL use `className="flex min-h-0 flex-1 flex-col"` (`flex-1` growth, not `size-full`/`h-full`), matching `AppsEditor` and `ToolsetEditor` — see the "Apps-editor page renders two steps" requirement in `app-editor-flow` for why `flex-1` is required under the mobile-only global `Header`. `CustomAppEditorView`'s own root, in turn, SHALL use `className="flex h-full min-h-0"` (`h-full`, not `flex-1`): its parent (`CustomAppEditor`'s `<div className="size-full">` content wrapper) is a plain block element, not a flex container, so `flex-1` there would have no effect and the view would fall back to content-based (`auto`) height, leaving its `shrink-0` Cancel/Next footer un-pinned from the bottom of the viewport instead of sitting flush against it.
+The editor is a single page with the shared `EntityEditor` layout:
 
-#### Scenario: Bottom Cancel/Next buttons stay pinned to the viewport bottom
-- **WHEN** the General step is shown and its content is shorter than the available height
-- **THEN** the Cancel/Next button row still renders flush against the bottom of the viewport, not immediately below the form content
+- **Header.** A back arrow and the title `customApp.createTitle` ("Create custom app") or `customApp.editTitle` ("Edit custom app"). Cancel and a Create/Save button sit at the inline end.
+- **Metadata section (left).** The shared `MetadataForm`: Avatar, Name*, Version, Description, Locales, Tags. The Name and Description placeholders come from `customApp.general.*`.
+- **Setup section (right).** `CustomAppSetup`, with the four fields specified in "CustomAppSettingsForm fields".
+
+The editor SHALL NOT render a step indicator, a Next button or a footer button bar on desktop. The editor supports both **create** and **edit** modes. Edit mode is entered when `ToolsetEditorQuery.Id` is present in the URL.
+
+Create mode uses `ApplicationCreateStrategy.AllAtOnce`. Clicking Create or Save SHALL open the existing save `ConfirmationPopup` (`customApp.saveConfirm*`, title "Only valid data will be saved") before sending the request only when the definition's `needsConfirmation` holds — i.e. the Features data is not valid (`!isValidFeaturesData`); otherwise the request is sent directly. Blocking setup errors (Chat completion URL, MIME types) are reported before and instead of the confirmation.
 
 #### Scenario: Navigate to custom app editor (create)
 - **WHEN** user clicks "Custom App" in the catalog
@@ -23,22 +25,22 @@ The system SHALL provide a `CustomAppEditor` page that reuses `ToolsetEditorHead
 - **WHEN** user clicks the Edit button on a schema-less custom app in the catalog and `OverlayFeature.CustomApps` is enabled
 - **THEN** the app navigates to the Custom App Editor with `id=<applicationId>` (edit mode)
 
-#### Scenario: General step shown first
-- **WHEN** the editor opens
-- **THEN** the General step is active and `GeneralForm` is rendered
+#### Scenario: Metadata and Setup visible together
+- **WHEN** the editor opens at desktop width
+- **THEN** the "Metadata" section with the shared fields and the "Setup" section with Features data, Attachment types, Max attachments number and Chat completion URL are visible at the same time, with no step navigation
 
-#### Scenario: Settings step renders custom form
-- **WHEN** user proceeds to the Settings step
-- **THEN** `CustomAppSettingsForm` is rendered with four fields: Features data, Attachment types, Max attachments number, Chat completion URL
+#### Scenario: Sections stack on mobile
+- **WHEN** the editor opens at mobile width
+- **THEN** Metadata renders above Setup, and Cancel/Create render in the bottom action bar
 
 ### Requirement: CustomAppSettingsForm fields
-The `CustomAppSettingsForm` SHALL contain exactly four fields rendered in this order:
-1. **Features data** — `<Textarea>` with description "Enter key-value pairs for rate_endpoint and/or configuration_endpoint in JSON format." and JSON placeholder
+The Setup section, `CustomAppSetup` (`apps/chat/src/pages/ApplicationEditor/setup/CustomAppSetup.tsx`), SHALL contain exactly four fields rendered in this order:
+1. **Features data** — `<Textarea>` with caption "Enter key-value pairs for rate_endpoint and/or configuration_endpoint in JSON format." and JSON placeholder; an invalid value shows `customApp.settings.featuresDataInvalid` inline
 2. **Attachment types** — `<TagInput>` for MIME type entries
-3. **Max attachments number** — `<Input type="number">` with minimum value 0
-4. **Chat completion URL** — `<Input>` field, validated on blur as a valid absolute URL; distinct errors are shown for an empty value versus an invalid value
+3. **Max attachments number** — `<Input type="number">` labelled "Max. input attachments" with `min={0}`
+4. **Chat completion URL** — required `<Input>` field, validated on blur as a valid absolute URL; distinct errors are shown for an empty value (`customApp.settings.completionUrlRequired`) versus an invalid value (`customApp.settings.completionUrlInvalid`)
 
-The Save action on the Settings step SHALL stay disabled until the Chat completion URL is a valid absolute URL (`isValidAbsoluteUrl`), not merely non-empty.
+The Create/Save button SHALL NOT be disabled for validation reasons. A submit attempt while the Chat completion URL is not a valid absolute URL (`isValidAbsoluteUrl`), not merely non-empty, SHALL show the field error and send no request.
 
 #### Scenario: Chat completion URL blur validation — empty
 - **WHEN** the Chat completion URL field is empty and loses focus
@@ -48,9 +50,9 @@ The Save action on the Settings step SHALL stay disabled until the Chat completi
 - **WHEN** user enters a non-absolute-URL value in the Chat completion URL field and the field loses focus
 - **THEN** an "invalid URL" error message is shown
 
-#### Scenario: Save disabled until URL is valid
-- **WHEN** the Chat completion URL field does not hold a valid absolute URL
-- **THEN** the Save button is disabled
+#### Scenario: Save blocked until URL is valid
+- **WHEN** the Chat completion URL field does not hold a valid absolute URL and the user clicks Create or Save
+- **THEN** the Chat completion URL error is shown and no request is sent
 
 #### Scenario: Features data placeholder
 - **WHEN** the Features data textarea is empty
@@ -60,9 +62,9 @@ The Save action on the Settings step SHALL stay disabled until the Chat completi
 - **WHEN** the Features data textarea contains a JSON object with any key other than `rate_endpoint` or `configuration_endpoint`
 - **THEN** the field is treated as invalid, even if it also contains one of the allowed keys
 
-#### Scenario: Max attachments accepts only positive integers
-- **WHEN** user enters a value less than 1 in Max attachments number
-- **THEN** an error is shown
+#### Scenario: Max attachments accepts non-negative integers
+- **WHEN** user enters a number in Max attachments number
+- **THEN** it is parsed as an integer and the input enforces a minimum of 0, with no inline error
 
 #### Scenario: Attachment types tag input
 - **WHEN** user types a MIME type and confirms
@@ -87,31 +89,39 @@ On save in creation mode, `CustomAppEditor` SHALL NOT send `type` in the create 
 - **THEN** the create request body carries no `type` field and no `application_type_schema_id`
 
 ### Requirement: General step validation — name and version
-`CustomAppEditor` SHALL validate the `name` field as required and the `version` field against the shared `DeploymentCreationForm`'s exported `SEMVER_VERSION_PATTERN` (via `validateDeploymentCreationFields` from `@epam/ai-dial-builder-form`, passing `validateVersionPattern: SEMVER_VERSION_PATTERN`), stricter than that library's default character-set-only version pattern: a non-empty version must be one or more dot-separated numeric segments (e.g. `0.0.1`, `2.0`). Each field SHALL be re-validated on blur, independently of the other, so an error shown for one field does not get cleared by fixing the other. The Next button SHALL stay disabled while either field is invalid. The version-invalid error message SHALL be `"Version format is invalid (example: 0.0.1)"` (`appsEditor.generalForm.versionInvalid`).
+`CustomAppEditor` SHALL validate metadata through `useMetadataForm` with `validateVersionPattern: SEMVER_VERSION_PATTERN`. `name` is required. A non-empty version must be a SemVer 2.0.0 version (e.g. `1.0.0`, `1.0.0-beta`, `1.0.0+build`), the rule DIAL Admin applies.
+
+Each field's error SHALL appear once that field has been touched (on blur), independently of the other field. All errors SHALL appear on a submit attempt. The primary button SHALL NOT be disabled for validation reasons. Instead, a submit attempt with invalid metadata SHALL show the errors, focus the first invalid field and send no request.
+
+The version-invalid error message SHALL be `"Version must follow semantic versioning (e.g., 1.0.0)"` (`editor.versionInvalid`).
 
 #### Scenario: Name required error on blur
 - **WHEN** the Name field is blank and loses focus
 - **THEN** a name-required error is shown under the Name field
 
 #### Scenario: Version format error on blur
-- **WHEN** the Version field contains a value that is not entirely dot-separated numeric segments (e.g. contains letters) and loses focus
-- **THEN** a version-invalid error ("Version format is invalid (example: 0.0.1)") is shown under the Version field
+- **WHEN** the Version field contains a value that is not SemVer 2.0.0 (e.g. `1.2` or `abc`) and loses focus
+- **THEN** a version-invalid error ("Version must follow semantic versioning (e.g., 1.0.0)") is shown under the Version field
 
-#### Scenario: Next disabled while General step invalid
-- **WHEN** the Name or Version field currently holds an invalid value
-- **THEN** the Next button is disabled
+#### Scenario: Pre-release and build metadata are accepted
+- **WHEN** the Version field contains `1.0.0-beta` or `1.0.0+build` and loses focus
+- **THEN** no version error is shown
+
+#### Scenario: Submit attempt with invalid metadata
+- **WHEN** the Name or Version field holds an invalid value and the user clicks Create
+- **THEN** the errors are shown, focus moves to the first invalid field, and no request is sent
 
 ### Requirement: Save validation — name required
-`CustomAppEditor` SHALL re-check that `name` is filled when Save is activated from any step, and SHALL send no request while it is blank.
+The name-required check SHALL be performed once, by `useMetadataForm`, and SHALL NOT be duplicated in the page. Activating Create or Save while `name` is blank SHALL send no request.
 
-#### Scenario: Saving with a blank name returns to the General step
+#### Scenario: Saving with a blank name
 - **WHEN** user clicks Save and `name` is blank
-- **THEN** the editor redirects to the General step and shows a name-required error; no API call is made
+- **THEN** a name-required error is shown under Name, focus moves to Name, and no API call is made
 
 ### Requirement: Edit mode — load settings from backend
 When opening the editor in edit mode, `CustomAppEditor` SHALL pre-populate all Settings fields from the deployment details returned by `GET /api/v1/deployments/:id/details`.
 
-The backend (`DeploymentsService.buildApplicationDetails`) SHALL call `getCustomApplication(bucket, path)` for `applications/{bucket}/{path}` IDs to retrieve the full stored config (the model-listing endpoint does not expose `endpoint`). The resolved `endpoint` SHALL prefer `customAppRaw.endpoint`; `features` from `customAppRaw` SHALL be merged into `applicationProperties` so the Settings textarea receives them.
+The backend (`buildApplicationDetails` in `apps/chat-api/src/deployments/details/deployments-details.service.ts`) SHALL call `getCustomApplication(bucket, path)` for `applications/{bucket}/{path}` IDs to retrieve the full stored config (the model-listing endpoint does not expose `endpoint`). The resolved `endpoint` SHALL prefer `customAppRaw.endpoint`; the top-level `features` from `customAppRaw` SHALL be returned as `applicationDetails.customAppFeatures` (distinct from `applicationProperties`), which `loadSetup` serialises into the Features data textarea. If the details request fails, the editor shows `customApp.error.loadFailed` and navigates back to the catalog.
 
 > **Note:** DIAL Core expands stored features with all defaults when returning `getCustomApplication`. The textarea will show the full expanded object, not only what the user originally entered.
 
@@ -120,7 +130,7 @@ The backend (`DeploymentsService.buildApplicationDetails`) SHALL call `getCustom
 - **THEN** Chat completion URL, Features data, Attachment types, and Max attachments are pre-populated from the deployment details
 
 ### Requirement: Edit mode — deployment resolution waits for shared context
-`CustomAppEditor` SHALL populate `generalForm` (name, description, icon, version, topics, other locales) from the matching entry in `useDeployments().items`, and SHALL keep re-resolving that match whenever the deployments list updates until a match is found — not only once at mount. This covers the case where the editor is opened for a just-accepted shared item before `DeploymentsContext` has finished propagating the corrected shared-context entry (`isMy`/`canEdit`/`sharedWithMe`); the editor SHALL NOT get stuck showing empty/placeholder General fields for that item. Once a match is found and applied, it SHALL NOT be re-applied again for the same deployment id, so it never overwrites in-progress user edits. If the deployments list finishes loading (`useDeployments().isLoading` becomes `false`) without ever producing a match, `CustomAppEditor` SHALL stop waiting rather than block indefinitely.
+`CustomAppEditor` SHALL populate the metadata form (name, description, icon, version, topics, other locales) from the matching entry in `useDeployments().items`, resolved by `useEditedApplication` (`apps/chat/src/hooks/application-editor/useEditedApplication.ts`), and SHALL keep re-resolving that match whenever the deployments list updates until a match is found — not only once at mount. This covers the case where the editor is opened for a just-accepted shared item before `DeploymentsContext` has finished propagating the corrected shared-context entry (`isMy`/`canEdit`/`sharedWithMe`); the editor SHALL NOT get stuck showing empty/placeholder General fields for that item. Once a match is found and applied, it SHALL NOT be re-applied again for the same deployment id, so it never overwrites in-progress user edits. If the deployments list finishes loading (`useDeployments().isLoading` becomes `false`) without ever producing a match, `CustomAppEditor` SHALL stop waiting rather than block indefinitely.
 
 Settings-form fields fetched directly from `GET /api/v1/deployments/:id/details` SHALL be populated as soon as that response arrives, independently of whether the deployment list match has resolved yet.
 
@@ -133,10 +143,10 @@ Settings-form fields fetched directly from `GET /api/v1/deployments/:id/details`
 - **THEN** `CustomAppEditor` stops waiting and does not show the loading overlay indefinitely
 
 ### Requirement: Loading overlay while resolving edit-mode context
-After the initial `GET /api/v1/deployments/:id/details` request completes, if the matching deployment entry has not yet been resolved from `useDeployments().items`, `CustomAppEditor` SHALL render the same blocking overlay pattern used for saving (spinner plus a translated "Loading…" label) over the editor content and mark the underlying form `inert`, instead of showing the editor with incomplete General-step fields.
+While the edit-mode `GET /api/v1/deployments/:id/details` request is pending, or the matching deployment entry has not yet been resolved from `useDeployments().items` (`useEditedApplication().isResolving`), `CustomAppEditor` SHALL render the same blocking overlay pattern used for saving (spinner plus a translated "Loading…" label, `customApp.loadingOverlay`) over the editor content and mark the underlying form `inert`, instead of showing the editor with incomplete fields.
 
 #### Scenario: Overlay shown while deployment match is still resolving
-- **WHEN** edit mode has finished the initial details fetch but the deployment entry has not yet been resolved from the deployments list
+- **WHEN** edit mode is still fetching the details, or has finished it but the deployment entry has not yet been resolved from the deployments list
 - **THEN** a spinner overlay with an `aria-live` status label and a "Loading…" message is shown, and the editor form beneath it is `inert`
 
 #### Scenario: Overlay hidden once resolved
@@ -144,26 +154,26 @@ After the initial `GET /api/v1/deployments/:id/details` request completes, if th
 - **THEN** the loading overlay is removed and the editor form is interactive again
 
 ### Requirement: Edit mode — save settings
-On save in edit mode, `CustomAppEditor` SHALL call `PATCH /api/v1/applications/:id` with all changed General and Settings fields. The `UpdateApplicationBodyDto` accepts optional `version`, `endpoint`, `features`, `inputAttachmentTypes`, and `maxInputAttachments` in addition to the existing general fields. `type` and `applicationProperties` remain excluded from the update body.
+On save in edit mode, `CustomAppEditor` SHALL call `PATCH /api/v1/applications/:id` with the General and Settings fields. The `UpdateApplicationBodyDto` accepts optional `version`, `endpoint`, `features`, `inputAttachmentTypes`, and `maxInputAttachments` in addition to the existing general fields. The Custom App editor never sends `type` or `applicationProperties` in the update body.
 
 #### Scenario: Settings fields sent on edit save
 - **WHEN** user saves in edit mode
-- **THEN** `endpoint`, `features` (parsed JSON), `inputAttachmentTypes`, `maxInputAttachments`, and `version` are included in the PATCH body when non-empty
+- **THEN** `name`, `endpoint` (trimmed), `features` (parsed JSON), `inputAttachmentTypes`, `maxInputAttachments`, `version`, and the locale fields (`locales`/`primaryLocale`) are included in the PATCH body when non-empty
 
 ### Requirement: `UpdateApplicationBodyDto` — settings fields
-`UpdateApplicationBodyDto` SHALL accept the following optional settings fields:
-- `version` — string matching `/^[a-zA-Z0-9._-]+$/`
-- `endpoint` — URL string (protocol required, TLD not required)
+`UpdateApplicationBodyDto` (`apps/chat-api/src/applications/dto/update-application.dto.ts`) SHALL accept the following optional settings fields:
+- `version` — a SemVer 2.0.0 string matching `SEMVER_VERSION_PATTERN` (`apps/chat-api/src/common/validators/semver-version.pattern.ts`)
+- `endpoint` — URL string (protocol required, TLD not required, trailing dot allowed)
 - `features` — `Record<string, unknown>` object
-- `inputAttachmentTypes` — `string[]`
+- `inputAttachmentTypes` — `string[]`, each entry matching a MIME-type pattern such as `image/png`
 - `maxInputAttachments` — number ≥ 0
 
-`type` and `applicationProperties` remain excluded.
+`type` is not a DTO field. `applicationProperties` is an optional object (or `null`) used by schema-based editors: when supplied it fully replaces the stored `application_properties`; omitted or `null`, it leaves them unchanged. The Custom App editor does not send it.
 
 #### Scenario: Settings fields survive validation, excluded fields are rejected
 - **WHEN** an update body carries `version`, `endpoint`, `features`, `inputAttachmentTypes`, and `maxInputAttachments` with valid values
 - **THEN** the DTO validates and forwards all five
-- **AND** a body that also carries `type` or `applicationProperties` is rejected by the global validation pipe
+- **AND** a body that also carries `type` is rejected by the global validation pipe (`forbidNonWhitelisted`)
 
 ### Requirement: Saving overlay
 While a save request is in flight, `CustomAppEditor` SHALL render a blocking overlay (spinner plus a translated "Saving in progress…" label) over the editor content and mark the underlying form `inert` so it cannot be interacted with or reached by keyboard focus.
@@ -190,7 +200,7 @@ On a failed create/save request, `CustomAppEditor` SHALL extract the error messa
 - Create → `NotifiableEntity.CustomApp` + `EntityOperation.Created`, `name` = the application's name.
 - Save → `NotifiableEntity.CustomApp` + `EntityOperation.Edited`, same `name`.
 
-Today a successful save only navigates away, so a user who saves and lands back on the catalog has no confirmation that anything was persisted. The failure path is unchanged (see "Save/create failure surfaces API error details"): the error notification with `requestId` stays exactly as specified, and no success notification is raised.
+The success notification is raised after the deployments list is refetched. The failure path is unchanged (see "Save/create failure surfaces API error details"): the error notification with `requestId` stays exactly as specified, and no success notification is raised.
 
 #### Scenario: Create confirms and returns
 

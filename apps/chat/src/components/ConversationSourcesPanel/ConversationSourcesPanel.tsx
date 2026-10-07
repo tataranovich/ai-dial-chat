@@ -1,4 +1,5 @@
 import { useOpenAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
+import { findDeploymentByIdOrReference } from '@epam/ai-dial-chat-hooks';
 import {
   useAttachmentAction,
   isDownloadableAttachment,
@@ -14,12 +15,15 @@ import { usePanelMaxWidth } from '@epam/ai-dial-chat-hooks/viewport-layout';
 import type {
   AttachmentDisplayResolvers,
   DisplayAttachment,
+  Message,
 } from '@epam/ai-dial-chat-shared';
 import {
   MDMessageViewer,
   AttachmentType,
+  MIMEType,
   RequestStatus,
 } from '@epam/ai-dial-chat-shared';
+import { parsePdfPageReference } from '@epam/ai-dial-quotations';
 import {
   ScheduledTaskDetailsSummary,
   ScheduledTaskRunHistoryList,
@@ -44,6 +48,7 @@ import {
   AttachmentsI18nKeys,
   BasicI18nKeys,
   ButtonsI18nKeys,
+  ChatI18nKeys,
   ConversationPanelI18nKeys,
   ScheduledTasksI18nKeys,
   SidebarI18nKeys,
@@ -51,10 +56,15 @@ import {
 import { useActiveScheduledTask } from '../../context/ActiveScheduledTaskContext';
 import { useConversations } from '../../context/ConversationsContext';
 import { useDeployments } from '../../context/DeploymentsContext';
-import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
+import {
+  useSourcesSidebar,
+  useSourcesSidebarData,
+} from '../../context/SourcesSidebarContext';
 import { useAttachmentCanvasResolvers } from '../../hooks/attachment/useAttachmentCanvasResolvers';
 import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
 import { useLanguage } from '../../hooks/language/useLanguage';
+import { useScheduledTaskSkillDisplayNames } from '../../hooks/scheduled-tasks/useScheduledTaskSkillDisplayNames';
+import { useCloseSourcesSidebarOnSubjectChange } from '../../hooks/sources-sidebar/useCloseSourcesSidebarOnSubjectChange';
 import useLocalStorage from '../../hooks/useLocalStorage';
 import {
   ActiveScheduledTaskDetailState,
@@ -65,6 +75,9 @@ import { resolveDialFileDownloadUrl } from '../../utils/dial-file';
 import { resolveCatalogIconUrl } from '../../utils/icon-path';
 import { resolveLocalizedText } from '../../utils/locale';
 import { mapScheduledTaskRunDtosToItems } from '../../utils/map-scheduled-task-run-dto';
+
+/* Stable stand-in for the messages while the panel is closed. */
+const EMPTY_MESSAGES: Message[] = [];
 
 const MIN_PANEL_WIDTH = 312;
 const DEFAULT_PANEL_WIDTH = 360;
@@ -80,9 +93,17 @@ const attachmentDisplayResolvers: AttachmentDisplayResolvers = {
 const ConversationSourcesPanelContainer: FC = () => {
   const { t } = useTranslation();
   const { language } = useLanguage();
-  const { handleClose, isOpen, messages } = useSourcesSidebar();
+  const { handleClose, isOpen } = useSourcesSidebar();
+  const { messages, conversationModelId } = useSourcesSidebarData();
+  /*
+   * The panel mounts on every `/conversations/*` route even while closed, so
+   * this is the one mount point where the sidebar's reset rule runs wherever
+   * the sidebar can be open (the reset keys on the sidebar's subject, not the
+   * route param — see the hook's JSDoc).
+   */
+  useCloseSourcesSidebarOnSubjectChange();
   const { uploaded, generated, sources } = useConversationSources(
-    messages,
+    isOpen ? messages : EMPTY_MESSAGES,
     attachmentDisplayResolvers,
   );
   const { handleAttachmentClick: downloadAttachment } = useAttachmentAction({
@@ -91,6 +112,9 @@ const ConversationSourcesPanelContainer: FC = () => {
   const { resolvers, options } = useAttachmentCanvasResolvers();
   const { openAttachmentCanvas } = useOpenAttachmentCanvas(resolvers, options);
   const activeScheduledTask = useActiveScheduledTask();
+  const skillDisplayNames = useScheduledTaskSkillDisplayNames(
+    activeScheduledTask.task?.skillUrls,
+  );
   const { items: deploymentItems } = useDeployments();
   const { conversations } = useConversations();
   const navigate = useNavigate();
@@ -123,14 +147,24 @@ const ConversationSourcesPanelContainer: FC = () => {
     [navigate],
   );
 
-  const taskModel = activeScheduledTask.task?.model;
+  /*
+   * The Details section describes this run, so its Model field must show the
+   * deployment the run actually used — the run conversation's own model id,
+   * already published to the sources sidebar with its messages — not the
+   * schedule's current `model`, which a later edit may have changed after
+   * this run fired.
+   */
   const modelDisplayName = useMemo(() => {
-    if (!taskModel) return undefined;
-    const deployment = deploymentItems.find((item) => item.id === taskModel);
+    if (!conversationModelId) return undefined;
+    const deployment = findDeploymentByIdOrReference(
+      deploymentItems,
+      conversationModelId,
+    );
     return deployment
-      ? resolveLocalizedText(deployment.displayName, language) || taskModel
-      : taskModel;
-  }, [taskModel, deploymentItems, language]);
+      ? resolveLocalizedText(deployment.displayName, language) ||
+          conversationModelId
+      : conversationModelId;
+  }, [conversationModelId, deploymentItems, language]);
 
   const historyLabels = useMemo(
     () => ({
@@ -185,10 +219,19 @@ const ConversationSourcesPanelContainer: FC = () => {
       <ScheduledTaskDetailsSummary
         modelLabel={t(ScheduledTasksI18nKeys.ConversationPanelModelLabel)}
         instructionsLabel={t(ScheduledTasksI18nKeys.CreateInstructionsLabel)}
-        modelDisplayName={modelDisplayName as string}
+        skillLabel={t(ScheduledTasksI18nKeys.CreateSkillLabel)}
+        skillDisplayNames={skillDisplayNames}
+        modelDisplayName={modelDisplayName}
         instructionsMarkdown={activeScheduledTask.task?.prompt}
         renderInstructions={(markdown) => (
-          <MDMessageViewer content={markdown} />
+          <MDMessageViewer
+            content={markdown}
+            codeBlockCopyLabel={t(ButtonsI18nKeys.Copy)}
+            codeBlockCopiedLabel={t(ButtonsI18nKeys.Copied)}
+            codeBlockDownloadLabel={t(ButtonsI18nKeys.Download)}
+            tableScrollRegionAriaLabel={t(ChatI18nKeys.ScrollableTable)}
+            mathScrollRegionAriaLabel={t(ChatI18nKeys.ScrollableFormula)}
+          />
         )}
       />
     );
@@ -253,6 +296,34 @@ const ConversationSourcesPanelContainer: FC = () => {
         !isExternalSourcePreviewable(contentType, url)
       ) {
         window.open(url, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      /* A `…pdf#page=N` source goes through the canvas's reference-PDF
+       * resolver (it only runs for `referenceUrl` with no `url`), which keeps
+       * the page; the generic PDF path strips the fragment and opens page 1. */
+      const pageReference = parsePdfPageReference(url);
+      if (pageReference?.page != null) {
+        const pageAttachment: DisplayAttachment = {
+          id: url,
+          name: title,
+          contentType: MIMEType.PDF,
+          type: AttachmentType.File,
+          status: RequestStatus.Idle,
+          referenceUrl: url,
+        };
+        if (await openAttachmentCanvas(pageAttachment)) {
+          handleClose();
+          return;
+        }
+        if (isDialFileId(pageReference.baseUrl)) {
+          downloadAttachment({
+            ...pageAttachment,
+            referenceUrl: undefined,
+            url: pageReference.baseUrl,
+          });
+        } else {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        }
         return;
       }
       const resolvedContentType = resolveExternalSourceContentType(
@@ -323,6 +394,11 @@ const ConversationSourcesPanelContainer: FC = () => {
       copySourceLabel: t(ButtonsI18nKeys.CopyLink),
       sourceCopiedLabel: t(ButtonsI18nKeys.Copied),
       attachmentClickLabel: t(AttachmentsI18nKeys.Download),
+      codeBlockCopyLabel: t(ButtonsI18nKeys.Copy),
+      codeBlockCopiedLabel: t(ButtonsI18nKeys.Copied),
+      codeBlockDownloadLabel: t(ButtonsI18nKeys.Download),
+      tableScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableTable),
+      mathScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableFormula),
     }),
     [t],
   );

@@ -27,12 +27,12 @@
                     "version": {
                       "type": "string",
                       "example": "1.0.0",
-                      "description": "Application version. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Matches the appVersion reported by the client config endpoint."
+                      "description": "Application version. Sourced from CHAT_VERSION; falls back to the workspace root package.json version — the one the release pipeline stamps — when that env var is unset or blank. Matches the appVersion reported by the client config endpoint."
                     },
                     "buildId": {
                       "type": "string",
                       "example": "3f9a1c2b8e7d",
-                      "description": "Stable identifier for the running deployment, derived from a hash of the served frontend build. Changes when a new deployment replaces the frontend static assets, letting long-lived clients detect that a reload will pick up a newer build."
+                      "description": "Stable identifier for the running deployment, derived from a hash of the served frontend build, or of the application version when no frontend is bundled (BFF-only image). Changes when a new deployment replaces the frontend static assets or the version, letting long-lived clients detect that a reload will pick up a newer build."
                     }
                   }
                 }
@@ -41,7 +41,8 @@
           }
         },
         "summary": "Check application health status",
-        "tags": ["health"]
+        "tags": ["health"],
+        "security": []
       }
     },
     "/api/v1/auth/providers": {
@@ -64,7 +65,8 @@
           }
         },
         "summary": "List configured identity providers",
-        "tags": ["auth"]
+        "tags": ["auth"],
+        "security": []
       }
     },
     "/api/v1/auth/login/{providerId}": {
@@ -94,7 +96,8 @@
           }
         },
         "summary": "Start OIDC login flow",
-        "tags": ["auth"]
+        "tags": ["auth"],
+        "security": []
       }
     },
     "/api/v1/auth/callback/{providerId}": {
@@ -124,7 +127,8 @@
           }
         },
         "summary": "OIDC authorization callback",
-        "tags": ["auth"]
+        "tags": ["auth"],
+        "security": []
       }
     },
     "/api/v1/auth/logout": {
@@ -140,7 +144,8 @@
           }
         },
         "summary": "Log out and clear session cookie",
-        "tags": ["auth"]
+        "tags": ["auth"],
+        "security": []
       }
     },
     "/api/v1/auth/me": {
@@ -205,7 +210,8 @@
           }
         },
         "summary": "Get client-safe application configuration and feature flags",
-        "tags": ["app-config"]
+        "tags": ["app-config"],
+        "security": []
       }
     },
     "/api/v1/application-schemas": {
@@ -224,11 +230,29 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
           "403": {
             "description": "Caller lacks permission to list application schemas"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -281,6 +305,18 @@
           "404": {
             "description": "Schema not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate limit exceeded"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -308,11 +344,29 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
           "403": {
             "description": "Caller lacks permission to list applications"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -325,7 +379,7 @@
         "tags": ["applications"]
       },
       "post": {
-        "description": "Creates a new application for the authenticated session user by proxying DIAL Core. Invalidates the applications list cache on success.",
+        "description": "Creates a new application for the authenticated session user by proxying DIAL Core. Invalidates the applications list and deployments list caches on success.",
         "operationId": "createApplication",
         "parameters": [],
         "requestBody": {
@@ -355,8 +409,26 @@
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
+          "403": {
+            "description": "Caller lacks permission to create applications in their bucket"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
           "409": {
             "description": "Application name already taken"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
+          "502": {
+            "description": "DIAL Core returned an error response or an empty bucket"
           },
           "503": {
             "description": "DIAL Core is unavailable or timed out"
@@ -375,7 +447,7 @@
             "name": "applicationName",
             "required": true,
             "in": "path",
-            "description": "Application identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "description": "Application identifier. Slash-separated names must be percent-encoded in the URL (%2F). Empty, dot, and dot-dot path segments are rejected, including when encoded.",
             "schema": {
               "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
               "example": "my-app__1.0",
@@ -416,6 +488,18 @@
           "404": {
             "description": "Application not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -434,7 +518,7 @@
             "name": "applicationName",
             "required": true,
             "in": "path",
-            "description": "Application identifier. Slash-separated names must be percent-encoded in the URL (%2F).",
+            "description": "Application identifier. Slash-separated names must be percent-encoded in the URL (%2F). Empty, dot, and dot-dot path segments are rejected, including when encoded.",
             "schema": {
               "pattern": "^(?:[\\w.\\-:@/()]|%[\\dA-Fa-f]{2})+$",
               "example": "my-app__1.0",
@@ -457,6 +541,18 @@
           },
           "404": {
             "description": "Application not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -516,6 +612,21 @@
           "403": {
             "description": "Caller lacks permission"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -561,8 +672,23 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Deployment does not support configuration"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "Unexpected response from DIAL Core"
@@ -615,6 +741,18 @@
           "404": {
             "description": "Deployment limits not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "500": {
             "description": "Internal server error"
           },
@@ -663,8 +801,23 @@
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Deployment not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -679,9 +832,24 @@
     },
     "/api/v1/user/limits": {
       "get": {
-        "description": "Returns rate-limit and calendar-period usage statistics for every model deployment visible to the caller, plus the caller's global cost-budget figures. The day, week, and month stats cover the current UTC day, week, and month; each may carry a `resetsAt` instant, which the response forwards verbatim from DIAL Core. Proxies GET /v1/user/limits using the caller's session access token. Not cached — every request hits DIAL Core for real-time usage data.",
+        "description": "Returns rate-limit and calendar-period usage statistics for every deployment of the requested kinds visible to the caller, plus the caller's global cost-budget figures. `deploymentTypes` selects models and/or applications; when omitted, the server-configured default kinds are reported. A deployment's cost includes the cost of deployments it called, so per-deployment cost figures overlap and are not additive. The day, week, and month stats cover the current UTC day, week, and month; each may carry a `resetsAt` instant, which the response forwards verbatim from DIAL Core. Proxies GET /v1/user/limits using the caller's session access token. Not cached — every request hits DIAL Core for real-time usage data.",
         "operationId": "getUserLimits",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "deploymentTypes",
+            "required": false,
+            "in": "query",
+            "description": "Deployment kinds to report on, comma-separated or as repeated keys. When omitted, the server-configured default kinds are reported.",
+            "schema": {
+              "example": ["model", "application"],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["model", "application"]
+              }
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successfully retrieved aggregate user limits",
@@ -693,8 +861,29 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid `deploymentTypes` value"
+          },
           "401": {
             "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "500": {
             "description": "Internal server error"
@@ -712,9 +901,24 @@
     },
     "/api/v1/user/usage": {
       "get": {
-        "description": "Returns the same shape as GET /user/limits, restricted to deployments the caller actually used within the currently reported calendar periods (the current UTC day, week, and month). Each day, week, and month stat may carry a `resetsAt` instant, which the response forwards verbatim from DIAL Core. Proxies GET /v1/user/usage using the caller's session access token. Not cached — every request hits DIAL Core for real-time usage data.",
+        "description": "Returns the same shape as GET /user/limits, restricted to deployments the caller actually used within the currently reported calendar periods (the current UTC day, week, and month). Each day, week, and month stat may carry a `resetsAt` instant, which the response forwards verbatim from DIAL Core. `deploymentTypes` selects models and/or applications; when omitted, the server-configured default kinds are reported. A deployment's cost includes the cost of deployments it called, so per-deployment cost figures are not additive. Proxies GET /v1/user/usage using the caller's session access token. Not cached — every request hits DIAL Core for real-time usage data.",
         "operationId": "getUserUsage",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "deploymentTypes",
+            "required": false,
+            "in": "query",
+            "description": "Deployment kinds to report on, comma-separated or as repeated keys. When omitted, the server-configured default kinds are reported.",
+            "schema": {
+              "example": ["model", "application"],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["model", "application"]
+              }
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successfully retrieved user usage",
@@ -726,8 +930,29 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid `deploymentTypes` value"
+          },
           "401": {
             "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "500": {
             "description": "Internal server error"
@@ -758,8 +983,32 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
+          "502": {
+            "description": "DIAL Core returned a server error or an unexpected response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Get current user configuration",
@@ -789,6 +1038,30 @@
           },
           "401": {
             "description": "Not authenticated"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
+          "502": {
+            "description": "DIAL Core returned a server error or an unexpected response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Pin or unpin a conversation",
@@ -818,6 +1091,30 @@
           },
           "401": {
             "description": "Not authenticated"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
+          "502": {
+            "description": "DIAL Core returned a server error or an unexpected response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Install or uninstall a toolset",
@@ -847,6 +1144,30 @@
           },
           "401": {
             "description": "Not authenticated"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
+          "502": {
+            "description": "DIAL Core returned a server error or an unexpected response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Install or uninstall a deployment",
@@ -876,6 +1197,30 @@
           },
           "401": {
             "description": "Not authenticated"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
+          "502": {
+            "description": "DIAL Core returned a server error or an unexpected response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Add or remove a prompt from favorites",
@@ -905,6 +1250,30 @@
           },
           "401": {
             "description": "Not authenticated"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
+          "502": {
+            "description": "DIAL Core returned a server error or an unexpected response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Add or remove a skill from favorites",
@@ -929,8 +1298,35 @@
           "204": {
             "description": "Selected deployment updated"
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
+          "502": {
+            "description": "DIAL Core returned a server error or an unexpected response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Set the selected deployment",
@@ -953,11 +1349,29 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
           "403": {
             "description": "Caller lacks permission to list models"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "500": {
             "description": "Internal server error"
@@ -982,7 +1396,7 @@
             "name": "modelName",
             "required": true,
             "in": "path",
-            "description": "Model name (alphanumeric, dash, underscore, dot, colon, at-sign, and slash only)",
+            "description": "Model name (alphanumeric, dash, underscore, dot, colon, and at-sign only)",
             "schema": {
               "example": "gpt-4o",
               "type": "string"
@@ -1011,6 +1425,18 @@
           },
           "404": {
             "description": "Model not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "500": {
             "description": "Internal server error"
@@ -1042,11 +1468,29 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
           "403": {
             "description": "Caller lacks permission to list toolsets"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "500": {
             "description": "Internal server error"
@@ -1095,8 +1539,20 @@
           "403": {
             "description": "Caller lacks permission"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
           "409": {
             "description": "Toolset name already taken"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -1147,6 +1603,18 @@
           },
           "404": {
             "description": "Toolset not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "500": {
             "description": "Internal server error"
@@ -1209,6 +1677,18 @@
           "404": {
             "description": "Toolset not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -1249,6 +1729,18 @@
           },
           "404": {
             "description": "Toolset not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -1306,6 +1798,21 @@
           },
           "403": {
             "description": "Caller lacks permission"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -1367,6 +1874,18 @@
           "404": {
             "description": "Toolset not found (only reachable when `authenticationType` is omitted and the lookup fails)"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -1419,8 +1938,31 @@
           "404": {
             "description": "Toolset or resource not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "headers": {
+              "Retry-After": {
+                "description": "Upstream retry delay, when provided by DIAL Core",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "502": {
             "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Fetch a toolset's MCP Apps ui:// resource",
@@ -1471,11 +2013,37 @@
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Deployment not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "headers": {
+              "Retry-After": {
+                "description": "Upstream retry delay, when provided by DIAL Core",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "502": {
             "description": "DIAL Core's proxied tools/list failed"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "List MCP Apps-capable tools for an MCP-enabled deployment",
@@ -1526,11 +2094,37 @@
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Deployment not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "headers": {
+              "Retry-After": {
+                "description": "Upstream retry delay, when provided by DIAL Core",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "502": {
             "description": "DIAL Core's proxied tools/list failed"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "List every tool name exposed by an MCP-enabled deployment",
@@ -1586,8 +2180,31 @@
           "404": {
             "description": "Toolset not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "headers": {
+              "Retry-After": {
+                "description": "Upstream retry delay, when provided by DIAL Core",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "502": {
             "description": "DIAL Core's proxied tools/call failed"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Forward an MCP App's self-initiated tool call",
@@ -1622,8 +2239,26 @@
           "400": {
             "description": "Invalid request body"
           },
+          "401": {
+            "description": "Not authenticated, or DIAL Core rejected the session token"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Deployment not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "Unexpected response from DIAL Core"
@@ -1663,6 +2298,21 @@
           },
           "403": {
             "description": "The liveChatInteraction feature is not enabled for this user"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core rejected or failed the subscription"
@@ -1713,8 +2363,26 @@
           "403": {
             "description": "The liveChatInteraction feature is not enabled for this user"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Report an RPC response on the client channel",
@@ -1818,6 +2486,18 @@
           "404": {
             "description": "Application not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an invalid response"
           },
@@ -1880,8 +2560,23 @@
           "404": {
             "description": "External service not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Get application external-service metadata",
@@ -1946,8 +2641,26 @@
           "403": {
             "description": "Caller lacks permission, or the liveChatInteraction feature is not enabled"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response or rejected sign-in"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Submit external-service credentials",
@@ -2012,8 +2725,26 @@
           "403": {
             "description": "Caller lacks permission, or the liveChatInteraction feature is not enabled"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Revoke external-service credentials",
@@ -2049,8 +2780,35 @@
           "400": {
             "description": "Invalid request body — firstMessage or deploymentId missing or out of range"
           },
+          "401": {
+            "description": "Not authenticated, or DIAL Core rejected the session token"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "500": {
             "description": "Internal server error"
+          },
+          "502": {
+            "description": "DIAL Core returned a server error or an unexpected response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Create a new conversation",
@@ -2087,8 +2845,23 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Conversation not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core error"
@@ -2141,14 +2914,29 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Conversation not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core error"
           },
           "503": {
-            "description": "DIAL Core unreachable"
+            "description": "DIAL Core unreachable, or the conversation kept changing while it has a pending background answer; retry shortly"
           }
         },
         "summary": "Save (overwrite) a conversation by path",
@@ -2195,14 +2983,29 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Conversation not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core error"
           },
           "503": {
-            "description": "DIAL Core unreachable"
+            "description": "DIAL Core unreachable, or the conversation kept changing while it has a pending background answer; retry shortly"
           }
         },
         "summary": "Rename a conversation by path",
@@ -2232,8 +3035,23 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Conversation not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core error"
@@ -2291,6 +3109,24 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
           },
@@ -2344,8 +3180,23 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Conversation not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core error"
@@ -2403,7 +3254,16 @@
             "description": "Conversation not found"
           },
           "409": {
-            "description": "Another generation is already active for this conversation and principal"
+            "description": "Another generation is already active for this conversation and principal, or the conversation has a pending background answer (started by any instance or session)"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core error"
@@ -2439,6 +3299,9 @@
           },
           "404": {
             "description": "No active generation found for this principal for the given path and generationId"
+          },
+          "503": {
+            "description": "The stopped state of a background generation could not be saved; the generation keeps running and Stop can be retried"
           }
         },
         "summary": "Stop an active generation",
@@ -2503,8 +3366,29 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core subscription failed"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Subscribe to conversation resource updates via SSE",
@@ -2550,6 +3434,18 @@
           "404": {
             "description": "Conversation not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "LLM title generation failed"
           },
@@ -2593,8 +3489,23 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Source conversation not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core error"
@@ -2719,8 +3630,29 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Mark a conversation as viewed",
@@ -2775,6 +3707,18 @@
           },
           "404": {
             "description": "Conversation not found"
+          },
+          "409": {
+            "description": "An answer in the conversation is still being generated in the background; publish after it finishes"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -2836,6 +3780,18 @@
           "404": {
             "description": "Conversation not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -2883,6 +3839,24 @@
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -2910,11 +3884,35 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "List personal, shared, and organisation prompts",
@@ -2950,11 +3948,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
           "409": {
             "description": "Prompt already exists at that path"
           },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Create a personal prompt",
@@ -3002,14 +4018,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Prompt not found"
           },
           "409": {
             "description": "Rename target already exists"
           },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Update a personal or writable shared prompt",
@@ -3040,11 +4071,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Prompt not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Delete a personal or writable shared prompt",
@@ -3085,11 +4134,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Prompt not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Get a personal or shared prompt",
@@ -3111,11 +4178,35 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "List organisation prompts",
@@ -3155,11 +4246,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Prompt not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Get an organisation prompt",
@@ -3197,11 +4306,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
           "409": {
             "description": "Folder already exists"
           },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Create a prompt folder",
@@ -3249,14 +4376,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Folder not found"
           },
           "409": {
             "description": "Target folder already exists"
           },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Rename a prompt folder",
@@ -3287,11 +4429,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Folder not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Delete a prompt folder",
@@ -3341,14 +4501,29 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Prompt not found"
           },
           "409": {
             "description": "Target path already exists"
           },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core error"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable or timed out"
           }
         },
         "summary": "Move a personal or writable shared prompt to another folder",
@@ -3407,11 +4582,20 @@
           "403": {
             "description": "Forbidden"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
           "409": {
             "description": "File already exists (create-only mode)"
           },
           "413": {
             "description": "Payload too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error"
@@ -3467,11 +4651,23 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
           "413": {
             "description": "Archive exceeds ARCHIVE_UPLOAD_MAX_BYTES"
           },
           "422": {
             "description": "Archive exceeds ARCHIVE_UPLOAD_MAX_FILES or ARCHIVE_UPLOAD_MAX_UNCOMPRESSED_BYTES"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error"
@@ -3572,6 +4768,18 @@
           "404": {
             "description": "Bucket or path not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error"
           },
@@ -3645,8 +4853,23 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Path not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error"
@@ -3711,6 +4934,24 @@
           "401": {
             "description": "Not authenticated"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error"
           },
@@ -3753,6 +4994,24 @@
           },
           "401": {
             "description": "Not authenticated"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate limit exceeded"
           },
           "502": {
             "description": "DIAL Core returned an error"
@@ -3814,6 +5073,18 @@
           "404": {
             "description": "File not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error"
           },
@@ -3865,6 +5136,15 @@
           "409": {
             "description": "Folder already exists"
           },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error"
           },
@@ -3914,8 +5194,17 @@
           "404": {
             "description": "File or folder not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
           "413": {
             "description": "Too many items or archive too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error"
@@ -4133,6 +5422,18 @@
           "404": {
             "description": "A resource does not exist"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate limit exceeded"
+          },
           "502": {
             "description": "DIAL Core returned an error"
           },
@@ -4181,6 +5482,18 @@
           "404": {
             "description": "A resource does not exist"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate limit exceeded"
+          },
           "502": {
             "description": "DIAL Core returned an error"
           },
@@ -4189,6 +5502,29 @@
           }
         },
         "summary": "Discard resources shared with the caller",
+        "tags": ["files"]
+      }
+    },
+    "/api/v1/files/html-preview-frame": {
+      "get": {
+        "operationId": "getHtmlPreviewFrame",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Static HTML preview bootstrap document",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          }
+        },
+        "summary": "Bootstrap document that renders in-memory HTML under the sandboxed preview CSP",
         "tags": ["files"]
       }
     },
@@ -4241,6 +5577,18 @@
           "404": {
             "description": "File not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error"
           },
@@ -4275,6 +5623,24 @@
           },
           "401": {
             "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an unexpected response"
@@ -4318,6 +5684,24 @@
           },
           "400": {
             "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Not authenticated, or DIAL Core rejected the session token"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
           },
           "500": {
             "description": "ASR_MODEL is not configured"
@@ -4368,7 +5752,8 @@
           }
         },
         "summary": "Get themes configuration",
-        "tags": ["themes"]
+        "tags": ["themes"],
+        "security": []
       }
     },
     "/api/themes/icon": {
@@ -4426,7 +5811,8 @@
           }
         },
         "summary": "Get theme icon",
-        "tags": ["themes"]
+        "tags": ["themes"],
+        "security": []
       }
     },
     "/api/v1/share": {
@@ -4460,6 +5846,24 @@
           },
           "401": {
             "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -4506,8 +5910,23 @@
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
           "404": {
             "description": "Invitation not found, expired, or already revoked"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -4558,6 +5977,18 @@
           "404": {
             "description": "Resource does not exist"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -4601,6 +6032,24 @@
           },
           "401": {
             "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -4651,6 +6100,18 @@
           "404": {
             "description": "Resource does not exist"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -4678,14 +6139,32 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated"
           },
           "403": {
             "description": "Forbidden"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
-            "description": "DIAL Core returned an error"
+            "description": "DIAL Core returned an error, or an invalid listing page (a repeated page token)"
           },
           "503": {
             "description": "DIAL Core is unavailable"
@@ -4773,6 +6252,18 @@
           "404": {
             "description": "Grouping folder not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -4843,11 +6334,20 @@
           "403": {
             "description": "Forbidden"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
           "409": {
             "description": "A skill already exists at this path"
           },
           "413": {
             "description": "A file or the total content is too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -4932,14 +6432,23 @@
           "404": {
             "description": "Skill not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
           "412": {
             "description": "If-Match precondition failed — stale edit"
           },
           "413": {
             "description": "A file or the total content is too large"
           },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
           "428": {
             "description": "If-Match header is required for update"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5008,8 +6517,20 @@
           "404": {
             "description": "Skill not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
           "412": {
             "description": "If-Match precondition failed"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5110,6 +6631,18 @@
           "404": {
             "description": "Skill not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -5186,6 +6719,9 @@
           "405": {
             "description": "Method not allowed"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
           "412": {
             "description": "If-Match precondition failed"
           },
@@ -5194,6 +6730,9 @@
           },
           "422": {
             "description": "Core resource validation failure"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5272,8 +6811,20 @@
           "404": {
             "description": "File or skill not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
           "412": {
             "description": "If-Match precondition failed"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5334,6 +6885,18 @@
           },
           "404": {
             "description": "Skill not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5399,8 +6962,17 @@
           "405": {
             "description": "Method not allowed"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
           "422": {
             "description": "Unprocessable entity"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5461,6 +7033,9 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
@@ -5469,6 +7044,18 @@
           },
           "404": {
             "description": "File or skill not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5523,6 +7110,9 @@
           "403": {
             "description": "Forbidden"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
           "409": {
             "description": "A skill already exists at this path"
           },
@@ -5531,6 +7121,9 @@
           },
           "422": {
             "description": "Archive is structurally invalid: too many entries, more than one skill, duplicate paths, or an encrypted/symlink/unsupported entry (standalone SKILL.md uploads never produce this status)"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5570,7 +7163,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "201": {
             "description": "",
             "content": {
               "application/json": {
@@ -5590,7 +7183,19 @@
             "description": "Forbidden"
           },
           "404": {
-            "description": "Parent path not found"
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -5665,6 +7270,15 @@
           "412": {
             "description": "If-Match precondition failed"
           },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -5733,11 +7347,26 @@
           "403": {
             "description": "Caller lacks write access to the target folder"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
           "503": {
-            "description": "DIAL Core is unavailable or timed out"
+            "description": "The session user bucket could not be resolved because DIAL Core is unavailable (raised by session authentication; an unreachable DIAL Core during the call itself is reported as 502)"
           }
         },
         "summary": "Publish a catalog entity to an Organization folder",
@@ -5804,11 +7433,23 @@
           "404": {
             "description": "DIAL Core reports the entity or target folder as unknown"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
           "503": {
-            "description": "DIAL Core is unavailable or timed out"
+            "description": "The session user bucket could not be resolved because DIAL Core is unavailable (raised by session authentication; an unreachable DIAL Core during the call itself is reported as 502)"
           }
         },
         "summary": "Request removal of a published catalog entity from a folder",
@@ -5862,6 +7503,24 @@
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
@@ -5906,11 +7565,29 @@
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response"
           },
           "503": {
-            "description": "DIAL Core is unavailable or timed out"
+            "description": "The session user bucket could not be resolved because DIAL Core is unavailable (raised by session authentication; an unreachable DIAL Core during the call itself is reported as 502)"
           }
         },
         "summary": "Get a destination folder's already-configured access rules",
@@ -5981,7 +7658,14 @@
             }
           },
           "400": {
-            "description": "Invalid limit, offset, or search query parameter"
+            "description": "Invalid limit, offset, or search query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Not authenticated"
@@ -5989,8 +7673,58 @@
           "403": {
             "description": "The scheduledTasksEnabled feature is not enabled for this user"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
           "502": {
-            "description": "DIAL Core returned an error response"
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "503": {
             "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
@@ -6000,7 +7734,7 @@
         "tags": ["scheduled-tasks"]
       },
       "post": {
-        "description": "Creates a DIAL Scheduler schedule that runs a chat completion on the given model and prompt, using the OAuth external-service id configured via SCHEDULER_SERVICE_ID. Invalidates the scheduled tasks list cache on success.",
+        "description": "Creates a DIAL Scheduler schedule that runs a chat completion on the given model and prompt or skill, using the OAuth external-service id configured via SCHEDULER_SERVICE_ID. Invalidates the scheduled tasks list cache on success.",
         "operationId": "createScheduledTask",
         "parameters": [],
         "requestBody": {
@@ -6025,16 +7759,87 @@
             }
           },
           "400": {
-            "description": "Validation error — missing or invalid fields"
+            "description": "Validation error — missing or invalid fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Not authenticated"
           },
           "403": {
-            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+            "description": "Feature disabled, selected model is inaccessible, or an administrator revoked the DIAL_NATIVE scheduler consent (code scheduledTaskAdminConsentRequired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Selected model is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "502": {
-            "description": "DIAL Core returned an error response"
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "503": {
             "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
@@ -6073,7 +7878,14 @@
             }
           },
           "400": {
-            "description": "Invalid scheduleId"
+            "description": "Invalid scheduleId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Not authenticated"
@@ -6084,8 +7896,55 @@
           "404": {
             "description": "Scheduled task not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
           "502": {
-            "description": "DIAL Core returned an error response"
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "503": {
             "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
@@ -6095,7 +7954,7 @@
         "tags": ["scheduled-tasks"]
       },
       "put": {
-        "description": "Updates an existing DIAL Scheduler schedule for the authenticated session user. Invalidates the scheduled tasks list cache on success.",
+        "description": "Updates an existing DIAL Scheduler schedule for the authenticated session user. Omitting skillUrls preserves saved references; [] removes them. Invalidates the scheduled tasks list cache on success.",
         "operationId": "updateScheduledTask",
         "parameters": [
           {
@@ -6132,19 +7991,87 @@
             }
           },
           "400": {
-            "description": "Validation error — invalid scheduleId or body fields"
+            "description": "Validation error — invalid scheduleId or body fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Not authenticated"
           },
           "403": {
-            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+            "description": "Feature disabled, selected model is inaccessible, or an administrator revoked the DIAL_NATIVE scheduler consent (code scheduledTaskAdminConsentRequired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Scheduled task not found"
+            "description": "Scheduled task or selected model not found; deployment errors carry scheduledTaskDeploymentUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "502": {
-            "description": "DIAL Core returned an error response"
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "503": {
             "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
@@ -6174,7 +8101,14 @@
             "description": "Scheduled task deleted successfully (empty body)"
           },
           "400": {
-            "description": "Invalid scheduleId"
+            "description": "Invalid scheduleId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Not authenticated"
@@ -6186,10 +8120,54 @@
             "description": "Scheduled task not found, owned by another user, or already hard-deleted"
           },
           "409": {
-            "description": "Scheduled task is already soft-deleted"
+            "description": "Scheduled task is already soft-deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "502": {
-            "description": "DIAL Scheduler could not unregister the job; no data changed and retrying is safe"
+            "description": "DIAL Scheduler could not unregister the job; no data changed and retrying is safe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "503": {
             "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
@@ -6253,7 +8231,14 @@
             }
           },
           "400": {
-            "description": "Invalid scheduleId, limit, or offset"
+            "description": "Invalid scheduleId, limit, or offset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Not authenticated"
@@ -6264,14 +8249,298 @@
           "404": {
             "description": "Scheduled task not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
           "502": {
-            "description": "DIAL Core returned an error response"
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "503": {
             "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
           }
         },
         "summary": "List a scheduled task run history",
+        "tags": ["scheduled-tasks"]
+      }
+    },
+    "/api/v1/scheduled-tasks/{scheduleId}/runs/{runId}": {
+      "get": {
+        "description": "Returns one DIAL Scheduler run for an owned schedule, proxying the Scheduler using the session access token. Not cached.",
+        "operationId": "getScheduledTaskRun",
+        "parameters": [
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "description": "DIAL Scheduler schedule identifier.",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "example": "sched_123",
+              "type": "string"
+            }
+          },
+          {
+            "name": "runId",
+            "required": true,
+            "in": "path",
+            "description": "DIAL Scheduler run identifier.",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "example": "run_9f2a",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved the scheduled task run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskRunDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scheduleId or runId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+          },
+          "404": {
+            "description": "Scheduled task run not found or not owned by the current user"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Scheduler rate limited the run status request",
+            "headers": {
+              "Retry-After": {
+                "description": "Scheduler retry delay in seconds or an HTTP date, when supplied.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "Get one scheduled task run",
+        "tags": ["scheduled-tasks"]
+      }
+    },
+    "/api/v1/scheduled-tasks/{scheduleId}/run": {
+      "post": {
+        "description": "Starts the saved DIAL Scheduler definition immediately for the authenticated session user. The request has no body, does not wait for completion, and does not change the schedule.",
+        "operationId": "startScheduledTask",
+        "parameters": [
+          {
+            "name": "scheduleId",
+            "required": true,
+            "in": "path",
+            "description": "DIAL Scheduler schedule identifier.",
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "example": "sched_123",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Scheduled task run accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskRunDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scheduleId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "The scheduledTasksEnabled feature is not enabled for this user or the request failed CSRF validation"
+          },
+          "404": {
+            "description": "Scheduled task not found or not owned by the current user"
+          },
+          "409": {
+            "description": "Scheduled task is soft-deleted and cannot be started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Scheduler rate limited the start request",
+            "headers": {
+              "Retry-After": {
+                "description": "Scheduler retry delay in seconds or an HTTP date, when supplied.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
+          }
+        },
+        "summary": "Start a scheduled task immediately",
         "tags": ["scheduled-tasks"]
       }
     },
@@ -6304,7 +8573,14 @@
             }
           },
           "400": {
-            "description": "Invalid scheduleId"
+            "description": "Invalid scheduleId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Not authenticated"
@@ -6315,8 +8591,55 @@
           "404": {
             "description": "Scheduled task not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
           "502": {
-            "description": "DIAL Core returned an error response"
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "503": {
             "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
@@ -6355,19 +8678,80 @@
             }
           },
           "400": {
-            "description": "Invalid scheduleId"
+            "description": "Invalid scheduleId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Not authenticated"
           },
           "403": {
-            "description": "The scheduledTasksEnabled feature is not enabled for this user"
+            "description": "Feature disabled, or an administrator revoked the DIAL_NATIVE scheduler consent (code scheduledTaskAdminConsentRequired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "404": {
             "description": "Scheduled task not found"
           },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "DIAL Core could not process the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
+          },
           "502": {
-            "description": "DIAL Core returned an error response"
+            "description": "DIAL Core returned an error response (upstreamMessage/upstreamCode carry DIAL Scheduler's own reason and code when supplied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledTaskValidationErrorDto"
+                }
+              }
+            }
           },
           "503": {
             "description": "DIAL Core is unavailable, timed out, or SCHEDULER_APP_ID is not configured"
@@ -6393,11 +8777,29 @@
               }
             }
           },
+          "400": {
+            "description": "DIAL Core rejected the request as invalid"
+          },
           "401": {
             "description": "Not authenticated — valid session cookie required"
           },
           "403": {
             "description": "Caller lacks permission, or neither scheduledTasksEnabled nor liveChatInteraction is enabled"
+          },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
           },
           "502": {
             "description": "DIAL Core returned an error response"
@@ -6445,6 +8847,21 @@
           "403": {
             "description": "Caller lacks permission, or neither scheduledTasksEnabled nor liveChatInteraction is enabled"
           },
+          "404": {
+            "description": "DIAL Core resource not found"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "413": {
+            "description": "DIAL Core rejected the payload as too large"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "DIAL Core rate-limited the request"
+          },
           "502": {
             "description": "DIAL Core returned an error response or rejected sign-in"
           },
@@ -6454,6 +8871,124 @@
         },
         "summary": "Submit offline-credentials OAuth authorization code",
         "tags": ["offline-credentials"]
+      }
+    },
+    "/api/v1/text-refinement": {
+      "post": {
+        "description": "Rewrite one field using a server-owned prompt and the caller credentials. Does not save or cache drafts. Scheduled-task purposes require scheduled-task access.",
+        "operationId": "refineText",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefineTextRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Complete refined text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefineTextResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid purpose, text, length or unknown body fields"
+          },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "403": {
+            "description": "CSRF, feature or model permission denied"
+          },
+          "413": {
+            "description": "Global request body limit exceeded"
+          },
+          "429": {
+            "description": "DIAL Core quota or rate limit exceeded"
+          },
+          "502": {
+            "description": "Upstream failure or invalid/incomplete output"
+          },
+          "503": {
+            "description": "Model unconfigured, network unavailable or 30-second deadline exceeded"
+          }
+        },
+        "summary": "Refine an authoring draft",
+        "tags": ["text-refinement"]
+      }
+    },
+    "/api/v1/custom-api/{id}": {
+      "get": {
+        "description": "Dispatches an authenticated GET request to the exact Core path configured for this operation ID under CUSTOM_CORE_API_CONFIG, using the caller's own session access token. Accepts no query parameters and no request body. Core remains the authority for route role authorization and business rate limits; this endpoint adds no BFF business schema or field filtering, so the response is an opaque JSON value the calling application must validate for its own domain.",
+        "operationId": "getCustomApiOperation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Operation ID from the deployment-configured CUSTOM_CORE_API_CONFIG registry.",
+            "schema": {
+              "pattern": "^[a-z][a-z0-9-]{0,63}$",
+              "example": "data-products",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The configured operation succeeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomApiResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid operation ID, or a query/body value was supplied"
+          },
+          "401": {
+            "description": "Not authenticated — valid session cookie required"
+          },
+          "403": {
+            "description": "DIAL Core denied access to the resource"
+          },
+          "404": {
+            "description": "No operation is configured for this ID, or DIAL Core reported the resource as not found"
+          },
+          "405": {
+            "description": "Only GET is supported for custom API operations"
+          },
+          "409": {
+            "description": "DIAL Core reported a conflict with the current resource state"
+          },
+          "422": {
+            "description": "DIAL Core could not process the request"
+          },
+          "429": {
+            "description": "Local in-flight call capacity exhausted, or DIAL Core rate-limited the call"
+          },
+          "502": {
+            "description": "DIAL Core returned an error, a redirect, or an invalid/oversized response"
+          },
+          "503": {
+            "description": "DIAL Core is unreachable"
+          },
+          "504": {
+            "description": "DIAL Core request exceeded its configured deadline"
+          }
+        },
+        "summary": "Call a deployment-configured custom Core API operation",
+        "tags": ["custom-api"]
       }
     }
   },
@@ -6487,6 +9022,10 @@
     {
       "name": "deployments",
       "description": "List deployments available to the authenticated user"
+    },
+    {
+      "name": "custom-api",
+      "description": "Deployment-configured custom Core API operations (CUSTOM_CORE_API_CONFIG)"
     }
   ],
   "servers": [
@@ -6497,10 +9036,11 @@
   ],
   "components": {
     "securitySchemes": {
-      "cookie": {
+      "session": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "session"
+        "name": "__Host-chat.sess",
+        "description": "Encrypted session cookie set by the OIDC login callback. The name is configurable (AUTH_SESSION_COOKIE_NAME, default shown); the `__Host-` prefix is dropped when AUTH_COOKIE_SECURE=false, and a large session is split across numbered chunk cookies. Cookie-authenticated mutating requests also require the X-CSRF-Token header."
       },
       "bearer": {
         "scheme": "bearer",
@@ -6607,6 +9147,16 @@
           "passExplicitToken": {
             "type": "boolean",
             "description": "Whether the host should pass an explicit access token. Accepted for schema parity; inert, because 1.0 auth is server-side and the browser holds no access token.",
+            "example": false
+          },
+          "borderless": {
+            "type": "boolean",
+            "description": "When true, the inline frame renders without its border, rounded corners, background, and header divider. Carried over from legacy Chat 0.x.",
+            "example": false
+          },
+          "withoutTitle": {
+            "type": "boolean",
+            "description": "When true, the inline frame hides its header title text; the header actions stay visible. Carried over from legacy Chat 0.x.",
             "example": false
           }
         },
@@ -6719,9 +9269,20 @@
       "ClientConfigDto": {
         "type": "object",
         "properties": {
+          "aiTextRefinementAvailable": {
+            "type": "boolean",
+            "description": "Whether a text refinement model is configured. Missing means unavailable.",
+            "example": false
+          },
+          "activeEventId": {
+            "type": "string",
+            "description": "Active start-page celebration module ID selected by UI_EVENT. Null when UI_EVENT is absent or none. Event IDs are open-ended; clients ignore IDs not present in their local registry.",
+            "nullable": true,
+            "example": "new-year"
+          },
           "appVersion": {
             "type": "string",
-            "description": "Version string of the running chat application. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Always a non-empty string.",
+            "description": "Version string of the running chat application. Sourced from CHAT_VERSION; falls back to the workspace root package.json version — the one the release pipeline stamps — when that env var is unset or blank. Always a non-empty string.",
             "example": "0.45.0"
           },
           "asrModelId": {
@@ -6761,7 +9322,7 @@
           },
           "mcpAppUserAgent": {
             "type": "string",
-            "description": "Host application identifier sent to MCP App Views in hostContext.userAgent. Null when MCP_APP_USER_AGENT is not configured — defaults to \"ai-dial-chat\" on the client.",
+            "description": "Host application identifier sent to MCP App Views in hostContext.userAgent. Null when MCP_APP_USER_AGENT is not configured — the client then falls back to the browser's navigator.userAgent.",
             "nullable": true
           },
           "mcpAppHostName": {
@@ -6770,8 +9331,8 @@
             "nullable": true
           },
           "fileManagerTabs": {
-            "description": "Which File Manager tabs are shown to users. Defaults to all three currently-supported tabs.",
-            "example": ["my_files", "shared", "organization"],
+            "description": "Which File Manager tabs are shown to users. Defaults to the All tab plus the three source tabs.",
+            "example": ["all", "my_files", "shared", "organization"],
             "type": "array",
             "items": {
               "type": "string"
@@ -6785,6 +9346,15 @@
           "overlayAllowedOrigins": {
             "description": "Host origins allowed to embed this app. Sourced from ALLOWED_IFRAME_ORIGINS, the same list used for CSP frame-ancestors/frame-src.",
             "example": ["https://partner.example.com"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedConnectOrigins": {
+            "description": "Trusted HTTP(S) connection origins from ALLOWED_CONNECT_ORIGINS, including leading *. subdomain patterns. PDF previews use browser credentials for matching external origins and reject redirects. Empty by default; upstream credentialed CORS and browser cookie policy still apply.",
+            "default": [],
+            "example": ["https://documents.example.com"],
             "type": "array",
             "items": {
               "type": "string"
@@ -6875,6 +9445,7 @@
           }
         },
         "required": [
+          "activeEventId",
           "appVersion",
           "asrModelId",
           "transcribeSizeLimitBytes",
@@ -7056,7 +9627,8 @@
         "properties": {
           "name": {
             "type": "string",
-            "example": "My App"
+            "example": "My App",
+            "maxLength": 256
           },
           "type": {
             "type": "string",
@@ -7065,7 +9637,8 @@
           },
           "description": {
             "type": "string",
-            "example": "A custom application."
+            "example": "A custom application.",
+            "maxLength": 2000
           },
           "iconUrl": {
             "type": "string",
@@ -7074,7 +9647,7 @@
           },
           "version": {
             "type": "string",
-            "example": "1.0"
+            "example": "1.0.0"
           },
           "topics": {
             "example": ["nlp", "assistant"],
@@ -7143,11 +9716,13 @@
         "properties": {
           "name": {
             "type": "string",
-            "example": "My App"
+            "example": "My App",
+            "maxLength": 256
           },
           "description": {
             "type": "string",
-            "example": "A custom application."
+            "example": "A custom application.",
+            "maxLength": 2000
           },
           "iconUrl": {
             "type": "string",
@@ -7269,6 +9844,10 @@
           "skillsSupported": {
             "type": "boolean",
             "description": "Whether the deployment supports custom skills in chat requests"
+          },
+          "tools": {
+            "type": "boolean",
+            "description": "Whether the deployment supports tools/functions in chat completion requests"
           }
         },
         "required": ["systemPrompt", "temperature"]
@@ -8025,7 +10604,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/DeploymentLimitsResponseDto"
             },
-            "description": "Per-deployment rate-limit and calendar-period usage stats, keyed by deployment name. Models only — applications, toolsets, and routes never appear here. On GET /v1/user/limits every deployment visible to the caller is present, including ones never used (reported against zero usage). On GET /v1/user/usage only deployments the caller used within the currently reported calendar periods are present; absence means zero usage, not \"unknown\"."
+            "description": "Per-deployment rate-limit and calendar-period usage stats, keyed by deployment name. Contains only the deployment kinds selected by the request `deploymentTypes` (models and/or applications); when the request omits it, the server-configured default kinds are reported (models and applications unless USER_USAGE_DEPLOYMENT_TYPES narrows them). Toolsets and routes never appear here. On GET /v1/user/limits every deployment of those kinds visible to the caller is present, including ones never used (reported against zero usage). On GET /v1/user/usage only deployments the caller used within the currently reported calendar periods are present; absence means zero usage, not \"unknown\"."
           },
           "minuteCostStats": {
             "description": "The caller's global cost budget for the current UTC minute and spend against it. Unlike the identically-named field nested inside a `deployments` entry (that is per-deployment attributed spend whose `total` is the unlimited sentinel in every payload observed to date; consumers detect the sentinel rather than assume it), this is the caller's actual money budget. A `total` at or above 9007199254740992 (2^53) represents the upstream \"unlimited\" sentinel (`Long.MAX_VALUE`, which exceeds `Number.MAX_SAFE_INTEGER`) and must be treated as unlimited rather than rendered as a used/total ratio.",
@@ -8908,7 +11487,8 @@
         "properties": {
           "name": {
             "type": "string",
-            "example": "My toolset"
+            "example": "My toolset",
+            "maxLength": 256
           },
           "version": {
             "type": "string",
@@ -8916,7 +11496,8 @@
           },
           "description": {
             "type": "string",
-            "example": "My toolset description"
+            "example": "My toolset description",
+            "maxLength": 2000
           },
           "iconUrl": {
             "type": "string",
@@ -9196,6 +11777,12 @@
             "items": {
               "$ref": "#/components/schemas/StageAttachmentDto"
             }
+          },
+          "parent_stage_index": {
+            "type": "integer",
+            "description": "Index of the parent stage. In a streaming delta it is the parent's streaming `index` and is sent only on the chunk that opens the child; in a complete array without `index` values it is the parent's array position. Absent for a top-level stage",
+            "minimum": 0,
+            "example": 0
           }
         }
       },
@@ -9861,6 +12448,36 @@
           }
         }
       },
+      "BackgroundGenerationStatus": {
+        "type": "string",
+        "enum": ["pending", "completed", "stopped", "failed"],
+        "description": "pending while the job runs or its result is not saved yet; completed, stopped or failed once the final state is saved."
+      },
+      "BackgroundGenerationDto": {
+        "type": "object",
+        "properties": {
+          "generationId": {
+            "type": "string",
+            "description": "Client-supplied generation id of the request that started the background job; identifies this message across saves.",
+            "example": "2d0b6c8e-5f7a-4c1b-9e3d-1a2b3c4d5e6f"
+          },
+          "status": {
+            "description": "pending while the job runs or its result is not saved yet; completed, stopped or failed once the final state is saved.",
+            "example": "pending",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BackgroundGenerationStatus"
+              }
+            ]
+          },
+          "startedAt": {
+            "type": "number",
+            "description": "Server time (epoch ms) at which the pending placeholder was saved.",
+            "example": 1790000000000
+          }
+        },
+        "required": ["generationId", "status", "startedAt"]
+      },
       "ConversationMessageDto": {
         "type": "object",
         "properties": {
@@ -9892,8 +12509,16 @@
           },
           "responseId": {
             "type": "string",
-            "description": "DIAL Responses API id for this message, set only when the generation was routed through the Responses adapter. Diagnostic only — never used to resume a generation (previous_response_id/conversation are never sent).",
+            "description": "DIAL Responses API id for this message, set only when the generation was routed through the Responses adapter. On the stateless path it is diagnostic only; on the background path it is also the key used to recover, replay, stop and clean up the DIAL Core job. Never sent as previous_response_id/conversation.",
             "example": "dial-gpt-4o-3c1a7e6e-...-uuid"
+          },
+          "backgroundGeneration": {
+            "description": "Present only on an assistant message produced by a DIAL Core background Responses job. Server-owned: client saves cannot change it while its status is pending.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BackgroundGenerationDto"
+              }
+            ]
           },
           "deploymentId": {
             "type": "string",
@@ -9968,6 +12593,14 @@
             "type": "boolean",
             "example": false,
             "description": "When true, automatic LLM conversation naming has already run for this conversation."
+          },
+          "customViewState": {
+            "type": "object",
+            "additionalProperties": true,
+            "example": {
+              "annotations": []
+            },
+            "description": "Open, feature-keyed container for conversation-level view state. Currently defines exactly one key, `annotations`, holding the pool of html_tag citation annotations accumulated across the conversation. Any other key is opaque and preserved as-is."
           }
         },
         "required": [
@@ -9996,6 +12629,11 @@
             "type": "string",
             "description": "Human-readable conversation title (the resource `name` from DIAL Core).",
             "example": "My chat"
+          },
+          "createdAt": {
+            "type": "number",
+            "description": "Unix epoch milliseconds of the resource creation, as reported by DIAL Core metadata. Absent when DIAL Core does not report it, and always absent for conversations shared with the current user.",
+            "example": 1749600000000
           },
           "updatedAt": {
             "type": "number",
@@ -10210,6 +12848,11 @@
             "type": "string",
             "description": "Conversation path of the active generation.",
             "example": "gpt-4o__My Conversation__cfeaf733-4ecd-4898-ad3b-d6835c0b5fc8"
+          },
+          "content": {
+            "type": "string",
+            "description": "Answer text the client has shown so far. Saved as the stopped answer of a background generation, whose text the backend never assembles; ignored for every other generation, whose answer the backend already holds.",
+            "maxLength": 1000000
           }
         },
         "required": ["generationId", "path"]
@@ -10926,7 +13569,7 @@
           },
           "name": {
             "type": "string",
-            "description": "Display name for archive entry",
+            "description": "Display name for archive entry; a single path segment (no \"/\", \"\\\", \".\" or \"..\")",
             "example": "reports"
           },
           "nodeType": {
@@ -11499,7 +14142,7 @@
           },
           "expiresInDays": {
             "type": "number",
-            "description": "Number of days the link stays active before expiring.",
+            "description": "Days until the DIAL Core invitation expires, rounded up. Omitted when DIAL Core does not report a usable expiry.",
             "example": 3
           },
           "access": {
@@ -11512,7 +14155,7 @@
             }
           }
         },
-        "required": ["url", "expiresInDays", "access"]
+        "required": ["url", "access"]
       },
       "SkillMetadataItemDto": {
         "type": "object",
@@ -12083,6 +14726,11 @@
             "type": "boolean",
             "example": true
           },
+          "isCompleted": {
+            "type": "boolean",
+            "example": true,
+            "description": "True when the schedule can no longer produce a future run: either a one-time (date-trigger) schedule whose newest run terminated with Success or Error, or a recurring schedule whose cron activity window has closed with no upcoming run. Undefined when the run-history check failed; computed by ScheduledTasksService, not by fromUpstreamSchedule (which cannot see runs)."
+          },
           "isDeleted": {
             "type": "boolean",
             "example": false
@@ -12106,6 +14754,13 @@
           "prompt": {
             "type": "string",
             "example": "Summarize my inbox"
+          },
+          "skillUrls": {
+            "example": ["skills/public/daily-summary"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": ["id", "displayName", "trigger"]
@@ -12149,12 +14804,70 @@
         },
         "required": ["items"]
       },
+      "ScheduledTaskErrorCode": {
+        "type": "string",
+        "enum": [
+          "scheduledTaskSkillUnsupported",
+          "scheduledTaskInstructionsOrSkillRequired",
+          "scheduledTaskDeploymentUnavailable",
+          "scheduledTaskAdminConsentRequired"
+        ]
+      },
+      "ScheduledTaskValidationErrorDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 400
+          },
+          "message": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "error": {
+            "type": "string",
+            "example": "Bad Request"
+          },
+          "code": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScheduledTaskErrorCode"
+              }
+            ]
+          },
+          "field": {
+            "type": "string",
+            "example": "skillUrls"
+          },
+          "upstreamMessage": {
+            "type": "string",
+            "example": "Application consent revoked",
+            "description": "DIAL Scheduler's own error reason, trimmed and capped at 1000 characters. Never present for 401/403/404."
+          },
+          "upstreamCode": {
+            "type": "string",
+            "example": "consent_revoked",
+            "description": "DIAL Scheduler's own error code (matches ^[A-Za-z0-9_.:-]{1,128}$). Never present for 401/403/404."
+          }
+        },
+        "required": ["statusCode", "message", "error"]
+      },
       "CreateScheduledTaskBodyDto": {
         "type": "object",
         "properties": {
           "displayName": {
             "type": "string",
-            "example": "Daily summary"
+            "example": "Daily summary",
+            "maxLength": 256
           },
           "trigger": {
             "$ref": "#/components/schemas/ScheduleTriggerDto"
@@ -12165,7 +14878,17 @@
           },
           "prompt": {
             "type": "string",
-            "example": "Summarize my inbox"
+            "example": "Summarize my inbox",
+            "description": "Instructions; may be empty when the effective task has a skill.",
+            "maxLength": 50000
+          },
+          "skillUrls": {
+            "example": ["skills/public/daily-summary"],
+            "description": "DIAL skill references with paths of at most 1024 decoded characters each. Omission preserves saved skills on update; an empty array removes them.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "description": {
             "type": "string",
@@ -12209,6 +14932,11 @@
             "type": "boolean",
             "example": true
           },
+          "isCompleted": {
+            "type": "boolean",
+            "example": true,
+            "description": "True when the schedule can no longer produce a future run: either a one-time (date-trigger) schedule whose newest run terminated with Success or Error, or a recurring schedule whose cron activity window has closed with no upcoming run. Undefined when the run-history check failed; computed by ScheduledTasksService, not by fromUpstreamSchedule (which cannot see runs)."
+          },
           "isDeleted": {
             "type": "boolean",
             "example": false
@@ -12232,6 +14960,13 @@
           "prompt": {
             "type": "string",
             "example": "Summarize my inbox"
+          },
+          "skillUrls": {
+            "example": ["skills/public/daily-summary"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": ["id", "displayName", "trigger"]
@@ -12264,6 +14999,11 @@
           "conversationId": {
             "type": "string",
             "example": "conversations/bucket/.scheduler/sched_123/dial-chathub-v2-gemini-3.5-flash__123123123123123__run_9f2a"
+          },
+          "resultStage": {
+            "type": "string",
+            "description": "Failure stage reported by DIAL Scheduler. Only a string result.stage is exposed.",
+            "example": "credentials"
           }
         },
         "required": ["id", "status", "startTime"]
@@ -12312,7 +15052,8 @@
         "properties": {
           "displayName": {
             "type": "string",
-            "example": "Daily summary"
+            "example": "Daily summary",
+            "maxLength": 256
           },
           "trigger": {
             "$ref": "#/components/schemas/ScheduleTriggerDto"
@@ -12323,7 +15064,17 @@
           },
           "prompt": {
             "type": "string",
-            "example": "Summarize my inbox"
+            "example": "Summarize my inbox",
+            "description": "Instructions; may be empty when the effective task has a skill.",
+            "maxLength": 50000
+          },
+          "skillUrls": {
+            "example": ["skills/public/daily-summary"],
+            "description": "DIAL skill references with paths of at most 1024 decoded characters each. Omission preserves saved skills on update; an empty array removes them.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "description": {
             "type": "string",
@@ -12367,6 +15118,11 @@
             "type": "boolean",
             "example": true
           },
+          "isCompleted": {
+            "type": "boolean",
+            "example": true,
+            "description": "True when the schedule can no longer produce a future run: either a one-time (date-trigger) schedule whose newest run terminated with Success or Error, or a recurring schedule whose cron activity window has closed with no upcoming run. Undefined when the run-history check failed; computed by ScheduledTasksService, not by fromUpstreamSchedule (which cannot see runs)."
+          },
           "isDeleted": {
             "type": "boolean",
             "example": false
@@ -12390,6 +15146,13 @@
           "prompt": {
             "type": "string",
             "example": "Summarize my inbox"
+          },
+          "skillUrls": {
+            "example": ["skills/public/daily-summary"],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": ["id", "displayName", "trigger"]
@@ -12460,7 +15223,81 @@
           }
         },
         "required": ["success"]
+      },
+      "TextRefinementPurpose": {
+        "type": "string",
+        "enum": [
+          "skill-description",
+          "skill-instructions",
+          "scheduled-task-description",
+          "scheduled-task-instructions",
+          "application-description",
+          "toolset-description",
+          "prompt-description"
+        ],
+        "description": "Server-owned rewriting purpose"
+      },
+      "RefineTextRequestDto": {
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "description": "Server-owned rewriting purpose",
+            "example": "skill-description",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TextRefinementPurpose"
+              }
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Exact nonblank draft. Unicode code point limits: skill Description 4000, task Description 500, application/toolset/prompt Description 2000, either Instructions 32000.",
+            "example": "Use this skill to explain project documentation."
+          }
+        },
+        "required": ["purpose", "text"]
+      },
+      "RefineTextResponseDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Complete refined draft, bounded by the same purpose-specific Unicode limits as the input.",
+            "example": "Use this skill when you need an explanation of the project documentation."
+          }
+        },
+        "required": ["text"]
+      },
+      "CustomApiResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Opaque JSON value returned by the configured Core operation. Documented as a free-form object; the actual value may also be an array, string, number, boolean, or null — see the generated-typing note on this field.",
+            "additionalProperties": true,
+            "example": [
+              {
+                "id": "1",
+                "display_name": "Display name",
+                "description": "some description"
+              }
+            ]
+          }
+        },
+        "required": ["data"]
       }
     }
-  }
+  },
+  "security": [
+    {
+      "session": []
+    },
+    {
+      "bearer": []
+    }
+  ]
 }

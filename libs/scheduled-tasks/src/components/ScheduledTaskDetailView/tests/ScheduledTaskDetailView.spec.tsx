@@ -93,22 +93,38 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {icon}
     </button>
   ),
+  /*
+   * Mirrors the kit's documented contract: a disabled button with a visible
+   * tooltip is `aria-disabled` (still focusable) and swallows its click.
+   */
   NeutralButton: ({
     label,
     iconBefore,
     onClick,
     disabled,
+    tooltipProps,
+    'aria-describedby': ariaDescribedBy,
   }: {
     label: string;
     iconBefore?: ReactNode;
     onClick?: () => void;
     disabled?: boolean;
-  }) => (
-    <button onClick={onClick} disabled={disabled}>
-      {iconBefore}
-      {label}
-    </button>
-  ),
+    tooltipProps?: { tooltip?: string };
+    'aria-describedby'?: string;
+  }) => {
+    const isSoftDisabled = !!disabled && !!tooltipProps?.tooltip;
+    return (
+      <button
+        onClick={isSoftDisabled ? undefined : onClick}
+        disabled={isSoftDisabled ? undefined : disabled}
+        aria-disabled={isSoftDisabled || undefined}
+        aria-describedby={ariaDescribedBy}
+      >
+        {iconBefore}
+        {label}
+      </button>
+    );
+  },
   Tabs: ({
     tabs,
     activeTabId,
@@ -137,14 +153,37 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
 }));
 
 vi.mock('@tabler/icons-react', () => ({
-  IconArrowNarrowLeft: ({ className }: { className?: string }) => (
-    <svg data-icon="back" className={className} />
+  IconArrowNarrowLeft: ({
+    className,
+    'aria-hidden': ariaHidden,
+  }: {
+    className?: string;
+    'aria-hidden'?: boolean;
+  }) => (
+    <svg
+      data-testid="back-icon"
+      className={className}
+      aria-hidden={ariaHidden}
+    />
   ),
   IconCircleCheck: () => <svg data-icon="success" />,
   IconCircleX: () => <svg data-icon="error" />,
   IconAlertTriangle: () => <svg data-icon="missed" />,
   IconClipboardX: () => <svg data-icon="empty" />,
   IconPencilMinus: () => <svg data-icon="edit" />,
+  IconPlayerPlay: ({
+    className,
+    'aria-hidden': ariaHidden,
+  }: {
+    className?: string;
+    'aria-hidden'?: boolean;
+  }) => (
+    <svg
+      data-testid="start-icon"
+      className={className}
+      aria-hidden={ariaHidden}
+    />
+  ),
   IconTrashX: ({ className }: { className?: string }) => (
     <svg data-icon="delete" className={className} />
   ),
@@ -162,6 +201,7 @@ const labels: ScheduledTaskDetailViewLabels = {
   repeatsLabel: 'Repeats',
   activeWindowLabel: 'Active',
   activeStatusLabel: 'Active',
+  completedFieldLabel: 'Status',
   configurationTitle: 'Configuration',
   instructionsLabel: 'Instructions',
   retryLabel: 'Retry',
@@ -202,6 +242,20 @@ describe('ScheduledTaskDetailView — library isolation', () => {
 });
 
 describe('ScheduledTaskDetailView', () => {
+  it('passes the optional skill to Configuration and omits empty Instructions', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={{ ...labels, skillLabel: 'Skill' }}
+        onBack={vi.fn()}
+        displayName="Task"
+        runs={[]}
+        instructionsMarkdown=""
+        skillDisplayNames={['skills/public/deleted']}
+      />,
+    );
+    expect(screen.getByText('skills/public/deleted')).toBeTruthy();
+    expect(screen.queryByText('Instructions')).toBeNull();
+  });
   it('renders the back control and title', () => {
     render(
       <ScheduledTaskDetailView
@@ -282,6 +336,130 @@ describe('ScheduledTaskDetailView', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
     expect(onEdit).toHaveBeenCalledOnce();
+  });
+
+  it('renders Start now after Edit and calls its optional callback once', async () => {
+    const onStartNow = vi.fn();
+    render(
+      <ScheduledTaskDetailView
+        labels={{ ...labels, startNowButtonLabel: 'Start now' }}
+        onBack={vi.fn()}
+        onEdit={vi.fn()}
+        onStartNow={onStartNow}
+        displayName="Daily summary"
+        runs={[]}
+      />,
+    );
+
+    const editButton = screen.getByRole('button', { name: 'Edit' });
+    const startButton = screen.getByRole('button', { name: 'Start now' });
+    expect(
+      editButton.compareDocumentPosition(startButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await userEvent.click(startButton);
+    expect(onStartNow).toHaveBeenCalledOnce();
+  });
+
+  it('shows the pending label and disables Start now', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={{
+          ...labels,
+          startNowButtonLabel: 'Start now',
+          startingLabel: 'Starting…',
+        }}
+        onBack={vi.fn()}
+        onStartNow={vi.fn()}
+        isStarting
+        displayName="Daily summary"
+        runs={[]}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Starting…' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+  });
+
+  it('exposes the busy reason on a disabled Start now while a run is in progress', async () => {
+    const onStartNow = vi.fn();
+    render(
+      <ScheduledTaskDetailView
+        labels={{
+          ...labels,
+          startNowButtonLabel: 'Start now',
+          startNowBusyLabel: 'A task run is already in progress.',
+        }}
+        onBack={vi.fn()}
+        onStartNow={onStartNow}
+        isStartNowBusy
+        displayName="Daily summary"
+        runs={[]}
+      />,
+    );
+
+    const startButton = screen.getByRole('button', { name: 'Start now' });
+    expect(startButton.getAttribute('aria-disabled')).toBe('true');
+    const reason = screen.getByText('A task run is already in progress.');
+    expect(
+      (startButton.getAttribute('aria-describedby') ?? '').split(' '),
+    ).toContain(reason.id);
+
+    await userEvent.click(startButton);
+    expect(onStartNow).not.toHaveBeenCalled();
+  });
+
+  it('omits the busy reason when Start now is not busy', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={{
+          ...labels,
+          startNowButtonLabel: 'Start now',
+          startNowBusyLabel: 'A task run is already in progress.',
+        }}
+        onBack={vi.fn()}
+        onStartNow={vi.fn()}
+        displayName="Daily summary"
+        runs={[]}
+      />,
+    );
+
+    const startButton = screen.getByRole('button', { name: 'Start now' });
+    expect(startButton.getAttribute('aria-describedby')).toBeNull();
+    expect(screen.queryByText('A task run is already in progress.')).toBeNull();
+  });
+
+  it('keeps the Start now action and mobile tabs keyboard-accessible in RTL without mirroring the play icon', async () => {
+    useIsMobileMock.mockReturnValue(true);
+    document.documentElement.dir = 'rtl';
+    const onStartNow = vi.fn();
+    render(
+      <ScheduledTaskDetailView
+        labels={{ ...labels, startNowButtonLabel: 'Start now' }}
+        onBack={vi.fn()}
+        onEdit={vi.fn()}
+        onStartNow={onStartNow}
+        displayName="Daily summary"
+        runs={[]}
+      />,
+    );
+
+    const startButton = screen.getByRole('button', { name: 'Start now' });
+    await userEvent.click(startButton);
+
+    expect(onStartNow).toHaveBeenCalledOnce();
+    expect(screen.getByRole('tablist')).toBeTruthy();
+    const backIcon = screen.getByTestId('back-icon');
+    const startIcon = screen.getByTestId('start-icon');
+    expect(backIcon?.getAttribute('class')).toContain('rtl:scale-x-[-1]');
+    expect(backIcon?.getAttribute('aria-hidden')).toBe('true');
+    expect(startIcon?.getAttribute('aria-hidden')).toBe('true');
+    expect(startIcon?.getAttribute('class') ?? '').not.toContain('rtl:');
+    document.documentElement.dir = 'ltr';
+    useIsMobileMock.mockReturnValue(false);
   });
 
   it('shows a page-level spinner while isLoading', () => {
@@ -889,8 +1067,7 @@ describe('ScheduledTaskDetailView', () => {
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
 
-      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- decorative icons inside already-labeled buttons carry no accessible role of their own
-      const backIcon = container.querySelector('[data-icon="back"]');
+      const backIcon = screen.getByTestId('back-icon');
       // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- decorative icons inside already-labeled buttons carry no accessible role of their own
       const deleteIcon = container.querySelector('[data-icon="delete"]');
       expect(backIcon).toBeTruthy();
@@ -1077,6 +1254,19 @@ describe('ScheduledTaskDetailView', () => {
       expect(screen.getByText('GPT-4o')).toBeTruthy();
     });
 
+    it('keeps desktop section overflow inside independently scrolling columns', () => {
+      useIsMobileMock.mockReturnValue(false);
+      renderView();
+
+      const details = screen.getByRole('group', { name: 'Details' });
+      expect(details.classList).toContain('overflow-y-auto');
+      /* The desktop body is a structural wrapper with no semantic role. */
+      // eslint-disable-next-line testing-library/no-node-access
+      expect(details.parentElement?.classList).toContain(
+        'desktop:overflow-hidden',
+      );
+    });
+
     it('renders no count badges on the tabs', () => {
       renderView();
 
@@ -1105,5 +1295,113 @@ describe('ScheduledTaskDetailView', () => {
         }),
       ).toBeTruthy();
     });
+  });
+});
+
+describe('ScheduledTaskDetailView — completed state', () => {
+  it('renders the completed field in the Details section when completedLabel is supplied', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={{ ...labels, completedFieldLabel: 'Status' }}
+        onBack={vi.fn()}
+        displayName="One-time report"
+        isActive={false}
+        completedLabel="Completed"
+        runs={[]}
+      />,
+    );
+
+    expect(screen.getByText('Status')).toBeTruthy();
+    expect(screen.getByText('Completed')).toBeTruthy();
+  });
+
+  it('renders no completed field when completedLabel is omitted', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="One-time report"
+        isActive={false}
+        runs={[]}
+      />,
+    );
+
+    expect(screen.queryByText('Status')).toBeNull();
+    expect(screen.queryByText('Completed')).toBeNull();
+  });
+
+  it('renders no Active switch when isCompleted is true, even with isActive supplied', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="One-time report"
+        isCompleted
+        isActive={false}
+        isActiveDisabled
+        activeDisabledReason="Already ran — cannot be rescheduled"
+        runs={[]}
+      />,
+    );
+
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(
+      screen.queryByText('Already ran — cannot be rescheduled'),
+    ).toBeNull();
+  });
+
+  it('renders the disabled-switch reason next to the Active switch when isActiveDisabled is true', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="One-time report"
+        isActive={false}
+        isActiveDisabled
+        activeDisabledReason="Already ran — cannot be rescheduled"
+        runs={[]}
+      />,
+    );
+
+    expect(
+      screen.getByText('Already ran — cannot be rescheduled'),
+    ).toBeTruthy();
+    expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
+  });
+
+  it('renders no reason text when the switch is togglable', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="One-time report"
+        isActive={true}
+        activeDisabledReason="Already ran — cannot be rescheduled"
+        runs={[]}
+      />,
+    );
+
+    expect(
+      screen.queryByText('Already ran — cannot be rescheduled'),
+    ).toBeNull();
+    expect(screen.getByRole('switch')).toHaveProperty('disabled', false);
+  });
+
+  it('renders no reason text when activeDisabledReason is omitted', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="One-time report"
+        isActive={false}
+        isActiveDisabled
+        runs={[]}
+      />,
+    );
+
+    expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
+    expect(
+      screen.queryByText('Already ran — cannot be rescheduled'),
+    ).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import {
   annotationHighlightId,
+  annotationHighlightIds,
   annotationsToPdfHighlights,
   annotationToOfficeHighlightLocations,
   getAnnotationPdfPage,
@@ -164,8 +165,40 @@ describe('getAnnotationPdfPage', () => {
     expect(getAnnotationPdfPage(makeAnnotation(selector))).toBe(2);
   });
 
-  it('returns undefined for a pdf_region selector with non-finite geometry', () => {
-    const selector = pdfRegionLtWh({ wh: [NaN, 1] });
+  it('falls back to the page of a pdf_region selector with non-finite geometry', () => {
+    const selector = pdfRegionLtWh({ page: 3, wh: [NaN, 1] });
+    expect(getAnnotationPdfPage(makeAnnotation(selector))).toBe(3);
+  });
+
+  it('returns the page of a page-only pdf_region selector without a bbox', () => {
+    const selector = [{ type: 'pdf_region', page: 2 }] as AnnotationSelector[];
+    expect(getAnnotationPdfPage(makeAnnotation(selector))).toBe(2);
+    expect(
+      annotationsToPdfHighlights([{ index: 0, body: { selector } }]),
+    ).toEqual([]);
+  });
+
+  it('prefers a selector with valid geometry over an earlier page-only one', () => {
+    const selector = [
+      { type: 'pdf_region', page: 2 },
+      pdfRegionLtWh({ page: 5 }),
+    ] as AnnotationSelector[];
+    expect(getAnnotationPdfPage(makeAnnotation(selector))).toBe(5);
+  });
+
+  it('returns undefined for a page-only selector with an invalid page', () => {
+    const selector = [
+      { type: 'pdf_region', page: 0 },
+      { type: 'pdf_bbox', page: 1.5 },
+      { type: 'pdf_region', page: '2' },
+    ] as unknown as AnnotationSelector[];
+    expect(getAnnotationPdfPage(makeAnnotation(selector))).toBeUndefined();
+  });
+
+  it('ignores the page of a non-PDF selector', () => {
+    const selector = [
+      { type: 'docx_text_range', page: 2 },
+    ] as unknown as AnnotationSelector[];
     expect(getAnnotationPdfPage(makeAnnotation(selector))).toBeUndefined();
   });
 });
@@ -541,7 +574,7 @@ describe('annotationToOfficeHighlightLocations', () => {
 
 describe('annotationHighlightId', () => {
   /*
-   * Issue #8907: ids used to be the annotation's position inside the list the
+   * [#8907](https://github.com/epam/ai-dial-chat/issues/8907): ids used to be the annotation's position inside the list the
    * caller gathered, so every single-annotation `cit` group resolved to '0'
    * and the canvas could not tell two citations of one document apart.
    */
@@ -643,6 +676,94 @@ describe('annotationHighlightId', () => {
     expect(annotationHighlightId(citAnnotation('c1', selector), 0)).toMatch(
       /^[A-Za-z0-9_-]+$/,
     );
+  });
+});
+
+describe('annotationHighlightIds', () => {
+  const withIndex = (
+    index: number | undefined,
+    selector: unknown,
+  ): Annotation => ({
+    ...(index != null ? { index } : {}),
+    body: {
+      source: {
+        type: 'attachment',
+        attachment: { type: MIMEType.PDF, url: 'files/bucket/report.pdf' },
+      },
+      selector: selector as NonNullable<Annotation['body']>['selector'],
+    },
+  });
+
+  it('keeps unambiguous wire indices unchanged', () => {
+    const ids = annotationHighlightIds([
+      withIndex(0, bbox({ page: 1 })),
+      withIndex(1, bbox({ page: 2 })),
+      withIndex(2, bbox({ page: 3 })),
+    ]);
+
+    expect(ids).toEqual(['0', '1', '2']);
+  });
+
+  it('gives two annotations repeating one wire index distinct ids', () => {
+    const ids = annotationHighlightIds([
+      withIndex(0, bbox({ page: 1 })),
+      withIndex(0, bbox({ page: 2 })),
+    ]);
+
+    expect(ids[0]).toBe('0');
+    expect(ids[1]).not.toBe(ids[0]);
+    expect(ids[1]).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it('never mints a disambiguated id that equals another entry’s own id', () => {
+    const ids = annotationHighlightIds([
+      withIndex(0, bbox({ page: 1 })),
+      withIndex(0, bbox({ page: 2 })),
+      withIndex(0, bbox({ page: 3 })),
+    ]);
+
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it('separates a wire index from an equal positional fallback', () => {
+    const noIdentity: Annotation = {
+      body: {
+        source: {
+          type: 'attachment',
+          attachment: { type: MIMEType.PDF, url: 'files/bucket/report.pdf' },
+        },
+      },
+    };
+    const ids = annotationHighlightIds([
+      withIndex(1, bbox({ page: 1 })),
+      noIdentity,
+    ]);
+
+    expect(ids[0]).toBe('1');
+    expect(ids[1]).not.toBe('1');
+  });
+
+  it('matches annotationHighlightId for each entry when nothing collides', () => {
+    const list = [
+      withIndex(undefined, bbox({ page: 1, y1: 10 })),
+      withIndex(4, bbox({ page: 2 })),
+    ];
+
+    expect(annotationHighlightIds(list)).toEqual(
+      list.map((a, i) => annotationHighlightId(a, i)),
+    );
+  });
+
+  it('is what annotationsToPdfHighlights assigns, so repeated indices do not collide', () => {
+    const list = [
+      withIndex(0, bbox({ page: 1 })),
+      withIndex(0, bbox({ page: 2 })),
+    ];
+    const highlights = annotationsToPdfHighlights(list);
+
+    expect(highlights).toHaveLength(2);
+    expect(highlights.map((h) => h.id)).toEqual(annotationHighlightIds(list));
+    expect(highlights[0].id).not.toBe(highlights[1].id);
   });
 });
 

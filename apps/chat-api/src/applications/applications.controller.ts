@@ -13,6 +13,7 @@ import {
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import type { SessionUser } from '../auth/session/session.types';
+import { ApiDialCoreErrors } from '../common/dial/api-dial-core-errors.decorator';
 import { ApplicationsService } from './applications.service';
 import { ApplicationsResponseDto } from './dto/application.dto';
 import {
@@ -40,6 +41,7 @@ export class ApplicationsController {
       "Proxies GET /openai/applications using the caller's session access token. " +
       'Results are cached server-side for 30 seconds per user.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Successfully retrieved application list',
@@ -73,9 +75,10 @@ export class ApplicationsController {
     summary: 'Create a new application',
     description:
       'Creates a new application for the authenticated session user by proxying DIAL Core. ' +
-      'Invalidates the applications list cache on success.',
+      'Invalidates the applications list and deployments list caches on success.',
   })
   @ApiBody({ type: CreateApplicationBodyDto })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 201,
     description: 'Application created successfully',
@@ -89,7 +92,16 @@ export class ApplicationsController {
     status: 401,
     description: 'Not authenticated — valid session cookie required',
   })
+  @ApiResponse({
+    status: 403,
+    description:
+      'Caller lacks permission to create applications in their bucket',
+  })
   @ApiResponse({ status: 409, description: 'Application name already taken' })
+  @ApiResponse({
+    status: 502,
+    description: 'DIAL Core returned an error response or an empty bucket',
+  })
   @ApiResponse({
     status: 503,
     description: 'DIAL Core is unavailable or timed out',
@@ -115,6 +127,7 @@ export class ApplicationsController {
       'stored value. Invalidates the applications and deployments list caches on success.',
   })
   @ApiBody({ type: UpdateApplicationBodyDto })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Application updated successfully',
@@ -161,6 +174,7 @@ export class ApplicationsController {
       'Deletes an application for the authenticated session user by proxying DIAL Core. ' +
       'Invalidates the applications list cache on success.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 204, description: 'Application deleted successfully' })
   @ApiResponse({ status: 400, description: 'Invalid application name' })
   @ApiResponse({

@@ -1,7 +1,7 @@
 # skill-editing Specification
 
 ## Purpose
-Specifies `apps/chat/src/pages/SkillEditor/SkillEditor.tsx`'s edit-mode behavior: the `?id=...` route, ETag-gated load, frontmatter/file preservation, save via `updateSkill` with no ZIP rebuild, stale-edit conflict handling, immutable Name/path, dirty-navigation guard, and edit-specific labels.
+Specifies `apps/chat/src/pages/SkillEditor/SkillEditor.tsx`'s edit-mode behavior: the `?id=...` route, ETag-gated load, frontmatter/file preservation, save via `updateSkill` with no ZIP rebuild, stale-edit conflict handling, immutable Name/path, dirty-navigation guard, and edit-specific labels. The page wires its load, submit and file-action logic through `useSkillEditorLoad`, `useSkillEditorSubmit` and `useSkillFileActions` from `@epam/ai-dial-chat-hooks` (`libs/chat-hooks/src/skill/`), passing the `apps/chat/src/server-api/skills.api.ts` wrappers in as already-configured clients.
 
 ## Requirements
 
@@ -21,9 +21,16 @@ A non-empty `id` SHALL switch the page to edit mode. A full `skills/{ownerBucket
 
 #### Scenario: Whole-skill ZIP is incompatible with the Core installation
 
-- **WHEN** the canonical whole-skill download returns `400` as a grouping folder, or returns an archive without a usable ETag/root manifest
+- **WHEN** the canonical whole-skill download returns `400` as a grouping folder, or returns an archive whose body cannot be unpacked into a root manifest
 - **THEN** the editor loads `SKILL.md`, recursive file metadata, and every supporting file through the granular skill-file endpoints
 - **AND** it derives supporting-file paths relative to `{skillPath}/files`, preserves the resource ETag for update, and never sends the technical `files` prefix back as part of a file path
+
+A **missing ETag** is not one of these cases and SHALL NOT trigger the granular path, which can only offer the manifest *file*'s own ETag — sending that as a whole-skill `If-Match` makes the save fail with `412` under a conflict banner blaming an edit nobody made. It is a load failure, per "Edit load requires an ETag and never falls back to an empty create form" below.
+
+#### Scenario: A missing ETag does not fall back to the granular path
+
+- **WHEN** the whole-skill download returns a readable archive with no `ETag` header
+- **THEN** the editor does not call the granular skill-file endpoints, and shows the retryable load-error state
 
 #### Scenario: Development StrictMode does not abort an active ZIP stream
 
@@ -75,7 +82,9 @@ On edit-mode load, the page SHALL call the existing `downloadSkill()` wrapper (`
 ---
 
 ### Requirement: Frontmatter and supporting files are unpacked and preserved for editing
-On successful load, the page SHALL unpack the downloaded ZIP with `fflate`, parse the root `SKILL.md`'s YAML frontmatter with the `yaml` package's `parse` function keeping the entire parsed object (not just `name`/`description`), and load every other entry into an in-memory `Map<relativePath, Uint8Array>`. The file tree presented to `libs/skill-editor` SHALL be built from these real file paths plus any parent folders inferred from those paths — no server-side "folder" entities exist to load separately.
+On successful load, the page SHALL unpack the downloaded ZIP with `fflate`, parse the root `SKILL.md`'s YAML frontmatter with the `yaml` package's `parse` function keeping the entire parsed object (not just `name`/`description`), and load every other entry into an in-memory `Map<relativePath, Uint8Array>` (`unpackSkillArchive` in `libs/chat-hooks/src/skill/skill.ts`); `useSkillEditorLoad` then keeps it as `filesContentRef`, a `Map<relativePath, SkillFileContent>` whose entries hold those bytes as `{ bytes }`. The file tree presented to `libs/skill-editor` SHALL be built from these real file paths, any parent folders inferred from those paths, and one `SkillFileNodeKind.Folder` node per folder marker.
+
+A folder marker is an entry whose final path segment is `.dial_folder` (`HIDDEN_FILE` from `@epam/ai-dial-chat-shared`). `unpackSkillArchive` SHALL return markers separately from `files`, as a list of folder paths (the marker path without `/.dial_folder`). Markers SHALL NOT enter the content map or the file nodes. A root-level `.dial_folder` entry (no folder before it) stands for no folder and SHALL be dropped entirely, so it cannot become a file that the server would then refuse on save. The same rule SHALL apply on the listing fallback (`loadSkillFiles`): a `nodeType: 'item'` entry that resolves to a marker path SHALL become a folder path and SHALL NOT be downloaded. `useSkillEditorLoad` SHALL set `files` to the file nodes followed by a folder node for each marker folder path that is not already a file path. Its parent folders are still inferred by `buildDialFileTree`.
 
 #### Scenario: Unknown frontmatter field is retained after load
 - **WHEN** the loaded `SKILL.md` has a `version: "1.2.0"` field the form never renders
@@ -88,6 +97,18 @@ On successful load, the page SHALL unpack the downloaded ZIP with `fflate`, pars
 #### Scenario: File tree infers folders from paths
 - **WHEN** the archive contains `agents/analyzer.md` and no separate folder marker for `agents`
 - **THEN** the presented file tree shows an `agents` folder node containing `analyzer.md`, derived purely from the file's path
+
+#### Scenario: A folder marker restores an empty folder from the ZIP
+- **WHEN** the archive contains `SKILL.md` and `docs/.dial_folder`
+- **THEN** `files` contains one `SkillFileNodeKind.Folder` node `docs`, no node named `.dial_folder`, and the content map has no `docs/.dial_folder` key
+
+#### Scenario: A folder marker restores an empty folder from the listing fallback
+- **WHEN** the ZIP route fails, and the listing returns the manifest plus an item resolving to `docs/.dial_folder`
+- **THEN** `files` contains a folder node `docs`, and `downloadSkillFile` is called only for `SKILL.md`
+
+#### Scenario: Reloading a saved empty folder is clean
+- **WHEN** a skill with an empty `docs` folder is loaded and then saved without edits
+- **THEN** the form is not dirty after load, and the save payload contains `docs/.dial_folder` again
 
 ---
 
@@ -164,7 +185,7 @@ The Back control while a supporting file is selected is **not** a navigation and
 - **THEN** the page asks for confirmation before navigating to `returnUrl`, exactly as it does from the `SKILL.md` view
 
 ### Requirement: Edit-specific labels and success notification
-In edit mode, the page SHALL render an edit-specific title and Save-button label (distinct from create mode's "Create skill" title and Create button) and, on a successful save, SHALL show a success notification distinct from the create-success notification in both its title and its message (e.g. title "Skill updated" vs. "Skill created", message "\"{{name}}\" has been updated." vs. "\"{{name}}\" has been created."). The edit-mode notification's title SHALL use a dedicated i18n key distinct from create mode's title key — reusing the create-mode title key for an edit-mode save is a defect, not an acceptable shortcut.
+In edit mode, the page SHALL render an edit-specific title and Save-button label (distinct from create mode's "Create skill" title and Create button) and, on a successful save, SHALL show a success notification distinct from the create-success notification in both its title and its message (title "Skill edited successfully" vs. "Skill created successfully", message "Changes for skill \"{{name}}\" are saved." vs. "You can now see skill \"{{name}}\" in the catalog and My collection."). Both come from the shared entity-operation map (`ENTITY_OPERATION_NOTIFICATIONS[NotifiableEntity.Skill]`, keys `entityNotifications.skill.created*` / `entityNotifications.skill.edited*`, see `entity-operation-notifications`): the page builds `useSkillEditorSubmit`'s `saveSuccessTitle`/`createSuccess`/`updateSuccessTitle`/`updateSuccess` messages from those keys, and routes the hook's `onNotify` to `showSuccessNotification` / `showErrorNotification` by variant. The edit-mode notification's title SHALL use a dedicated i18n key distinct from create mode's title key — reusing the create-mode title key for an edit-mode save is a defect, not an acceptable shortcut.
 
 #### Scenario: Edit mode shows Save, not Create
 - **WHEN** the page renders in edit mode
@@ -172,7 +193,7 @@ In edit mode, the page SHALL render an edit-specific title and Save-button label
 
 #### Scenario: Successful edit save shows an update notification
 - **WHEN** an edit save succeeds
-- **THEN** the shown notification's title and message both reflect an update ("Skill updated"), not a creation ("Skill created")
+- **THEN** the shown notification's title and message both reflect an edit ("Skill edited successfully"), not a creation ("Skill created successfully")
 
 ---
 

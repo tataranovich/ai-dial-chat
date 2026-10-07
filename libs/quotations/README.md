@@ -51,6 +51,31 @@ import { CitationMarker } from '@epam/ai-dial-quotations';
 
 Popup card displaying a citation's title, quoted excerpt, and navigation controls.
 
+A previewable file shows "Preview" and "Download" (which calls
+`onOpenInBrowser`; pass `isDownloadEnabled={false}` to hide it — the same flag
+exists on `CitationDropdown` and the `useCitationMarkdownComponents`
+callbacks), and its header shows the
+file extension (e.g. `.pdf`) after a file-type icon — the UI kit's `FileIcon`
+glyph for that extension, the same one a file manager row shows, unless the
+host passes its own `headerIcon`. A web link, or a
+source with no `onPreview`, shows "Open in browser" instead and keeps the
+source name in the header.
+
+The quote is clamped to six lines. When it overflows, a `labels.showMore`
+toggle appears under it; expanding lifts the clamp and caps the quote at
+`min(20rem, 50vh)` with its own keyboard-focusable scroll, and
+`labels.showLess` collapses it again. The toggle carries `aria-expanded` /
+`aria-controls`, and every citation — including one reached through the
+switcher — opens collapsed.
+
+The quote is rendered as Markdown, so it can contain fenced code blocks, tables
+and block formulas. The optional `labels.codeBlockCopyLabel`,
+`labels.codeBlockCopiedLabel`, `labels.codeBlockDownloadLabel`,
+`labels.tableScrollRegionAriaLabel` and `labels.mathScrollRegionAriaLabel`
+name those controls; each falls back to the renderer's English default
+(`'Copy code'`, `'Copied!'`, `'Download code'`, `'Scrollable table'`,
+`'Scrollable formula'`).
+
 ```tsx
 import { CitationCard } from '@epam/ai-dial-quotations';
 
@@ -68,18 +93,30 @@ import { CitationCard } from '@epam/ai-dial-quotations';
     preview: 'Preview',
     openInBrowser: 'Open in browser',
     download: 'Download',
+    showMore: 'Show more',
+    showLess: 'Show less',
+    codeBlockCopyLabel: 'Copy',
+    codeBlockCopiedLabel: 'Copied!',
+    codeBlockDownloadLabel: 'Download',
+    tableScrollRegionAriaLabel: 'Scrollable table',
+    mathScrollRegionAriaLabel: 'Scrollable formula',
   }}
 />;
 ```
 
 ### `CitationDropdown`
 
-Combines `CitationMarker` and `CitationCard` into a tooltip-based dropdown.
+Combines `CitationMarker` and `CitationCard` into a click-opened popover that works on touch and pointer devices alike.
 
 Pass the optional `isPreviewable(annotation)` callback to control Preview for
 each active annotation. When it returns `false`, the card shows only
 "Open in browser"; without it, providing `onPreview` enables Preview as before.
 Availability is checked again when the user switches annotations within a card.
+
+Pass `isPreviewOpen` while the host's preview panel is open: a marker click
+then calls `onPreview` for the active annotation directly, without showing the
+card, so the user can switch the previewed citation from badge to badge. A
+non-previewable annotation still opens the card.
 
 ```tsx
 import {
@@ -123,10 +160,13 @@ While `isStreaming` is `true`, `processedContent` hides only complete supported 
 The hook owns no PDF-detection, attachment-DTO, or canvas-opening logic — that belongs in the host's `onPreview` implementation.
 
 Its callbacks also accept optional `isPreviewable(annotation)`, forwarded to
-`CitationDropdown`. The host supplies its source classification policy: DIAL Chat
+`CitationDropdown`, and an optional `isPreviewOpen` boolean with the same
+meaning as the `CitationDropdown` prop. The host supplies its source classification policy: DIAL Chat
 keeps Preview for DIAL files and supported external file sources, and hides it
 for ordinary external web pages such as `https://data.imf.org/en/datasets/IMF.RES:WEO`.
 The library does not interpret DIAL file paths or decide which viewers the host supports.
+
+An optional trailing `fallbackGroups` parameter (default `[]`) is a pool of groups that do not belong to this message — supplied by the host for a `<cit data-id="…">` element the message's own `groups` do not resolve. It participates only in `data-id` lookup: it is never passed to sentinel injection, so it cannot shift a marker position in `processedContent`, and a colliding id always resolves from `groups` first.
 
 ```tsx
 import { useCitationMarkdownComponents } from '@epam/ai-dial-quotations';
@@ -146,6 +186,8 @@ const { processedContent, markdownComponents } = useCitationMarkdownComponents(
         preview: 'Preview',
         openInBrowser: 'Open in browser',
         download: 'Download',
+        showMore: 'Show more',
+        showLess: 'Show less',
       },
       markerLabels: {
         ariaLabel: `Citation from ${group.sourceName}`,
@@ -155,6 +197,8 @@ const { processedContent, markdownComponents } = useCitationMarkdownComponents(
     }),
   },
   isStreaming,
+  false,
+  fallbackCitationGroups,
 );
 ```
 
@@ -170,9 +214,10 @@ are omitted so quote-only streaming deltas preserve an earlier page.
 - `groupAnnotationsByCitId(annotations)` — groups `html_tag`-selector annotations by `target.selector.id`, one group per distinct tag id (never collapsing two ids that cite the same document)
 - `resolveMessageAnnotations(message)` — resolves annotations from either internal or raw wire format and repairs persisted `html_tag` sources whose historical PDF fallback conflicts with a recognized URL extension
 - `normalizeRawAnnotations(raw, attachments)` — **moved to `@epam/ai-dial-chat-shared`**, which owns the annotation model. It normalises raw API wire-format annotations (the legacy `attachment_index` + `pdf_region` shape and the `html_tag` + flat `body.source.url` shape, including DOCX/XLSX/PPTX MIME inference). `@epam/ai-dial-chat-hooks` needed it while streaming and nothing else from this package, so keeping it here made a conversation-only host install the whole citation stack ([issue #8719](https://github.com/epam/ai-dial-chat/issues/8719))
-- `annotationsToPdfHighlights(annotations)` — maps annotations with positive integer pages and finite coordinates to PDF viewer highlight entries; recognizes `pdf_bbox` selectors (`{ page, x1, y1, x2, y2 }`) and `pdf_region` selectors in either coordinate form (`bbox: { lt: [left, top], wh: [width, height] }` or the legacy `bbox: { left, top, width, height }`), converting a region to edges as `x1 = left`, `y1 = top`, `x2 = left + width`, `y2 = top + height`; zero-area boxes are supported; each highlight's `id` comes from `annotationHighlightId`
-- `annotationHighlightId(annotation, fallbackIndex)` — returns the highlight id for one annotation, the same id `annotationsToPdfHighlights` assigns it: `annotation.index` when the wire supplied one, otherwise an id derived from the annotation's own identity (its `cit` tag id plus a digest of its selectors), falling back to `fallbackIndex` only for an annotation carrying none of those. The id is opaque — compare it, never parse it — and a position-derived id is unique only within the list it came from, which is why it is the last resort
-- `getAnnotationPdfPage(annotation)` — returns the first positive integer page from its `pdf_bbox`/`pdf_region` body selectors, skipping malformed entries and invalid pages; returns `undefined` when no valid page exists
+- `annotationsToPdfHighlights(annotations)` — maps annotations with positive integer pages and finite coordinates to PDF viewer highlight entries; recognizes `pdf_bbox` selectors (`{ page, x1, y1, x2, y2 }`) and `pdf_region` selectors in either coordinate form (`bbox: { lt: [left, top], wh: [width, height] }` or the legacy `bbox: { left, top, width, height }`), converting a region to edges as `x1 = left`, `y1 = top`, `x2 = left + width`, `y2 = top + height`; zero-area boxes are supported; each highlight's `id` is the entry's id from `annotationHighlightIds(annotations)`, so ids are unique within the input list
+- `annotationHighlightId(annotation, fallbackIndex)` — returns the base highlight id for one annotation: `annotation.index` when the wire supplied one, otherwise an id derived from the annotation's own identity (its `cit` tag id plus a digest of its selectors), falling back to `fallbackIndex` only for an annotation carrying none of those. The id is opaque — compare it, never parse it — and a position-derived id is unique only within the list it came from, which is why it is the last resort. A base id is not guaranteed unique — a wire payload may repeat an `index` — so build a list's ids with `annotationHighlightIds`
+- `annotationHighlightIds(annotations)` — returns one id per entry, unique within the list: each entry's `annotationHighlightId` when no earlier entry holds it (so unambiguous wire indices stay `"0"`, `"1"`, …), otherwise that id with a `-<n>` suffix no other entry uses. `annotationsToPdfHighlights` and `libs/chat-hooks`'s Office/PDF canvas mappers use it, so the id selected for a clicked annotation is the one its own highlight carries
+- `getAnnotationPdfPage(annotation)` — returns the page to open from its `pdf_bbox`/`pdf_region` body selectors: the first selector with valid geometry wins, so the page matches its highlight; otherwise the first one with a positive integer `page`, so a page-only selector such as `{ type: 'pdf_region', page: 2 }` still navigates (with no highlight); returns `undefined` when no valid page exists
 - `injectCitationSentinels(content, groups)` — inserts sentinel strings at character offsets in markdown, for offset-based (non-`html_tag`) groups only
 - `stripCitTagsWhileStreaming(content)` — hides supported paired citation elements while streaming and escapes every other `cit` shape for literal display
 - `replaceSentinelsInChildren(children, renderMarker)` — replaces sentinels with React nodes in a rendered tree

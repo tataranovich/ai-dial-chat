@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import {
+  IsArray,
   IsNotEmpty,
   IsBoolean,
   IsEnum,
@@ -13,6 +14,10 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import {
+  DeploymentType,
+  normalizeDeploymentTypesInput,
+} from '../deployments/dto/deployment-type';
 import { CspMode } from './csp';
 
 export enum ApplicationLogLevel {
@@ -79,7 +84,7 @@ export class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
-  CORS_ORIGIN?: string = 'http://localhost:4207';
+  CORS_ORIGIN?: string;
 
   @IsNotEmpty()
   @IsString()
@@ -207,6 +212,26 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   DIAL_ROLES_FIELD?: string = 'dial_roles';
+
+  /*
+   * Deployment kinds `GET /user/limits` and `GET /user/usage` report when the
+   * request names none, forwarded to DIAL Core as `deploymentTypes`. Defaults
+   * to models and applications, so Settings → Usage shows the spend DIAL Core
+   * attributes to routers; `model` restores the model-only report.
+   */
+  @IsOptional()
+  @Transform(({ value }) => {
+    const normalized = normalizeDeploymentTypesInput(value ?? '');
+    return Array.isArray(normalized) && normalized.length === 0
+      ? [DeploymentType.Model, DeploymentType.Application]
+      : normalized;
+  })
+  @IsArray()
+  @IsEnum(DeploymentType, { each: true })
+  USER_USAGE_DEPLOYMENT_TYPES?: DeploymentType[] = [
+    DeploymentType.Model,
+    DeploymentType.Application,
+  ];
 
   // Auth providers
   @IsOptional()
@@ -640,6 +665,22 @@ export class EnvironmentVariables {
   @IsString()
   CUSTOM_CLIENT_VARIABLES?: string;
 
+  /*
+   * Server-only allowlist of exact GET Core paths exposed through
+   * GET /api/v1/custom-api/:operationId (see
+   * openspec/changes/archive/2026-10-02-add-configured-core-api-operations/design.md). JSON object,
+   * `{"version":1,"operations":[{"id":...,"method":"GET","corePath":...}]}`.
+   * Unset, empty or whitespace-only values mean no operations are enabled.
+   * Parsed and bounded by CustomApiRegistryService, not by this schema, so an
+   * invalid value fails startup there rather than here; this field is kept a
+   * permissive string so the registry service controls the exact error. Never
+   * exposed through client-config, CUSTOM_CLIENT_VARIABLES or browser build
+   * variables. Restart chat-api after changing.
+   */
+  @IsOptional()
+  @IsString()
+  CUSTOM_CORE_API_CONFIG?: string;
+
   @IsOptional()
   @IsString()
   ANNOUNCEMENT_HTML_MESSAGE?: string;
@@ -680,10 +721,47 @@ export class EnvironmentVariables {
   UTILITY_MODEL?: string;
 
   @IsOptional()
-  @Transform(({ value }) => {
-    if (value == null) return undefined;
-    if (typeof value === 'boolean') return value;
-    return !['false', '0', 'no'].includes(String(value).toLowerCase());
+  @IsString()
+  TEXT_REFINEMENT_SKILL_DESCRIPTION_PROMPT?: string;
+
+  @IsOptional()
+  @IsString()
+  TEXT_REFINEMENT_SKILL_INSTRUCTIONS_PROMPT?: string;
+
+  @IsOptional()
+  @IsString()
+  TEXT_REFINEMENT_SCHEDULED_TASK_DESCRIPTION_PROMPT?: string;
+
+  @IsOptional()
+  @IsString()
+  TEXT_REFINEMENT_SCHEDULED_TASK_INSTRUCTIONS_PROMPT?: string;
+
+  @IsOptional()
+  @IsString()
+  TEXT_REFINEMENT_APPLICATION_DESCRIPTION_PROMPT?: string;
+
+  @IsOptional()
+  @IsString()
+  TEXT_REFINEMENT_TOOLSET_DESCRIPTION_PROMPT?: string;
+
+  @IsOptional()
+  @IsString()
+  TEXT_REFINEMENT_PROMPT_DESCRIPTION_PROMPT?: string;
+
+  @IsOptional()
+  @IsString()
+  CONVERSATION_NAMING_SYSTEM_PROMPT?: string;
+
+  @IsOptional()
+  @IsString()
+  TRANSCRIPTION_PROMPT?: string;
+
+  @IsOptional()
+  @Transform(({ obj, key }) => {
+    const raw = (obj as Record<string, unknown>)[key];
+    if (raw == null) return undefined;
+    if (typeof raw === 'boolean') return raw;
+    return !['false', '0', 'no'].includes(String(raw).toLowerCase());
   })
   @IsBoolean()
   LLM_CONVERSATION_NAMING_ENABLED?: boolean = false;
@@ -806,10 +884,11 @@ export class EnvironmentVariables {
   ENABLED_UI_FEATURES?: string[] | null = null;
 
   @IsOptional()
-  @Transform(({ value }) => {
-    if (value == null) return undefined;
-    if (typeof value === 'boolean') return value;
-    return !['false', '0', 'no'].includes(String(value).toLowerCase());
+  @Transform(({ obj, key }) => {
+    const raw = (obj as Record<string, unknown>)[key];
+    if (raw == null) return undefined;
+    if (typeof raw === 'boolean') return raw;
+    return !['false', '0', 'no'].includes(String(raw).toLowerCase());
   })
   @IsBoolean()
   LIVE_CHAT_INTERACTION_ENABLED?: boolean = false;
@@ -830,17 +909,22 @@ export class EnvironmentVariables {
 
   @IsOptional()
   @Transform(({ obj, key }) => {
-    /* Reads the raw source value (not `value`, which class-transformer's
-     * enableImplicitConversion may have already coerced to `true` for any
-     * non-empty string, including the literal string "false") so an env var
-     * explicitly set to "false"/"0"/"no" parses to `false` as intended. */
+    /* Same raw-value coercion as RESPONSES_API_ENABLED, so the literal
+     * string "false" parses to `false`. */
     const raw = (obj as Record<string, unknown>)[key];
     if (raw == null) return undefined;
     if (typeof raw === 'boolean') return raw;
     return !['false', '0', 'no'].includes(String(raw).toLowerCase());
   })
   @IsBoolean()
-  SKILL_USAGE_ENABLED?: boolean = false;
+  RESPONSES_BACKGROUND_ENABLED?: boolean = false;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/, {
+    message: 'UI_EVENT must be a lowercase kebab-case event ID or none',
+  })
+  UI_EVENT?: string;
 
   @IsOptional()
   @Transform(({ value }) => {
@@ -854,10 +938,11 @@ export class EnvironmentVariables {
   LIVE_CHAT_INTERACTION_ENABLED_ROLES?: string[] = [];
 
   @IsOptional()
-  @Transform(({ value }) => {
-    if (value == null) return undefined;
-    if (typeof value === 'boolean') return value;
-    return !['false', '0', 'no'].includes(String(value).toLowerCase());
+  @Transform(({ obj, key }) => {
+    const raw = (obj as Record<string, unknown>)[key];
+    if (raw == null) return undefined;
+    if (typeof raw === 'boolean') return raw;
+    return !['false', '0', 'no'].includes(String(raw).toLowerCase());
   })
   @IsBoolean()
   SCHEDULED_TASKS_ENABLED?: boolean = false;
@@ -882,6 +967,18 @@ export class EnvironmentVariables {
   })
   @IsBoolean()
   DEFAULT_DEPLOYMENT_PINNED?: boolean = false;
+
+  @IsOptional()
+  @Transform(({ obj, key }) => {
+    const raw = (obj as Record<string, unknown>)[key];
+    if (raw == null) return undefined;
+    if (typeof raw === 'boolean') return raw;
+    /* Fail closed: this flag lets an iframe send messages as the user, so
+     * only an explicit truthy value turns it on. */
+    return ['true', '1', 'yes'].includes(String(raw).trim().toLowerCase());
+  })
+  @IsBoolean()
+  ALLOW_VISUALIZER_SEND_MESSAGES?: boolean = false;
 
   @IsOptional()
   @IsString()
@@ -918,13 +1015,13 @@ export class EnvironmentVariables {
   PUBLICATION_FILTER_SOURCES?: string[] = [];
 
   /*
-   * Skills domain limits (see openspec/changes/fix-skill-editor-core-contract/design.md).
+   * Skills domain limits (see openspec/changes/archive/2026-08-13-fix-skill-editor-core-contract/design.md).
    * Defaults match DIAL Core's own real, verified `ComplexResourceService.Settings`
    * (maxFiles=100, maxFileSizeBytes=1 MiB, maxTotalBytes=16 MiB — read directly from
-   * epam/ai-dial-core's source, not the epic issue's "~" approximations). The former
-   * `SKILL_UPLOAD_MAX_BYTES` (a compressed-ZIP Multer ingress cap) has been removed: no
-   * ZIP is ever uploaded on the create/update path since this change, so it has no
-   * remaining meaning. A deployment that still sets it has that value silently ignored
+   * epam/ai-dial-core's source, not the epic issue's "~" approximations). There is no
+   * `SKILL_UPLOAD_MAX_BYTES` (a compressed-ZIP Multer ingress cap): no ZIP is uploaded
+   * on the create/update path, so such a cap has nothing to bound. A deployment that
+   * still sets it has that value silently ignored
    * (class-transformer only maps decorated properties) rather than the boot failing.
    */
   @IsOptional()
@@ -953,7 +1050,7 @@ export class EnvironmentVariables {
 
   /*
    * Compressed-ZIP ingress cap for `POST /api/v1/skills/import` (see
-   * openspec/changes/add-skill-archive-import/design.md D8). Distinct from
+   * openspec/changes/archive/2026-08-20-add-skill-archive-import/design.md D8). Distinct from
    * the retired `SKILL_UPLOAD_MAX_BYTES`: that variable capped a ZIP upload
    * on the create/update path, which no longer accepts ZIP at all; this one
    * bounds the new, additive archive-import endpoint's compressed upload

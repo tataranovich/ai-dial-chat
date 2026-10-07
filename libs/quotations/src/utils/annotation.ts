@@ -83,8 +83,8 @@ const readPdfRegionEdges = (
  * carries both coordinate forms. Both shapes share one validation gate
  * (integer `page >= 1`, four finite coordinates) so that highlight geometry
  * (`annotationsToPdfHighlights`) and page navigation (`getAnnotationPdfPage`)
- * can never disagree about which selectors they understand — both entry
- * points call this one reader.
+ * agree whenever a selector carries geometry. Navigation additionally accepts
+ * a page-only selector (`readPdfSelectorPage`), which has no highlight.
  */
 const readPdfSelectorBox = (selector: AnnotationSelector): BBox | undefined => {
   if (!isAnnotationSelector(selector)) return undefined;
@@ -116,6 +116,25 @@ const readPdfSelectorBox = (selector: AnnotationSelector): BBox | undefined => {
   }
 
   return { page, x1: edges.x1, y1: edges.y1, x2: edges.x2, y2: edges.y2 };
+};
+
+/*
+ * Reads the page of a `pdf_bbox`/`pdf_region` selector regardless of its
+ * geometry, or `undefined` when the selector is not a PDF selector or its
+ * `page` is not an integer `>= 1`. Lets navigation open a cited page whose
+ * selector carries no usable box, e.g. `{ type: 'pdf_region', page: 2 }`.
+ */
+const readPdfSelectorPage = (
+  selector: AnnotationSelector,
+): number | undefined => {
+  if (!isAnnotationSelector(selector)) return undefined;
+  const s = selector as unknown as Record<string, unknown>;
+  if (s['type'] !== 'pdf_bbox' && s['type'] !== 'pdf_region') return undefined;
+
+  const page = s['page'];
+  return typeof page === 'number' && Number.isInteger(page) && page >= 1
+    ? page
+    : undefined;
 };
 
 /*
@@ -196,14 +215,15 @@ const annotationIdentityKey = (annotation: Annotation): string | undefined => {
  * Maps a list of annotations to `InputHighlightData` entries for the PDF viewer.
  * Recognizes `pdf_bbox` selectors and both `pdf_region` coordinate forms
  * (`lt`/`wh` and legacy `left`/`top`/`width`/`height`); annotations whose
- * `body.selector` contains none of these are skipped. The highlight `id` comes
- * from `annotationHighlightId`, so it identifies the annotation itself rather
- * than its position in this particular input list.
+ * `body.selector` contains none of these are skipped. Each highlight `id` is
+ * the entry's id from `annotationHighlightIds(annotations)`, unique within
+ * this input list.
  */
 export const annotationsToPdfHighlights = (
   annotations: Annotation[],
-): InputHighlightData[] =>
-  annotations.flatMap((annotation, i) => {
+): InputHighlightData[] => {
+  const ids = annotationHighlightIds(annotations);
+  return annotations.flatMap((annotation, i) => {
     const selector = annotation.body?.selector;
     if (selector == null) return [];
 
@@ -217,21 +237,24 @@ export const annotationsToPdfHighlights = (
     if (bboxes.length === 0) return [];
     return [
       {
-        id: annotationHighlightId(annotation, i),
+        id: ids[i],
         bboxes,
         style: CITATION_HIGHLIGHT_STYLE,
       },
     ];
   });
+};
 
 /**
- * Returns a stable string ID for a given annotation, matching the IDs
- * `annotationsToPdfHighlights` produces (it calls this function) and the ones
- * the Office highlight path assigns.
+ * Returns a stable string ID for a given annotation — the id
+ * `annotationHighlightIds` (and so `annotationsToPdfHighlights` and the Office
+ * highlight path) assigns it whenever no earlier entry of the same list
+ * already holds that id.
  *
  * Resolved in order:
- * 1. `annotation.index` when the wire supplied one — already unique within the
- *    message, and short.
+ * 1. `annotation.index` when the wire supplied one — short, but not guaranteed
+ *    unique: a payload may repeat an `index`, which `annotationHighlightIds`
+ *    disambiguates.
  * 2. Otherwise an id derived from the annotation's own identity: its `cit` tag
  *    id plus a digest of its selectors. Two annotations differing in either
  *    part get different ids; two agreeing in both describe the same cited
@@ -244,7 +267,7 @@ export const annotationsToPdfHighlights = (
  * unique beyond the list it came from, which is why it is the last resort — a
  * caller gathering one citation group at a time would otherwise give every
  * single-annotation group the same id, and the canvas could not tell two
- * citations of one document apart (issue #8907). Ids are never persisted and
+ * citations of one document apart ([#8907](https://github.com/epam/ai-dial-chat/issues/8907)). Ids are never persisted and
  * never sent over the wire.
  */
 export const annotationHighlightId = (
@@ -256,10 +279,41 @@ export const annotationHighlightId = (
     : (annotationIdentityKey(annotation) ?? String(fallbackIndex));
 
 /**
- * Returns the first positive integer PDF page in the annotation's body selectors,
- * or `undefined` when none exists. Recognizes `pdf_bbox` selectors and both
- * `pdf_region` coordinate forms; a page is returned only for a selector whose
- * geometry also validates (see `readPdfSelectorBox`).
+ * Returns one highlight id per entry of `annotations`, unique within the list:
+ * the entry's `annotationHighlightId` when no earlier entry holds it, otherwise
+ * that id with a `-<n>` suffix no other entry's id uses.
+ */
+export const annotationHighlightIds = (annotations: Annotation[]): string[] => {
+  const baseIds = annotations.map((annotation, i) =>
+    annotationHighlightId(annotation, i),
+  );
+  /* Every base id is reserved up front, so a suffixed id never takes one a
+     later entry keeps as-is. */
+  const taken = new Set(baseIds);
+  const claimed = new Set<string>();
+
+  return baseIds.map((baseId) => {
+    if (!claimed.has(baseId)) {
+      claimed.add(baseId);
+      return baseId;
+    }
+    let ordinal = 1;
+    while (taken.has(`${baseId}-${ordinal}`)) ordinal += 1;
+    const id = `${baseId}-${ordinal}`;
+    taken.add(id);
+    claimed.add(id);
+    return id;
+  });
+};
+
+/**
+ * Returns the PDF page to open for the annotation, or `undefined` when none
+ * exists. Recognizes `pdf_bbox` selectors and both `pdf_region` coordinate
+ * forms. The first selector whose geometry validates wins (see
+ * `readPdfSelectorBox`), so the page matches the selected highlight; when no
+ * selector has valid geometry, the first `pdf_bbox`/`pdf_region` selector
+ * with a positive integer `page` is used, so a page-only selector still
+ * navigates without a highlight.
  */
 export const getAnnotationPdfPage = (
   annotation: Annotation,
@@ -272,6 +326,10 @@ export const getAnnotationPdfPage = (
     if (!isAnnotationSelector(s)) continue;
     const box = readPdfSelectorBox(s);
     if (box != null) return box.page;
+  }
+  for (const s of selectors) {
+    const page = readPdfSelectorPage(s);
+    if (page != null) return page;
   }
   return undefined;
 };
@@ -372,7 +430,7 @@ export const isExcelRcRangeSelector = (
  * any field fails validation (non-integer/negative offsets, `end < start`,
  * a non-integer-array `path`, or a non-string `text`). `endExclusive` is the
  * wire's `end` copied through unchanged — already exclusive, not `end + 1`
- * (see `design.md` D3).
+ * (see `openspec/changes/archive/2026-09-10-highlight-office-document-annotations/design.md` D3).
  */
 const normalizeDocxSelector = (
   selector: DocxRangeSelector,
@@ -400,7 +458,7 @@ const normalizeDocxSelector = (
 /**
  * Converts one `pptx_text_range` selector to a location, or `undefined` when
  * any field fails validation. `endExclusive` is the wire's `end` copied
- * through unchanged (see `design.md` D3).
+ * through unchanged (see `openspec/changes/archive/2026-09-10-highlight-office-document-annotations/design.md` D3).
  */
 const normalizePptxSelector = (
   selector: PptxRangeSelector,

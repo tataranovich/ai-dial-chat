@@ -4,10 +4,11 @@
 
 Presentational building blocks shared by DIAL's builder/editor form pages — the surfaces where a user composes or edits an entity (a scheduled task, a deployment, a toolset, a prompt, a skill) through a titled page with a back control and save/cancel actions. The package provides:
 
-- `BuilderFormContainer` — a full-height scrollable form page shell with a header and a three-column body;
+- `BuilderFormContainer` — a full-height form page shell with fixed chrome and a responsive, scroll-owning three-column body;
 - `EditorLayout` and `EditorSection` — a two-column editor shell with a header row and a bordered card wrapper for named field groups;
 - `AddAvatar` and `AvatarPickerModal` — the avatar preview control and the host-wired file-manager modal behind it;
-- `DeploymentCreationForm`, `DeploymentLocalesField`, and `validateDeploymentCreationFields` — the shared General-step field set (avatar, name, description, version, topics, per-locale translations) and its validation.
+- `DeploymentCreationForm`, `DeploymentLocalesField`, and `validateDeploymentCreationFields` — the shared General-step field set (avatar, name, description, version, topics, per-locale translations) and its validation;
+- `EntityEditor`, `MetadataForm`, and `useMetadataForm` — the standard entity editor page (header, Metadata column, Setup column), the Metadata field set with its avatar picker, and the headless state that decides when a metadata error shows.
 
 Extracting these blocks keeps every builder page visually identical and lets a single fix reach all of them. Quick Apps, Toolsets, and other deployment kinds all open with the same first step — identify the thing being created — so the field order, validation rules, and the "Add locale" popup are owned once instead of drifting apart between editors.
 
@@ -35,21 +36,21 @@ import '@epam/ai-dial-builder-form/styles.css';
 
 - `react` `^19.2.8`
 - `@epam/ai-dial-chat-shared` `*`
-- `@epam/ai-dial-ui-kit` `^0.15.0-dev.12`
+- `@epam/ai-dial-ui-kit` `^0.15.0-dev.39`
 
 ## Components
 
 ### BuilderFormContainer
 
-The whole builder form page shell — full height, scrollable, with the page background applied.
+The whole builder form page shell — full height, non-scrolling, with the page background applied. Its body owns scrolling so the header and mobile action footer remain fixed.
 
-It renders the header itself: a back control, the title, and a cancel/submit action pair, where submit is the primary action and both actions disable independently (e.g. submit disabled while required fields are empty, cancel disabled while a submission is in flight). Header styling is forwarded through `styles.header`.
+It renders the header itself: a back control, the title, and a cancel/submit action pair, where submit is the primary action and both actions disable independently (e.g. submit disabled while required fields are empty, cancel disabled while a submission is in flight). Its responsive vertical and inline padding matches the scheduled-task detail header. Header styling is forwarded through `styles.header`.
 
-The action pair is placed per breakpoint: in the header at the desktop breakpoint, and in a sticky footer pinned over the bottom of the scrolling form at mobile widths, so it stays thumb-reachable while the form scrolls. Both copies render the same actions from the same props — exactly one is visible (and in the tab order) at any width. The footer paints the page background and an elevation shadow (`--shadow-xs-1`/`--shadow-xs-2`) so scrolled content never shows through it, and its two actions split the row equally. At mobile the header row — back control and title — reads as the first row of the form rather than a page bar: its divider is drawn above the row (under the app shell's floating header) instead of below it.
+The action pair is placed per breakpoint: in the header at the desktop breakpoint, and in a sticky footer pinned over the bottom of the scrolling form at mobile widths, so it stays thumb-reachable while the form scrolls. Both copies render the same actions from the same props — exactly one is visible (and in the tab order) at any width. The footer paints the page background and an elevation shadow (`shadow-sm`, from `--shadow-sm`) so scrolled content never shows through it, and its two actions split the row equally. At mobile the header row — back control and title — reads as the first row of the form rather than a page bar: its divider is drawn above the row (under the app shell's floating header) instead of below it.
 
 `isSubmitDisabled` covers both "not ready yet" and "already submitting", so it cannot on its own tell a user which of the two is happening. `isSubmitting` supplies the difference: it puts a spinner in the submit button, sets `aria-busy` on it, and announces `labels.submittingLabel` (default `'Submitting'`) through the header's `role="status"` region. The button's accessible name stays `labels.submitButtonLabel` throughout — the spinner is `aria-hidden`. Set both flags while a submit is in flight.
 
-Below the header it lays out a three-column body: `left`, the main column (`children`), and `metadata`. Side columns are full width on mobile and a fixed 360px on desktop, with the main column taking the rest. Supplying `left` without `metadata` reserves an empty end column of the same width, so the main column stays optically centered. Column content carries its own padding, borders, and `flex-1` — the container supplies only the column widths and the row/stack direction.
+Below the header it lays out a three-column body: `left`, the main column (`children`), and `metadata`. On mobile the stacked body is the single vertical scroll container. On desktop the body is a non-wrapping clipped row and each populated column owns its vertical overflow, matching `EditorLayout`; the page root and header never scroll. Side columns are full width on mobile and a fixed 400px on desktop, with the main column taking the rest. Supplying `left` without `metadata` reserves an empty end column of the same width, so the main column stays optically centered. Column content carries its own padding, borders, and `flex-1`.
 
 The `styles.cssVars` escape hatch sets arbitrary CSS custom properties on the root, so vars read anywhere inside the form cascade from one place.
 
@@ -215,7 +216,8 @@ import { AvatarPickerModal } from '@epam/ai-dial-builder-form';
     hiddenFilesLabel: 'Hidden files',
     showHiddenFilesLabel: 'Show hidden files',
     hideHiddenFilesLabel: 'Hide hidden files',
-    getSelectionLabel: (count) => `${count} selected`,
+    getSelectionLabel: (count) =>
+      count === 1 ? 'item selected' : 'items selected',
     uploadFilesLabel: 'Upload',
     newFolderLabel: 'New folder',
     downloadLabel: 'Download',
@@ -229,8 +231,116 @@ import { AvatarPickerModal } from '@epam/ai-dial-builder-form';
     deleteConfirmItemsLabel: 'items?',
     deleteConfirmLabel: 'Delete',
     deleteCancelLabel: 'Cancel',
-    uploadProgressTitle: 'Uploading',
-    cancelLabel: 'Cancel',
+  }}
+/>;
+```
+
+### EntityEditor
+
+The standard entity editor page: `EditorLayout` with a back arrow and `<h1>` title, Cancel and a primary button in the header, a "Metadata" `EditorSection` in the 360px left column and a "Setup" `EditorSection` in the right column. `title`, `onBack`, `onCancel`, `onSubmit`, `submitLabel`, and `metadata` are required.
+
+- `isSubmitting` disables Cancel and the primary button and announces `labels.savingStatusLabel`.
+- `isSubmitDisabled` disables only the primary button. Use it for a host-owned readiness reason (an embedded editor that is not ready to save), not for validation — a submit attempt with invalid fields should show the errors instead.
+- `extraActions` render before Cancel; `hideStandardActions` hides Cancel and the primary button so only they remain (e.g. while a preview is open).
+- `metadataTitle` replaces the Metadata heading; `null` renders the section without one, for left-column content that carries its own heading.
+- `metadataFooter` renders below the Metadata section in the left column.
+- `setup` fills the Setup section; without it the left column takes the full width. `setupTitle` replaces the section heading; `null` renders the section without one, for Setup content that carries its own heading (e.g. an embedded editor).
+- `alert` renders in a `role="alert"` region above the Setup section (above Metadata when there is no Setup).
+
+```tsx
+import { EntityEditor, MetadataForm } from '@epam/ai-dial-builder-form';
+
+<EntityEditor
+  title="Create toolset"
+  onBack={handleBack}
+  onCancel={handleBack}
+  onSubmit={handleSubmit}
+  submitLabel="Create"
+  isSubmitting={isSaving}
+  alert={submitError}
+  metadata={
+    <MetadataForm values={values} errors={errors} onChange={handleChange} />
+  }
+  setup={<ToolsetSettings />}
+  labels={{ backAriaLabel: 'Back to catalog' }}
+/>;
+```
+
+### MetadataForm
+
+`DeploymentCreationForm` plus the avatar picker, with English default labels. `values`, `errors`, and `onChange` are required.
+
+`fields` (a list of `MetadataField`) narrows the rendered fields; the order never changes. The Avatar field renders only when `avatarPicker` is supplied. Every value in it is host-resolved: the storage `bucket`, the host's `FileManagerModal`, `resolveIconUrl` for the preview, and `resolveAttachedIconUrl`, which turns the picked file into the icon value to store (return `undefined` to leave the icon unchanged). The lib never builds storage paths itself.
+
+```tsx
+import { MetadataField, MetadataForm } from '@epam/ai-dial-builder-form';
+
+// Full field set with the avatar picker
+<MetadataForm
+  values={values}
+  errors={errors}
+  onChange={handleChange}
+  onNameBlur={handleNameBlur}
+  availableLocaleOptions={localeOptions}
+  avatarPicker={{
+    bucket,
+    FileManagerModal,
+    resolveIconUrl,
+    resolveAttachedIconUrl: (result) => toIconUrl(result.files[0]),
+    allowedMimeTypes: ['image/png', 'image/jpeg', 'image/svg+xml'],
+    maxFileSizeBytes: 1024 * 1024,
+  }}
+/>;
+
+// Name and Description only
+<MetadataForm
+  values={values}
+  errors={errors}
+  onChange={handleChange}
+  fields={[MetadataField.Name, MetadataField.Description]}
+  isDescriptionRequired
+/>;
+```
+
+`renderDescription(textarea, fieldId)` wraps the Description textarea, for example in a label row with an extra action. The textarea then renders without its own label, so the wrapper must label the control whose id is `fieldId`:
+
+```tsx
+import { MetadataField, MetadataForm } from '@epam/ai-dial-builder-form';
+import { Label } from '@epam/ai-dial-ui-kit';
+
+<MetadataForm
+  values={values}
+  errors={errors}
+  onChange={handleChange}
+  fields={[MetadataField.Name, MetadataField.Description]}
+  renderDescription={(textarea, fieldId) => (
+    <>
+      <Label htmlFor={fieldId} label="Description" required />
+      {textarea}
+    </>
+  )}
+/>;
+```
+
+`DEFAULT_METADATA_FORM_LABELS` holds the English labels `MetadataForm` falls back to. `labels.form` replaces the whole group, so spread it to override only a few fields:
+
+```tsx
+import {
+  DEFAULT_METADATA_FORM_LABELS,
+  MetadataField,
+  MetadataForm,
+} from '@epam/ai-dial-builder-form';
+
+<MetadataForm
+  values={values}
+  errors={errors}
+  onChange={handleChange}
+  fields={[MetadataField.Name, MetadataField.Description]}
+  labels={{
+    form: {
+      ...DEFAULT_METADATA_FORM_LABELS,
+      name: { label: 'Name', placeholder: 'Prompt name' },
+    },
   }}
 />;
 ```
@@ -238,6 +348,8 @@ import { AvatarPickerModal } from '@epam/ai-dial-builder-form';
 ### DeploymentCreationForm
 
 Renders the whole shared General-step field set. `values`, `errors`, `onChange`, `onAddAvatarClick`, and `labels` are required. The avatar field never opens a file picker itself — `onAddAvatarClick` is the host's hook to open its own file manager/upload flow, and the host reports the result back through `onChange({ iconUrl })`. `iconPreviewUrl` is the URL to actually render in the preview box; the host resolves it from `values.iconUrl` (which may be a DIAL file id rather than a directly displayable URL). Supplying `labels.ariaLabel` wraps the root in a named `role="group"`, so the field set is discoverable as one region inside a larger host form.
+
+`fields` renders a subset (Avatar, Name + Version, Description, Locales, Tags, in that fixed order); Name takes the full row when Version is hidden. `isNameReadOnly`, `nameCaption`, `isDescriptionRequired`, and `errors.description` cover editors whose name is fixed after creation or whose description is required. When errors first appear, focus moves to the first invalid field — Name, then Version, then Description. `labels.topics.placeholder` falls back to `'Add tags, comma separated'`.
 
 ```tsx
 import { DeploymentCreationForm } from '@epam/ai-dial-builder-form';
@@ -298,7 +410,7 @@ import { DeploymentLocalesField } from '@epam/ai-dial-builder-form';
 
 ### validateDeploymentCreationFields
 
-Pure validation returning untranslated error codes. Pattern checks are opt-in, because the allowed character set differs by deployment kind.
+Pure validation returning untranslated error codes. Length and control-character checks always run — the name must be at most `ENTITY_NAME_MAX_LENGTH` (256) characters with no line breaks or tabs, and the description at most `ENTITY_DESCRIPTION_MAX_LENGTH` (2000), both from `@epam/ai-dial-chat-shared`. Pattern checks are opt-in, because the allowed character set differs by deployment kind. Pass the translated `description` message back through `errors.description`; `DeploymentCreationForm` renders it under the field.
 
 ```tsx
 import {
@@ -311,7 +423,7 @@ import {
 
 const codes = validateDeploymentCreationFields(values, {
   validateNamePattern: true,
-  validateVersionPattern: true, // or: SEMVER_VERSION_PATTERN for a stricter check
+  validateVersionPattern: true, // or: SEMVER_VERSION_PATTERN for a SemVer 2.0.0 check
 });
 
 const errors = {
@@ -325,10 +437,48 @@ const errors = {
 `NAME_PATTERN` allows letters, digits, spaces, underscores, dots, and dashes;
 `VERSION_PATTERN` (the default when `validateVersionPattern: true`) allows
 letters, digits, dots, underscores, and dashes. Pass a `RegExp` instead of
-`true` — e.g. `SEMVER_VERSION_PATTERN`, which requires one or more
-dot-separated numeric segments (`0.0.1`, `2.0`) — for a host that needs a
-stricter version format. All three are exported so a host can pre-filter
+`true` — e.g. `SEMVER_VERSION_PATTERN`, which requires a SemVer 2.0.0
+version (`1.0.0`, `1.0.0-beta.1`, `1.0.0+build.5`; not `1.2`, `1.0.0.0` or
+`01.0.0`), the rule DIAL Admin applies — for a host that needs a stricter
+version format. All three are exported so a host can pre-filter
 input with the same rule the validator applies.
+
+## Hooks
+
+### useMetadataForm
+
+Headless metadata state: values, touched fields, and validation through `validateDeploymentCreationFields`. An error is visible once its field has been touched (`markTouched`, typically on blur) — a `TooLong` or `ControlCharacters` code shows as soon as the value is typed — and every error is visible after `attemptSubmit()`, which returns whether the values are valid. `initialValues` seed the form once per `reseedKey`, so a host re-render never overwrites the user's edits. It returns error codes, not messages.
+
+Pass `submitAttemptCount` to `MetadataForm`'s `focusRequestKey`: focus then moves to the first invalid field on each submit attempt, and an error that appears on blur never pulls focus back from the field the user just moved to.
+
+```tsx
+import {
+  MetadataField,
+  MetadataForm,
+  SEMVER_VERSION_PATTERN,
+  useMetadataForm,
+} from '@epam/ai-dial-builder-form';
+
+const metadata = useMetadataForm({
+  initialValues,
+  validationOptions: { validateVersionPattern: SEMVER_VERSION_PATTERN },
+  reseedKey: appId,
+});
+
+const handleSubmit = () => {
+  if (!metadata.attemptSubmit()) return;
+  void save(metadata.values);
+};
+
+<MetadataForm
+  values={metadata.values}
+  errors={toMessages(metadata.visibleErrorCodes)}
+  onChange={metadata.setValues}
+  onNameBlur={() => metadata.markTouched(MetadataField.Name)}
+  onVersionBlur={() => metadata.markTouched(MetadataField.Version)}
+  focusRequestKey={metadata.submitAttemptCount}
+/>;
+```
 
 ## Enums
 
@@ -338,6 +488,18 @@ import { DeploymentCreationFieldErrorCode } from '@epam/ai-dial-builder-form';
 DeploymentCreationFieldErrorCode.Required; // field left empty
 DeploymentCreationFieldErrorCode.InvalidFormat; // value fails its pattern
 DeploymentCreationFieldErrorCode.TooLong; // value exceeds its maximum length
+DeploymentCreationFieldErrorCode.ControlCharacters; // name contains a line break, tab, …
+```
+
+```tsx
+import { MetadataField } from '@epam/ai-dial-builder-form';
+
+MetadataField.Avatar;
+MetadataField.Name;
+MetadataField.Version;
+MetadataField.Description;
+MetadataField.Locales;
+MetadataField.Tags;
 ```
 
 ## Types
@@ -378,6 +540,14 @@ import type {
   AddAvatarProps,
   AddAvatarColors,
   AddAvatarStyles,
+  EntityEditorProps,
+  EntityEditorLabels,
+  EntityEditorStyles,
+  MetadataFormProps,
+  MetadataFormLabels,
+  MetadataFormAvatarPicker,
+  UseMetadataFormOptions,
+  UseMetadataFormResult,
 } from '@epam/ai-dial-builder-form';
 ```
 
@@ -399,10 +569,12 @@ they are hashed at build time — nor through DOM order or ARIA attributes, whic
 are structure and accessibility contracts rather than styling ones. Selected
 elements therefore carry a stable public class.
 
-| Key       | Class                       | Element                                                    |
-| --------- | --------------------------- | ---------------------------------------------------------- |
-| `layout`  | `dial-builder-form-layout`  | The editor layout root, holding the header and the columns |
-| `section` | `dial-builder-form-section` | Every `EditorSection` box, titled or not                   |
+| Key               | Class                                | Element                                                        |
+| ----------------- | ------------------------------------ | -------------------------------------------------------------- |
+| `layout`          | `dial-builder-form-layout`           | The editor layout root, holding the header and the columns     |
+| `section`         | `dial-builder-form-section`          | Every `EditorSection` box, titled or not                       |
+| `metadataSection` | `dial-builder-form-metadata-section` | The Metadata section `EntityEditor` renders in the left column |
+| `setupSection`    | `dial-builder-form-setup-section`    | The Setup section `EntityEditor` renders in the right column   |
 
 ```tsx
 import { BUILDER_FORM_CLASS } from '@epam/ai-dial-builder-form';

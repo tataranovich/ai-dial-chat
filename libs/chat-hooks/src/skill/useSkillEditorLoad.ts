@@ -15,9 +15,12 @@ import {
   stripTrailingSlashes,
 } from '../shared/string-utils';
 import {
+  isSkillFolderMarkerPath,
   nameFromPath,
   parseSkillManifest,
+  SKILL_FOLDER_MARKER,
   SKILL_MANIFEST_FILE,
+  skillFolderMarkerParent,
   unpackSkillArchive,
 } from './skill';
 import type { SkillFileContent } from './skill-file-preview';
@@ -59,9 +62,21 @@ interface LoadedSkill {
   etag: string;
   manifestText: string;
   files: Map<string, Uint8Array>;
+  folders: string[];
 }
 
 class InvalidSkillArchiveError extends Error {}
+
+/**
+ * The skill loaded, but carried no version tag to send back as `If-Match`.
+ * Deliberately not an {@link InvalidSkillArchiveError}: that one means this
+ * Core installation cannot serve the skill as one archive, which the
+ * per-file path recovers from. A missing tag is not recoverable that way —
+ * the per-file path can only offer the manifest *file*'s tag, and sending a
+ * file's tag as a whole-skill precondition is what made a save fail with
+ * `412` under a banner blaming a concurrent edit that never happened.
+ */
+class MissingSkillEtagError extends Error {}
 
 const resolveSkillFilePath = (
   item: SkillMetadataItemDto,
@@ -93,12 +108,14 @@ const loadSkillArchive = async (
 ): Promise<LoadedSkill> => {
   const response = await client.downloadSkill(bucket, skillPath);
   const etag = response.headers.get('etag');
-  if (!etag) throw new InvalidSkillArchiveError('Skill ETag is missing');
+  if (!etag) throw new MissingSkillEtagError('Skill ETag is missing');
 
   try {
     const buffer = await response.arrayBuffer();
-    const { manifestText, files } = unpackSkillArchive(new Uint8Array(buffer));
-    return { etag, manifestText, files };
+    const { manifestText, files, folders } = unpackSkillArchive(
+      new Uint8Array(buffer),
+    );
+    return { etag, manifestText, files, folders };
   } catch {
     throw new InvalidSkillArchiveError('Skill ZIP is invalid');
   }
@@ -124,17 +141,22 @@ const loadSkillFiles = async (
       resolveSkillFilePath(item, skillPath) === SKILL_MANIFEST_FILE,
   );
   const etag = manifestResponse.headers.get('etag') ?? manifestItem?.etag;
-  if (!etag) throw new Error('Skill ETag is missing');
+  if (!etag) throw new MissingSkillEtagError('Skill ETag is missing');
 
-  const fileItems = listing.items
+  const itemPaths = listing.items
     .filter((item) => item.nodeType === 'item')
-    .map((item) => ({ item, path: resolveSkillFilePath(item, skillPath) }))
+    .map((item) => resolveSkillFilePath(item, skillPath))
     .filter(
-      (entry): entry is { item: SkillMetadataItemDto; path: string } =>
-        entry.path != null && entry.path !== SKILL_MANIFEST_FILE,
+      (path): path is string => path != null && path !== SKILL_MANIFEST_FILE,
     );
+  const folders = itemPaths
+    .filter(isSkillFolderMarkerPath)
+    .map(skillFolderMarkerParent);
+  const filePaths = itemPaths.filter(
+    (path) => nameFromPath(path) !== SKILL_FOLDER_MARKER,
+  );
   const downloadedFiles = await Promise.all(
-    fileItems.map(async ({ path }) => {
+    filePaths.map(async (path) => {
       const response = await client.downloadSkillFile(bucket, skillPath, path);
       return [path, new Uint8Array(await response.arrayBuffer())] as const;
     }),
@@ -144,6 +166,7 @@ const loadSkillFiles = async (
     etag,
     manifestText: await manifestResponse.text(),
     files: new Map(downloadedFiles),
+    folders,
   };
 };
 
@@ -234,6 +257,14 @@ export const useSkillEditorLoad = ({
         try {
           loadedSkill = await loadSkillArchive(client, bucket, skillPath);
         } catch (error) {
+          /*
+           * A skill served without a version tag is a load failure, not a
+           * reason to try the other route: the per-file path would answer
+           * with the manifest file's own tag, which a whole-skill save then
+           * rejects. Better a retryable error than a form that cannot save.
+           */
+          if (error instanceof MissingSkillEtagError) throw error;
+
           const status = getApiErrorStatus(error);
           if (!(error instanceof InvalidSkillArchiveError) && status !== 400) {
             throw error;
@@ -257,13 +288,21 @@ export const useSkillEditorLoad = ({
         filesContentRef.current = new Map(
           [...loadedSkill.files].map(([path, bytes]) => [path, { bytes }]),
         );
-        setFiles(
-          [...loadedSkill.files.keys()].map((path) => ({
+        const fileNodes: SkillFileTreeNode[] = [
+          ...loadedSkill.files.keys(),
+        ].map((path) => ({
+          path,
+          name: nameFromPath(path),
+          kind: SkillFileNodeKind.File,
+        }));
+        const folderNodes: SkillFileTreeNode[] = loadedSkill.folders
+          .filter((path) => !loadedSkill.files.has(path))
+          .map((path) => ({
             path,
             name: nameFromPath(path),
-            kind: SkillFileNodeKind.File,
-          })),
-        );
+            kind: SkillFileNodeKind.Folder,
+          }));
+        setFiles([...fileNodes, ...folderNodes]);
         setLoadedValues({
           name: typeof frontmatter.name === 'string' ? frontmatter.name : '',
           description:

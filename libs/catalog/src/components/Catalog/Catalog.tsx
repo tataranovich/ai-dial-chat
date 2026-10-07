@@ -24,6 +24,7 @@ import {
 } from '../../utils/catalog-filter';
 import { sortCatalogItems } from '../../utils/catalog-sort';
 import { buildCatalogTabs } from '../../utils/catalog-tabs';
+import { getCatalogMarkdownLabels } from '../../utils/item-details-texts';
 import { getStyles } from '../../utils/styles';
 import { isLevelSignedIn, sleep } from '../../utils/toolset-credentials';
 import { CardGrid } from '../CardGrid/CardGrid';
@@ -58,7 +59,7 @@ export const Catalog: FC<CatalogProps> = ({
   items,
   tabs: controlledTabs,
   topicOptions: controlledTopicOptions,
-  favorites,
+  favorites: favoritesProp,
   titles,
   browseHeaderRenderer,
   onToggleFavorite,
@@ -95,6 +96,7 @@ export const Catalog: FC<CatalogProps> = ({
   onLoadContentFile,
   onLoadContentFilePreview,
   renderContentFilePreview,
+  renderContentFileTree,
   onDelete,
   onUnshare,
   isUnshareVisible,
@@ -107,6 +109,7 @@ export const Catalog: FC<CatalogProps> = ({
   onLogout,
   onCreateClick,
   createOptions,
+  createSearch,
   hideCreateButton = false,
   hidePageTitle = false,
   isReadonly = false,
@@ -210,6 +213,11 @@ export const Catalog: FC<CatalogProps> = ({
   const filteredItems = useMemo(
     () => items.filter((item) => !item.isHidden),
     [items],
+  );
+
+  const favorites = useMemo(
+    () => favoritesProp.filter((item) => !item.isHidden),
+    [favoritesProp],
   );
 
   const allFilterValues = useMemo(
@@ -503,6 +511,32 @@ export const Catalog: FC<CatalogProps> = ({
   const isFavoritesVisible = isFavoritesRendered && !isReadonly;
 
   const emptyTitle = query ? noResultsTitle(query) : 'No items';
+  /* Keyed on the strings, not `detailsTexts`, which hosts often pass inline;
+   * a fresh object here would invalidate every virtual grid row. */
+  const {
+    copyCodeAriaLabel,
+    copiedCodeStatusLabel,
+    downloadCodeAriaLabel,
+    tableScrollRegionAriaLabel,
+    mathScrollRegionAriaLabel,
+  } = detailsTexts ?? {};
+  const cardMarkdownLabels = useMemo(
+    () =>
+      getCatalogMarkdownLabels({
+        copyCodeAriaLabel,
+        copiedCodeStatusLabel,
+        downloadCodeAriaLabel,
+        tableScrollRegionAriaLabel,
+        mathScrollRegionAriaLabel,
+      }),
+    [
+      copyCodeAriaLabel,
+      copiedCodeStatusLabel,
+      downloadCodeAriaLabel,
+      tableScrollRegionAriaLabel,
+      mathScrollRegionAriaLabel,
+    ],
+  );
   const cardGridTitles = useMemo(
     () => ({
       noResultsTitle: emptyTitle,
@@ -564,6 +598,10 @@ export const Catalog: FC<CatalogProps> = ({
                 label={createLabel}
                 options={createOptions}
                 onClick={onCreateClick}
+                search={createSearch}
+                searchPlaceholder={titles?.createSearchPlaceholder}
+                searchClearLabel={titles?.createSearchClearLabel}
+                noResultsLabel={titles?.createNoResultsLabel}
               />
             )}
           </div>
@@ -673,6 +711,7 @@ export const Catalog: FC<CatalogProps> = ({
                   isReadonly={isReadonly}
                   isFullWidth={isFullWidth}
                   featuredChipStyle={catalogStyles?.colors?.featuredChipStyle}
+                  markdownLabels={cardMarkdownLabels}
                 />
               </div>
 
@@ -756,6 +795,7 @@ export const Catalog: FC<CatalogProps> = ({
           onLoadContentFile={onLoadContentFile}
           onLoadContentFilePreview={onLoadContentFilePreview}
           renderContentFilePreview={renderContentFilePreview}
+          renderContentFileTree={renderContentFileTree}
           onDelete={onDelete}
           onUnshare={onUnshare}
           isUnshareVisible={isUnshareVisible}

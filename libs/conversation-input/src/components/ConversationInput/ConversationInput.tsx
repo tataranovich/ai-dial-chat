@@ -10,13 +10,14 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   placeholder = 'Type a prompt or use "/" to select one',
   welcomeText,
   descriptionText,
+  belowWelcomeSlot,
   styles: stylesProp,
   className,
   inputClassName,
   isInputDisabled = false,
   ...inputProps
 }) => {
-  const { colors, typography, attachmentTray } = stylesProp ?? {};
+  const { colors, typography, attachmentTray, modelMenu } = stylesProp ?? {};
 
   const cssVars = buildCssVars({
     '--ci-welcome-color': colors?.welcomeText,
@@ -55,6 +56,13 @@ export const ConversationInput: FC<ConversationInputProps> = ({
           )}
         </div>
       )}
+      {belowWelcomeSlot != null && (
+        /* `empty:hidden` drops the flex gap when the slot renders nothing,
+           e.g. a starters component with no starters. */
+        <div className="flex w-full max-w-[700px] flex-col items-center empty:hidden">
+          {belowWelcomeSlot}
+        </div>
+      )}
       <div
         className={mergeClasses(
           'relative w-full',
@@ -72,6 +80,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
           colors={colors?.input}
           typography={typography?.input}
           attachmentTray={attachmentTray}
+          modelMenu={modelMenu}
         />
       </div>
     </div>

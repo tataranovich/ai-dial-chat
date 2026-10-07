@@ -10,7 +10,7 @@ it is absent from the ID token.
 ## Requirements
 ### Requirement: The `job_title` OIDC claim is captured into the session on login
 
-`AuthController.callback()` SHALL include `job_title` in the allowlist of OIDC ID-token claims copied into `SessionPayload.claims` when present on the token, using the same allowlist mechanism as `name`, `email`, `preferred_username`, and the other existing allowlisted claims. No new per-provider configuration key is introduced for this claim name — it is read the same way for every provider, same as the other allowlisted claims (unlike `rolesClaim`, which is configurable). Once a request is authenticated via the session cookie, the same value is available as `SessionUser.claims['job_title']`.
+`AuthController.callback()` SHALL include `job_title` in the allowlist of OIDC ID-token claims copied into `SessionPayload.claims` when present on the token as a string that is non-empty after trimming, using the same allowlist mechanism as `name`, `email`, `preferred_username`, and the other existing allowlisted claims. No new per-provider configuration key is introduced for this claim name — it is read the same way for every provider, same as the other allowlisted claims (unlike `rolesClaim`, which is configurable). Once a request is authenticated via the session cookie, the same value is available as `SessionUser.claims['job_title']`.
 
 #### Scenario: Provider's ID token includes a job title
 
@@ -21,6 +21,15 @@ it is absent from the ID token.
 
 - **WHEN** a user completes login and neither the ID token nor an applicable Keycloak UserInfo fallback supplies a usable `job_title` claim
 - **THEN** the session's `claims` does not include a `job_title` key, and reading it from `SessionUser.claims` yields no value
+
+#### Scenario: Provider's ID token carries an unusable job title
+- **WHEN** a user completes login and the ID token's `job_title` is an empty or whitespace-only string, or is not a string (number, `null`, array), and no applicable Keycloak UserInfo fallback supplies a usable value
+- **THEN** the session's `claims` does not include a `job_title` key, and no `X-JOB-TITLE` header is sent for that session
+- **AND** for Keycloak, an unusable ID-token value counts as absent, so the UserInfo fallback is still attempted
+
+#### Scenario: Forwarding ignores an unusable job title from any source
+- **WHEN** `getJobTitleClaim` reads `SessionUser.claims` (cookie session or unfiltered bearer-JWT claims) and `job_title` is missing, not a string, or empty after trimming
+- **THEN** it yields no value, so the outbound DIAL Core request omits `X-JOB-TITLE`; a non-empty string is returned unchanged and forwarded
 
 ### Requirement: Keycloak can supply job title through UserInfo
 
@@ -84,9 +93,9 @@ For an authenticated completion request, the BFF SHALL add an `X-JOB-TITLE` head
 - **WHEN** the caller's `job_title` contains bytes outside the safe HTTP field-value range (e.g. non-ASCII characters)
 - **THEN** the outbound `X-JOB-TITLE` value is percent-encoded the same way `X-CONVERSATION-ID` already is, and the request is not rejected by the HTTP client for an invalid header byte
 
-### Requirement: Models list and default-model requests to DIAL Core carry the caller's job title
+### Requirement: Models list requests to DIAL Core carry the caller's job title
 
-The `GET /api/v1/deployments` endpoint's single underlying DIAL Core `listDeployments` call — which backs both the models list and the default-model value embedded in that same response — SHALL include `X-JOB-TITLE` with the caller's session `job_title` value when present, omitted when absent. This header is not part of the deployments list cache key: a cache hit SHALL continue to skip the DIAL Core call (and therefore this header) exactly as it does today, since the header does not affect the returned deployment data.
+The `GET /api/v1/deployments` endpoint's single underlying DIAL Core `listDeployments` call — which backs the models list returned as `DeploymentsResponseDto` (`{ deployments: DeploymentItemDto[] }`, with no default-model field) — SHALL include `X-JOB-TITLE` with the caller's session `job_title` value when present, omitted when absent. This header is not part of the deployments list cache key: a cache hit SHALL continue to skip the DIAL Core call (and therefore this header) exactly as it does today, since the header does not affect the returned deployment data.
 
 #### Scenario: Deployments list request forwards job title
 

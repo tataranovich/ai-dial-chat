@@ -5,9 +5,12 @@ import type {
 } from '@epam/ai-dial-chat-api-client';
 import {
   ArchiveItemDtoNodeTypeEnum,
+  CopyItemDtoNodeTypeEnum,
   DeleteItemDtoNodeTypeEnum,
+  MoveItemDtoNodeTypeEnum,
   RenameItemDtoNodeTypeEnum,
 } from '@epam/ai-dial-chat-api-client';
+import { getParentFolderPath } from '@epam/ai-dial-chat-shared';
 import type {
   DialCopiedItem,
   DialDeletedItem,
@@ -50,7 +53,6 @@ import type { DialFilesApi } from '../dial-files-api';
 import { DownloadDestinationType } from '../download-destination';
 import type { DownloadDestinationHandlers } from '../download-destination';
 import {
-  getParentFolderPath,
   resolveDialFileApiPath,
   virtualPathToApiPath,
 } from '../resolve-dial-file-api-path';
@@ -167,7 +169,7 @@ export const useDialFileMutations = ({
    * confirm callback on it — and the name it eventually passes to
    * `onCreateFolder` is derived by splitting a constructed virtual path on
    * '/', which silently swallows an embedded '/' the user typed as if it
-   * were a path separator (see #7968). Track the last live-typed validation
+   * were a path separator (see [#7968](https://github.com/epam/ai-dial-chat/issues/7968)). Track the last live-typed validation
    * result here so `onCreateFolder` can refuse even when the value it
    * receives no longer reflects that error.
    */
@@ -185,8 +187,6 @@ export const useDialFileMutations = ({
           reason: FileNameValidationErrorReason.ForbiddenSymbols,
           symbols: NOT_ALLOWED_SYMBOLS,
         };
-      } else if (name.startsWith('.')) {
-        error = { reason: FileNameValidationErrorReason.LeadingDot };
       } else if (name === RESERVED_MARKER_NAME) {
         error = { reason: FileNameValidationErrorReason.ReservedName };
       } else if (name.length > 255) {
@@ -407,10 +407,20 @@ export const useDialFileMutations = ({
       const run = async () => {
         setIsDeleting(true);
 
+        /*
+         * Deleted folders in the listing's own path space (the space `folderPath`
+         * lives in); on the Shared tab `dto.path` is in owner coordinates instead.
+         */
+        const deletedListingFolderPaths: string[] = [];
         const dtos: DeleteItemDto[] = deletedItems.map((item) => {
           const isFolder = item.nodeType === DialFileNodeType.FOLDER;
           const apiPath = virtualPathToApiPath(item.sourceUrl, rootLabel);
           const relPath = isFolder ? apiPath : apiPath.replace(/\/$/, '');
+          if (isFolder && relPath !== '') {
+            deletedListingFolderPaths.push(
+              relPath.endsWith('/') ? relPath : `${relPath}/`,
+            );
+          }
           const name = getVirtualPathName(item.sourceUrl, relPath);
           const { bucket: itemBucket, path: itemPath } =
             activeTab === DialFileManagerTabs.Shared
@@ -469,10 +479,6 @@ export const useDialFileMutations = ({
           });
         }
 
-        const deletedFolderPaths = dtos
-          .filter((d) => d.nodeType === DeleteItemDtoNodeTypeEnum.Folder)
-          .map((d) => (d.path.endsWith('/') ? d.path : `${d.path}/`));
-
         const affectedFolderKeys = new Set<string>(
           dtos.map((d) => {
             if (d.nodeType === DeleteItemDtoNodeTypeEnum.Folder) {
@@ -485,11 +491,21 @@ export const useDialFileMutations = ({
 
         invalidateFolders([...affectedFolderKeys]);
 
-        const isCurrentFolderDeleted = deletedFolderPaths.some(
-          (fp) => folderPath === fp || folderPath.startsWith(fp),
-        );
-        if (isCurrentFolderDeleted) {
-          setFolderPath((prev) => prev.replace(/[^/]+\/$/, ''));
+        /*
+         * When the browsed folder is, or sits inside, a deleted folder, land on the
+         * parent of the outermost such folder; every deeper match went with it.
+         */
+        const outermostDeletedAncestor = deletedListingFolderPaths
+          .filter((deletedPath) => folderPath.startsWith(deletedPath))
+          .reduce<string | undefined>(
+            (outermost, deletedPath) =>
+              outermost == null || deletedPath.length < outermost.length
+                ? deletedPath
+                : outermost,
+            undefined,
+          );
+        if (outermostDeletedAncestor != null) {
+          setFolderPath(getParentFolderPath(outermostDeletedAncestor));
         }
 
         bumpRetry();
@@ -571,13 +587,32 @@ export const useDialFileMutations = ({
               results,
             );
 
-            onOperationSuccess?.({
-              kind:
+            /* The Duplicate action is a copy into each item's own folder. */
+            const isDuplicate = dtos.every(
+              (dto) =>
+                getParentFolderPath(dto.sourcePath) ===
+                getParentFolderPath(dto.destinationPath),
+            );
+            let kind: FileOperationKind;
+            if (isDuplicate) {
+              kind =
+                successCount === 1
+                  ? FileOperationKind.FileDuplicated
+                  : FileOperationKind.FilesDuplicated;
+            } else {
+              kind =
                 successCount === 1
                   ? FileOperationKind.FileCopied
-                  : FileOperationKind.FilesCopied,
+                  : FileOperationKind.FilesCopied;
+            }
+
+            onOperationSuccess?.({
+              kind,
               name: firstSuccessfulItem?.destinationName,
               count: successCount,
+              isFolder:
+                firstSuccessfulItem?.dto.nodeType ===
+                CopyItemDtoNodeTypeEnum.Folder,
               destinationFolderName: formatOperationFolderName(
                 destinationFolder,
                 rootLabel,
@@ -736,6 +771,9 @@ export const useDialFileMutations = ({
                 : FileOperationKind.FilesMoved,
             name: firstSuccessfulItem?.destinationName,
             count: moveSuccessCount,
+            isFolder:
+              firstSuccessfulItem?.dto.nodeType ===
+              MoveItemDtoNodeTypeEnum.Folder,
             destinationFolderName: formatOperationFolderName(
               destinationFolder,
               rootLabel,

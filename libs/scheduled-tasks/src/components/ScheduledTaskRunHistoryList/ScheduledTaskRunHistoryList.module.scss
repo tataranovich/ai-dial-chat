@@ -21,12 +21,22 @@
   );
 }
 
+/* Hover stays lighter than the current-run highlight so the current row keeps visible hover feedback. */
 .interactiveRow:hover {
-  background: var(--strhl-row-hover-bg, transparent);
+  background: var(
+    --strhl-row-hover-bg,
+    var(--bg-control-accent-alpha, #2764d90f)
+  );
 }
 
+/* Focus mirrors hover and adds an outline: a background alone would read as the current-run highlight (WCAG 2.4.7). */
 .interactiveRow:focus-visible {
-  background: var(--strhl-row-focus-bg, var(--strhl-row-hover-bg, transparent));
+  background: var(
+    --strhl-row-focus-bg,
+    var(--strhl-row-hover-bg, var(--bg-control-accent-alpha, #2764d90f))
+  );
+  outline: 2px solid var(--strhl-row-focus-outline, var(--text-accent, #1d4ed8));
+  outline-offset: -2px;
 }
 
 .unreadDot {

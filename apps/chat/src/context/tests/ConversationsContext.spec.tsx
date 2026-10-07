@@ -2,6 +2,7 @@ import {
   ConversationDeletionFailureDtoCodeEnum,
   type ConversationDeletionResultDto,
 } from '@epam/ai-dial-chat-api-client';
+import { useActiveConversationSync } from '@epam/ai-dial-chat-hooks';
 import {
   OverlayEventType,
   OverlayRequestType,
@@ -13,6 +14,10 @@ import * as conversationsApi from '../../server-api/conversations.api';
 import * as userConfigApi from '../../server-api/user-config.api';
 import { AuthStatus } from '../../types/auth-status';
 import {
+  conversationIdsMatch,
+  toPanelConversationId,
+} from '../../utils/conversation-id-match';
+import {
   ConversationsProvider,
   useConversations,
 } from '../ConversationsContext';
@@ -21,13 +26,14 @@ import { useAppConfig as mockUseAppConfig } from './app-config-context-mock';
 
 const contextMocks = vi.hoisted(() => ({
   userSub: 'user-1' as string | undefined,
+  setPinnedConversation: vi.fn(),
 }));
 
 vi.mock('../../server-api/conversations.api');
 vi.mock('../../server-api/user-config.api');
 vi.mock('../UserConfigContext', () => ({
   useUserConfig: () => ({
-    setPinnedConversation: vi.fn().mockResolvedValue(undefined),
+    setPinnedConversation: contextMocks.setPinnedConversation,
   }),
 }));
 
@@ -98,6 +104,7 @@ const seedConversations = [
 beforeEach(() => {
   vi.clearAllMocks();
   contextMocks.userSub = 'user-1';
+  contextMocks.setPinnedConversation.mockResolvedValue(undefined);
   mockUseAppConfig.mockReturnValue({
     config: { overlayAllowedOrigins: ['https://partner.example.com'] },
   });
@@ -218,6 +225,72 @@ describe('ConversationsContext — background refresh', () => {
     expect(result.current.isLoading).toBe(false);
     expect(result.current.conversations).toEqual(seedConversations);
     expect(result.current.error).toBe(refreshError);
+  });
+});
+
+describe('ConversationsContext — no-op updates keep the list reference', () => {
+  const renderLoaded = async () => {
+    const view = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+    return view;
+  };
+
+  it('keeps the list when a title is set to its current value', async () => {
+    const { result } = await renderLoaded();
+    const before = result.current.conversations;
+
+    act(() => {
+      result.current.updateConversationTitle('conv2', 'Chat 2');
+    });
+
+    expect(result.current.conversations).toBe(before);
+  });
+
+  it('replaces only the renamed item when a title changes', async () => {
+    const { result } = await renderLoaded();
+    const before = result.current.conversations;
+
+    act(() => {
+      result.current.updateConversationTitle('conv2', 'Renamed');
+    });
+
+    const after = result.current.conversations;
+    expect(after).not.toBe(before);
+    expect(after[1].title).toBe('Renamed');
+    expect(after[0]).toBe(before[0]);
+    expect(after[2]).toBe(before[2]);
+  });
+
+  it('keeps the list when removing an id that is not in it', async () => {
+    const { result } = await renderLoaded();
+    const before = result.current.conversations;
+
+    act(() => {
+      result.current.removeConversationFromList('missing');
+    });
+
+    expect(result.current.conversations).toBe(before);
+  });
+
+  it('keeps the list when pinning to the current pin state and still persists it', async () => {
+    const { result } = await renderLoaded();
+    const before = result.current.conversations;
+
+    let pinPromise!: Promise<void>;
+    act(() => {
+      pinPromise = result.current.pinConversation('conv1', false);
+    });
+
+    expect(result.current.conversations).toBe(before);
+    await act(async () => {
+      await pinPromise;
+    });
+    expect(contextMocks.setPinnedConversation).toHaveBeenCalledWith(
+      'conv1',
+      false,
+    );
   });
 });
 
@@ -708,6 +781,416 @@ describe('ConversationsContext — bumpConversationActivity', () => {
 });
 
 describe('ConversationsContext — markConversationViewed', () => {
+  it('discovers a completed run after navigation and marks its late metadata viewed', async () => {
+    vi.useFakeTimers();
+    try {
+      mockListConversations.mockResolvedValue({ items: [] });
+      mockMarkConversationViewed.mockResolvedValue(undefined);
+      const task = {
+        ...seedConversations[0],
+        id: 'conversations/bucket/.scheduler/task/run',
+        isScheduledTask: true,
+        isUnread: true,
+      };
+      const { result, rerender, unmount } = renderHook(
+        ({ activeId }) => {
+          const context = useConversations();
+          useActiveConversationSync({
+            activeConversationId: activeId,
+            items: context.conversations,
+            refreshConversations: context.refreshConversations,
+            markConversationViewed: context.markConversationViewed,
+            conversationIdsMatch,
+            toPanelConversationId,
+          });
+          return context;
+        },
+        {
+          wrapper: ConversationsProvider,
+          initialProps: { activeId: undefined as string | undefined },
+        },
+      );
+      await act(async () => undefined);
+      /* The final run status has a conversation id before list metadata exists. */
+      await act(async () => result.current.refreshConversations([task.id]));
+      rerender({ activeId: 'bucket/.scheduler/task/run' });
+      await act(async () => undefined);
+      expect(mockMarkConversationViewed).not.toHaveBeenCalled();
+      mockListConversations.mockResolvedValue({ items: [task] });
+      await act(async () => vi.advanceTimersByTimeAsync(2_000));
+      expect(result.current.conversations[0].isUnread).toBe(false);
+      expect(mockMarkConversationViewed).toHaveBeenCalledExactlyOnceWith(
+        '.scheduler/task/run',
+      );
+      const calls = mockListConversations.mock.calls.length;
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(mockListConversations).toHaveBeenCalledTimes(calls);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries discovery after a temporary list failure', async () => {
+    vi.useFakeTimers();
+    try {
+      mockListConversations.mockResolvedValue({ items: [] });
+      const { result, unmount } = renderHook(() => useConversations(), {
+        wrapper: ConversationsProvider,
+      });
+      await act(async () => undefined);
+      mockListConversations.mockRejectedValueOnce(
+        new Error('temporary outage'),
+      );
+      await act(async () => result.current.refreshConversations(['conv1']));
+      mockListConversations.mockResolvedValue({ items: seedConversations });
+      await act(async () => vi.advanceTimersByTimeAsync(2_000));
+      expect(result.current.conversations).toEqual(seedConversations);
+      expect(result.current.error).toBeNull();
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([true, false])(
+    'keeps successful discovery when a newer refresh fails (failure first: %s)',
+    async (failureFirst) => {
+      mockListConversations.mockResolvedValue({ items: [] });
+      const { result } = renderHook(() => useConversations(), {
+        wrapper: ConversationsProvider,
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      const task = {
+        ...seedConversations[0],
+        isScheduledTask: true,
+        isUnread: true,
+      };
+      let finishDiscovery!: (value: { items: (typeof task)[] }) => void;
+      let failRefresh!: (error: Error) => void;
+      mockListConversations
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            finishDiscovery = resolve;
+          }),
+        )
+        .mockReturnValueOnce(
+          new Promise((_resolve, reject) => {
+            failRefresh = reject;
+          }),
+        );
+      let discovery!: Promise<void>;
+      let refresh!: Promise<void>;
+      act(() => {
+        discovery = result.current.refreshConversations();
+        refresh = result.current.refreshConversations();
+      });
+      const completeDiscovery = async () => {
+        finishDiscovery({ items: [task] });
+        await discovery;
+      };
+      const rejectRefresh = async () => {
+        failRefresh(new Error('temporary outage'));
+        await refresh;
+      };
+      await act(failureFirst ? rejectRefresh : completeDiscovery);
+      await act(failureFirst ? completeDiscovery : rejectRefresh);
+      expect(result.current.conversations).toEqual([task]);
+    },
+  );
+
+  it('keeps the successful initial load when an overlapping refresh fails', async () => {
+    let finishLoad!: (value: { items: typeof seedConversations }) => void;
+    mockListConversations.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishLoad = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    mockListConversations.mockRejectedValueOnce(new Error('temporary outage'));
+    await act(async () => result.current.refreshConversations());
+    await act(async () => {
+      finishLoad({ items: seedConversations });
+    });
+    expect(result.current.conversations).toEqual(seedConversations);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('serializes viewed writes for rapidly opened chats while clearing both indicators immediately', async () => {
+    const tasks = seedConversations
+      .slice(0, 2)
+      .map((item) => ({ ...item, isScheduledTask: true, isUnread: true }));
+    mockListConversations.mockResolvedValue({ items: tasks });
+    let finishFirst!: () => void;
+    mockMarkConversationViewed
+      .mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishFirst = resolve;
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.markConversationViewed('conv1');
+      second = result.current.markConversationViewed('conv2');
+    });
+    expect(result.current.conversations.map((item) => item.isUnread)).toEqual([
+      false,
+      false,
+    ]);
+    expect(mockMarkConversationViewed).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finishFirst();
+      await Promise.all([first, second]);
+    });
+    expect(mockMarkConversationViewed.mock.calls.map(([id]) => id)).toEqual([
+      'conv1',
+      'conv2',
+    ]);
+  });
+
+  it('does not let an older list response remove a newly discovered run', async () => {
+    mockListConversations.mockResolvedValue({ items: [] });
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    let finishOlder!: (value: { items: never[] }) => void;
+    mockListConversations.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishOlder = resolve;
+      }),
+    );
+    let older!: Promise<void>;
+    act(() => {
+      older = result.current.refreshConversations();
+    });
+    const task = {
+      ...seedConversations[0],
+      isScheduledTask: true,
+      isUnread: true,
+    };
+    mockListConversations.mockResolvedValueOnce({ items: [task] });
+    await act(async () => result.current.refreshConversations());
+    await act(async () => {
+      finishOlder({ items: [] });
+      await older;
+    });
+    expect(result.current.conversations).toEqual([task]);
+  });
+
+  it('persists a directly opened chat after metadata loads and retries a failed write only on revisit', async () => {
+    const task = {
+      ...seedConversations[0],
+      id: 'conversations/bucket/.scheduler/task/run',
+      isScheduledTask: true,
+      isUnread: true,
+    };
+    let finishLoad!: (value: { items: (typeof task)[] }) => void;
+    mockListConversations.mockReturnValue(
+      new Promise((resolve) => {
+        finishLoad = resolve;
+      }),
+    );
+    mockMarkConversationViewed
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined);
+    const { result, rerender } = renderHook(
+      ({ activeId }) => {
+        const context = useConversations();
+        useActiveConversationSync({
+          activeConversationId: activeId,
+          items: context.conversations,
+          refreshConversations: context.refreshConversations,
+          markConversationViewed: context.markConversationViewed,
+          conversationIdsMatch,
+          toPanelConversationId,
+        });
+        return context;
+      },
+      {
+        wrapper: ConversationsProvider,
+        initialProps: { activeId: 'bucket/.scheduler/task/run' },
+      },
+    );
+    await act(async () => {
+      finishLoad({ items: [task] });
+    });
+    await waitFor(() =>
+      expect(mockMarkConversationViewed).toHaveBeenCalledTimes(1),
+    );
+    expect(result.current.conversations[0].isUnread).toBe(true);
+    await act(async () => result.current.refreshConversations());
+    expect(mockMarkConversationViewed).toHaveBeenCalledTimes(1);
+    rerender({ activeId: 'another-chat' });
+    rerender({ activeId: 'bucket/.scheduler/task/run' });
+    await waitFor(() =>
+      expect(result.current.conversations[0].isUnread).toBe(false),
+    );
+    expect(mockMarkConversationViewed).toHaveBeenCalledTimes(2);
+  });
+
+  it('deduplicates simultaneous views and preserves read state through stale list responses', async () => {
+    const task = {
+      ...seedConversations[0],
+      id: 'conversations/bucket/.scheduler/task/run',
+      isScheduledTask: true,
+      isUnread: true,
+    };
+    mockListConversations.mockResolvedValue({ items: [task] });
+    let finishView!: () => void;
+    mockMarkConversationViewed.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishView = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    let viewing!: Promise<void>;
+    act(() => {
+      viewing = result.current.markConversationViewed(task.id);
+      void result.current.markConversationViewed('bucket/.scheduler/task/run');
+    });
+    expect(mockMarkConversationViewed).toHaveBeenCalledTimes(1);
+    expect(mockMarkConversationViewed).toHaveBeenCalledWith(
+      '.scheduler/task/run',
+    );
+    await act(async () => result.current.refreshConversations());
+    expect(result.current.conversations[0].isUnread).toBe(false);
+    await act(async () => {
+      finishView();
+      await viewing;
+    });
+    await act(async () => result.current.refreshConversations());
+    expect(result.current.conversations[0].isUnread).toBe(false);
+    expect(mockMarkConversationViewed).toHaveBeenCalledTimes(1);
+  });
+
+  it('matches encoded route ids and only marks the selected run viewed', async () => {
+    const task = {
+      ...seedConversations[0],
+      id: 'conversations/bucket/.scheduler/task/run 1',
+      isScheduledTask: true,
+      isUnread: true,
+    };
+    mockListConversations.mockResolvedValue({
+      items: [
+        task,
+        { ...task, id: 'conversations/bucket/.scheduler/task/run2' },
+      ],
+    });
+    mockMarkConversationViewed.mockResolvedValueOnce(undefined);
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await act(async () =>
+      result.current.markConversationViewed('bucket/.scheduler/task/run%201'),
+    );
+    expect(result.current.conversations.map((item) => item.isUnread)).toEqual([
+      false,
+      true,
+    ]);
+  });
+
+  it('allows another view attempt after a failed write and refresh', async () => {
+    const task = {
+      ...seedConversations[0],
+      isScheduledTask: true,
+      isUnread: true,
+    };
+    mockListConversations.mockResolvedValue({ items: [task] });
+    mockMarkConversationViewed
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined);
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await act(async () => result.current.markConversationViewed(task.id));
+    await act(async () => result.current.refreshConversations());
+    expect(result.current.conversations[0].isUnread).toBe(true);
+    await act(async () => result.current.markConversationViewed(task.id));
+    expect(result.current.conversations[0].isUnread).toBe(false);
+    expect(mockMarkConversationViewed).toHaveBeenCalledTimes(2);
+  });
+
+  it("discards the previous identity's pending refresh and failed viewed write", async () => {
+    const task = {
+      ...seedConversations[0],
+      isScheduledTask: true,
+      isUnread: true,
+    };
+    mockListConversations.mockResolvedValue({ items: [task] });
+    let failView!: (error: Error) => void;
+    mockMarkConversationViewed.mockReturnValueOnce(
+      new Promise<void>((_resolve, reject) => {
+        failView = reject;
+      }),
+    );
+    const { result, rerender } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    let viewing!: Promise<void>;
+    let refreshing!: Promise<void>;
+    let finishRefresh!: (value: { items: (typeof task)[] }) => void;
+    mockListConversations.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRefresh = resolve;
+      }),
+    );
+    act(() => {
+      viewing = result.current.markConversationViewed(task.id);
+      refreshing = result.current.refreshConversations();
+    });
+    mockListConversations.mockResolvedValue({
+      items: [{ ...task, title: 'New identity', isUnread: false }],
+    });
+    contextMocks.userSub = 'user-2';
+    rerender();
+    await waitFor(() =>
+      expect(result.current.conversations[0]?.title).toBe('New identity'),
+    );
+    await act(async () => {
+      failView(new Error('old request'));
+      finishRefresh({ items: [task] });
+      await Promise.all([viewing, refreshing]);
+    });
+    expect(result.current.conversations[0]).toMatchObject({
+      title: 'New identity',
+      isUnread: false,
+    });
+  });
+
+  it('does not carry successful viewed ids into another identity', async () => {
+    const task = {
+      ...seedConversations[0],
+      isScheduledTask: true,
+      isUnread: true,
+    };
+    mockListConversations.mockResolvedValue({ items: [task] });
+    mockMarkConversationViewed.mockResolvedValue(undefined);
+    const { result, rerender } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await act(async () => result.current.markConversationViewed(task.id));
+    contextMocks.userSub = 'user-2';
+    rerender();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.conversations[0].isUnread).toBe(true);
+  });
+
   const unreadTaskConversations = [
     {
       id: 'task1',
@@ -812,17 +1295,78 @@ describe('ConversationsContext — markConversationViewed', () => {
 });
 
 describe('ConversationsContext — watchForDisplayNameUpdate', () => {
-  const buildUpdateEventStream = () => {
+  const buildUpdateEventStream = (
+    events: Array<{ action: string; url?: string }> = [{ action: 'UPDATE' }],
+  ) => {
     const encoder = new TextEncoder();
     return new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ action: 'UPDATE' })}\n\n`),
-        );
+        for (const event of events) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+          );
+        }
         controller.close();
       },
     });
   };
+
+  const startWatch = async (conversationId: string) => {
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: ConversationsProvider,
+    });
+    await waitFor(() => expect(result.current.conversations).toHaveLength(3));
+    const onUpdated = vi.fn();
+    act(() => {
+      result.current.watchForDisplayNameUpdate(
+        conversationId,
+        'Old Name',
+        onUpdated,
+      );
+    });
+    return onUpdated;
+  };
+
+  it('ignores an UPDATE event for a different resource URL', async () => {
+    vi.mocked(conversationsApi.watchConversation).mockResolvedValueOnce(
+      buildUpdateEventStream([
+        { action: 'UPDATE', url: 'conversations/bucket/other__uuid' },
+      ]),
+    );
+
+    const onUpdated = await startWatch('bucket/model__title__uuid');
+
+    await waitFor(() =>
+      expect(conversationsApi.watchConversation).toHaveBeenCalled(),
+    );
+    /* Let the stream drain before asserting nothing was fetched. */
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(conversationsApi.getConversation).not.toHaveBeenCalled();
+    expect(onUpdated).not.toHaveBeenCalled();
+  });
+
+  it('closes the watch connection once a qualifying update arrives', async () => {
+    let signal: AbortSignal | undefined;
+    vi.mocked(conversationsApi.watchConversation).mockImplementationOnce(
+      async (_path, abortSignal) => {
+        signal = abortSignal;
+        return buildUpdateEventStream([
+          {
+            action: 'UPDATE',
+            url: 'conversations/bucket/model__title%20one__uuid',
+          },
+        ]);
+      },
+    );
+    vi.mocked(conversationsApi.getConversation).mockResolvedValueOnce({
+      name: 'New Name',
+    } as never);
+
+    const onUpdated = await startWatch('bucket/model__title one__uuid');
+
+    await waitFor(() => expect(onUpdated).toHaveBeenCalledWith('New Name'));
+    expect(signal?.aborted).toBe(true);
+  });
 
   /*
    * Regression test: `getConversation`'s backend contract requires the bucket

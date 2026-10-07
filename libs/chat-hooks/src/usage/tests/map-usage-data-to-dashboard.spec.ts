@@ -6,6 +6,7 @@ import {
   USAGE_DATA_I18N_KEYS,
   mapUsageDataToDashboard,
 } from '../map-usage-data-to-dashboard';
+import { mapOverallCostLimitsToPeriodStatuses } from '../map-user-usage-to-model-limits';
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
@@ -33,7 +34,7 @@ const noReset: FormatResetTime = () => undefined;
 /*
  * Reset values and top-level cost figures reproduced from the real
  * GET /api/v1/user/usage capture in
- * openspec/changes/migrate-usage-reset-times/fixtures/ — a payload that mixes a
+ * openspec/changes/archive/2026-09-15-migrate-usage-reset-times/fixtures/ — a payload that mixes a
  * finite day and month budget with a sentinel week budget, and carries
  * `resetsAt` on all three.
  */
@@ -331,5 +332,30 @@ describe('mapUsageDataToDashboard', () => {
         'This month',
       ]);
     });
+  });
+
+  it('ignores application entries in deployments, reading only the top-level budget', () => {
+    const budget: UserLimitStatsResponseDto = {
+      deployments: {
+        'gpt-4o': { dayCostStats: { total: 2 ** 63, used: 1.5 } },
+      },
+      dayCostStats: { total: 100, used: 1.5 },
+      weekCostStats: { total: 500, used: 1.5 },
+      monthCostStats: { total: 2000, used: 1.5 },
+    };
+    const withRouter: UserLimitStatsResponseDto = {
+      ...budget,
+      deployments: {
+        ...budget.deployments,
+        'llm-router': { dayCostStats: { total: 2 ** 63, used: 1.5 } },
+      },
+    };
+
+    expect(mapUsageDataToDashboard(withRouter, t, noReset)).toEqual(
+      mapUsageDataToDashboard(budget, t, noReset),
+    );
+    expect(mapOverallCostLimitsToPeriodStatuses(withRouter, 'en', t)).toEqual(
+      mapOverallCostLimitsToPeriodStatuses(budget, 'en', t),
+    );
   });
 });

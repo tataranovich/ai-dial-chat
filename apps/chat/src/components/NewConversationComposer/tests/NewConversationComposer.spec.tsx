@@ -3,20 +3,42 @@ import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import { type DeploymentItem } from '@epam/ai-dial-chat-shared';
 import { NotificationVariant } from '@epam/ai-dial-ui-kit';
 import { act, render, screen } from '@testing-library/react';
-import { Suspense } from 'react';
+import { type ReactNode, Suspense } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  AttachmentsI18nKeys,
+  ButtonsI18nKeys,
+} from '../../../constants/translation-keys';
 import { useAppConfig as mockUseAppConfig } from '../../../context/tests/app-config-context-mock';
 import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
 import * as useUiFeatureModule from '../../../hooks/useUiFeature';
 import NewConversationComposer from '../NewConversationComposer';
 
-const { mockShowNotification, capturedInputProps } = vi.hoisted(() => ({
-  mockShowNotification: vi.fn(),
-  capturedInputProps: {
-    onSend: undefined as
-      ((message: string, attachments: never[]) => Promise<void>) | undefined,
-  },
-}));
+const {
+  mockShowNotification,
+  capturedInputProps,
+  mockUsePageFileDrag,
+  pageDrag,
+} = vi.hoisted(() => {
+  const pageDrag = { isDragging: false };
+  return {
+    pageDrag,
+    mockShowNotification: vi.fn(),
+    mockUsePageFileDrag: vi.fn(
+      (_isAttachmentsAllowed?: boolean, _isEnabled?: boolean) => ({
+        isDragging: pageDrag.isDragging,
+        pendingFiles: [] as File[],
+        onFilesConsumed: () => undefined,
+      }),
+    ),
+    capturedInputProps: {
+      onSend: undefined as
+        ((message: string, attachments: never[]) => Promise<void>) | undefined,
+      expandLabel: undefined as string | undefined,
+      clickLabel: undefined as string | undefined,
+    },
+  };
+});
 
 vi.mock('../../../hooks/useUiFeature');
 
@@ -28,6 +50,10 @@ vi.mock('@epam/ai-dial-conversation-input', () => ({
     inputClassName,
     autoFocus,
     onSend,
+    belowWelcomeSlot,
+    welcomeText,
+    expandLabel,
+    clickLabel,
   }: {
     deployments?: unknown[];
     chatSettings?: unknown;
@@ -35,10 +61,17 @@ vi.mock('@epam/ai-dial-conversation-input', () => ({
     inputClassName?: string;
     autoFocus?: boolean;
     onSend?: (message: string, attachments: never[]) => Promise<void>;
+    belowWelcomeSlot?: ReactNode;
+    welcomeText?: string;
+    expandLabel?: string;
+    clickLabel?: string;
   }) => {
     capturedInputProps.onSend = onSend;
+    capturedInputProps.expandLabel = expandLabel;
+    capturedInputProps.clickLabel = clickLabel;
     return (
       <div data-testid="conversation-input">
+        {belowWelcomeSlot}
         Conversation input
         <output aria-label="deployments">
           {deployments === undefined
@@ -51,6 +84,7 @@ vi.mock('@epam/ai-dial-conversation-input', () => ({
         <output aria-label="send-disabled">{String(!!isSendDisabled)}</output>
         <output aria-label="input-class-name">{inputClassName ?? ''}</output>
         <output aria-label="auto-focus">{String(!!autoFocus)}</output>
+        <output aria-label="welcome-text">{welcomeText ?? 'undefined'}</output>
       </div>
     );
   },
@@ -171,11 +205,7 @@ vi.mock('@epam/ai-dial-chat-hooks/viewport-layout', async (importOriginal) => {
     >();
   return {
     ...actual,
-    usePageFileDrag: () => ({
-      isDragging: false,
-      pendingFiles: [],
-      onFilesConsumed: vi.fn(),
-    }),
+    usePageFileDrag: mockUsePageFileDrag,
   };
 });
 
@@ -202,11 +232,49 @@ describe('NewConversationComposer', () => {
   beforeEach(() => {
     mockShowNotification.mockClear();
     capturedInputProps.onSend = undefined;
+    capturedInputProps.expandLabel = undefined;
+    capturedInputProps.clickLabel = undefined;
+    mockUsePageFileDrag.mockClear();
+    pageDrag.isDragging = false;
     mockUseUiFeature.mockImplementation(
       (feature) =>
         feature === OverlayFeature.EmptyChatSettings ||
         feature === OverlayFeature.ChatSettings,
     );
+  });
+
+  it('passes a translated expand label for pasted-text attachment cards', async () => {
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          onCreateConversation={vi.fn()}
+        />
+      </Suspense>,
+    );
+
+    await screen.findByText('Conversation input');
+    expect(capturedInputProps.expandLabel).toBe(
+      AttachmentsI18nKeys.ExpandPastedText,
+    );
+  });
+
+  it('names composer attachment tiles after the open-in-canvas action', async () => {
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          onCreateConversation={vi.fn()}
+        />
+      </Suspense>,
+    );
+
+    await screen.findByText('Conversation input');
+    expect(capturedInputProps.clickLabel).toBe(ButtonsI18nKeys.OpenInCanvas);
   });
 
   it('renders intro text and starter content below the conversation input', async () => {
@@ -236,6 +304,66 @@ describe('NewConversationComposer', () => {
       introText.compareDocumentPosition(starterButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it('passes intro text and starter content into the below-welcome slot when starters-below-greeting is enabled', async () => {
+    mockUseUiFeature.mockImplementation(
+      (feature) => feature === OverlayFeature.StartersBelowGreeting,
+    );
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          introText="Choose how to start"
+          onCreateConversation={vi.fn()}
+        >
+          <button type="button">Draft</button>
+        </NewConversationComposer>
+      </Suspense>,
+    );
+
+    const input = await screen.findByTestId('conversation-input');
+    expect(input.contains(screen.getByText('Choose how to start'))).toBe(true);
+    expect(input.contains(screen.getByRole('button', { name: 'Draft' }))).toBe(
+      true,
+    );
+  });
+
+  it('passes the greeting to the conversation input by default', async () => {
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          onCreateConversation={vi.fn()}
+        />
+      </Suspense>,
+    );
+
+    const welcomeText = await screen.findByLabelText('welcome-text');
+    expect(welcomeText.textContent).not.toBe('undefined');
+  });
+
+  it('omits the greeting when hide-greeting is enabled', async () => {
+    mockUseUiFeature.mockImplementation(
+      (feature) => feature === OverlayFeature.HideGreeting,
+    );
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          onCreateConversation={vi.fn()}
+        />
+      </Suspense>,
+    );
+
+    const welcomeText = await screen.findByLabelText('welcome-text');
+    expect(welcomeText.textContent).toBe('undefined');
   });
 
   it('passes chatSettings through when both chat-settings and empty-chat-settings are enabled', async () => {
@@ -346,6 +474,41 @@ describe('NewConversationComposer', () => {
     expect(screen.getByLabelText('send-disabled').textContent).toBe('true');
   });
 
+  it('rejects page file drops with the denied overlay while the input is disabled', async () => {
+    pageDrag.isDragging = true;
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          isInputDisabled
+          onCreateConversation={vi.fn()}
+        />
+      </Suspense>,
+    );
+    await screen.findByTestId('conversation-input');
+    expect(mockUsePageFileDrag).toHaveBeenLastCalledWith(false, true);
+    expect(screen.getByText('fileDnd.overlayDeniedTitle')).toBeTruthy();
+  });
+
+  it('accepts page file drops while the input is enabled', async () => {
+    pageDrag.isDragging = true;
+    render(
+      <Suspense fallback={null}>
+        <NewConversationComposer
+          deployments={deployments}
+          selectedDeploymentId="gpt-4o"
+          placeholder="Message"
+          onCreateConversation={vi.fn()}
+        />
+      </Suspense>,
+    );
+    await screen.findByTestId('conversation-input');
+    expect(mockUsePageFileDrag).toHaveBeenLastCalledWith(true, true);
+    expect(screen.getByText('basic.attachFiles')).toBeTruthy();
+  });
+
   it('suppresses autoFocus when skip-focus-chat-input-onload is enabled', async () => {
     mockUseUiFeature.mockImplementation(
       (feature) => feature === OverlayFeature.SkipFocusChatInputOnload,
@@ -379,7 +542,7 @@ describe('NewConversationComposer', () => {
     expect(screen.getByLabelText('auto-focus').textContent).toBe('true');
   });
 
-  it('renders the agent description below the starters when show-agent-description is enabled', async () => {
+  it('renders the agent description above the input when show-agent-description is enabled', async () => {
     mockUseUiFeature.mockImplementation(
       (feature) => feature === OverlayFeature.ShowAgentDescription,
     );
@@ -398,12 +561,11 @@ describe('NewConversationComposer', () => {
     );
 
     const link = await screen.findByRole('link', { name: 'the terms' });
-    const starterButton = screen.getByRole('button', { name: 'Draft' });
+    const input = screen.getByTestId('conversation-input');
 
     expect(link.getAttribute('href')).toBe('https://example.com/terms');
     expect(
-      starterButton.compareDocumentPosition(link) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      link.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 

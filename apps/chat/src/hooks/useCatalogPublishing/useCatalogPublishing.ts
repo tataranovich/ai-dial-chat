@@ -1,5 +1,8 @@
 import type { CatalogItem } from '@epam/ai-dial-catalog';
-import type { DeploymentItemDto } from '@epam/ai-dial-chat-api-client';
+import type {
+  ApplicationSchemaSummaryDto,
+  DeploymentItemDto,
+} from '@epam/ai-dial-chat-api-client';
 import {
   findDeploymentByIdOrReference,
   getPublicCatalogEntityFolderPath,
@@ -21,12 +24,17 @@ import {
   unpublishCatalogEntity,
 } from '../../server-api/publish.api';
 import { EntityOperation } from '../../types/entity-notification';
-import { resolveCatalogItemEntity } from '../../utils/entity-notification';
+import {
+  findSchemaDisplayName,
+  resolveCatalogItemEntity,
+} from '../../utils/entity-notification';
 import { getPublishFolderLabel } from '../../utils/publish';
 import type { useOperationNotification } from '../useOperationNotification';
 
 interface UseCatalogPublishingParams {
   deployments: DeploymentItemDto[];
+  /** Application schemas, used to name a schema app by its schema in notifications. */
+  schemas: ApplicationSchemaSummaryDto[];
   rememberPublishFolder: (folderPath: string[]) => void;
   notifyOperationSuccess: ReturnType<
     typeof useOperationNotification
@@ -68,6 +76,7 @@ interface UseCatalogPublishingResult {
  */
 export const useCatalogPublishing = ({
   deployments,
+  schemas,
   rememberPublishFolder,
   notifyOperationSuccess,
   showPublishError,
@@ -78,7 +87,7 @@ export const useCatalogPublishing = ({
 
   /*
    * Publish and Unpublish act on two different items, and each is offered
-   * only on the one it applies to (GH #8691, where both landed on the wrong
+   * only on the one it applies to ([#8691](https://github.com/epam/ai-dial-chat/issues/8691), where both landed on the wrong
    * side: the personal item offered nothing but Unpublish, and the public
    * copy offered nothing at all).
    *
@@ -119,7 +128,7 @@ export const useCatalogPublishing = ({
   /*
    * Load-bearing beyond the publish panel: this is the only source of the
    * folder list an unpublish request needs, and what makes the details
-   * panel's Unpublish action visible at all. The GH #7897 `503` this call
+   * panel's Unpublish action visible at all. The [#7897](https://github.com/epam/ai-dial-chat/issues/7897) `503` this call
    * was stubbed out for was never Core being down: `PublishService` called
    * `.filter` on a `getPublications` response Core returns as an envelope,
    * and the resulting `TypeError` was reported as "DIAL Core is currently
@@ -207,37 +216,41 @@ export const useCatalogPublishing = ({
         showPublishError(error, EntityOperation.UnpublishRequested);
         throw error;
       }
+      const deployment = findDeploymentByIdOrReference(deployments, item.id);
       notifyOperationSuccess(
-        resolveCatalogItemEntity(
-          item.type,
-          findDeploymentByIdOrReference(deployments, item.id),
-        ),
+        resolveCatalogItemEntity(item.type, deployment, schemas),
         EntityOperation.UnpublishRequested,
         {
           name: item.name,
           folder: getPublishFolderLabel(folderPath, t),
+          type: findSchemaDisplayName(
+            schemas,
+            deployment?.applicationTypeSchemaId,
+          ),
         },
       );
     },
-    [deployments, notifyOperationSuccess, showPublishError, t],
+    [deployments, notifyOperationSuccess, schemas, showPublishError, t],
   );
 
   const handlePublishSuccess = useCallback(
     (item: CatalogItem, folderPath: string[]) => {
       rememberPublishFolder(folderPath);
+      const deployment = findDeploymentByIdOrReference(deployments, item.id);
       notifyOperationSuccess(
-        resolveCatalogItemEntity(
-          item.type,
-          findDeploymentByIdOrReference(deployments, item.id),
-        ),
+        resolveCatalogItemEntity(item.type, deployment, schemas),
         EntityOperation.PublishRequested,
         {
           name: item.name,
           folder: getPublishFolderLabel(folderPath, t),
+          type: findSchemaDisplayName(
+            schemas,
+            deployment?.applicationTypeSchemaId,
+          ),
         },
       );
     },
-    [deployments, rememberPublishFolder, notifyOperationSuccess, t],
+    [deployments, rememberPublishFolder, notifyOperationSuccess, schemas, t],
   );
 
   const handlePublishError = useCallback(

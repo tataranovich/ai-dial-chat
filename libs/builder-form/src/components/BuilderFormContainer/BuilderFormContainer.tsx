@@ -6,7 +6,7 @@ import { BuilderFormBody } from '../BuilderFormBody/BuilderFormBody';
 import { BuilderFormHeader } from '../BuilderFormHeader/BuilderFormHeader';
 import styles from './BuilderFormContainer.module.scss';
 
-/** Full-height scrollable builder form page shell: a header above the form content and a mobile-only sticky action footer below it. */
+/** Full-height builder form shell with fixed chrome and responsive body/column scrolling. */
 export const BuilderFormContainer: FC<BuilderFormContainerProps> = ({
   labels,
   onBack,
@@ -34,7 +34,7 @@ export const BuilderFormContainer: FC<BuilderFormContainerProps> = ({
         ...cssVars,
       }}
       className={mergeClasses(
-        'flex h-full w-full flex-col overflow-y-auto',
+        'flex h-full min-h-0 w-full flex-col overflow-hidden',
         className,
         styles.container,
       )}
@@ -60,12 +60,13 @@ export const BuilderFormContainer: FC<BuilderFormContainerProps> = ({
        * the same `BuilderFormActions` the header holds at the desktop
        * breakpoint: CSS cannot move one instance between the top of the page
        * and the bottom, so exactly one copy is visible (and tabbable) at any
-       * width. Opaque background and the elevation shadow come from
-       * `styles.footer`, so scrolled content never shows through it.
+       * width. Opaque background comes from `styles.footer` and the
+       * elevation shadow from `shadow-sm`, so scrolled content never shows
+       * through it.
        */}
       <div
         className={mergeClasses(
-          'sticky bottom-0 z-10 items-center gap-2 p-3',
+          'sticky bottom-0 z-10 items-center gap-2 p-3 shadow-sm',
           styles.footer,
         )}
       >

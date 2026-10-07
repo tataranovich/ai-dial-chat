@@ -32,7 +32,9 @@ The registry SHALL include a `dialCore.externalUrl` entry: `type='config'`, `val
 
 The registry SHALL include a `features.responsesApiEnabled` entry: `type='feature'`, `valueType='boolean'`, `visibility='server'`, `defaultValue=false`, `critical=false`, `envVar='RESPONSES_API_ENABLED'`, and no `allowedRolesEnvVar` (role-based rollout via `RESPONSES_API_ENABLED_ROLES` is explicitly out of scope for this entry). This flag SHALL NOT be included in `AppConfigService.getClientConfig`'s response under any circumstance, by virtue of its `visibility='server'` classification — the same mechanism that already excludes `features.llmConversationNaming`.
 
-**Feature flag:** Not gated. The registry entry itself has no user-visible flag; it declares the `features.responsesApiEnabled` key consumed elsewhere.
+The registry SHALL include a `features.responsesBackgroundEnabled` entry: `type='feature'`, `valueType='boolean'`, `visibility='server'`, `defaultValue=false`, `critical=false`, `envVar='RESPONSES_BACKGROUND_ENABLED'`, and no `allowedRolesEnvVar`. It SHALL NOT be included in `AppConfigService.getClientConfig`'s response under any circumstance. Its description SHALL state that it only affects how new generations start and that in-flight background jobs remain recoverable when it is disabled.
+
+**Feature flag:** Not gated. The registry entries themselves have no user-visible flag; they declare the `features.responsesApiEnabled` and `features.responsesBackgroundEnabled` keys consumed elsewhere.
 
 **RTL impact:** None.
 
@@ -73,7 +75,16 @@ The registry SHALL include a `features.responsesApiEnabled` entry: `type='featur
 - **WHEN** `AppConfigService.getClientConfig(context)` is called, in any state of `RESPONSES_API_ENABLED`
 - **THEN** the returned DTO's `features` map does not contain a `responsesApiEnabled` (or `features.responsesApiEnabled`) key
 
----
+
+#### Scenario: Registry contains the responsesBackgroundEnabled feature key with server-only visibility
+
+- **WHEN** the registry is imported
+- **THEN** it MUST contain an entry with `key='features.responsesBackgroundEnabled'`, `type='feature'`, `valueType='boolean'`, `visibility='server'`, `critical=false`, `envVar='RESPONSES_BACKGROUND_ENABLED'`, `defaultValue=false`, and no `allowedRolesEnvVar`
+
+#### Scenario: responsesBackgroundEnabled is excluded from the client-config response
+
+- **WHEN** `AppConfigService.getClientConfig(context)` is called, in any state of `RESPONSES_BACKGROUND_ENABLED`
+- **THEN** the returned DTO's `features` map does not contain a `responsesBackgroundEnabled` (or `features.responsesBackgroundEnabled`) key
 
 ### Requirement: AppConfigEvalContext carries resolution context
 
@@ -84,23 +95,22 @@ interface AppConfigEvalContext {
   appId: string;
   userId?: string;
   roles?: string[];
-  environment?: string;
 }
 ```
 
-Context fields MUST NOT be serialized into the client response. Providers receive the full context but MAY ignore user-specific fields in the first slice.
+`AppConfigController` (`apps/chat-api/src/app-config/app-config.controller.ts`) builds the context from the validated `appId` query parameter, the optional session (`OptionalSessionGuard`): `userId` = the session user's `sub` and `roles` = the string entries of the session claims' `roles` array. The context carries no environment field: no provider reads one, and the controller does not read `process.env`. Context fields MUST NOT be serialized into the client response. Providers receive the full context and MAY ignore user-specific fields; `EnvConfigProvider` reads only `roles`, for definitions that declare `allowedRolesEnvVar`.
 
 **RTL impact:** None. **i18n impact:** None.
 
 #### Scenario: Context is built from appId
 
 - **WHEN** the controller receives `?appId=chat-ui`
-- **THEN** an `AppConfigEvalContext` with `appId='chat-ui'` and `environment=NODE_ENV` is constructed and passed to `AppConfigService`
+- **THEN** an `AppConfigEvalContext` with `appId='chat-ui'` and — when a session is present — the session user's `userId` and `roles` is constructed and passed to `AppConfigService`
 
 #### Scenario: Context does not appear in response
 
 - **WHEN** the client-config response is serialized
-- **THEN** it MUST NOT contain `userId`, `roles`, or `environment` fields
+- **THEN** it MUST NOT contain `userId` or `roles` fields
 
 ---
 
@@ -211,13 +221,13 @@ On provider error: log warning, skip to next provider. For keys with `critical=t
 
 ### Requirement: Type mismatch falls through to next provider
 
-When `EnvConfigProvider` reads an env var whose parsed value does not match `definition.valueType` (e.g. `TRANSCRIBE_SIZE_LIMIT_BYTES` is `NaN` after `parseInt`), it MUST log a warning including the key name and return `undefined` so the next provider can supply a safe default.
+When `EnvConfigProvider`'s generic environment-variable path receives a value from `ConfigService` that does not match `definition.valueType` (e.g. `NaN` for a `valueType='number'` key), it MUST log a warning including the key name and return `undefined` so the next provider can supply a safe default. `valueType='json'` values are not type-checked on this path. Numeric env vars such as `TRANSCRIBE_SIZE_LIMIT_BYTES` are additionally validated with `@IsInt()`/`@Min(1)` in `EnvironmentVariables`, so a non-numeric value set in the real environment fails startup validation before any resolution happens; this provider-level check is the defensive fallback for values that bypass that schema.
 
 **RTL impact:** None. **i18n impact:** None.
 
 #### Scenario: Non-numeric TRANSCRIBE_SIZE_LIMIT_BYTES falls through
 
-- **WHEN** `TRANSCRIBE_SIZE_LIMIT_BYTES=not-a-number` is set and `EnvConfigProvider.resolve('asr.transcribeSizeLimitBytes', ctx)` is called
+- **WHEN** `ConfigService` yields `NaN` for `TRANSCRIBE_SIZE_LIMIT_BYTES` and `EnvConfigProvider.resolve('asr.transcribeSizeLimitBytes', ctx)` is called
 - **THEN** the provider logs a warning and returns `undefined`
 - **AND** `CompositeConfigProvider` falls through to `StaticDefaultsProvider` and returns `5242880`
 
@@ -277,7 +287,7 @@ The `CONFIG_DEFINITIONS` registry SHALL include an `announcement.html` entry so 
 
 ### Requirement: Unrecognized entries are filtered with a warning at the service layer, not at env validation
 
-`AppConfigService.getClientConfig` SHALL filter the resolved `uiFeatures.enabledUiFeatures` list to values that are members of the shared `OverlayFeature` enum before including it in the response, logging a `warn`-level message (naming the unrecognized value) for each entry dropped. When all entries are unrecognized, the service SHALL log an additional warning and return `null` (falling back to compiled-in defaults), rather than sending an empty array that would break the entire UI. This filtering SHALL NOT cause application boot to fail and SHALL NOT reject the request — the response always returns `200 OK`.
+`AppConfigService.getClientConfig` SHALL filter the resolved `uiFeatures.enabledUiFeatures` list to values that are members of the shared `OverlayFeature` enum before including it in the response — through `normalizeEnabledUiFeatures` (`apps/chat-api/src/app-config/enabled-ui-features.normalizer.ts`), applied by the `uiFeatures.enabledUiFeatures` entry of `CLIENT_CONFIG_MAPPINGS` (`client-config.mapper.ts`) with a `warn` callback bound to the service's logger — logging a `warn`-level message (naming the unrecognized value) for each entry dropped. When all entries are unrecognized, the service SHALL log an additional warning and return `null` (falling back to compiled-in defaults), rather than sending an empty array that would break the entire UI. This filtering SHALL NOT cause application boot to fail and SHALL NOT reject the request — the response always returns `200 OK`.
 
 Membership SHALL be decided against the app-local `KNOWN_UI_FEATURES` allowlist and `DEPRECATED_UI_FEATURE_ALIASES` map (`apps/chat-api/src/app-config/known-ui-features.constants.ts`), which mirror `OverlayFeature` and `DEPRECATED_OVERLAY_FEATURE_ALIASES` without importing the browser-facing overlay package into this Node-only service.
 
@@ -362,7 +372,7 @@ The `CONFIG_DEFINITIONS` registry (`apps/chat-api/src/app-config/config-registry
 - `description` — human-readable summary of the visualizer registry semantics.
 - `owner` — matches the ownership convention used by other registry entries.
 
-The parsed value type MUST be `CustomVisualizer[]` (see `custom-visualizers` capability). Elements that fail per-entry validation SHALL be dropped with an error log at boot; total parse failure SHALL yield `[]`.
+The parsed value type MUST be `CustomVisualizer[]` (see `custom-visualizers` capability). Elements that fail per-entry validation (`CustomVisualizerDto` requires a non-empty `title` and `contentType` and an absolute HTTP(S) `url`) SHALL be dropped with an error log when the key is resolved; total parse failure SHALL yield `[]`. Boot never fails on malformed config.
 
 **Feature flag:** none. The registry entry is a backend implementation detail.
 
@@ -373,8 +383,8 @@ The parsed value type MUST be `CustomVisualizer[]` (see `custom-visualizers` cap
 
 #### Scenario: Env resolves to parsed array
 
-- **WHEN** `CUSTOM_VISUALIZERS='[{"contentType":"application/x-my-viz","url":"https://viz.example.com"}]'` and the config is resolved
-- **THEN** the `customVisualizers` value on the resolved config equals `[{ contentType: 'application/x-my-viz', url: 'https://viz.example.com' }]`
+- **WHEN** `CUSTOM_VISUALIZERS='[{"title":"my-viz","contentType":"application/x-my-viz","url":"https://viz.example.com"}]'` and the config is resolved
+- **THEN** the `customVisualizers` value on the resolved config is one entry with `title: 'my-viz'`, `contentType: 'application/x-my-viz'`, and `url: 'https://viz.example.com'`
 
 #### Scenario: Missing env falls back to default
 
@@ -509,36 +519,6 @@ Malformed JSON in `ANNOUNCEMENTS` SHALL NOT fail application startup or environm
 
 ---
 
-### Requirement: Registry contains the skillUsageEnabled client feature key
-
-The `CONFIG_DEFINITIONS` registry SHALL include a `features.skillUsageEnabled` entry: `type='feature'`, `valueType='boolean'`, `visibility='client'`, `defaultValue=false`, `critical=false`, `envVar='SKILL_USAGE_ENABLED'`, and no `allowedRolesEnvVar` (role-based rollout is out of scope). Unlike `features.responsesApiEnabled` (server-only), this key SHALL be included in `AppConfigService.getClientConfig`'s response by virtue of its `visibility='client'` classification, because it gates frontend UI (the catalog skill "Use in chat" button and the conversation input's Skills menu).
-
-`EnvironmentVariables` (`apps/chat-api/src/config/environment.config.ts`) SHALL gain the validated boolean `SKILL_USAGE_ENABLED` (default `false`) using the same raw-source-value `@Transform` as `RESPONSES_API_ENABLED`, so the literal string `"false"` parses to `false`. The `FeatureKey` enum SHALL gain `SkillUsageEnabled = 'features.skillUsageEnabled'` (its string value matching the registry key exactly), per the feature-flags-service requirement that every feature key be declared in the enum before use.
-
-**Feature flag:** the entry declares `features.skillUsageEnabled`, consumed by the frontend via `useFeatureFlag('skillUsageEnabled')` and by the `catalog-use-in-chat` / `skill-input-attachment` capabilities.
-
-**RTL impact:** None. **i18n impact:** None (the flag carries no user-visible text).
-
-#### Scenario: Registry contains the skillUsageEnabled feature key with client visibility
-
-- **WHEN** the registry is imported
-- **THEN** it MUST contain an entry with `key='features.skillUsageEnabled'`, `type='feature'`, `valueType='boolean'`, `visibility='client'`, `critical=false`, `envVar='SKILL_USAGE_ENABLED'`, `defaultValue=false`, and no `allowedRolesEnvVar`
-
-#### Scenario: Flag is exposed to the client and off by default
-
-- **WHEN** the client-config endpoint is called on a deployment that has not set `SKILL_USAGE_ENABLED`
-- **THEN** the response's `features` map contains `skillUsageEnabled: false`
-
-#### Scenario: Literal "false" parses to false
-
-- **WHEN** the deployment sets `SKILL_USAGE_ENABLED=false` in the environment
-- **THEN** the resolved `features.skillUsageEnabled` value is `false`, not `true`
-
-#### Scenario: FeatureKey enum stays in sync with the registry
-
-- **WHEN** all `FeatureKey` enum values are compared to `CONFIG_DEFINITIONS`
-- **THEN** `FeatureKey.SkillUsageEnabled` has a matching `type='feature'` entry with the identical key string
-
 ### Requirement: Client-owned variables have a generic environment entry
 
 The registry SHALL declare `customVariables` as a non-critical, client-visible JSON config entry sourced from `CUSTOM_CLIENT_VARIABLES`, defaulting to an empty object. The environment schema SHALL accept an optional string. EnvConfigProvider SHALL parse this string as JSON and accept only a non-null, non-array object. The BFF SHALL NOT register or interpret individual client-owned keys.
@@ -572,3 +552,164 @@ The `CONFIG_DEFINITIONS` registry SHALL include an `attachments.maxFileSizeBytes
 - **WHEN** `FILE_UPLOAD_MAX_BYTES` is not set
 - **THEN** the key resolves to the registry's `defaultValue` of `536870912`, matching `MulterModule`'s own hardcoded fallback in `files.module.ts`
 - **AND** invalid nonblank values produce a diagnostic without logging the payload or parser error text
+
+### Requirement: UI_EVENT selects one decorative event
+
+UI_EVENT SHALL be an optional validated lowercase kebab-case identifier. An absent value or `none` SHALL resolve to null; other valid identifiers SHALL be exposed as config.activeEventId:string|null by existing GET /api/v1/client-config. Unknown valid IDs SHALL be allowed through the API and result in no decoration when absent from the frontend registry. HALLOWEEN_ENABLED and features.halloweenEnabled SHALL be removed with no fallback. There SHALL be no new role-gating flag or scheduling behavior. Existing endpoint authentication, status codes, configuration cache and refresh behavior SHALL be retained. Swagger and the generated AppConfigApi.getClientConfig response model SHALL reflect the new config field; callers SHALL continue using the normal method through the existing app adapter.
+
+#### Scenario: Event explicitly selected
+- **WHEN** UI_EVENT is halloween or new-year
+- **THEN** GET /api/v1/client-config returns the corresponding string in config.activeEventId
+
+#### Scenario: Old configuration only
+- **WHEN** only the removed HALLOWEEN_ENABLED variable is set
+- **THEN** config.activeEventId is null and no seasonal decoration is enabled
+
+#### Scenario: Explicit off
+- **WHEN** UI_EVENT is none
+- **THEN** config.activeEventId is null
+
+### Requirement: Registry declares the applicationVisualizers key
+
+The `CONFIG_DEFINITIONS` registry (`apps/chat-api/src/app-config/config-registry/config-registry.constants.ts`) SHALL include a new entry:
+
+- `key='applicationVisualizers'`
+- `type='config'`
+- `valueType='json'`
+- `visibility='client'`
+- `defaultValue={}`
+- `critical=false`
+- `envVar='APPLICATION_VISUALIZERS'`
+- `description` — human-readable summary of the application-scoped grouped visualizer registry, including that each entry's origin must also be listed in `ALLOWED_IFRAME_ORIGINS` and that application visualizers take precedence over `CUSTOM_VISUALIZERS` for the attachments they claim.
+- `owner` — matches the ownership convention used by other registry entries.
+
+The parsed value type MUST be `Record<string, ApplicationVisualizer>` (see the `application-visualizers` capability). Entries that fail per-entry validation SHALL be dropped with an error log when the key is resolved; total parse failure SHALL yield `{}`. Boot never fails on malformed config.
+
+**Feature flag:** none. The registry entry is a backend implementation detail.
+
+#### Scenario: Registry contains applicationVisualizers key
+
+- **WHEN** the registry is imported
+- **THEN** it MUST contain an entry with `key='applicationVisualizers'`, `type='config'`, `valueType='json'`, `visibility='client'`, `envVar='APPLICATION_VISUALIZERS'`, and `defaultValue={}`
+
+#### Scenario: Env resolves to a parsed object
+
+- **WHEN** `APPLICATION_VISUALIZERS='{"app-1":{"title":"my-viz","url":"https://viz.example.com"}}'` and the config is resolved
+- **THEN** the `applicationVisualizers` value on the resolved config equals `{ 'app-1': { title: 'my-viz', url: 'https://viz.example.com' } }`
+
+#### Scenario: Missing env falls back to default
+
+- **WHEN** `APPLICATION_VISUALIZERS` is unset
+- **THEN** the `applicationVisualizers` value on the resolved config equals `{}`
+
+---
+
+### Requirement: EnvConfigProvider parses APPLICATION_VISUALIZERS fail-open
+
+`EnvConfigProvider` (`apps/chat-api/src/app-config/config-registry/env-config.provider.ts`) SHALL resolve `applicationVisualizers` through a dedicated `parseApplicationVisualizers` method, structurally mirroring the existing `parseCustomVisualizers`:
+
+- Unparseable JSON SHALL log an error and resolve to `{}`.
+- A parsed value that is not a plain object — including an array or `null` — SHALL log an error and resolve to `{}`.
+- Each value SHALL be validated independently via `plainToInstance(ApplicationVisualizerDto, …)` + `validateSync`. A failing entry SHALL be dropped with an error log naming its key; the remaining entries SHALL still resolve.
+- A value that is not an object SHALL be dropped with an error log naming its key.
+- When an entry declares `contentType`, it SHALL be dropped with an error log if splitting on `,` and trimming yields no non-empty MIME type. An entry that omits `contentType` SHALL NOT be subject to this check.
+- `title` SHALL NOT be trimmed or normalised — it is an opaque postMessage namespace, and a whitespace-only value is a legitimate `appName` for some deployed visualizers. Only absent and empty-string titles are rejected, by `@IsNotEmpty()` on the DTO.
+- Unrecognised fields on an entry SHALL be logged as a warning listing their names and then ignored; they MUST NOT cause the entry to be dropped.
+
+Boot MUST NOT fail for any of these cases.
+
+Additionally, the provider SHALL log a warning when a surviving entry's URL origin is absent from `ALLOWED_IFRAME_ORIGINS`, naming the entry key and the missing origin. The entry is still returned — CSP, not this provider, is what blocks the iframe — but the warning gives the operator the only server-side signal of a misconfiguration that is otherwise invisible in the browser.
+
+`ApplicationVisualizerDto` (`apps/chat-api/src/app-config/dto/application-visualizer.dto.ts`) SHALL mirror `CustomVisualizerDto` with `contentType` optional plus the application-only `borderless` and `withoutTitle` fields, and SHALL carry full `@ApiProperty` metadata on every field.
+
+#### Scenario: Invalid JSON resolves to an empty registry
+
+- **WHEN** `APPLICATION_VISUALIZERS` is `'not-json'`
+- **THEN** `resolve('applicationVisualizers', ctx)` returns `{}`
+- **AND** an error is logged
+
+#### Scenario: A JSON array is rejected
+
+- **WHEN** `APPLICATION_VISUALIZERS` is `'[{"title":"my-viz","url":"https://viz.example.com"}]'`
+- **THEN** `resolve('applicationVisualizers', ctx)` returns `{}`
+- **AND** an error is logged stating the value must be a JSON object
+
+#### Scenario: One invalid entry does not drop the others
+
+- **WHEN** the object contains a valid entry under `app-1` and an entry under `app-2` whose `url` is not an absolute HTTP(S) URL
+- **THEN** the resolved registry contains only `app-1`
+- **AND** an error naming `app-2` is logged
+
+#### Scenario: Entry without contentType is accepted
+
+- **WHEN** an entry declares `title` and `url` but no `contentType`
+- **THEN** the entry is accepted with `contentType` absent
+
+#### Scenario: Entry with an unusable contentType is dropped
+
+- **WHEN** an entry declares `contentType: " , "`
+- **THEN** the entry is dropped with an error log
+
+#### Scenario: Whitespace-only title is preserved
+
+- **WHEN** an entry's `title` is `" "`
+- **THEN** the entry is accepted and `title` is preserved verbatim, including its whitespace
+- **AND** no error is logged
+
+#### Scenario: Unknown fields are warned about and ignored
+
+- **WHEN** an entry carries `expanded: true`
+- **THEN** the entry is still accepted
+- **AND** a warning naming `expanded` as an ignored field is logged
+
+#### Scenario: Origin missing from the iframe allowlist is warned about
+
+- **WHEN** a valid entry's `url` is `https://viz.example.com` and `ALLOWED_IFRAME_ORIGINS` does not contain that origin
+- **THEN** the entry is still returned in the resolved registry
+- **AND** a warning naming the entry key and the missing origin is logged
+
+### Requirement: Client-visible registry keys stay in sync with the client-config mapping
+
+Every `CONFIG_DEFINITIONS` entry with `visibility: 'client'` and `type: 'config'` SHALL
+fall into exactly one of two groups. Either it has exactly one entry in the
+client-config mapping table, or it is `app.version`, which `AppConfigService` resolves
+through its documented special path. Every mapping-table entry SHALL name a key that
+exists in `CONFIG_DEFINITIONS` with `visibility: 'client'` and `type: 'config'`. No two
+mapping entries SHALL write the same response field. The mapped fields, together with
+`appVersion` and `aiTextRefinementAvailable`, SHALL cover every `ClientConfigDto`
+field.
+
+The mapping table is `CLIENT_CONFIG_MAPPINGS` in `apps/chat-api/src/app-config/client-config.mapper.ts`. A unit test in `apps/chat-api/src/app-config/tests/` (`client-config.mapper.spec.ts`) SHALL enforce these properties
+against the real `CONFIG_DEFINITIONS`, so a new unmapped client key fails the test
+suite during development. `ConfigDefinition.key` SHALL stay typed as `string`, and
+`CONFIG_DEFINITIONS` SHALL stay annotated as `ConfigDefinition[]`. This requirement
+does not require a type-level rewrite of the registry. Server-visible keys, such as
+`utility.modelId`, and `type: 'feature'` keys SHALL have no mapping entry.
+
+This requirement SHALL NOT change the contents or order of `CONFIG_DEFINITIONS`,
+provider priority, or provider fallback behavior.
+
+#### Scenario: A new client key without a mapping is caught
+
+- **WHEN** a developer adds a `visibility: 'client'`, `type: 'config'` definition to `CONFIG_DEFINITIONS` without adding a mapping entry
+- **THEN** the registry-coverage test fails and names the unmapped key
+
+#### Scenario: A stale mapping is caught
+
+- **WHEN** a mapping entry names a key that is absent from `CONFIG_DEFINITIONS`, or that is server-visible or a feature
+- **THEN** the registry-coverage test fails and names the stale key
+
+#### Scenario: Duplicate field ownership is caught
+
+- **WHEN** two mapping entries write the same `ClientConfigDto` field
+- **THEN** the registry-coverage test fails and names the field
+
+#### Scenario: app.version is the only unmapped client config key
+
+- **WHEN** the coverage test lists client-visible `type: 'config'` keys without a mapping entry
+- **THEN** the only key listed is `app.version`
+
+#### Scenario: Server-only keys stay out of the mapping
+
+- **WHEN** the mapping table is inspected
+- **THEN** it has no entry for `utility.modelId` or for any `features.*` key

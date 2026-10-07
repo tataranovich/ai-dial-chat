@@ -1,3 +1,4 @@
+import { createSDK } from '@epam/ai-dial-typescript-sdk';
 import {
   BadGatewayException,
   Logger,
@@ -6,7 +7,15 @@ import {
 } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DialClientService } from '../../../dial/dial-client.service';
+import { DeploymentType } from '../../dto/deployment-type';
 import { DeploymentsDetailsService } from '../deployments-details.service';
+
+const configWith = (defaultKinds: DeploymentType[] | undefined) =>
+  ({
+    get: vi.fn((key: string) =>
+      key === 'USER_USAGE_DEPLOYMENT_TYPES' ? defaultKinds : undefined,
+    ),
+  }) as never;
 
 function makeService() {
   const store = new Map<string, unknown>();
@@ -37,6 +46,7 @@ function makeService() {
     }),
     getToolset: vi.fn(),
     getToolSetTools: vi.fn(),
+    getDeploymentInfo: vi.fn(),
   };
 
   const dialClient = {
@@ -48,6 +58,7 @@ function makeService() {
   const service = new DeploymentsDetailsService(
     dialClient,
     cacheManager as never,
+    configWith([DeploymentType.Model, DeploymentType.Application]),
   );
 
   return { service, sdkClient, cacheManager };
@@ -170,6 +181,26 @@ describe('DeploymentsDetailsService', () => {
       await expect(
         service.getDeploymentConfiguration('unknown', 'user-123', 'token'),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('does not cache an upstream error outcome and refetches on the next call', async () => {
+      const { service, cacheManager, sdkClient } = makeService();
+      sdkClient.configurationDeployment
+        .mockResolvedValueOnce(errResponse(404))
+        .mockResolvedValueOnce(okResponse(schema));
+
+      await expect(
+        service.getDeploymentConfiguration('statgpt', 'user-123', 'token'),
+      ).rejects.toThrow(NotFoundException);
+      expect(cacheManager.set).not.toHaveBeenCalled();
+
+      const result = await service.getDeploymentConfiguration(
+        'statgpt',
+        'user-123',
+        'token',
+      );
+      expect(result).toEqual(schema);
+      expect(sdkClient.configurationDeployment).toHaveBeenCalledTimes(2);
     });
 
     it('throws ServiceUnavailableException on network error', async () => {
@@ -373,6 +404,72 @@ describe('DeploymentsDetailsService', () => {
     });
   });
 
+  /*
+   * Drives the real SDK client against a stubbed `fetch`, so these assert the
+   * URL DIAL Core actually receives rather than the SDK call's arguments.
+   */
+  describe.each([
+    ['getUserLimits', '/v1/user/limits'],
+    ['getUserUsage', '/v1/user/usage'],
+  ] as const)('%s deploymentTypes forwarding', (method, path) => {
+    const sendRequest = async (
+      requested: DeploymentType[] | undefined,
+      defaultKinds: DeploymentType[] = [
+        DeploymentType.Model,
+        DeploymentType.Application,
+      ],
+    ) => {
+      const fetchStub = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ deployments: {} }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      const dialClient = {
+        client: createSDK({ baseUrl: 'http://dial-core', fetch: fetchStub }),
+      } as unknown as DialClientService;
+      const service = new DeploymentsDetailsService(
+        dialClient,
+        {} as never,
+        configWith(defaultKinds),
+      );
+
+      await service[method]('token', requested);
+
+      const [request] = fetchStub.mock.calls[0] as unknown as [Request];
+      const url = new URL(request.url);
+      expect(url.pathname).toBe(path);
+      return url.searchParams.getAll('deploymentTypes');
+    };
+
+    it('sends the requested kinds as one comma-joined value', async () => {
+      expect(
+        await sendRequest([DeploymentType.Model, DeploymentType.Application]),
+      ).toEqual(['model,application']);
+    });
+
+    it.each([undefined, []])(
+      'falls back to the configured default kinds when the request names %j',
+      async (requested) => {
+        expect(await sendRequest(requested)).toEqual(['model,application']);
+        expect(await sendRequest(requested, [DeploymentType.Model])).toEqual([
+          'model',
+        ]);
+      },
+    );
+
+    it('lets the requested kinds override the configured default', async () => {
+      expect(
+        await sendRequest([DeploymentType.Application], [DeploymentType.Model]),
+      ).toEqual(['application']);
+    });
+
+    it('sends no deploymentTypes when neither the request nor config names any', async () => {
+      expect(await sendRequest(undefined, [])).toEqual([]);
+    });
+  });
+
   describe('getDeploymentDetails', () => {
     it('encodes each deployment path segment before calling DIAL Core', async () => {
       const { service, sdkClient } = makeService();
@@ -510,6 +607,38 @@ describe('DeploymentsDetailsService', () => {
       });
       expect(JSON.stringify(result)).not.toContain('SECRET');
       expect(JSON.stringify(result)).not.toContain('editor.example.com');
+    });
+
+    it('logs the raw DIAL Core application response with function.env redacted', async () => {
+      const debugSpy = vi
+        .spyOn(Logger.prototype, 'debug')
+        .mockImplementation(() => undefined);
+      const { service, sdkClient } = makeService();
+      sdkClient.getApplication.mockResolvedValue(
+        okResponse({
+          id: 'applications/my-app',
+          function: {
+            runtime: 'python3.11',
+            status: 'DEPLOYED',
+            env: { API_KEY: 'super-secret-env-value' },
+          },
+        }),
+      );
+
+      await service.getDeploymentDetails(
+        'user1',
+        'applications/my-app',
+        'token',
+      );
+
+      const logged = debugSpy.mock.calls.map((call) => String(call[0]));
+      expect(
+        logged.some((line) => line.includes('DIAL Core application details')),
+      ).toBe(true);
+      expect(logged.join('\n')).not.toContain('super-secret-env-value');
+      expect(logged.join('\n')).toContain('python3.11');
+
+      debugSpy.mockRestore();
     });
 
     it('maps skills_supported to features.skillsSupported in details', async () => {
@@ -1167,6 +1296,75 @@ describe('DeploymentsDetailsService', () => {
         'deployments:details:user1:toolsets/search-tool',
       );
       expect(cached).toEqual(freshResult);
+    });
+  });
+
+  describe('getDeploymentInterfaces', () => {
+    it('returns the deployment interfaces and caches them under their own key', async () => {
+      const { service, sdkClient, cacheManager } = makeService();
+      sdkClient.getDeploymentInfo.mockResolvedValue(
+        okResponse({
+          id: 'gpt-4.1-nano',
+          interfaces: ['chat', 'openaiResponses'],
+        }),
+      );
+
+      const first = await service.getDeploymentInterfaces(
+        'user1',
+        'gpt-4.1-nano',
+        'token',
+      );
+      const second = await service.getDeploymentInterfaces(
+        'user1',
+        'gpt-4.1-nano',
+        'token',
+      );
+
+      expect(first).toEqual(['chat', 'openaiResponses']);
+      expect(second).toEqual(['chat', 'openaiResponses']);
+      expect(sdkClient.getDeploymentInfo).toHaveBeenCalledTimes(1);
+      expect(sdkClient.getDeploymentInfo).toHaveBeenCalledWith('gpt-4.1-nano', {
+        headers: { Authorization: 'Bearer token' },
+      });
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        'deployments:interfaces:user1:gpt-4.1-nano',
+        ['chat', 'openaiResponses'],
+        60 * 1000,
+      );
+    });
+
+    it('is invalidated together with the deployment details', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getDeploymentInfo.mockResolvedValue(
+        okResponse({ interfaces: ['openaiResponses'] }),
+      );
+
+      await service.getDeploymentInterfaces('user1', 'gpt-4.1-nano', 'token');
+      await service.invalidateDetailsCache('user1', 'gpt-4.1-nano');
+      await service.getDeploymentInterfaces('user1', 'gpt-4.1-nano', 'token');
+
+      expect(sdkClient.getDeploymentInfo).toHaveBeenCalledTimes(2);
+    });
+
+    it('resolves an error answer to no interfaces without caching it', async () => {
+      const { service, sdkClient, cacheManager } = makeService();
+      sdkClient.getDeploymentInfo.mockResolvedValue(errResponse(503));
+
+      await expect(
+        service.getDeploymentInterfaces('user1', 'gpt-4.1-nano', 'token'),
+      ).resolves.toEqual([]);
+      expect(cacheManager.set).not.toHaveBeenCalled();
+    });
+
+    it('resolves a transport failure to no interfaces', async () => {
+      const { service, sdkClient } = makeService();
+      sdkClient.getDeploymentInfo.mockRejectedValue(
+        new TypeError('fetch failed'),
+      );
+
+      await expect(
+        service.getDeploymentInterfaces('user1', 'gpt-4.1-nano', 'token'),
+      ).resolves.toEqual([]);
     });
   });
 });

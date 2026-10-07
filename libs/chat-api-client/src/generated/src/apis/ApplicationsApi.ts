@@ -44,7 +44,7 @@ export interface UpdateApplicationRequest {
  */
 export class ApplicationsApi extends runtime.BaseAPI {
   /**
-   * Creates a new application for the authenticated session user by proxying DIAL Core. Invalidates the applications list cache on success.
+   * Creates a new application for the authenticated session user by proxying DIAL Core. Invalidates the applications list and deployments list caches on success.
    * Create a new application
    */
   async createApplicationRaw(
@@ -64,6 +64,15 @@ export class ApplicationsApi extends runtime.BaseAPI {
 
     headerParameters['Content-Type'] = 'application/json';
 
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
     let urlPath = `/api/v1/applications`;
 
     const response = await this.request(
@@ -81,7 +90,7 @@ export class ApplicationsApi extends runtime.BaseAPI {
   }
 
   /**
-   * Creates a new application for the authenticated session user by proxying DIAL Core. Invalidates the applications list cache on success.
+   * Creates a new application for the authenticated session user by proxying DIAL Core. Invalidates the applications list and deployments list caches on success.
    * Create a new application
    */
   async createApplication(
@@ -113,6 +122,15 @@ export class ApplicationsApi extends runtime.BaseAPI {
     const queryParameters: runtime.HTTPQuery = {};
 
     const headerParameters: runtime.HTTPHeaders = {};
+
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
 
     let urlPath = `/api/v1/applications/{applicationName}`;
     urlPath = urlPath.replace(
@@ -163,6 +181,15 @@ export class ApplicationsApi extends runtime.BaseAPI {
 
     const headerParameters: runtime.HTTPHeaders = {};
 
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
     let urlPath = `/api/v1/application-schemas/{id}`;
     urlPath = urlPath.replace(
       `{${'id'}}`,
@@ -208,6 +235,15 @@ export class ApplicationsApi extends runtime.BaseAPI {
 
     const headerParameters: runtime.HTTPHeaders = {};
 
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
+
     let urlPath = `/api/v1/application-schemas`;
 
     const response = await this.request(
@@ -244,6 +280,15 @@ export class ApplicationsApi extends runtime.BaseAPI {
     const queryParameters: runtime.HTTPQuery = {};
 
     const headerParameters: runtime.HTTPHeaders = {};
+
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
 
     let urlPath = `/api/v1/applications`;
 
@@ -298,6 +343,15 @@ export class ApplicationsApi extends runtime.BaseAPI {
     const headerParameters: runtime.HTTPHeaders = {};
 
     headerParameters['Content-Type'] = 'application/json';
+
+    if (this.configuration && this.configuration.accessToken) {
+      const token = this.configuration.accessToken;
+      const tokenString = await token('bearer', []);
+
+      if (tokenString) {
+        headerParameters['Authorization'] = `Bearer ${tokenString}`;
+      }
+    }
 
     let urlPath = `/api/v1/applications/{applicationName}`;
     urlPath = urlPath.replace(

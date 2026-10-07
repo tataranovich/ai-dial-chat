@@ -1,3 +1,8 @@
+import {
+  DialFileManagerActionProfile,
+  DialFileManagerVariant,
+  isUploadInProgress,
+} from '@epam/ai-dial-chat-shared';
 import type { DialFile } from '@epam/ai-dial-react-file-manager';
 import {
   DialFileManagerActions,
@@ -19,11 +24,7 @@ import type {
   UseDialFileManagerOptions,
   UseDialFileManagerResult,
 } from '../dial-file-manager.types';
-import {
-  DialFileManagerActionProfile,
-  DialFileManagerVariant,
-  deriveActionProfile,
-} from '../file-manager-variant';
+import { deriveActionProfile } from '../file-manager-variant';
 import { useDialFileListing } from '../useDialFileListing/useDialFileListing';
 import { useDialFileMetadata } from '../useDialFileMetadata/useDialFileMetadata';
 import { useDialFileMutations } from '../useDialFileMutations/useDialFileMutations';
@@ -52,6 +53,8 @@ export const useDialFileManager = ({
   bucket,
   rootLabel = 'My files',
   activeTab = DialFileManagerTabs.MyFiles,
+  isActive,
+  sessionKey,
   onNotification,
   onOperationSuccess,
   forbiddenSymbolsRegExp,
@@ -71,6 +74,8 @@ export const useDialFileManager = ({
     rootLabel,
     activeTab,
     onNotification,
+    isActive,
+    sessionKey,
   });
 
   const upload = useDialFileUploadBatch({
@@ -183,7 +188,7 @@ export const useDialFileManager = ({
       mutations.isMoving ||
       sharing.isUnsharing ||
       sharing.isRemovingAccess ||
-      upload.uploadBatchState != null,
+      isUploadInProgress(upload.uploadBatchState),
     [
       mutations.isCreatingFolder,
       mutations.isDownloading,
@@ -234,6 +239,7 @@ export const useDialFileManager = ({
     onValidateUpload: upload.onValidateUpload,
     uploadBatchState: upload.uploadBatchState,
     cancelUpload: upload.cancelUpload,
+    cancelUploadFile: upload.cancelUploadFile,
     clearUploadBatch: upload.clearUploadBatch,
     onCreateFolder: mutations.onCreateFolder,
     onCreateFolderValidate,

@@ -78,14 +78,13 @@ const getWrapper = (container: HTMLElement): HTMLElement =>
   container.firstElementChild as HTMLElement;
 
 /*
- * The disabled-state marker around the model selector chip carries no
- * accessible role/label of its own — only the nested trigger button does.
+ * Scoped to the chip's trigger: other kit buttons with a tooltip (e.g. "Add")
+ * also render `aria-disabled="true"` when disabled, so a container-wide query
+ * would match them instead.
  */
-const getModelSelectorDisabledMarker = (
-  container: HTMLElement,
-): Element | null =>
-  // eslint-disable-next-line testing-library/no-node-access
-  container.querySelector('[aria-disabled="true"]');
+const isModelSelectorMarkedDisabled = (): boolean =>
+  screen.getByLabelText(/Select model/).getAttribute('aria-disabled') ===
+  'true';
 
 /*
  * Skeleton is mocked to a bare <span data-variant> for this test file; it has
@@ -568,7 +567,7 @@ describe('Input — model selector', () => {
 
 describe('Input — isModelSelectorDisabled', () => {
   it('keeps the model chip visible and marks it aria-disabled', () => {
-    const { container } = render(
+    render(
       <Input
         deployments={mockItems}
         selectedDeploymentId="gpt-4o"
@@ -577,11 +576,11 @@ describe('Input — isModelSelectorDisabled', () => {
       />,
     );
     expect(screen.getByLabelText(/Select model/)).toBeTruthy();
-    expect(getModelSelectorDisabledMarker(container)).toBeTruthy();
+    expect(isModelSelectorMarkedDisabled()).toBe(true);
   });
 
   it('does not mark the chip aria-disabled when isModelSelectorDisabled is false', () => {
-    const { container } = render(
+    render(
       <Input
         deployments={mockItems}
         selectedDeploymentId="gpt-4o"
@@ -589,7 +588,7 @@ describe('Input — isModelSelectorDisabled', () => {
         isModelSelectorDisabled={false}
       />,
     );
-    expect(getModelSelectorDisabledMarker(container)).toBeNull();
+    expect(isModelSelectorMarkedDisabled()).toBe(false);
   });
 
   it('keeps typing and sending enabled while the model selector is disabled', () => {
@@ -659,7 +658,13 @@ describe('Input — isSendDisabled', () => {
         message="Hello"
         onSend={handleSend}
         isSendDisabled
-        renderFooterActions={({ canSend, onSend }) => {
+        renderFooterActions={({
+          canSend,
+          onSend,
+        }: {
+          canSend: boolean;
+          onSend: () => void;
+        }) => {
           footerCanSend = canSend;
           return (
             <button type="button" onClick={onSend}>
@@ -692,6 +697,35 @@ describe('Input — isSendDisabled', () => {
 });
 
 describe('Input — isInputDisabled', () => {
+  it('consumes pendingDropFiles without adding them while isInputDisabled is true', () => {
+    const onDropFilesConsumed = vi.fn();
+    const onUploadAttachment = vi.fn();
+    const file = new File(['content'], 'dropped.pdf', {
+      type: 'application/pdf',
+    });
+    const { rerender } = render(
+      <Input
+        isInputDisabled
+        pendingDropFiles={[file]}
+        onDropFilesConsumed={onDropFilesConsumed}
+        onUploadAttachment={onUploadAttachment}
+      />,
+    );
+    expect(screen.queryByText('dropped')).toBeNull();
+    expect(onUploadAttachment).not.toHaveBeenCalled();
+    expect(onDropFilesConsumed).toHaveBeenCalledOnce();
+
+    rerender(
+      <Input
+        pendingDropFiles={[file]}
+        onDropFilesConsumed={onDropFilesConsumed}
+        onUploadAttachment={onUploadAttachment}
+      />,
+    );
+    expect(screen.queryByText('dropped')).toBeNull();
+    expect(onDropFilesConsumed).toHaveBeenCalledOnce();
+  });
+
   it('textarea has disabled attribute when isInputDisabled is true', () => {
     render(<Input isInputDisabled />);
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
@@ -731,7 +765,7 @@ describe('Input — isInputDisabled', () => {
   it('attach button is disabled when isInputDisabled is true', () => {
     render(<Input isInputDisabled />);
     const addButton = screen.getByLabelText('Add') as HTMLButtonElement;
-    expect(addButton.disabled).toBe(true);
+    expect(addButton.getAttribute('aria-disabled')).toBe('true');
   });
 
   it('does not call onSend on Enter when isInputDisabled is true', () => {
@@ -770,7 +804,7 @@ describe('Input — isInputDisabled', () => {
   });
 
   it('does not dim the model selector when isInputDisabled is true', () => {
-    const { container } = render(
+    render(
       <Input
         deployments={mockItems}
         selectedDeploymentId="gpt-4o"
@@ -778,7 +812,7 @@ describe('Input — isInputDisabled', () => {
         isInputDisabled
       />,
     );
-    expect(getModelSelectorDisabledMarker(container)).toBeNull();
+    expect(isModelSelectorMarkedDisabled()).toBe(false);
   });
 
   it('keeps the model picker closed when the selector is explicitly disabled', () => {
@@ -965,7 +999,7 @@ describe('Input — pasted attachment expand', () => {
 
     pasteText(screen.getByRole('textbox'), text);
 
-    const card = screen.getByRole('button', { name: 'Download attachment' });
+    const card = screen.getByRole('button', { name: 'Expand pasted text' });
     fireEvent.click(card);
 
     await waitFor(() => {
@@ -982,7 +1016,7 @@ describe('Input — pasted attachment expand', () => {
 
     pasteText(screen.getByRole('textbox'), text);
 
-    const card = screen.getByRole('button', { name: 'Download attachment' });
+    const card = screen.getByRole('button', { name: 'Expand pasted text' });
     fireEvent.click(card);
 
     await waitFor(() => {
@@ -990,6 +1024,22 @@ describe('Input — pasted attachment expand', () => {
         `existing\n${text}`,
       );
     });
+  });
+
+  it('names a pasted card by the host-supplied expandLabel', () => {
+    render(<Input pasteTextThreshold={5} expandLabel="Развернуть текст" />);
+
+    pasteText(
+      screen.getByRole('textbox'),
+      'This is long enough to become a pasted attachment',
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Развернуть текст' }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: 'Expand pasted text' }),
+    ).toBeNull();
   });
 
   /*
@@ -1004,9 +1054,60 @@ describe('Input — pasted attachment expand', () => {
     pasteText(screen.getByRole('textbox'), text);
 
     expect(
-      screen.queryByRole('button', { name: 'Download attachment' }),
+      screen.queryByRole('button', { name: 'Expand pasted text' }),
     ).toBeNull();
     expect(screen.queryByRole('list', { name: 'Attached files' })).toBeNull();
+  });
+});
+
+describe('Input — attachment click label', () => {
+  const attachment = {
+    id: 'report',
+    name: 'report.pdf',
+    file: new File([], 'report.pdf', { type: 'application/pdf' }),
+    type: AttachmentType.File,
+    contentType: 'application/pdf',
+    url: 'files/report.pdf',
+    status: RequestStatus.Idle,
+  };
+
+  it('names a clickable file tile by the host-supplied clickLabel', () => {
+    render(
+      <Input
+        initialAttachments={[attachment]}
+        onAttachmentClick={vi.fn()}
+        clickLabel="Открыть в холсте"
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Открыть в холсте' }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: 'Download attachment' }),
+    ).toBeNull();
+  });
+
+  it('keeps expandLabel on a pasted card when a clickLabel is also given', () => {
+    render(
+      <Input
+        pasteTextThreshold={5}
+        onAttachmentClick={vi.fn()}
+        clickLabel="Открыть в холсте"
+        expandLabel="Развернуть текст"
+      />,
+    );
+
+    fireEvent.paste(screen.getByRole('textbox'), {
+      clipboardData: {
+        items: [] as unknown as DataTransferItemList,
+        getData: () => 'This is long enough to become a pasted attachment',
+      },
+    });
+
+    expect(
+      screen.getByRole('button', { name: 'Развернуть текст' }),
+    ).toBeTruthy();
   });
 });
 
@@ -1135,9 +1236,9 @@ describe('Input — message length cap', () => {
   });
 });
 
-/* Issue #8754: a picked prompt used to arrive on the `message` channel, which
+/* [#8754](https://github.com/epam/ai-dial-chat/issues/8754): a picked prompt used to arrive on the `message` channel, which
  * replaces the whole textarea value, so any draft was destroyed with no undo.
- * Issue #8781: the insert then had to survive as an *undoable* edit. */
+ * [#8781](https://github.com/epam/ai-dial-chat/issues/8781): the insert then had to survive as an *undoable* edit. */
 describe('Input — textInsertion', () => {
   const renderWithInsertion = (revision: number, text: string) =>
     render(<Input textInsertion={{ text, revision }} />);
@@ -1241,7 +1342,7 @@ describe('Input — textInsertion', () => {
     expect(textarea.value).toBe('aXYb');
   });
 
-  /* Issue #8781: the menu the prompt was picked in returns focus to its own
+  /* [#8781](https://github.com/epam/ai-dial-chat/issues/8781): the menu the prompt was picked in returns focus to its own
      opener from a microtask queued as it unmounts, which used to leave the
      caret outside the composer — and the undo shortcut with nothing to act on. */
   it('keeps the caret in the composer when the closing menu returns focus to its opener', async () => {
@@ -1310,7 +1411,7 @@ describe('Input — textInsertion', () => {
 
   /* Browsers that cannot insert into a textarea through the editing pipeline
      (Firefox) only take the value programmatically, which drops their undo
-     history — so the hook owes the user that one undo itself (issue #8781).
+     history — so the hook owes the user that one undo itself ([#8781](https://github.com/epam/ai-dial-chat/issues/8781)).
      jsdom has no `execCommand` at all, which is exactly that case. */
   describe('when the browser cannot put the insert on its undo stack', () => {
     const insertIntoDraft = async (draft: string, text = 'PROMPT') => {

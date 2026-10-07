@@ -27,16 +27,17 @@ Core principle: the chat application is assembled from a set of **independently 
 
 ## Monorepo & Tooling
 
-| Tool               | Role                                                           |
-| ------------------ | -------------------------------------------------------------- |
-| **Nx 23**          | Monorepo orchestration, task pipeline, caching, affected graph |
-| **npm workspaces** | Package management                                             |
-| **React 19**       | UI framework for all libraries and the frontend app            |
-| **NestJS 11**      | Backend API server (`apps/chat-api`)                           |
-| **TypeScript 6.0** | Strict mode, `noUnusedLocals`, `noUnusedParameters`            |
-| **Vite 8**         | Frontend bundler                                               |
-| **Vitest 4**       | Test runner (frontend + backend unit tests)                    |
-| **ESLint 9**       | Flat config (`eslint.config.mjs`) + Prettier 3                 |
+| Tool               | Role                                                                                                  |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| **Nx 23**          | Monorepo orchestration, task pipeline, caching, affected graph                                        |
+| **npm workspaces** | Package management                                                                                    |
+| **React 19**       | UI framework for all libraries and the frontend app                                                   |
+| **NestJS 11**      | Backend API server (`apps/chat-api`)                                                                  |
+| **TypeScript 6.0** | Strict mode, `noUnusedLocals`, `noUnusedParameters`                                                   |
+| **Vite 8**         | Frontend bundler                                                                                      |
+| **Vitest 4**       | Test runner (frontend + backend unit tests)                                                           |
+| **ESLint 9**       | Flat config (`eslint.config.mjs`) + Prettier 3                                                        |
+| **Storybook 10**   | Lib-local component catalogue (`libs/celebrations/.storybook`, React/Vite); built in CI, not deployed |
 
 ```
 root/
@@ -45,7 +46,7 @@ root/
 │   ├── chat-api/              # NestJS — backend API server (port 5000)
 │   ├── chat-overlay-sandbox/  # Static host page for exercising the overlay (port 4300)
 │   └── mcp-app-sandbox/       # Separate-origin MCP Apps sandbox proxy (port 3100)
-├── libs/                      # 28 @epam/* libraries — see Libraries below
+├── libs/                      # 29 @epam/* libraries — see Libraries below
 ├── docs/                      # Architecture, requirements, auth, theming, overlay migration
 ├── openspec/
 │   ├── config.yaml            # Tech stack, commands, architecture rules for AI agents
@@ -60,6 +61,13 @@ The MCP Apps sandbox runs on an origin distinct from the chat host and has its
 own embedding allowlist. The BFF publishes its URL and host identity through
 client config; see [MCP Apps configuration](../apps/chat-api/README.md#mcp-apps-configuration)
 and the [sandbox deployment guide](../apps/mcp-app-sandbox/README.md).
+
+Three container images are released together, with the same tags per run:
+`ai-dial-chat` (root `Dockerfile`: BFF with the SPA and overlay sandbox
+bundled), `ai-dial-chat-bff` (`apps/chat-api/Dockerfile`: BFF only, for a
+frontend hosted elsewhere) and `ai-dial-chat-mcp-app-sandbox`
+(`apps/mcp-app-sandbox/Dockerfile`). See
+[Docker image (BFF only)](../apps/chat-api/README.md#docker-image-bff-only).
 
 ### Typechecking and verification
 
@@ -132,6 +140,7 @@ All libraries live in `libs/*`, resolve through `tsconfig.base.json` paths plus 
 | `@epam/ai-dial-chat-api-client`       | `chat-api-client`       | Generated OpenAPI client for the chat API (see the exception below)                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `@epam/ai-dial-chat-overlay`          | `chat-overlay`          | Embeddable `ChatOverlay` / `ChatOverlayManager` and the postMessage protocol                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `@epam/ai-dial-catalog`               | `catalog`               | Catalog for browsing models, applications, tools, prompts, and skills                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `@epam/ai-dial-celebrations`          | `celebrations`          | Seasonal start-page celebrations: `CelebrationProvider`, `useCelebration`, `CelebrationDecor`, and lazily loaded `./halloween` / `./new-year` events whose scenes and decor behaviors hosts enable per event; covered by a lib-local Storybook                                                                                                                                                                                                                                     |
 | `@epam/ai-dial-conversation-input`    | `conversation-input`    | Message composer — model selection, attachments, voice input, edit mode                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `@epam/ai-dial-conversation-messages` | `conversation-messages` | Message bubbles with actions and source citations                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `@epam/ai-dial-conversation-panel`    | `conversation-panel`    | Virtualized conversation-history sidebar with grouping, tabs, and search                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -139,7 +148,7 @@ All libraries live in `libs/*`, resolve through `tsconfig.base.json` paths plus 
 | `@epam/ai-dial-sidebar`               | `sidebar`               | Resizable sidebar shell — header, search, empty state                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `@epam/ai-dial-source-panel`          | `source-panel`          | Conversation sources — uploaded files and generated citations                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `@epam/ai-dial-quotations`            | `quotations`            | Citation and annotation components, hooks, and utilities                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `@epam/ai-dial-toolset-editor`        | `toolset-editor`        | Host-agnostic toolset editor — composed `ToolsetEditor`, shared `GeneralForm`, validation and form utils, injected auth/persist callbacks; first lib peer on `chat-hooks` (root barrel)                                                                                                                                                                                                                                                                                            |
+| `@epam/ai-dial-toolset-editor`        | `toolset-editor`        | Host-agnostic toolset editor — composed `ToolsetEditor` (on builder-form's `EntityEditor`), a deprecated `GeneralForm` wrapper over `MetadataForm`, validation and form utils, injected auth/persist callbacks; first lib peer on `chat-hooks` (root barrel)                                                                                                                                                                                                                       |
 | `@epam/ai-dial-mcp-apps`              | `mcp-apps`              | Host-agnostic MCP Apps building blocks — message/tool-call matching, the response cache, and the inline preview hook/component, shared with `apps/chat`'s full-width MCP App canvas                                                                                                                                                                                                                                                                                                |
 | `@epam/ai-dial-attachment-canvas`     | `attachment-canvas`     | Viewer for attachments — images, PDFs, DOCX/XLSX/PPTX, CSV spreadsheets, JSON, markdown, text                                                                                                                                                                                                                                                                                                                                                                                      |
 | `@epam/ai-dial-attachment-input`      | `attachment-input`      | File input with upload validation, drag-and-drop, progress                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -150,11 +159,11 @@ All libraries live in `libs/*`, resolve through `tsconfig.base.json` paths plus 
 | `@epam/ai-dial-prompts`               | `prompts`               | Favorite-prompts panel, the prompt-parameters popup, and the `usePromptSelectorOverlay` workflow for the composer                                                                                                                                                                                                                                                                                                                                                                  |
 | `@epam/ai-dial-skills`                | `skills`                | Skill selection for the composer — favorites overlay, slash-command menu, browse-modal shell, the selected/history skill chips, and the `SkillArchiveUploadDialog` presentation for skill-archive import                                                                                                                                                                                                                                                                           |
 | `@epam/ai-dial-skill-editor`          | `skill-editor`          | Skill authoring form with a file tree and conflict handling                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `@epam/ai-dial-builder-form`          | `builder-form`          | Presentational builder form shells, editor layouts and shared deployment field sets for composing and editing DIAL entities                                                                                                                                                                                                                                                                                                                                                        |
+| `@epam/ai-dial-builder-form`          | `builder-form`          | Presentational builder form shells, editor layouts and shared deployment field sets for composing and editing DIAL entities; owns the entity editor shell every editor uses (`EntityEditor`, `MetadataForm`, `useMetadataForm`)                                                                                                                                                                                                                                                    |
 | `@epam/ai-dial-scheduled-tasks`       | `scheduled-tasks`       | Host-agnostic Scheduled Tasks list, form, detail/history and delete-confirmation presentation; `styles.css` composes required builder-form structural CSS                                                                                                                                                                                                                                                                                                                          |
 | `@epam/ai-dial-usage-dashboard`       | `usage-dashboard`       | Aggregate calendar-period (UTC day/week/month) cost-limit cards and the per-model limits table for the Settings Usage tab, rendering normalized display models only — DTO interpretation lives in `libs/chat-hooks/src/usage`                                                                                                                                                                                                                                                      |
 
-Conversation-history reuse is split across three acyclic layers. `chat-shared` owns the canonical `FilterTab`, the transfer-job contracts (job, status, subject, determinate progress, and the `ConversationTransferErrorCode` taxonomy), and conversation-name utilities. `chat-hooks` owns headless resource-state and conversation-panel controller hooks, with host-specific routing, labels, feature policy, and configured clients injected by `apps/chat`. `conversation-panel` owns the virtualized panel plus the labels-driven `ImportExportQueue` — with its per-row UI kit `Spinner` and `getTransferFileIcon` mapping — and the `RenameConversationPopup` presentation component, and consumes `FilterTab` and the transfer-job contracts from `chat-shared` directly rather than re-exporting them.
+Conversation-history reuse is split across three acyclic layers. `chat-shared` owns the canonical `FilterTab`, the transfer-job contracts (job, status, subject, determinate progress, and the `ConversationTransferErrorCode` taxonomy), and conversation-name utilities. `chat-hooks` owns headless resource-state and conversation-panel controller hooks, with host-specific routing, labels, feature policy, and configured clients injected by `apps/chat`. `conversation-panel` owns the virtualized panel and the `RenameConversationPopup` presentation component, and consumes `FilterTab` and the transfer-job contracts from `chat-shared` directly rather than re-exporting them. The export/import queue is the UI kit's generic `TransferQueue`; `apps/chat` maps transfer jobs onto its items (`toTransferQueueItems` in `apps/chat/src/utils/conversation-transfer.ts`), and the file manager renders the same component for uploads.
 
 ### Library isolation
 
@@ -215,14 +224,25 @@ apps/chat/src/
 └── i18n/                  # i18next config + locale JSON files
 ```
 
-Routes under `pages/`: `Conversation`, `ConversationRoute`, `ConversationSharedInvitation`, `SharedInvitation`, `AppsEditor`, `ToolsetEditor`, `ToolsetAuthCallback`, `PromptEditor`, `DialFileManagerPage`, `ScheduledTasksPage`, `ScheduledTaskCreatePage`, `ScheduledTaskEditPage`, `ScheduledTaskDetailPage`, `SettingsPage`, `NotFound`, and `auth/`.
+Routes under `pages/`: `Conversation`, `ConversationRoute`, `ConversationSharedInvitation`, `SharedInvitation`, `ApplicationEditor`, `ToolsetAuthCallback`, `PromptEditor`, `SkillEditor`, `DialFileManagerPage`, `ScheduledTasksPage`, `ScheduledTaskCreatePage`, `ScheduledTaskEditPage`, `ScheduledTaskDetailPage`, `SettingsPage`, `NotFound`, and `auth/`.
 
-`SettingsPage` is always available — it is behind no feature flag. It renders a
-vertical tab rail via `@epam/ai-dial-settings-panel`, with the tab list declared
-in `hooks/useSettingsTabConfig.tsx` — adding a tab is one `SettingsTabs` enum
-member plus one entry there. Two tabs ship, in rail order: `PreferencesTab` then `UsageTab`.
-`Preferences` is the tab selected on arrival, so `GET /api/v1/user/usage` is not requested until
-the user opens `Usage`. The day, week, and month figures are **calendar** windows anchored to UTC
+`ApplicationEditor` holds one lazy route element, `ApplicationEditorPage`, which `ROUTES.AppsEditor`, `ROUTES.CustomAppEditor` and `ROUTES.ToolsetEditor` all render with a `kind`. The page resolves an `ApplicationEditorDefinition` from `APPLICATION_EDITOR_DEFINITIONS` and owns the shared lifecycle (mode from the query params, loading, metadata state, avatar picker, saving overlay, notifications, return navigation); a new application kind needs only a definition and a Setup component. The toolset definition delegates its whole body to the lib `ToolsetEditor` through `renderPage`, because its post-save OAuth sequencing stays inside that lib. Every entity editor — toolset, custom app, quick app, prompt and skill — renders through `EntityEditor` and `MetadataForm` from `@epam/ai-dial-builder-form`, which own the header, the Metadata | Setup columns and the shared metadata fields (prompt and skill keep their own arrangement on that shell: the prompt is one column without section headings, the skill shows Files on the left and the selected file on the right); the former stepper `EditorHeader` is gone.
+
+`SettingsPage` renders a vertical tab rail via `@epam/ai-dial-settings-panel`, with the tab list
+declared in `hooks/useSettingsTabConfig.tsx` — adding a tab is one `SettingsTabs` enum member plus
+one entry there. Two tabs ship, in rail order: `PreferencesTab` then `UsageTab`.
+
+Each tab is a location. `ROUTES.SettingsTab` (`/settings/:tab`) is a single dynamic pattern rather
+than one route per tab, so adding a tab stays a config change; `app/settings-routes.tsx` registers
+it alongside the bare `ROUTES.Settings`, applying the `OverlayFeature.HideSettingsPage` gate to
+both so neither path mounts the lazy chunk while the page is hidden. `SettingsPage` reads the
+segment from the URL — it holds no selection state — resolves it against the ids the config
+returned, and redirects a bare, unknown, or withheld segment to the first configured tab. Build a
+concrete path with `getSettingsTabRoute` (`constants/routes.ts`, beside the other route builders)
+rather than interpolating the pattern.
+
+`Preferences` is the first configured tab and therefore the redirect target, so
+`GET /api/v1/user/usage` is not requested until the user opens `Usage`. The frontend sends no `deploymentTypes`, so which deployment kinds are listed is the BFF's `USER_USAGE_DEPLOYMENT_TYPES` (default models and applications); an application (agent) row's cost includes the cost of the models it called, which appear as their own rows. The day, week, and month figures are **calendar** windows anchored to UTC
 boundaries, and DIAL Core reports each one's exclusive end as an optional `resetsAt` instant.
 `UsageTab` formats those at the application edge (`utils/usage-reset-time.ts` — the only place
 `Date`/`Intl` touch a reset time) and passes preformatted strings into `@epam/ai-dial-usage-dashboard`,
@@ -234,10 +254,11 @@ in the `libs/chat-hooks/src/usage` adapters `map-usage-data-to-dashboard.ts` and
 cards, rows, and period statuses those adapters produce. The tab also arms a timer for the earliest
 displayed boundary and re-fetches when it elapses, so post-reset figures always come from a fresh
 DIAL Core response — nothing is ever zeroed locally.
-`PreferencesTab` hosts the language, keyboard-shortcut and "Default agent for new chats"
-preferences. A theme row is implemented but **commented out**, parked for an
-upcoming theming feature — which is why `useThemeOptions` and the
-`settings.theme*` i18n keys exist with no live caller. The "Default agent for
+`PreferencesTab` hosts the theme, language, keyboard-shortcut and "Default agent for new chats"
+preferences. The theme row is driven by `useThemeOptions`, which derives its options from whatever
+`GET /api/themes` returns rather than from a fixed light/dark/system list: one entry per configured
+theme (`light` then `dark` first, the rest in configuration order), plus a synthetic `System`
+entry only where both `light` and `dark` exist. It is hidden below two options. The "Default agent for
 new chats" row renders only while `DEFAULT_DEPLOYMENT_PINNED` is on, since the
 pin is what gives its "Default agent" option something to refer to; in a default
 deployment (flag off) only the keyboard-shortcut row is visible. All three of
@@ -298,18 +319,23 @@ Current implementation uses **React Context** with no external state library. Th
 | `SkillsContext`               | Skill list and mutations                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `ConversationPanelContext`    | Conversation sidebar open/collapsed state                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `SourcesSidebarContext`       | Sources panel visibility and active source                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `VisualizerMessageContext`    | Ref-backed bridge publishing the active conversation's send handler, so a visualizer opened in the app-shell attachment canvas can post `SEND_MESSAGE` into its own conversation (gated by `ALLOW_VISUALIZER_SEND_MESSAGES`)                                                                                                                                                                                                                                                                                                                                                                                         |
 | `SheetNavigationContext`      | Mobile bottom-sheet navigation stack                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `FavoriteApplicationsContext` | Favorited catalog entities                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `ActiveScheduledTaskContext`  | Scheduled task currently being viewed or edited                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `UserConfigContext`           | Per-user preferences persisted through `/api/v1/user-config`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `NotificationContext`         | Toast notifications                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `CelebrationHost`             | Adapts the app to `@epam/ai-dial-celebrations`: passes `config.activeEventId` (`UI_EVENT`) only on `/` once the user config is ready, the navigation key as the reset key, labels translated from the `halloween.*` / `newYear.*` keys, the success toast, `useIsMobile` and the composer/starter/history anchors. The library owns playback, random scene selection, secret-phrase interception and cleanup; its `useCelebration` hook is inert outside the provider.                                                                                                                                               |
 | `ClientChannelContext`        | DIAL Core client-channel id, pending `toolset/signin` and `external-service/signin` events, `reportEvent()`, `ensureConnected()` — mounted inside `RequireAuth` alongside `GenerationProvider` so it survives conversation navigation. The subscription is demand-driven: it opens only when a completion request calls `ensureConnected()`/`waitForChannel()`, never merely from mounting or returning to a streaming-capable route; see [`docs/auth/auth-bff-encrypted-cookie.md` §5.5](./auth/auth-bff-encrypted-cookie.md#55-interactive-sign-in-during-a-completion-toolsets-and-application-external-services) |
 
 Context pattern (reference: `ThemeContext.tsx`):
 
 - `createContext<T | undefined>(undefined)`
 - `useMemo` on context value to prevent consumer re-renders
-- Guard consumer hook throws a clear error when used outside the provider
+- Guard consumer hook throws a clear error when used outside the provider —
+  the one exception is `useCelebration` from `@epam/ai-dial-celebrations`, whose default value is an inert,
+  disabled easter egg, so a decorative feature cannot break a tree that skips
+  its provider
 
 ### API layer
 
@@ -331,18 +357,16 @@ Behaviour applied automatically:
 
 `server-api/` holds one module per backend domain (`conversations.api.ts`, `skills.api.ts`, `files.api.ts`, …). The `ApiEndpoints` enum in `base.ts` centralises the URL constants used by the hand-written helpers; domains covered by the generated client go through `api-client.ts` instead.
 
-| Key                 | URL                         |
-| ------------------- | --------------------------- |
-| `THEMES`            | `/api/themes`               |
-| `THEME_ICON`        | `/api/themes/icon`          |
-| `CHAT_COMPLETIONS`  | `/api/v1/chat/completions`  |
-| `CONVERSATIONS`     | `/api/v1/conversations`     |
-| `MODELS`            | `/api/v1/models`            |
-| `AUTH_ME`           | `/api/v1/auth/me`           |
-| `AUTH_LOGOUT`       | `/api/v1/auth/logout`       |
-| `TRANSCRIPTION`     | `/api/v1/transcription`     |
-| `CLIENT_CHANNEL`    | `/api/v1/client-channel`    |
-| `EXTERNAL_SERVICES` | `/api/v1/external-services` |
+| Key                | URL                        |
+| ------------------ | -------------------------- |
+| `THEMES`           | `/api/themes`              |
+| `THEME_ICON`       | `/api/themes/icon`         |
+| `CHAT_COMPLETIONS` | `/api/v1/chat/completions` |
+| `CONVERSATIONS`    | `/api/v1/conversations`    |
+| `MODELS`           | `/api/v1/models`           |
+| `AUTH_ME`          | `/api/v1/auth/me`          |
+| `AUTH_LOGOUT`      | `/api/v1/auth/logout`      |
+| `CLIENT_CHANNEL`   | `/api/v1/client-channel`   |
 
 ### SSE streaming
 
@@ -356,6 +380,10 @@ see [PDF citation metadata](../apps/chat-api/README.md#pdf-citation-metadata).
 - Handles `[DONE]` termination marker
 - Supports `AbortSignal` for cancellation
 - Ignores comment lines (those starting with `:`), as every SSE reader in the repo must
+- Reports a lost connection (a rejected `fetch` or a failed read) and a stream silent for 45 s — keepalives included, re-checked immediately on `visibilitychange`/`online`/`pageshow` — as a `StreamInterruptedError`. `useConversationStream` then re-fetches the conversation and rejoins the still-running generation through `completions/attach` (falling back to `watch`), shows the saved answer if it already finished, and shows the error banner only if neither applies (issue #8959; OpenSpec capability `generation-stream-recovery`)
+- Reports a `409` as a `GenerationConflictError`. Most starts show it as the conflict message. The conversation page's load-time continuation of a user-last conversation opts in with `startStream(..., { resumeOnConflict: true })`: such a page can be a reload that landed before the running generation saved its start state. For it, `useConversationStream` waits on the same re-fetch schedule until the start state appears, then rejoins the generation, or shows the saved answer. It falls back to the conflict message only if neither appears (follow-up to issue #8935)
+
+`conversations/completions`, `conversations/completions/attach`, and `conversations/watch` each write a `: keepalive` comment every 15 s while open. On `completions` the tick is skipped while the last relayed upstream slice ended mid-line, so the comment never splits an SSE line.
 
 Every `chat-api` SSE response (`conversations/completions`, `conversations/watch`, `client-channel/subscribe`) is opened through `startSseResponse` (`apps/chat-api/src/common/utils/sse.ts`), which sets the event-stream headers, flushes them, and immediately writes a `: init` comment. Firefox does not hand a streamed response to the `fetch()` caller until the first body byte arrives, and these endpoints flush headers long before their first real event exists — without the comment, Firefox leaves the request pending, so the client-channel id never resolves and `useConversationStream` blocks on `waitForChannel` before it even sends the completion request — this is now the ordinary cold-start path for the first completion after mount or after an idle disconnect, not an edge case, since the subscription is opened by that same completion rather than in advance.
 
@@ -376,7 +404,12 @@ Configured at startup:
   a fresh style nonce and its required WebAssembly permission, while the PDF worker receives a
   separate worker policy. `CSP_MODE` controls report-only rollout versus strict
   enforcement. `ALLOWED_CONNECT_ORIGINS` extends `connect-src` for trusted external
-  document previews in both policies; remote-server CORS still applies.
+  document previews in both policies; remote-server CORS still applies. The same
+  list reaches the app through client config. The app supplies a PDF loader that
+  enables browser credentials for matching external HTTP(S) origins and rejects
+  their redirects; the attachment library receives only the loader callback.
+  See the [configuration reference](../apps/chat-api/README.md#content-security-policy)
+  for credentialed CORS and cookie requirements.
   Report-only mode accepts legacy HTML without the nonce marker with
   a startup warning; enforcement requires a nonce-aware build. See
   [CSP configuration](../apps/chat-api/README.md#content-security-policy).
@@ -428,6 +461,7 @@ apps/chat-api/src/
 ├── external-services/      # Application external-service metadata + signin/signout proxy
 ├── offline-credentials/    # Long-lived credentials for background runs
 ├── deployments/  models/   # Deployment and model listings
+├── text-refinement/        # Bounded draft rewriting with caller credentials
 ├── transcription/          # Speech-to-text proxy for voice input
 ├── rate/                   # Message like/dislike
 ├── user-config/            # Per-user preferences
@@ -435,6 +469,7 @@ apps/chat-api/src/
 ├── health/                 # Health check
 ├── telemetry/              # OpenTelemetry bootstrap, logger bridge, metrics
 ├── dial/                   # DIAL Core client wiring
+├── custom-api/             # Deployment-configured custom Core API bridge (disabled by default)
 ├── config/                 # class-validator env schema
 ├── constants/  common/     # Shared decorators, interceptors, constants
 └── openapi/                # Response DTOs and OpenAPI document generation
@@ -444,32 +479,66 @@ apps/chat-api/src/
 
 Business controllers are versioned; three infrastructure controllers are deliberately not.
 
-| Base path                           | Domain                                                    |
-| ----------------------------------- | --------------------------------------------------------- |
-| `/api/v1/auth`                      | OIDC login, callback, refresh, logout, profile, providers |
-| `/api/v1/conversations`             | Conversation CRUD, completions, publish                   |
-| `/api/v1/chat`                      | Direct DIAL Core completion proxy                         |
-| `/api/v1/models`                    | Model listing                                             |
-| `/api/v1/deployments`               | Deployment listing and per-deployment details             |
-| `/api/v1/applications`              | Application CRUD                                          |
-| `/api/v1/application-schemas`       | Application schema metadata                               |
-| `/api/v1/skills`                    | Skill CRUD and metadata lookup                            |
-| `/api/v1/toolsets`                  | Toolset CRUD and auth flows                               |
-| `/api/v1/prompts`                   | Prompt CRUD                                               |
-| `/api/v1/files`                     | File upload, listing, download                            |
-| `/api/v1/share`                     | Share links and recipients                                |
-| `/api/v1/publish` `/api/v1/catalog` | Publication rules and published-entity access             |
-| `/api/v1/scheduled-tasks`           | Scheduled task CRUD and runs                              |
-| `/api/v1/client-channel`            | Client-channel SSE relay                                  |
-| `/api/v1/external-services`         | External-service metadata and credentials                 |
-| `/api/v1/offline-credentials`       | Long-lived credentials for background runs                |
-| `/api/v1/transcription`             | Speech-to-text                                            |
-| `/api/v1/rate`                      | Message rating                                            |
-| `/api/v1/user-config`               | Per-user preferences                                      |
-| `/api/v1/client-config`             | Client configuration document                             |
-| `/api/apps`                         | App metadata — unversioned                                |
-| `/api/themes`                       | Theme configuration and icons — unversioned               |
-| `/api/health`                       | Health check — unversioned                                |
+| Base path                           | Domain                                                                                                                                                    |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/v1/auth`                      | OIDC login, callback, refresh, logout, profile, providers                                                                                                 |
+| `/api/v1/conversations`             | Conversation CRUD, completions, publish                                                                                                                   |
+| `/api/v1/chat`                      | Direct DIAL Core completion proxy                                                                                                                         |
+| `/api/v1/models`                    | Model listing                                                                                                                                             |
+| `/api/v1/deployments`               | Deployment listing and per-deployment details                                                                                                             |
+| `/api/v1/applications`              | Application CRUD                                                                                                                                          |
+| `/api/v1/application-schemas`       | Application schema metadata                                                                                                                               |
+| `/api/v1/skills`                    | Skill CRUD and metadata lookup                                                                                                                            |
+| `/api/v1/toolsets`                  | Toolset CRUD and auth flows                                                                                                                               |
+| `/api/v1/prompts`                   | Prompt CRUD                                                                                                                                               |
+| `/api/v1/files`                     | File upload, listing, download                                                                                                                            |
+| `/api/v1/share`                     | Share links and recipients                                                                                                                                |
+| `/api/v1/publish` `/api/v1/catalog` | Publication rules and published-entity access                                                                                                             |
+| `/api/v1/scheduled-tasks`           | Scheduled task CRUD, manual-run acceptance, and run status                                                                                                |
+| `/api/v1/client-channel`            | Client-channel SSE relay                                                                                                                                  |
+| `/api/v1/external-services`         | External-service metadata and credentials                                                                                                                 |
+| `/api/v1/offline-credentials`       | Long-lived credentials for background runs                                                                                                                |
+| `/api/v1/text-refinement`           | Draft refinement without persistence                                                                                                                      |
+| `/api/v1/transcription`             | Speech-to-text                                                                                                                                            |
+| `/api/v1/rate`                      | Message rating                                                                                                                                            |
+| `/api/v1/user-config`               | Per-user preferences                                                                                                                                      |
+| `/api/v1/client-config`             | Client configuration document                                                                                                                             |
+| `/api/v1/custom-api`                | Deployment-configured custom Core API bridge (disabled by default — see [apps/chat-api/README.md](../apps/chat-api/README.md#custom-core-api-operations)) |
+| `/api/apps`                         | App metadata — unversioned                                                                                                                                |
+| `/api/themes`                       | Theme configuration and icons — unversioned                                                                                                               |
+| `/api/health`                       | Health check — unversioned                                                                                                                                |
+
+#### Scheduled tasks
+
+Scheduled-task create/update accepts an optional `skillUrls: string[]` alongside
+the required-string prompt. PUT reads authoritative detail before merging:
+omission preserves saved skills, an empty array removes all skills; null is rejected. The scheduled-tasks service resolves
+session-scoped deployment capabilities through the deployments facade before
+saving a skill-bearing task. The mapper writes every encoded reference into the
+first user message's `custom_content.skills` in the Scheduler completion payload;
+this repository contains no task-run worker. Sparse lists need not include that
+payload. See the [API contract](../apps/chat-api/README.md#scheduled-task-skill-contract).
+
+Manual `POST /api/v1/scheduled-tasks/:scheduleId/run` execution is bodyless and
+returns an accepted run; it does not alter schedule metadata or resume an
+exhausted automatic trigger. The client observes that run through
+`GET /api/v1/scheduled-tasks/:scheduleId/runs/:runId`, retaining ordinary
+History pagination and using the existing offline-credentials sign-in flow only
+when an Error row projects `resultStage: "credentials"`. Start requests are
+never retried automatically.
+
+`ConversationsContext` owns unread metadata and bounded discovery retries for
+chats observed by Start now or History. Discovery survives navigation and run
+completion, while applied list snapshots are ordered by successful request
+sequence. See the [chat behavior contract](../apps/chat/README.md#manual-scheduled-task-runs)
+for retry limits and viewed-state synchronization.
+
+Reusable selection lives in `skills` (`SkillSelectorField`), validation and
+presentation in `scheduled-tasks`, and checked request mapping in `chat-hooks`.
+Both chat and scheduled-task validation use the pure `chat-shared` skill-support
+predicate. App adapters own feature flags, catalogs, metadata resolution and
+deployment data. Task execution belongs to the external Scheduler and uses the
+existing offline-credentials flow.
 
 #### Auth (`/api/v1/auth`)
 
@@ -492,19 +561,19 @@ prefix is fixed in `auth.controller.ts`, not derived from `API_PREFIX`.
 
 No endpoint in this domain carries a per-route rate limit — repo-wide rate limiting was removed from `apps/chat-api`.
 
-`GET /api/v1/conversations/list` returns the complete history when both `limit` and `nextToken` are omitted. The BFF follows personal and public bucket cursors independently in batches of 1000, adds shared conversations once, and sorts the combined list by latest activity before bounded display-name enrichment. The conversation panel uses this full-history mode. An explicit `limit` or `nextToken` requests one page per bucket and returns a compound continuation cursor; with only `nextToken`, the page size is 100. A failed personal page fails the request rather than returning a truncated history; public and shared sources remain best-effort.
+`GET /api/v1/conversations/list` returns the complete history when both `limit` and `nextToken` are omitted. The BFF follows personal and public bucket cursors independently in batches of 1000, adds shared conversations once — ordered by when the user accepted the share (`sharedBy[].acceptedAt`, newest first, then by name), since DIAL Core reports no activity time for them — and sorts the combined list by latest activity (a stable sort, so the shared order is kept) before bounded display-name enrichment. The conversation panel uses this full-history mode. An explicit `limit` or `nextToken` requests one page per bucket and returns a compound continuation cursor; with only `nextToken`, the page size is 100. A failed personal page fails the request rather than returning a truncated history; public and shared sources remain best-effort. Items carry DIAL Core's `createdAt` when it reports one (never for shared items). The panel shows one row per scheduled task: `ConversationPanelView` collapses a task's run conversations (`bucket` + `scheduleId`) to the newest by `createdAt` — or to the run currently open — while `ConversationsContext` keeps the full list, which the task banner, History unread marks, and mark-as-viewed depend on.
 
-| Method   | Path                                       | Description                                                                             |
-| -------- | ------------------------------------------ | --------------------------------------------------------------------------------------- |
-| `POST`   | `/api/v1/conversations`                    | Create conversation                                                                     |
-| `GET`    | `/api/v1/conversations?path=`              | Get conversation by path                                                                |
-| `GET`    | `/api/v1/conversations/metadata?path=`     | Get metadata + permissions                                                              |
-| `PUT`    | `/api/v1/conversations?path=`              | Save / overwrite conversation                                                           |
-| `POST`   | `/api/v1/conversations/completions`        | SSE chat completion stream — backend owns persistence for the full generation lifecycle |
-| `POST`   | `/api/v1/conversations/completions/stop`   | Stop an active generation by `generationId`                                             |
-| `POST`   | `/api/v1/conversations/completions/attach` | Attach to an active generation's live replay (SSE)                                      |
-| `POST`   | `/api/v1/conversations/watch`              | Subscribe to conversation resource-update events (SSE)                                  |
-| `DELETE` | `/api/v1/conversations?path=`              | Delete conversation                                                                     |
+| Method   | Path                                       | Description                                                                                      |
+| -------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `POST`   | `/api/v1/conversations`                    | Create conversation                                                                              |
+| `GET`    | `/api/v1/conversations?path=`              | Get conversation by path                                                                         |
+| `GET`    | `/api/v1/conversations/metadata?path=`     | Get metadata + permissions                                                                       |
+| `PUT`    | `/api/v1/conversations?path=`              | Save / overwrite conversation                                                                    |
+| `POST`   | `/api/v1/conversations/completions`        | SSE chat completion stream — backend owns persistence for the full generation lifecycle          |
+| `POST`   | `/api/v1/conversations/completions/stop`   | Stop an active generation by `generationId`                                                      |
+| `POST`   | `/api/v1/conversations/completions/attach` | Attach to an active generation's live replay (SSE); background generations replay from DIAL Core |
+| `POST`   | `/api/v1/conversations/watch`              | Subscribe to conversation resource-update events (SSE)                                           |
+| `DELETE` | `/api/v1/conversations?path=`              | Delete conversation                                                                              |
 
 `POST /api/v1/conversations/completions` routes to one of two upstream generation APIs per request — `ConversationStreamingService.streamCompletion` resolves `features.responsesApi` off `DeploymentsService.getDeploymentDetails` (under the caller's own token, before opening the upstream stream) and dispatches to an inline Chat Completions relay or `responses.adapter.ts` (`apps/chat-api/src/conversations/generation/`) accordingly. Both normalize their upstream SSE events into the same `chat.completion.chunk` shape, so `apply-chunk.server.ts` and the persistence lifecycle below are unchanged regardless of which API served the request. Deployments that don't declare `responses_api: true` keep using Chat Completions exactly as before.
 
@@ -514,24 +583,26 @@ the upstream payload. Encoding preserves path separators while escaping path
 segments; this mapping does not mutate the stored conversation. The Responses
 adapter receives its own request inputs and is a separate mapping boundary.
 
-**The backend, not the frontend, owns conversation persistence** across a completion's full lifecycle. `ConversationGenerationService` keeps an in-memory registry keyed by **principal**+conversation path — an opaque owner key that `resolvePrincipalKey` (`apps/chat-api/src/auth/session/principal-key.ts`) derives from server-verified identity only: the session `sid` under cookie auth, the verified `providerId`+`sub` pair under header (bearer) auth, in disjoint `c:`/`h:` namespaces. All three completion endpoints work under either authentication mode: `streamCompletion` saves the start state (user message + empty assistant placeholder) before opening the upstream stream, assembles the assistant message chunk-by-chunk as it relays the response, and attempts to save the final/partial state on completion, stop, or error regardless of whether the originating HTTP request is still connected. Save failures are logged; stream completion does not prove durable persistence. `ConversationController.streamCompletion` tracks client disconnection for response cleanup while continuing to consume the generation, so closing the tab does not stop upstream work. `POST .../completions/stop` aborts an active generation.
+**The backend, not the frontend, owns conversation persistence** across a completion's full lifecycle. `ConversationGenerationService` keeps an in-memory registry keyed by **principal**+conversation path — an opaque owner key that `resolvePrincipalKey` (`apps/chat-api/src/auth/session/principal-key.ts`) derives from server-verified identity only: the session `sid` under cookie auth, the verified `providerId`+`sub` pair under header (bearer) auth, in disjoint `c:`/`h:` namespaces. All three completion endpoints work under either authentication mode: `streamCompletion` saves the start state (user message + empty assistant placeholder) before opening the upstream stream, assembles the assistant message chunk-by-chunk as it relays the response, and attempts to save the final/partial state on completion, stop, or error regardless of whether the originating HTTP request is still connected. Terminal-save failures are logged and signaled to the originating stream as `error.type: "conversation_save_failed"` and to attach subscribers as an `error` event with `errorType: "conversation_save_failed"`, including after user stop. Clients retain received output and show a host-localized unsaved-answer warning instead of replacing it with the stored placeholder; successful reloads still use server-enriched data. A failed terminal conversation GET retains the received payload and sets hook-local reload-error state separately from message `streamErrorMessage`. The conversation page and application preview offer a read-only retry; successful reconciliation clears the notification, and generation ownership guards reject stale retries. A read failure is not evidence that saving failed. Upstream `[DONE]` does not prove durable persistence. There is still only one terminal-write attempt, and retained browser state does not survive a page reload. `ConversationController.streamCompletion` tracks client disconnection for response cleanup while continuing to consume the generation, so closing the tab does not stop upstream work. `POST .../completions/stop` aborts an active generation.
 
 Because generation survives a closed tab, reopening the conversation needs a way to see its progress: `POST /api/v1/conversations/watch` proxies DIAL Core's generic resource-update events (also used to detect LLM-title-rename completion) so the frontend can poll for the terminal save. `POST .../completions/attach` — resolved from the same registry, looked up by conversation path rather than `generationId` (a freshly-opened tab has no `generationId` to send) — opens an SSE stream that immediately snapshots the assistant message as assembled so far, then delivers every subsequent chunk live, then a terminal event (`done`/`error`/`stopped`) when registered before terminal notification, so a resumed conversation populates progressively instead of showing only a typing indicator until it finishes. It responds `404` when no active generation exists for that path under the caller's principal — including one that already finished, and including one another principal is running — in which case the frontend falls back to the `watch`-based terminal check.
 
-**Generation lifecycle and admission.** The registry is process-local, keyed by principal and conversation path. A process-issued lease identifies each operation independently of its client-supplied `generationId`. Any retained entry blocks another start on that process with `409` before asynchronous preflight. There is no cross-pod coordination or storage-side write fencing. Lifecycle states are `active`, `cancel_requested`, `finalizing`, `settling`, and `released`; a successful generation normally skips cancellation and settling. Stop, maximum duration, and a stale sweep request cancellation rather than evicting the key. The sweep runs on registration with a threshold of `max(30 min, MAX_GENERATION_DURATION_MS) + 1 min`. Only `user_stop` is mapped to the user-stop marker; stale, maximum-duration, and shutdown cancellation are separate causes.
+**Background Responses generations.** For deployments that report `features.responsesApi` and list `openaiResponses` in their DIAL Core `interfaces`, and only while `RESPONSES_API_ENABLED` and `RESPONSES_BACKGROUND_ENABLED` are both on, `streamCompletion` hands the request to `BackgroundGenerationService` (`apps/chat-api/src/conversations/generation/`), which starts the answer as a DIAL Core background job (`background: true`, `store: true`) and makes DIAL Core, not the BFF process, the owner of the running job. The assistant message carries `responseId` plus a server-owned `backgroundGeneration { generationId, status, startedAt }` marker; `generationId` is the message's identity on this path. The BFF relays normalized chunks without assembling the answer (the registry entry holds no text), and at the end retrieves the final answer from DIAL Core once and writes it with `If-Match` only while the marker is still `pending`; the terminal save of a non-background generation stays unconditional. Any BFF instance can then serve `completions/attach` for that message from DIAL Core (snapshot of the stored message, replay from the first event, one terminal event), finalize it if the job already ended, or mark it failed if DIAL Core no longer knows the job or its start was interrupted more than 2 minutes before a `responseId` was saved. Maximum duration and shutdown detach the relay instead of finalizing, so a rolling deploy leaves jobs running for recovery. While a conversation has a `pending` background message every new completion gets `409`. Access on this path is per DIAL user (own bucket plus DIAL Core ownership), not per session. See [the Responses API integration](responses-api-integration.md#background-mode) for the full lifecycle.
+
+**Generation lifecycle and admission.** The registry is process-local, keyed by principal and conversation path. A process-issued lease identifies each operation independently of its client-supplied `generationId`. Any retained entry blocks another start on that process with `409` before asynchronous preflight. The registry has no cross-pod coordination. Storage writes are fenced with `If-Match` for background generations, client saves, rename, and LLM naming, whatever the flags; the terminal save of a non-background generation is not. Lifecycle states are `active`, `cancel_requested`, `finalizing`, `settling`, and `released`; a successful generation normally skips cancellation and settling. Stop, maximum duration, and a stale sweep request cancellation rather than evicting the key. The sweep runs on registration with a threshold of `max(30 min, MAX_GENERATION_DURATION_MS) + 1 min`. Only `user_stop` is mapped to the user-stop marker; stale, maximum-duration, and shutdown cancellation are separate causes.
 
 The worker enters `finalizing` immediately before its single terminal-save attempt. If `GENERATION_FINALIZE_TIMEOUT_MS` expires first, existing attachment listeners are notified and removed and timers cleared, but the `settling` entry retains its key, assembled snapshot, pending write, and runtime-gauge contribution until the save resolves or rejects. The timeout does not cancel the write, settle its worker, or bound preflight. Shutdown releases local ownership without proving persistence. A late attachment can still join a retained entry after terminal notification and is not covered by the expired timer. See [the observability guide](observability.md#process-memory-and-outstanding-work) for state semantics, cleanup limits, and operational checks, and [the registry specification](../openspec/specs/generation-registry/spec.md) for the ownership contract.
 
 #### Models & Deployments
 
-| Method | Path                                       | Description                                                                                              |
-| ------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/v1/models`                           | List available models (cached)                                                                           |
-| `GET`  | `/api/deployments`                         | List available deployments                                                                               |
-| `GET`  | `/api/v1/deployments/{deployment}/details` | Full per-entity detail for one deployment by id (cached)                                                 |
-| `GET`  | `/api/v1/deployments/{deployment}/limits`  | Rate-limit and calendar-period usage stats for one deployment                                            |
-| `GET`  | `/api/v1/user/limits`                      | Rate-limit and calendar-period usage stats for every visible deployment, plus global cost-budget figures |
-| `GET`  | `/api/v1/user/usage`                       | Same shape as `/api/v1/user/limits`, restricted to deployments used in the current UTC day/week/month    |
+| Method | Path                                       | Description                                                                                                                                                                                                                      |
+| ------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/v1/models`                           | List available models (cached)                                                                                                                                                                                                   |
+| `GET`  | `/api/deployments`                         | List available deployments                                                                                                                                                                                                       |
+| `GET`  | `/api/v1/deployments/{deployment}/details` | Full per-entity detail for one deployment by id (cached)                                                                                                                                                                         |
+| `GET`  | `/api/v1/deployments/{deployment}/limits`  | Rate-limit and calendar-period usage stats for one deployment                                                                                                                                                                    |
+| `GET`  | `/api/v1/user/limits`                      | Rate-limit and calendar-period usage stats for every visible deployment of the kinds in the optional `deploymentTypes` (models and/or applications; default from `USER_USAGE_DEPLOYMENT_TYPES`), plus global cost-budget figures |
+| `GET`  | `/api/v1/user/usage`                       | Same shape as `/api/v1/user/limits`, restricted to deployments used in the current UTC day/week/month; takes the same `deploymentTypes`                                                                                          |
 
 #### Client Channel (`/api/v1/client-channel`)
 
@@ -651,7 +722,7 @@ for existing sessions. Provider metadata and rotation details live in the
 
 - Skips `GET`, `HEAD`, `OPTIONS` (safe methods)
 - Skips `@Public()` routes
-- Validates `Origin` / `Referer` header against configured `CORS_ORIGIN`
+- Validates `Origin` / `Referer` header against configured `CORS_ORIGIN` (defaults to `AUTH_CALLBACK_BASE_URL` when `CORS_ORIGIN` is unset)
 - Validates `X-CSRF-Token` header matches `req.user.csrf`
 
 Frontend bootstraps the CSRF token from the `x-csrf-token` response header on `GET /api/v1/auth/me` and stores it in memory. The typed `post`/`put`/`del` helpers inject it automatically.
@@ -814,6 +885,7 @@ The intended direction, enforced in review:
 - [Responses API Integration](responses-api-integration.md)
 - [Observability](observability.md) — telemetry configuration, metric contracts, and Grafana dashboard examples
 - [Host Install Matrix](host-install-matrix.md) — what an embedding host installs per set of libs
+- [Reusable Chat Workflows](reusable-chat-workflows.md) — skill import, file attachment and prompt selection as public package APIs, and the client application adoption map
 - [Chat API environment variables](../apps/chat-api/README.md#environment-variables) — the full variable reference
 - [Auth subsystem](./auth/)
 - [Legacy AI DIAL Chat](https://github.com/epam/ai-dial-chat)

@@ -264,7 +264,7 @@ describe('ApplicationsService', () => {
     };
 
     it('creates application, returns composite id, and invalidates cache', async () => {
-      const { service, cacheManager } = makeService();
+      const { service, cacheManager, deploymentsService } = makeService();
       mockCreateApplicationSdk(service);
 
       const result = await service.createApplication(
@@ -273,9 +273,12 @@ describe('ApplicationsService', () => {
         body,
       );
       expect(result).toEqual({
-        id: 'applications/test-bucket/My%20App__0.0.1',
+        id: 'applications/test-bucket/My%20App__1.0.0',
       });
       expect(cacheManager.del).toHaveBeenCalledWith('applications:list:user1');
+      expect(deploymentsService.invalidateListCache).toHaveBeenCalledWith(
+        'user1',
+      );
     });
 
     it('uses provided version in path and body', async () => {
@@ -296,12 +299,12 @@ describe('ApplicationsService', () => {
       );
     });
 
-    it('defaults version to 0.0.1 when not provided', async () => {
+    it('defaults version to 1.0.0 when not provided', async () => {
       const { service } = makeService();
       mockCreateApplicationSdk(service);
 
       const result = await service.createApplication('user1', 't', body);
-      expect(result.id).toContain('__0.0.1');
+      expect(result.id).toContain('__1.0.0');
     });
 
     it('maps DTO fields to DIAL Core SDK application body', async () => {
@@ -457,12 +460,13 @@ describe('ApplicationsService', () => {
     });
 
     it('does not invalidate cache when PUT returns error', async () => {
-      const { service, cacheManager } = makeService();
+      const { service, cacheManager, deploymentsService } = makeService();
       mockCreateApplicationSdk(service, undefined, errResponse(409));
       await expect(
         service.createApplication('user1', 't', body),
       ).rejects.toThrow();
       expect(cacheManager.del).not.toHaveBeenCalled();
+      expect(deploymentsService.invalidateListCache).not.toHaveBeenCalled();
     });
 
     it('forces features.skills_supported to true for a Quick App with no applicationProperties.features', async () => {
@@ -988,6 +992,7 @@ describe('updateApplication + GET .../details cache interaction (regression)', (
     const deploymentsDetailsService = new DeploymentsDetailsService(
       dialClient,
       cacheManager as never,
+      { get: vi.fn() } as never,
     );
     const applicationsService = new ApplicationsService(
       dialClient,

@@ -100,18 +100,34 @@ The `useClipboardPaste` and `useLazyImageLoad` hooks (with `LazyImageLoadStatus`
 - **THEN** it returns `"DOCX, AZW, EPUB, WOFF2"`
 
 ### Requirement: Upload constants exported from new lib
-The upload constraint constants (e.g. `MAX_UPLOADS_PER_MINUTE`) from `libs/conversation-input/src/constants/upload.ts` SHALL be exported from `libs/attachment-input/src/index.ts`.
+The upload constraint constants (e.g. `MAX_UPLOADS_PER_MINUTE`) SHALL live in `libs/attachment-input/src/constants/upload.ts` and be exported from the package root `libs/attachment-input/src/index.ts`. `libs/conversation-input` has no `upload.ts` of its own.
 
-#### Scenario: Constants accessible via new alias
-- **WHEN** a consumer imports upload constants from `@epam/ai-dial-attachment-input/src/index`
+#### Scenario: Constants accessible from the package root
+- **WHEN** a consumer imports `MAX_UPLOADS_PER_MINUTE` from `@epam/ai-dial-attachment-input`
 - **THEN** the constant values are accessible and correctly typed
 
-### Requirement: libs/conversation-input re-exports moved symbols
-All symbols that were previously exported from `libs/conversation-input/src/index.ts` and are now owned by `libs/attachment-input` SHALL continue to be re-exported from `libs/conversation-input/src/index.ts` via `export { ... } from '@epam/ai-dial-attachment-input'`. No existing consumer of `@epam/ai-dial-conversation-input` SHALL break.
+### Requirement: Attachment symbols are imported from their owning package
+Every consumer SHALL import `AttachmentCard`, `AttachmentTray`, `AttachmentGroup`,
+`FileDndOverlay`, `getAttachmentIcon`, and `AttachmentGroupProps` from
+`@epam/ai-dial-attachment-input`, the package that owns them.
+`libs/conversation-input/src/index.ts` SHALL NOT re-export them.
 
-#### Scenario: Existing conversation-input imports still resolve
-- **WHEN** any file that previously imported attachment symbols from `@epam/ai-dial-conversation-input` is typechecked
-- **THEN** TypeScript resolves the import without error
+A library that renders any of those components SHALL declare
+`@epam/ai-dial-attachment-input` in its own `dependencies` (so a host installs one package, per the
+`libs.md` install rule) and mark it external in its bundler config, rather than reaching it
+transitively through `@epam/ai-dial-conversation-input`. A library that no longer imports anything
+from `@epam/ai-dial-conversation-input` SHALL not declare it.
+
+#### Scenario: Attachment components resolve from the owning package
+- **WHEN** `conversation-messages`, `source-panel`, or `apps/chat` renders an attachment component
+- **THEN** it imports the component from `@epam/ai-dial-attachment-input`, and the import from
+  `@epam/ai-dial-conversation-input` does not resolve that name
+
+#### Scenario: The dependency the re-export hid is declared
+- **WHEN** `@epam/ai-dial-conversation-messages` or `@epam/ai-dial-source-panel` is built
+- **THEN** each declares `@epam/ai-dial-attachment-input` under `dependencies` and marks it
+  external, its TypeScript project references include `attachment-input`, and neither declares
+  `@epam/ai-dial-conversation-input`, which it no longer imports
 
 ### Requirement: apps/chat attachment MIME helpers moved into the library
 All `apps/chat` files that previously imported from `apps/chat/src/utils/attachment-mime` SHALL import the same helpers from `@epam/ai-dial-attachment-input`, where they live in `libs/attachment-input/src/utils/attachment.ts` together with the rest of the attachment utilities rather than in a separate MIME module. The original `attachment-mime.ts` file SHALL NOT exist under `apps/chat/src/utils/`.
@@ -169,7 +185,7 @@ Both attachment tile variants — `FileAttachment` and `ImageAttachment`, the on
 
 At the app layer, `AttachmentCanvasContextValue` (`libs/attachment-canvas`) SHALL track `attachmentId: string | undefined` — an opaque caller-supplied key identifying whatever is currently displayed in the canvas — set by `openCanvas`/`openCanvasLoading`'s optional third/second `attachmentId` parameter and cleared by `closeCanvas`. The lib itself SHALL NOT assume any structure for this key; it is purely stored and returned.
 
-The canvas hook's `openAttachmentCanvas(attachment, canvasAttachmentId?)` (in `libs/attachment-canvas`) SHALL accept an optional second parameter used as the tracked key instead of `attachment.id`, defaulting to `attachment.id` when omitted (non-message callers — the edit-message tray, `ConversationSourcesPanel` — rely on this default). `ConversationView.tsx`'s `handleMessageAttachmentClick(attachment, messageIndex)` SHALL call `openAttachmentCanvas` with the composite key `` `${messageIndex}:${attachment.id}` ``, so that two different messages containing content-identical attachments (same derived `id`) never collide.
+The `openAttachmentCanvas(attachment, canvasAttachmentId?, shouldCommit?)` function returned by `useOpenAttachmentCanvas` (in `libs/attachment-canvas`, constructed with content resolvers and options) SHALL accept an optional second parameter used as the tracked key instead of `attachment.id`, defaulting to `attachment.id` when omitted (non-message callers — the edit-message tray, `ConversationSourcesPanel` — rely on this default). The optional third `shouldCommit` guard (`ShouldCommitCanvas`) is checked before each canvas write, so a stale in-flight open neither replaces newer content nor closes a canvas it no longer owns. `ConversationView.tsx`'s `handleMessageAttachmentClick(attachment, messageIndex)` SHALL call `openAttachmentCanvas` with the composite key `` `${messageIndex}:${attachment.id}` ``, so that two different messages containing content-identical attachments (same derived `id`) never collide.
 
 `ConversationView.tsx` SHALL read this composite key back from `useAttachmentCanvas().attachmentId` and pass it to each `ConversationMessageItem` as `selectedAttachmentKey`. `ConversationMessageItem` SHALL derive a message-scoped `selectedAttachmentId` by checking whether `selectedAttachmentKey` starts with `` `${index}:` `` (its own message index) and, if so, stripping that prefix; otherwise it passes `undefined`. Only the matching message's `MessageBubble` receives a defined `selectedAttachmentId` — every other message's `ConversationMessageItem` computes `undefined` for the same global key, so no other message's tile can render as selected even if one of its attachments shares the same content-derived `id`.
 

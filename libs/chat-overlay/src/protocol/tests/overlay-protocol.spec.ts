@@ -165,10 +165,10 @@ describe('isOverlayMessageResponse', () => {
 });
 
 describe('OverlayFeature', () => {
-  it('has exactly 45 unique members', () => {
+  it('has exactly 51 unique members', () => {
     const values = Object.values(OverlayFeature);
-    expect(values).toHaveLength(45);
-    expect(new Set(values).size).toBe(45);
+    expect(values).toHaveLength(51);
+    expect(new Set(values).size).toBe(51);
   });
 
   it('includes the hide-keyboard-shortcuts feature key', () => {
@@ -201,12 +201,38 @@ describe('OverlayFeature', () => {
     expect(Object.values(OverlayFeature)).toContain('show-all-starters');
   });
 
+  it('includes the starters-below-greeting feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('starters-below-greeting');
+  });
+
+  it('includes the hide-greeting feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('hide-greeting');
+  });
+
   it('includes the hide-footer-version feature key', () => {
     expect(Object.values(OverlayFeature)).toContain('hide-footer-version');
   });
 
   it('includes the show-agent-description feature key', () => {
     expect(Object.values(OverlayFeature)).toContain('show-agent-description');
+  });
+
+  it('includes the disable-input-history-navigation feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain(
+      'disable-input-history-navigation',
+    );
+  });
+
+  it('includes the hide-conversation-export feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('hide-conversation-export');
+  });
+
+  it('includes the hide-settings-page feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('hide-settings-page');
+  });
+
+  it('includes the show-header-logo feature key', () => {
+    expect(Object.values(OverlayFeature)).toContain('show-header-logo');
   });
 
   it('includes the removable-tools feature key', () => {

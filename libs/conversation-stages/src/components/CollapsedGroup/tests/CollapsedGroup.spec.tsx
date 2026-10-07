@@ -1,42 +1,36 @@
 import { StageStatus } from '@epam/ai-dial-chat-shared';
-import { render, screen, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { CONVERSATION_STAGES_CLASS } from '../../../constants/public-class-names';
 import { CollapsedGroup } from '../CollapsedGroup';
 
-vi.mock('@epam/ai-dial-ui-kit', () => ({
-  DIAL_KIT_ICON_STROKE: 1.5,
-  DIAL_ICON_SIZE: { SM: 14, MD: 16 },
-  Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
-    <span role="status" aria-label={ariaLabel} />
-  ),
-  EllipsisTooltip: ({ text }: { text: string }) => <>{text}</>,
-  LinkButton: ({
-    label,
-    onClick,
-    className,
-    'aria-expanded': ariaExpanded,
-  }: {
-    label: ReactNode;
-    onClick?: () => void;
-    className?: string;
-    'aria-expanded'?: boolean;
-  }) => (
-    <button
-      type="button"
-      onClick={onClick}
-      className={className}
-      aria-expanded={ariaExpanded}
-    >
-      {label}
-    </button>
-  ),
-}));
+/* Disclosures are the real kit `Accordion`, so their button, region and inert state are what a user gets. */
+vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
+  const { Accordion } =
+    await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
+  return {
+    Accordion,
+    DIAL_KIT_ICON_STROKE: 1.5,
+    DIAL_ICON_SIZE: { SM: 14, MD: 16 },
+    Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
+      <span role="status" aria-label={ariaLabel} />
+    ),
+    EllipsisTooltip: ({ text }: { text: string }) => <>{text}</>,
+  };
+});
 
 vi.mock('@epam/ai-dial-attachment-input', () => ({
-  AttachmentCard: ({ attachment }: { attachment: { name: string } }) => (
-    <div>{attachment.name}</div>
+  AttachmentCard: ({
+    attachment,
+    onClick,
+  }: {
+    attachment: { id: string; name: string };
+    onClick?: (id: string) => void;
+  }) => (
+    <button type="button" onClick={() => onClick?.(attachment.id)}>
+      {attachment.name}
+    </button>
   ),
 }));
 
@@ -57,6 +51,37 @@ const running = (index: number, name: string) => ({
 });
 
 describe('CollapsedGroup — collapsed states', () => {
+  it('mounts the panel on demand and resets nested disclosures when closed', () => {
+    render(
+      <CollapsedGroup
+        stages={[
+          { ...completed(0, 'Step 1'), content: 'Stage details' },
+          completed(1, 'Step 2'),
+        ]}
+        isStreaming={false}
+      />,
+    );
+    const toggle = screen.getByRole('button', { name: /Executed 2 steps/ });
+    expect(screen.queryByText('Step 1')).toBeNull();
+    expect(screen.queryByText('Stage details')).toBeNull();
+
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: /Step 1/ }));
+    expect(screen.getByText('Stage details')).toBeTruthy();
+
+    fireEvent.click(toggle);
+    expect(screen.queryByText('Stage details')).toBeNull();
+    expect(screen.queryByText('Step 1')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(
+      screen
+        .getByRole('button', { name: /Step 1/ })
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(screen.queryByText('Stage details')).toBeNull();
+  });
+
   it('renders nothing for an empty stage list', () => {
     const { container } = render(
       <CollapsedGroup stages={[]} isStreaming={false} />,
@@ -97,23 +122,23 @@ describe('CollapsedGroup — collapsed states', () => {
     expect(screen.getByText(/1 failed/)).toBeTruthy();
   });
 
-  it('shows elapsed time without double-counting parallel stages', () => {
+  it('omits a total execution time from the finished summary', () => {
     render(
       <CollapsedGroup
         stages={[
           completed(0, 'Tool A (40s, Start: 11:21:00, End: 11:21:40)'),
-          completed(1, 'Tool B (40s, Start: 11:21:00, End: 11:21:40)'),
-          completed(2, 'Tool C (40s, Start: 11:21:00, End: 11:21:40)'),
+          completed(1, 'Tool B [40s]'),
         ]}
         isStreaming={false}
       />,
     );
 
-    expect(screen.getByText('40.0s')).toBeTruthy();
-    expect(screen.queryByText('2m 0s')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: /Executed/ }).textContent,
+    ).not.toMatch(/\d+(\.\d+)?s\b|\dm \d+s/);
   });
 
-  it('is expanded by default while running, showing progress through the live step', () => {
+  it('is expanded by default while running, showing the live step name', () => {
     render(
       <CollapsedGroup
         stages={[completed(0, 'Step 1'), running(1, 'Step 2')]}
@@ -122,7 +147,35 @@ describe('CollapsedGroup — collapsed states', () => {
     );
     const toggle = screen.getByRole('button');
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByText(/Step 2 of 2/)).toBeTruthy();
+    expect(within(toggle).getByText('Step 2')).toBeTruthy();
+  });
+
+  it('shows no step counter while running', () => {
+    render(
+      <CollapsedGroup
+        stages={[
+          completed(0, 'Search'),
+          completed(1, 'Read'),
+          running(2, 'Summarize'),
+        ]}
+        isStreaming
+      />,
+    );
+    expect(
+      within(screen.getByRole('button')).queryByText(/\d+ of \d+/),
+    ).toBeNull();
+  });
+
+  it('keeps the last stage name while streaming with every stage settled', () => {
+    render(
+      <CollapsedGroup
+        stages={[completed(0, 'Search'), completed(1, 'Summarize')]}
+        isStreaming
+      />,
+    );
+    expect(
+      within(screen.getByRole('button')).getByText('Summarize'),
+    ).toBeTruthy();
   });
 
   it('keeps a long live stage name on one truncated line', () => {
@@ -149,7 +202,7 @@ describe('CollapsedGroup — collapsed states', () => {
     );
     // role="status" implies aria-live="polite"; the Spinner mock also
     // renders one, so confirm the summary text is inside a status region.
-    const summaryText = screen.getByText(/Step 2 of 2/);
+    const summaryText = within(screen.getByRole('button')).getByText('Step 2');
     const isAnnounced = screen
       .getAllByRole('status')
       .some((status) => status.contains(summaryText));
@@ -168,6 +221,7 @@ describe('CollapsedGroup — collapse-by-default-when-finished transition', () =
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe(
       'true',
     );
+    expect(screen.getByText('Step 1')).toBeTruthy();
 
     rerender(
       <CollapsedGroup
@@ -177,6 +231,51 @@ describe('CollapsedGroup — collapse-by-default-when-finished transition', () =
     );
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe(
       'false',
+    );
+    expect(screen.queryByText('Step 1')).toBeNull();
+  });
+});
+
+describe('CollapsedGroup — onAttachmentClick', () => {
+  const attachmentStage = {
+    index: 0,
+    name: 'Combined search',
+    status: StageStatus.Completed,
+    attachments: [
+      { title: 'result.csv', reference_url: 'files/abc/result.csv' },
+    ],
+  };
+
+  it('forwards onAttachmentClick to the inner panel for a single stage', () => {
+    const onAttachmentClick = vi.fn();
+    render(
+      <CollapsedGroup
+        stages={[attachmentStage]}
+        isStreaming={false}
+        onAttachmentClick={onAttachmentClick}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Combined search/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'result.csv' }));
+    expect(onAttachmentClick).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'result.csv' }),
+    );
+  });
+
+  it('forwards onAttachmentClick to the inner panel for a multi-stage group', () => {
+    const onAttachmentClick = vi.fn();
+    render(
+      <CollapsedGroup
+        stages={[attachmentStage, completed(1, 'Step 2')]}
+        isStreaming={false}
+        onAttachmentClick={onAttachmentClick}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Executed 2 steps/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Combined search/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'result.csv' }));
+    expect(onAttachmentClick).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'result.csv' }),
     );
   });
 });
@@ -212,13 +311,14 @@ describe('conversation-stages — public class names', () => {
    * stylesheet simply stops applying, so each class is asserted here. The
    * panel root carries no role, so the stage row is located by text first.
    */
-  it('stamps the panel root behind a collapsed group', () => {
+  it('stamps the panel root when a collapsed group is opened', () => {
     render(
       <CollapsedGroup
         stages={[completed(0, 'Step 1'), completed(1, 'Step 2')]}
         isStreaming={false}
       />,
     );
+    fireEvent.click(screen.getByRole('button', { name: /Executed 2 steps/ }));
 
     expect(
       closestWithClass(
@@ -236,10 +336,55 @@ describe('conversation-stages — public class names', () => {
       />,
     );
 
-    const toggle = screen.getAllByRole('button')[0];
+    const toggle = screen.getByRole('button', { name: /Executed 2 steps/ });
     expect(toggle.classList).toContain(CONVERSATION_STAGES_CLASS.groupToggle);
     expect(
       closestWithClass(toggle, CONVERSATION_STAGES_CLASS.group),
     ).toBeTruthy();
+  });
+});
+
+describe('CollapsedGroup — nested stages', () => {
+  const child = (
+    stage: ReturnType<typeof completed> | ReturnType<typeof failed>,
+    parent: number,
+  ) => ({ ...stage, parent_stage_index: parent });
+
+  it('counts every stage once, including a failed child, whatever the disclosure state', () => {
+    render(
+      <CollapsedGroup
+        stages={[
+          completed(0, 'Plan'),
+          child(completed(1, 'Search'), 0),
+          child(failed(2, 'Read'), 0),
+        ]}
+        isStreaming={false}
+      />,
+    );
+
+    expect(screen.getByText(/Executed 3 steps/)).toBeTruthy();
+    expect(screen.getByText('1 failed')).toBeTruthy();
+  });
+
+  it('keeps a stage expanded when a second stage switches the group layout', async () => {
+    const user = userEvent.setup();
+    const first = { ...running(0, 'Plan'), content: 'thinking' };
+    const { rerender } = render(
+      <CollapsedGroup stages={[first]} isStreaming />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Plan/ }));
+    rerender(
+      <CollapsedGroup
+        stages={[first, { ...running(1, 'Search'), parent_stage_index: 0 }]}
+        isStreaming
+      />,
+    );
+
+    /* The last "Plan" disclosure is the stage row; the first is the live summary. */
+    const plan = screen.getAllByRole('button', { name: /Plan/ }).at(-1)!;
+    expect(plan.getAttribute('aria-controls')).toBeTruthy();
+    expect(screen.getByText('thinking')).toBeTruthy();
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
   });
 });

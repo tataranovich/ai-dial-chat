@@ -15,7 +15,7 @@ import type { Response } from 'express';
  *
  * A comment line is inert for consumers — every SSE reader in this repo skips
  * lines that do not start with `data:`. Same fix as the pre-BFF app carried in
- * `pages/api/client-channels/subscribe.ts` (issue #6500).
+ * `pages/api/client-channels/subscribe.ts` ([#6500](https://github.com/epam/ai-dial-chat/issues/6500)).
  */
 export const SSE_INIT_PAYLOAD = ': init\n\n';
 
@@ -66,6 +66,17 @@ export const writeSseChunk = (
 
   const needsDrain = !res.write(chunk);
   return { written: true, needsDrain };
+};
+
+const NEWLINE_BYTE = 0x0a;
+
+/**
+ * True when `chunk`'s last byte is `\n` — the only point where a handler may
+ * interleave its own SSE comment into a relayed stream without splitting a line.
+ */
+export const endsWithNewline = (chunk: Uint8Array | string): boolean => {
+  if (typeof chunk === 'string') return chunk.endsWith('\n');
+  return chunk.length > 0 && chunk[chunk.length - 1] === NEWLINE_BYTE;
 };
 
 /**

@@ -15,12 +15,18 @@ import { ContentTab, type ContentTabProps } from '../Content';
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@epam/ai-dial-ui-kit')>()),
   InlineSelectTrigger: ({
+    id,
     label,
     onClick,
   }: {
+    id?: string;
     label: string;
     onClick?: () => void;
-  }) => <button onClick={onClick}>{label}</button>,
+  }) => (
+    <button id={id} onClick={onClick}>
+      {label}
+    </button>
+  ),
   Dropdown: ({
     children,
     open,
@@ -208,6 +214,28 @@ describe('ContentTab — file selector', () => {
     expect(screen.getByText('2 files')).toBeTruthy();
   });
 
+  it('names the preview region after the selected file, via the trigger', () => {
+    render(
+      <ContentTab
+        content="Body"
+        files={nestedFiles}
+        selectedFileId="scripts/run.py"
+      />,
+    );
+
+    const region = screen.getByRole('region', { name: 'run.py' });
+    expect(region.getAttribute('aria-labelledby')).toBe(
+      screen.getByRole('button').id,
+    );
+    expect(region.textContent).toContain('Body');
+  });
+
+  it('exposes no unnamed region when there is no file choice', () => {
+    render(<ContentTab content="Body" />);
+
+    expect(screen.queryByRole('region')).toBeNull();
+  });
+
   it('shows the open file basename on the trigger', () => {
     render(
       <ContentTab
@@ -372,6 +400,62 @@ describe('ContentTab — file selector', () => {
     );
 
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('renders a host-supplied file tree in place of the built-in one', async () => {
+    const renderFileTree = vi.fn(() => <div>host tree</div>);
+    render(
+      <ControlledContentTab
+        content="Body"
+        files={nestedFiles}
+        selectedFileId="SKILL.md"
+        expandedFolderIds={new Set(['scripts'])}
+        fileSelectorAriaLabel="Pick a file"
+        renderFileTree={renderFileTree}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button'));
+
+    expect(screen.getByText('host tree')).toBeTruthy();
+    expect(screen.queryByRole('tree')).toBeNull();
+    expect(renderFileTree).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        nodes: nestedFiles,
+        selectedFileId: 'SKILL.md',
+        expandedFolderIds: new Set(['scripts']),
+        ariaLabel: 'Pick a file',
+        rowNameClassName: 'dial-small-text',
+      }),
+    );
+  });
+
+  it('closes the selector when a host-supplied tree picks a file or closes', async () => {
+    const onSelectFile = vi.fn();
+    render(
+      <ControlledContentTab
+        content="Body"
+        files={flatFiles}
+        selectedFileId="SKILL.md"
+        onSelectFile={onSelectFile}
+        renderFileTree={({ onSelectFile: pick, onClose }) => (
+          <div>
+            <button onClick={() => pick('analyzer.md')}>pick</button>
+            <button onClick={onClose}>dismiss</button>
+          </div>
+        )}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'SKILL.md' }));
+    await userEvent.click(screen.getByRole('button', { name: 'pick' }));
+    expect(onSelectFile).toHaveBeenCalledWith('analyzer.md');
+    expect(screen.queryByRole('button', { name: 'pick' })).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'SKILL.md' }));
+    await userEvent.click(screen.getByRole('button', { name: 'dismiss' }));
+    expect(onSelectFile).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'dismiss' })).toBeNull();
   });
 });
 

@@ -1,13 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ReactNode } from 'react';
-import {
-  MemoryRouter,
-  Route,
-  Routes,
-  useNavigate,
-  useSearchParams,
-} from 'react-router';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotFoundI18nKeys } from '../../../constants/translation-keys';
 import {
@@ -78,9 +72,19 @@ vi.mock('@epam/ai-dial-scheduled-tasks', () => ({
     onCardClick,
     banner,
   }: {
-    labels: { title: string; createButtonLabel: string; retryLabel: string };
+    labels: {
+      title: string;
+      createButtonLabel: string;
+      retryLabel: string;
+      loadMoreErrorLabel?: string;
+      cardLabels?: {
+        newBadgeLabel?: string;
+        pausedBadgeLabel?: string;
+        completedBadgeLabel?: string;
+      };
+    };
     onCreateClick: () => void;
-    items: { id: string }[];
+    items: { id: string; isCompleted?: boolean }[];
     error: Error | null;
     onRetry: () => void;
     searchQuery: string;
@@ -103,10 +107,14 @@ vi.mock('@epam/ai-dial-scheduled-tasks', () => ({
       <button onClick={onCreateClick}>{labels.createButtonLabel}</button>
       <button onClick={() => onSearchQueryChange('daily')}>set search</button>
       <button onClick={onLoadMore}>load more</button>
+      <span>completedBadgeLabel:{labels.cardLabels?.completedBadgeLabel}</span>
+      <span>pausedBadgeLabel:{labels.cardLabels?.pausedBadgeLabel}</span>
+      <span>loadMoreErrorLabel:{labels.loadMoreErrorLabel}</span>
       {items.map((item) => (
-        <button key={item.id} onClick={() => onCardClick?.(item.id)}>
-          card:{item.id}
-        </button>
+        <div key={item.id}>
+          <button onClick={() => onCardClick?.(item.id)}>card:{item.id}</button>
+          <span>completed:{String(item.isCompleted)}</span>
+        </div>
       ))}
       {banner}
     </div>
@@ -114,16 +122,13 @@ vi.mock('@epam/ai-dial-scheduled-tasks', () => ({
 }));
 
 const CreatePageStub = () => {
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   return (
     <div>
-      create page returnUrl={searchParams.get('returnUrl')}
+      create page
       <button
         onClick={() =>
-          navigate(searchParams.get('returnUrl') ?? '/scheduled-tasks', {
-            state: { refresh: true },
-          })
+          navigate('/scheduled-tasks', { state: { refresh: true } })
         }
       >
         submit
@@ -306,7 +311,7 @@ describe('ScheduledTasksPage', () => {
     expect(loadMoreMock).toHaveBeenCalledOnce();
   });
 
-  it('navigates to the create route with returnUrl when New task is clicked', async () => {
+  it('navigates to the create route when New task is clicked', async () => {
     useFeatureFlagMock.mockReturnValue(true);
     renderScheduledTasksPage();
 
@@ -316,9 +321,7 @@ describe('ScheduledTasksPage', () => {
       }),
     );
 
-    expect(
-      screen.getByText('create page returnUrl=/scheduled-tasks'),
-    ).toBeTruthy();
+    expect(screen.getByText('create page')).toBeTruthy();
   });
 
   it('navigates to the detail route when a card is clicked', async () => {
@@ -520,5 +523,51 @@ describe('ScheduledTasksPage', () => {
       );
       expect(screen.queryByRole('alert')).toBeNull();
     });
+  });
+});
+
+describe('ScheduledTasksPage — completed state', () => {
+  it('maps a completed DTO through to the lib items and passes the completed badge label', () => {
+    useFeatureFlagMock.mockReturnValue(true);
+    useScheduledTasksMock.mockReturnValue({
+      items: [
+        {
+          id: 'sched_done',
+          displayName: 'One-time report',
+          trigger: { date: '2020-01-01T00:00:00.000Z' },
+          triggerType: 'date',
+          isActive: false,
+          isCompleted: true,
+          nextRunTime: null,
+        },
+      ],
+      searchQuery: '',
+      setSearchQuery: setSearchQueryMock,
+      sortKey: 'firstToRun',
+      setSortKey: setSortKeyMock,
+      isLoading: false,
+      isLoadingMore: false,
+      error: null,
+      hasMore: false,
+      loadMore: loadMoreMock,
+      refetch: refetchMock,
+    });
+    renderScheduledTasksPage();
+
+    expect(screen.getByText('card:sched_done')).toBeTruthy();
+    expect(screen.getByText('completed:true')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'completedBadgeLabel:scheduledTasks.card.completedBadgeLabel',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('pausedBadgeLabel:scheduledTasks.card.pausedBadgeLabel'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        'loadMoreErrorLabel:scheduledTasks.list.loadMoreErrorLabel',
+      ),
+    ).toBeTruthy();
   });
 });

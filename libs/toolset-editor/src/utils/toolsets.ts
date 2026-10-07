@@ -1,8 +1,12 @@
-import { validateDeploymentCreationFields } from '@epam/ai-dial-builder-form';
+import {
+  validateDeploymentCreationFields,
+  type DeploymentCreationFormValues,
+} from '@epam/ai-dial-builder-form';
 import { ToolsetAuthTypes, WithLogin } from '@epam/ai-dial-chat-hooks';
 import {
   DEFAULT_TOOLSET_NAME,
   DEFAULT_TOOLSET_VERSION,
+  TOOLSET_METADATA_VALIDATION_OPTIONS,
   ToolsetTransportType,
 } from '../constants/toolsets';
 import type {
@@ -143,7 +147,46 @@ export const isToolsetFormValid = (
   isEditMode = false,
 ): boolean =>
   Object.keys(
-    validateDeploymentCreationFields(form, { validateVersionPattern: true }),
+    validateDeploymentCreationFields(form, TOOLSET_METADATA_VALIDATION_OPTIONS),
   ).length === 0 &&
   isValidEndpointUrl(form.endpoint) &&
   isToolsetAuthValid(form.auth, isEditMode);
+
+const METADATA_KEYS = new Set<string>([
+  'name',
+  'description',
+  'iconUrl',
+  'version',
+  'topics',
+  'otherLocales',
+]);
+
+/** Returns the Metadata-section slice of a toolset form. */
+export const pickToolsetMetadata = (
+  form: ToolsetFormData,
+): DeploymentCreationFormValues => ({
+  name: form.name,
+  description: form.description,
+  iconUrl: form.iconUrl,
+  version: form.version,
+  topics: form.topics,
+  otherLocales: form.otherLocales,
+});
+
+/** Splits a toolset form patch into its Metadata part and its Setup part. */
+export const splitToolsetFormPatch = (
+  patch: Partial<ToolsetFormData>,
+): {
+  metadata: Partial<DeploymentCreationFormValues>;
+  setup: Partial<ToolsetFormData>;
+} => {
+  const metadata: Record<string, unknown> = {};
+  const setup: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    (METADATA_KEYS.has(key) ? metadata : setup)[key] = value;
+  }
+  return {
+    metadata: metadata as Partial<DeploymentCreationFormValues>,
+    setup: setup as Partial<ToolsetFormData>,
+  };
+};

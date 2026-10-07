@@ -8,7 +8,7 @@ Backend feature keys, `FeatureFlagsService.isEnabled`, and the route guard built
 
 ### Requirement: FeatureKey enum enumerates all feature keys
 
-The system SHALL define a `FeatureKey` string enum in `apps/chat-api/src/app-config/feature-flags/feature-key.enum.ts` containing at least:
+The system SHALL define a `FeatureKey` string enum in `apps/chat-api/src/app-config/feature-flags/feature-key.enum.ts` containing:
 
 ```typescript
 enum FeatureKey {
@@ -18,12 +18,15 @@ enum FeatureKey {
   ScheduledTasksEnabled = 'features.scheduledTasksEnabled',
   Footer = 'features.footer',
   ResponsesApiEnabled = 'features.responsesApiEnabled',
+  ResponsesBackgroundEnabled = 'features.responsesBackgroundEnabled',
+  DefaultDeploymentPinned = 'features.defaultDeploymentPinned',
+  VisualizerSendMessages = 'features.visualizerSendMessages',
 }
 ```
 
 New feature keys MUST be added to this enum before being used in any service, guard, or decorator. String values MUST match the corresponding `ConfigDefinition.key` exactly.
 
-`FeatureKey.ResponsesApiEnabled` MAY be consulted directly from a domain service via `FeatureFlagsService.isEnabled` (as `ConversationStreamingService` does), not only from a `@RequireFeature`-decorated controller route via `FeatureGuard` — both consumption paths resolve through the same `AppConfigService`-backed mechanism and share the same fail-closed failure behavior.
+`FeatureKey.ResponsesApiEnabled` and `FeatureKey.ResponsesBackgroundEnabled` MAY be consulted directly from a domain service via `FeatureFlagsService.isEnabled` (as `ConversationStreamingService` does), not only from a `@RequireFeature`-decorated controller route via `FeatureGuard` — both consumption paths resolve through the same `AppConfigService`-backed mechanism and share the same fail-closed failure behavior.
 
 **Feature flag:** Not gated. **RTL impact:** None. **i18n impact:** None.
 
@@ -37,7 +40,10 @@ New feature keys MUST be added to this enum before being used in any service, gu
 - **WHEN** `ConversationStreamingService` calls `featureFlagsService.isEnabled(FeatureKey.ResponsesApiEnabled, context)` directly (not via `@RequireFeature`/`FeatureGuard` on a controller route)
 - **THEN** the call resolves a boolean using the same registry entry and the same fail-closed behavior as any other `FeatureKey`, with no `ForbiddenException` thrown by this call path since no `FeatureGuard` is involved
 
----
+#### Scenario: ResponsesBackgroundEnabled is usable from a domain service and fails closed
+
+- **WHEN** `ConversationStreamingService` calls `featureFlagsService.isEnabled(FeatureKey.ResponsesBackgroundEnabled, context)` and resolution fails
+- **THEN** the call resolves `false` without throwing, and no `FeatureGuard` is involved
 
 ### Requirement: FeatureFlagsService.isEnabled evaluates a feature key
 
@@ -47,12 +53,13 @@ New feature keys MUST be added to this enum before being used in any service, gu
 async isEnabled(key: FeatureKey, context: AppConfigEvalContext): Promise<boolean>
 ```
 
-It SHALL delegate to `AppConfigService.resolveValue(key, context)` and cast the result to `boolean`. It MUST reject calls for keys that are not `type='feature'` in the registry by throwing `BadRequestException` with a descriptive message.
+It SHALL first look the key up in `CONFIG_DEFINITIONS` and MUST reject calls for keys that are missing or not `type='feature'` by throwing `BadRequestException` (`Key "<key>" is not a valid feature flag key`). It SHALL then delegate to `AppConfigService.isEnabled(key, context)`, which resolves the value through `CompositeConfigProvider.resolve` and returns `value === true` (no cast).
 
 **Failure behavior:**
-- If resolution fails or returns `undefined`, return `false` (fail closed).
-- If the resolved value is not a boolean and the key has `critical=true`, return `false` and log at `error` level.
-- If the resolved value is not a boolean and `critical=false`, return `false` and log at `warn` level.
+- If the resolved value is `undefined` or any non-`true` value (including non-boolean values), return `false` (fail closed) without logging; there is no `critical`-based branching at this layer.
+- If `CompositeConfigProvider.resolve` throws, `AppConfigService.isEnabled` logs at `error` level and returns `false`.
+- If `AppConfigService.isEnabled` throws anything other than `BadRequestException`, `FeatureFlagsService` logs at `warn` level and returns `false`; a `BadRequestException` is rethrown.
+- `critical`-based `error`/`warn` logging exists only in `CompositeConfigProvider`, for provider exceptions.
 
 **Feature flag:** Not gated. **RTL impact:** None. **i18n impact:** None.
 
@@ -65,6 +72,11 @@ It SHALL delegate to `AppConfigService.resolveValue(key, context)` and cast the 
 
 - **WHEN** `ASR_MODEL` is not set and `featureFlagsService.isEnabled(FeatureKey.AsrEnabled, ctx)` is called
 - **THEN** it returns `false`
+
+#### Scenario: Non-boolean value returns false
+
+- **WHEN** the resolved value for a feature key is a non-boolean such as the string `'true'`
+- **THEN** `featureFlagsService.isEnabled` returns `false` because only `value === true` enables the feature
 
 #### Scenario: Returns false on resolution failure
 
@@ -82,7 +94,12 @@ It SHALL delegate to `AppConfigService.resolveValue(key, context)` and cast the 
 
 The system SHALL provide `FeatureGuard` in `apps/chat-api/src/app-config/feature-flags/feature.guard.ts` implementing `CanActivate`. When `featureFlagsService.isEnabled(key, context)` returns `false`, the guard MUST throw `ForbiddenException`. When `true`, the guard passes.
 
-`@RequireFeature(key: FeatureKey)` decorator SHALL set metadata consumed by `FeatureGuard` via `Reflector`.
+`@RequireFeature(key: FeatureKey)` decorator SHALL set metadata consumed by `FeatureGuard` via `Reflector.getAllAndOverride(FEATURE_KEY_METADATA, [handler, class])`, so the decorator works on a handler or on the controller class, and a handler-level `@RequireFeature` overrides the class-level one. `ScheduledTasksController` relies on the class-level form for `FeatureKey.ScheduledTasksEnabled`.
+
+#### Scenario: A class-level RequireFeature gates every handler
+
+- **WHEN** a controller class carries `@UseGuards(FeatureGuard)` and `@RequireFeature(FeatureKey.ScheduledTasksEnabled)`, a handler has no decorator of its own, and the feature is disabled
+- **THEN** `FeatureGuard` throws `ForbiddenException` for that handler
 
 Feature guards MUST NOT replace authorization checks. Routes protected by `@RequireFeature` MUST also carry appropriate auth guards. Role checks and feature checks remain separate concerns.
 

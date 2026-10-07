@@ -5,6 +5,7 @@ import {
   getCredentialsBadgeState,
   getCredentialsUiState,
 } from '@epam/ai-dial-catalog';
+import { FavoriteEntityType } from '@epam/ai-dial-chat-hooks';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import type { PublicationRule } from '@epam/ai-dial-publish-panel';
@@ -28,6 +29,8 @@ import { useCatalogActiveTabPreference } from '../../../hooks/useCatalogActiveTa
 import { useCatalogSortFilterPreference } from '../../../hooks/useCatalogSortFilterPreference/useCatalogSortFilterPreference';
 import { useUiFeature } from '../../../hooks/useUiFeature';
 import { getDeploymentLimits } from '../../../server-api/deployment-limits';
+import { deletePrompt } from '../../../server-api/prompts.api';
+import { deleteSkill } from '../../../server-api/skills.api';
 import { AuthStatus } from '../../../types/auth-status';
 import { UserConfigStatus } from '../../../types/user-config-status';
 import CatalogView from '../CatalogView';
@@ -125,6 +128,7 @@ vi.mock('@epam/ai-dial-catalog', async (importOriginal) => ({
     onUnpublish,
     isUnpublishVisible,
     publishLabels,
+    detailsTexts,
     ruleSourceOptions,
     onFetchExistingRules,
     isShareVisible,
@@ -179,10 +183,10 @@ vi.mock('@epam/ai-dial-catalog', async (importOriginal) => ({
     isPublishVisible?: (item: CatalogItem) => boolean;
     onUnpublish?: (item: CatalogItem, folderPath: string[]) => Promise<void>;
     isUnpublishVisible?: (item: CatalogItem) => boolean;
+    detailsTexts?: { apiKeyHeaderHint?: (header: string) => string };
     publishLabels?: {
       credentialsLabel?: string;
       credentialsHint?: string;
-      historySharedCredentialsLabel?: string;
     };
     ruleSourceOptions?: string[];
     onFetchExistingRules?: (folderPath: string[]) => Promise<PublicationRule[]>;
@@ -234,14 +238,14 @@ vi.mock('@epam/ai-dial-catalog', async (importOriginal) => ({
           {String(Boolean(isFullWidth))}
         </output>
         <output aria-label="Active tab">{activeTab ?? ''}</output>
+        <output aria-label="API key header hint">
+          {detailsTexts?.apiKeyHeaderHint?.('X-Api-Key') ?? ''}
+        </output>
         <output aria-label="Publish credentials label">
           {publishLabels?.credentialsLabel ?? ''}
         </output>
         <output aria-label="Publish credentials hint">
           {publishLabels?.credentialsHint ?? ''}
-        </output>
-        <output aria-label="Publish history shared credentials label">
-          {publishLabels?.historySharedCredentialsLabel ?? ''}
         </output>
         <button type="button" onClick={() => onActiveTabChange?.('PROMPT')}>
           switch to Prompts tab
@@ -687,6 +691,7 @@ describe('CatalogView', () => {
       status: UserConfigStatus.Ready,
       features: {},
       config: {
+        activeEventId: null,
         appVersion: '0.0.1',
         asrModelId: null,
         transcribeSizeLimitBytes: 5 * 1024 * 1024,
@@ -699,6 +704,7 @@ describe('CatalogView', () => {
         fileManagerTabs: ['my_files', 'shared', 'organization'],
         overlayEnabled: false,
         overlayAllowedOrigins: [],
+        allowedConnectOrigins: [],
         enabledUiFeatures: null,
         announcementHtml: null,
         announcementTitle: null,
@@ -786,6 +792,15 @@ describe('CatalogView', () => {
     );
   });
 
+  /* `t` echoes the key here; what matters is that the app supplies the hint. */
+  it('supplies a translated API key header hint to the catalog details', () => {
+    render(<CatalogView />);
+
+    expect(screen.getByLabelText('API key header hint').textContent).toBe(
+      CatalogI18nKeys.CredentialsApiKeyHeaderHint,
+    );
+  });
+
   describe('publish wiring', () => {
     it('sources ruleSourceOptions from useAppConfig, not a hardcoded list', () => {
       render(<CatalogView />);
@@ -797,7 +812,7 @@ describe('CatalogView', () => {
       ]);
     });
 
-    /* `t` echoes the key here; what matters is that the app supplies all three. */
+    /* `t` echoes the key here; what matters is that the app supplies both. */
     it('supplies the credentials labels the publish panel needs', () => {
       render(<CatalogView />);
 
@@ -807,10 +822,6 @@ describe('CatalogView', () => {
       expect(
         screen.getByLabelText('Publish credentials hint').textContent,
       ).toBe(CatalogI18nKeys.PublishCredentialsHint);
-      expect(
-        screen.getByLabelText('Publish history shared credentials label')
-          .textContent,
-      ).toBe(CatalogI18nKeys.PublishHistorySharedCredentials);
     });
   });
 
@@ -842,6 +853,48 @@ describe('CatalogView', () => {
     render(<CatalogView />);
 
     expect(mockSetSearchParams).not.toHaveBeenCalled();
+  });
+
+  /* A freshly created skill can reach the catalog after the param is cleared. */
+  it('keeps initialDetailsItemId after the itemId param is cleared while the item is not listed yet', () => {
+    mockSearchParams = new URLSearchParams({
+      itemId: 'skills/bucket/new-skill',
+    });
+    const { rerender } = render(<CatalogView />);
+
+    mockSearchParams = new URLSearchParams();
+    rerender(<CatalogView />);
+
+    expect(screen.getByLabelText('Initial details item id').textContent).toBe(
+      'skills/bucket/new-skill',
+    );
+  });
+
+  it('releases initialDetailsItemId once the item is listed', () => {
+    vi.mocked(useDeployments).mockReturnValue({
+      items: [{ id: 'gpt-4o', displayName: 'GPT-4o', type: 'model' }],
+      selectedItemId: null,
+      setSelectedItemId: vi.fn(),
+      restoreSelectedItemId: vi.fn(),
+      restoreDefaultSelection: vi.fn(),
+      selectedDeploymentConfiguration: null,
+      isLoading: false,
+      error: null,
+      schemas: [],
+      toolsets: [],
+      refetchToolsets: vi.fn(),
+      refetchDeployments: vi.fn(),
+      selectedDeploymentDetails: null,
+      isDeploymentDetailsLoading: false,
+      mergeSharedItem: vi.fn(),
+    });
+    mockSearchParams = new URLSearchParams({ itemId: 'gpt-4o' });
+
+    render(<CatalogView />);
+
+    expect(screen.getByLabelText('Initial details item id').textContent).toBe(
+      '',
+    );
   });
 
   describe('sort/filter persistence wiring', () => {
@@ -1176,7 +1229,34 @@ describe('CatalogView', () => {
       );
 
       expect(mockNavigate).toHaveBeenCalledWith(
-        '/prompt-editor?id=prompts%2Fowner-bucket%2FWork%2FAI%2Fsummarize&returnUrl=%2Fcatalog',
+        '/prompt-editor?id=prompts%2Fowner-bucket%2FWork%2FAI%2Fsummarize',
+      );
+    });
+
+    /* [#9143](https://github.com/epam/ai-dial-chat/issues/9143): a prompt re-created at the same path must not come back starred. */
+    it('removes a deleted prompt from favourites', async () => {
+      enablePrompts();
+      mockPrompts();
+      const toggleFavorite = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(useFavoriteApplications).mockReturnValue({
+        favoriteIds: new Set([personalPrompt.id]),
+        isLoading: false,
+        toggleFavorite,
+      });
+      vi.mocked(deletePrompt).mockResolvedValue(undefined);
+
+      render(<CatalogView />);
+      await user.click(
+        screen.getByRole('button', { name: `delete ${personalPrompt.id}` }),
+      );
+
+      expect(deletePrompt).toHaveBeenCalledWith(personalPrompt.id);
+      await waitFor(() =>
+        expect(toggleFavorite).toHaveBeenCalledWith(
+          personalPrompt.id,
+          false,
+          FavoriteEntityType.Prompt,
+        ),
       );
     });
   });
@@ -1327,12 +1407,12 @@ describe('CatalogView', () => {
       );
 
       expect(mockNavigate).toHaveBeenCalledWith(
-        '/skill-editor?id=skills%2Fowner-bucket%2Fanalysis%2Frevenue-skill&returnUrl=%2Fcatalog',
+        '/skill-editor?id=skills%2Fowner-bucket%2Fanalysis%2Frevenue-skill',
       );
     });
 
-    /* A skill has no chat interface, so it never offers Use in chat; download, unshare, and revoke are all backed by DTOs that accept a skills path. */
-    it('hides Use in chat for a skill while offering download, unshare, and revoke', () => {
+    /* A skill is always usable in chat; download, unshare, and revoke are all backed by DTOs that accept a skills path. */
+    it('offers Use in chat for a skill alongside download, unshare, and revoke', () => {
       enableSkills();
       mockSkills();
 
@@ -1340,8 +1420,8 @@ describe('CatalogView', () => {
 
       const skillId = 'skills/my-bucket/analysis/revenue-skill';
       expect(
-        screen.queryByRole('button', { name: `use in chat ${skillId}` }),
-      ).toBeNull();
+        screen.getByRole('button', { name: `use in chat ${skillId}` }),
+      ).toBeTruthy();
       expect(
         screen.getByRole('button', { name: `download ${skillId}` }),
       ).toBeTruthy();
@@ -1351,6 +1431,79 @@ describe('CatalogView', () => {
       expect(
         screen.getByRole('button', { name: `revoke ${skillId}` }),
       ).toBeTruthy();
+    });
+
+    /* [#9143](https://github.com/epam/ai-dial-chat/issues/9143): a skill re-created at the same path must not come back starred. */
+    it('removes a deleted skill from favourites', async () => {
+      enableSkills();
+      mockSkills();
+      const skillId = 'skills/my-bucket/analysis/revenue-skill';
+      const toggleFavorite = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(useFavoriteApplications).mockReturnValue({
+        favoriteIds: new Set([skillId]),
+        isLoading: false,
+        toggleFavorite,
+      });
+      vi.mocked(deleteSkill).mockResolvedValue({} as never);
+
+      render(<CatalogView />);
+      await user.click(
+        screen.getByRole('button', { name: `delete ${skillId}` }),
+      );
+
+      expect(deleteSkill).toHaveBeenCalledWith(
+        'my-bucket',
+        'analysis/revenue-skill',
+      );
+      await waitFor(() =>
+        expect(toggleFavorite).toHaveBeenCalledWith(
+          skillId,
+          false,
+          FavoriteEntityType.Skill,
+        ),
+      );
+    });
+
+    it('leaves favourites untouched when the deleted skill was not starred', async () => {
+      enableSkills();
+      mockSkills();
+      const skillId = 'skills/my-bucket/analysis/revenue-skill';
+      const toggleFavorite = vi.fn();
+      vi.mocked(useFavoriteApplications).mockReturnValue({
+        favoriteIds: new Set(),
+        isLoading: false,
+        toggleFavorite,
+      });
+      vi.mocked(deleteSkill).mockResolvedValue({} as never);
+
+      render(<CatalogView />);
+      await user.click(
+        screen.getByRole('button', { name: `delete ${skillId}` }),
+      );
+
+      await waitFor(() => expect(deleteSkill).toHaveBeenCalled());
+      expect(toggleFavorite).not.toHaveBeenCalled();
+    });
+
+    it('keeps a starred skill in favourites when its delete fails', async () => {
+      enableSkills();
+      mockSkills();
+      const skillId = 'skills/my-bucket/analysis/revenue-skill';
+      const toggleFavorite = vi.fn();
+      vi.mocked(useFavoriteApplications).mockReturnValue({
+        favoriteIds: new Set([skillId]),
+        isLoading: false,
+        toggleFavorite,
+      });
+      vi.mocked(deleteSkill).mockRejectedValue(new Error('boom'));
+
+      render(<CatalogView />);
+      await user.click(
+        screen.getByRole('button', { name: `delete ${skillId}` }),
+      );
+
+      await waitFor(() => expect(deleteSkill).toHaveBeenCalled());
+      expect(toggleFavorite).not.toHaveBeenCalled();
     });
 
     it('notifies once when the skill listing fails and still renders the catalog', async () => {

@@ -57,7 +57,7 @@ Without `renderLink` each item is wrapped in a plain `<a href={item.href}>`, so 
 
 ### UserMenu
 
-Avatar trigger plus dropdown: identity row, one submenu per settings group, divider, log-out entry. The host owns the log-out confirmation flow — `onLogout` only signals intent.
+Avatar trigger plus dropdown: identity row, one submenu per settings group, divider, log-out entry. The host owns the log-out confirmation flow — `onLogout` only signals intent. Pass `onSettings` with `labels.settings` to add a Settings entry between the divider and Log out; omit both to hide it.
 
 ```tsx
 <UserMenu
@@ -74,14 +74,16 @@ Avatar trigger plus dropdown: identity row, one submenu per settings group, divi
     trigger: t(AuthI18nKeys.SignedInAs, { email }),
     avatarAlt: t(AuthI18nKeys.UserAvatar),
     logOut: t(ButtonsI18nKeys.LogOut),
+    settings: t(BasicI18nKeys.Settings),
   }}
   onLogout={openLogoutConfirmation}
+  onSettings={() => navigate(ROUTES.Settings)}
 />
 ```
 
 ### NavigationSheet
 
-The mobile counterpart. `onSelectItem` fires after the sheet closes so the host can navigate.
+The mobile counterpart. `onSelectItem` fires after the sheet closes so the host can navigate. Pass `onSettings` with `labels.settings` to add a Settings row to the profile page, above Log out — the sheet closes first, then the host navigates, the same entry `UserMenu` offers on desktop.
 
 ```tsx
 <NavigationSheet
@@ -92,6 +94,7 @@ The mobile counterpart. `onSelectItem` fires after the sheet closes so the host 
   profile={profile}
   groups={[keyboardGroup]}
   onLogout={openLogoutConfirmation}
+  onSettings={() => navigate(ROUTES.Settings)}
   footer={<FooterMessage />}
   labels={{
     title: t(NavigationI18nKeys.Menu),
@@ -99,6 +102,7 @@ The mobile counterpart. `onSelectItem` fires after the sheet closes so the host 
     back: t(NavigationI18nKeys.Back),
     profile: t(NavigationI18nKeys.Profile),
     logOut: t(ButtonsI18nKeys.LogOut),
+    settings: t(BasicI18nKeys.Settings),
   }}
 />
 ```
@@ -127,7 +131,7 @@ A `SheetRow` marks state through two props: `isCurrent` sets `aria-current="true
 
 ### Shared primitives
 
-`UserAvatar` (image with initials fallback) and `AvatarInitials` (circular initials badge).
+`UserAvatar` (image with initials fallback) and `AvatarInitials` (circular initials badge), both drawn by the UI kit's `Avatar`. Only the image is named by `alt`; the initials badge is decorative.
 
 `UserMenu`'s submenu rows mark the applied option through the UI kit's own `MenuItemMark.Check`, so the trailing check and the `menuitemradio` role come from `Dropdown` rather than from this library.
 
@@ -145,7 +149,7 @@ Throws when called outside a `NavigableBottomSheet`.
 
 ## Theming
 
-Colors come from CSS custom properties with DIAL token fallbacks, overridable through each component's `styles.colors`. The rail reads `--np-bg`, `--np-item-text`, `--np-item-active-text`, `--np-item-selected-bg`, `--np-item-hover-bg`, and `--np-item-active-bg`; the menus and sheet read `--np-menu-text`, `--np-menu-active-icon`, `--np-avatar-bg`, `--np-avatar-text`, `--np-trigger-hover-bg`, `--np-sheet-text`, `--np-sheet-icon`, `--np-sheet-item-hover`, `--np-sheet-item-active`, and `--np-sheet-divider`.
+Colors come from CSS custom properties with DIAL token fallbacks, overridable through each component's `styles.colors`. The rail reads `--np-bg`, `--np-item-text`, `--np-item-active-text`, `--np-item-selected-bg`, `--np-item-hover-bg`, `--np-item-hover-icon` (the icon stroke on hover), `--np-item-active-icon` (the active icon paint), and `--np-item-active-bg`; both icon vars default to a built-in blue-to-violet gradient. The active item is always filled, in the rail and in the sheet: an item that sets `activeIcon` swaps to that filled glyph, painted by `fill` instead of `stroke`, and an item without one fills its outline `icon` in place (`fill` plus `stroke`); the menus and sheet read `--np-menu-text`, `--np-menu-active-icon`, `--np-avatar-bg`, `--np-avatar-text`, `--np-trigger-hover-bg`, `--np-sheet-text`, `--np-sheet-icon`, `--np-sheet-item-hover`, `--np-sheet-item-active`, and `--np-sheet-divider`.
 
 ## Types
 

@@ -9,19 +9,24 @@ skills/favorites data), and hands every interaction back through callbacks —
 it never fetches, navigates, or modifies the composer itself.
 
 `useSkillSelectorOverlay` owns the selection flow's state — the favorites
-overlay, the browse-modal and details-panel open state, and the single
-selected skill — while the host injects the listing data (descriptions
-included), the favorites state, labels, the browse modal's picker content,
-the app-owned details-panel component, and the current deployment's
-skills-support flag (a plain boolean — the lib knows nothing about
-deployments). While that flag is `false` the skill entry points are hidden,
-but an already-selected chip stays and renders in `ChatSkill`'s error state.
-The send-time semantics of a selected skill stay app-owned.
+overlay, the browse-modal and details-panel open state, and every currently
+mentioned skill, tracked as a character-range anchor within the composer's
+draft text — while the host injects the listing data (descriptions included),
+the favorites state, labels, the browse modal's picker content, the app-owned
+details-panel component, and the current deployment's skills-support flag (a
+plain boolean — the lib knows nothing about deployments). While that flag is
+`false` the skill entry points are hidden, but a tracked mention stays in the
+draft text and folds into `isSkillUnsupported` for the host's own
+send-disabled condition. A message can carry any number of mentions,
+interleaved anywhere with free text — order (not the shared `/{name}` label)
+is what disambiguates two mentions that display the same name but resolve to
+different skills. The send-time semantics of a selected skill stay app-owned.
 
 `SkillDetailsSidePanel` composes `@epam/ai-dial-catalog`'s exported
 `DetailsPanel` into a right-anchored skill details panel. It adds no chrome of
 its own: the host supplies the `CatalogItem`, the details data, and every
-action.
+action. Its Content-tab file selector is the file manager's `DialFoldersTree`,
+the same tree the skill editor renders.
 
 `ChatSkill` renders a single used skill — a `/name` ghost button whose
 interactive tooltip shows the skill's description and a "View details" action —
@@ -48,10 +53,75 @@ import '@epam/ai-dial-skills/styles.css';
 ## Peer Dependencies
 
 - `react` `^19.2.8`
-- `@epam/ai-dial-ui-kit` `^0.15.0-dev.12`
+- `@epam/ai-dial-ui-kit` `^0.15.0-dev.39`
 - `@epam/ai-dial-chat-shared` `*`
+- `@epam/ai-dial-react-file-manager` `^0.3.0-dev.25` — `SkillDetailsSidePanel`
+  renders its `DialFoldersTree`
 
 ## Components
+
+### `SkillSelectorField`
+
+Controlled array field for forms whose selected skills belong to the host
+draft. It renders the UI kit's multiple `Select` with every skill the host
+passes as a checkbox option and the built-in tags for selected values. There are
+no favorites, no Browse action and no catalog dialog. The kit shows the search
+input only for more than eight options. A missing display name falls back to the
+full reference. Adding requires explicit `isSkillsSupported`; unsupported
+selections remain removable. `isDisabled` makes the whole control inert. The UI-kit Select
+owns the visible `labels.fieldLabel`, optional `error`, invalid state, and their
+accessible association. The host provides feature gating and the skill list.
+
+Pass host-resolved `skills` (`SkillSelectorOption[]`: `id` and `name`) and
+translated `labels.fieldLabel`, `labels.placeholder`,
+`labels.unsupportedTooltipLabel`, `labels.searchPlaceholder`,
+`labels.emptyLabel`, and `labels.noMatchingSkillsLabel`.
+
+```tsx
+import { useState } from 'react';
+import { SkillSelectorField } from '@epam/ai-dial-skills';
+
+function SkillFieldExample() {
+  const [value, onChange] = useState<string[]>([]);
+  return (
+    <SkillSelectorField
+      value={value}
+      onChange={onChange}
+      skills={[{ id: 'skills/public/report', name: 'Report' }]}
+      isSkillsSupported
+      labels={{
+        fieldLabel: 'Skills',
+        placeholder: 'Choose a skill',
+        unsupportedTooltipLabel:
+          'Selected model does not support skills. Remove the skill or select different model to proceed.',
+      }}
+    />
+  );
+}
+```
+
+When `isSkillsSupported` is false, adding is disabled and hovering the field
+shows a tooltip with the reason: `labels.unsupportedTooltipLabel` while a skill
+is selected, otherwise `labels.unavailableTooltipLabel` (defaults to
+`'Selected model does not support skills. Select a different model to use a skill.'`).
+With no selection the same text is supplied as the Select caption so it is
+associated with the combobox through `aria-describedby`.
+
+Public types: `SkillSelectorFieldProps`, `SkillSelectorFieldLabels`,
+`SkillSelectorFieldStyles`, and `SkillSelectorOption`. `styles` supports colors (`text`, `background`,
+`border`, `error`), `typography.fontClassName`, `triggerClassName`, and `cssVars`.
+`SKILLS_CLASS.selectorField` is the stable root class
+`dial-skills-selector-field`. The existing stylesheet export includes its theme.
+
+`FavoriteSkillsPanel` also accepts `className` and `rowClassName` for layout
+composition. Its optional favorite/details callbacks hide their actions when
+omitted.
+
+The chat overlay's compatibility signal also depends on the selected reference,
+independently of catalog loading or deletion; unresolved selections keep a
+fallback chip and remain removable. `isSkillsSupported` still hides the chat
+flow's entry points and folds an existing selection into the unsupported
+state when the deployment does not support skills.
 
 ### `ChatSkill`
 
@@ -86,6 +156,15 @@ label carries `unsupportedLabelClassName` (default `text-error`), the chip
 carries `unsupportedClassName` (default `bg-error`), and the tooltip's content
 is the unsupported-model message alone (`labels.unsupportedTooltipLabel`) — no
 description paragraph and no "View details" button.
+
+`unresolvedReason` (`SkillUnresolvedReason`) is for a skill url the host
+could not resolve against any loaded listing. It takes precedence over
+`isUnsupported`; the `/{name}` label is unaffected (no color/class change),
+and the tooltip's content is a trash-can icon with `labels.deletedTooltipLabel`
+(for `SkillUnresolvedReason.Deleted`) or a lock icon with
+`labels.notSharedTooltipLabel` (for `SkillUnresolvedReason.NotShared`) — again
+no description paragraph and no "View details" button, since there is no
+metadata to fetch and no panel to open.
 
 ### `FavoriteSkillsPanel`
 
@@ -123,6 +202,24 @@ the exact same panel.
 
 `onViewDetails` fires when the tooltip's "View details" button is clicked.
 
+Passing `listboxId` switches the panel to listbox mode — the shape a text
+field's list autocomplete drives, as the conversation input's `commandMenu`
+does: the list becomes a `role="listbox"` with that `id`, named by the
+header, and each row a `role="option"` whose `id` derives from `listboxId`
+and the item id. The row matching `activeOptionId` carries
+`aria-selected="true"` and the row highlight. Rows stay tabbable, while each
+row's star and its tooltip's "View details" leave the Tab sequence (both stay
+clickable), so Tab moves from row to row. `useSkillSelectorOverlay` forwards
+both from the command-menu context; the Add-menu panel keeps the star and
+"View details" in the Tab sequence.
+
+`isMenu` is for a host that mounts the panel inside a `role="menu"` container,
+as the conversation input's Add-menu overlay does: the rows and the "Browse"
+action become `role="menuitem"` (the list wrappers `role="none"`), so the
+desktop submenu's ArrowUp/ArrowDown/Home/End move between them.
+`useSkillSelectorOverlay` sets it on the Add-menu panel; without it (and
+without `listboxId`) the rows are `role="button"`.
+
 Clicking a row's star plays a short exit animation first, so
 `onToggleFavorite` fires ~180 ms after the click rather than synchronously.
 The list's height animates to match once the row is gone.
@@ -151,6 +248,17 @@ description paragraph and no "View details" button. That state is why
 `onViewDetails` is optional: the unsupported branch renders no button, so
 the callback goes unused there.
 
+While `unresolvedReason` (`SkillUnresolvedReason`) is set, it takes
+precedence over `unsupportedMessage`: the content is a `dial-tiny-text
+text-primary` message (`deletedMessage` for `SkillUnresolvedReason.Deleted`,
+`notSharedMessage` for `SkillUnresolvedReason.NotShared`) beside a
+`text-secondary` icon (`IconTrash` or `IconLock`, `DIAL_ICON_SIZE.MD`) — again
+no description paragraph and no "View details" button.
+
+`viewDetailsTabIndex` sets the "View details" button's `tabIndex`; pass `-1`
+to keep it clickable but out of the Tab sequence, as `FavoriteSkillsPanel`
+does in listbox mode.
+
 ### `SkillDetailsSidePanel`
 
 ```tsx
@@ -176,10 +284,39 @@ import type { CatalogItem } from '@epam/ai-dial-catalog';
 A thin wrapper over `@epam/ai-dial-catalog`'s `DetailsPanel` narrowed to the
 actions a skill details surface offers: favorite toggle, close, "Use in chat",
 and content-file previews. Skills open on the content-first tab exactly as
-they do on the Catalog page. Publish, share, credentials, and download props
+they do on the Catalog page. The Content tab's file selector is drawn with the
+file manager's `DialFoldersTree` (read-only: no context menu, no rename), so a
+skill's files look and navigate the same as in the skill editor; the panel
+still owns expansion and selection. Publish, share, credentials, and download props
 are deliberately absent — `DetailsPanel` hides those actions when they are not
 supplied, so no catalog page chrome comes along. The host owns the open state
 and the details fetch; the panel itself never fetches.
+
+### `SkillContentFileTree`
+
+```tsx
+import { Catalog } from '@epam/ai-dial-catalog';
+import type { CatalogContentFileTreeRenderProps } from '@epam/ai-dial-catalog';
+import { SkillContentFileTree } from '@epam/ai-dial-skills';
+
+const renderContentFileTree = (props: CatalogContentFileTreeRenderProps) => (
+  <SkillContentFileTree {...props} />
+);
+
+<Catalog
+  items={items}
+  favorites={favorites}
+  renderContentFileTree={renderContentFileTree}
+/>;
+```
+
+The file-manager-backed tree `SkillDetailsSidePanel` renders in its Content
+tab, exported so a host can hand the same tree to `Catalog` or `DetailsPanel`
+through `renderContentFileTree`. It is a read-only `DialFoldersTree` — no
+context menu, no rename, dotfiles shown — fully controlled by the panel's
+`CatalogContentFileTreeRenderProps`: folder toggles come back one id at a time
+through `onToggleFolder`, only files are selectable, the selected file is
+focused on mount, and Escape calls `onClose`.
 
 ### `SkillCatalogModal`
 
@@ -211,7 +348,8 @@ import { SkillArchiveUploadDialog } from '@epam/ai-dial-skills';
 
 <SkillArchiveUploadDialog
   isOpen={isDialogOpen}
-  errorText={selectionError}
+  errorText={errorText}
+  isUploading={isUploading}
   accept=".zip,.md"
   labels={{
     dialogTitle: 'Upload skill',
@@ -220,6 +358,7 @@ import { SkillArchiveUploadDialog } from '@epam/ai-dial-skills';
     formatsLabel: 'File formats .zip and SKILL.md',
     fileInputAriaLabel: 'Upload a skill ZIP archive or a SKILL.md file',
     closeAriaLabel: 'Close',
+    uploadingAriaLabel: 'Uploading skill',
   }}
   onClose={closeDialog}
   onFilesSelected={handleFilesSelected}
@@ -228,7 +367,7 @@ import { SkillArchiveUploadDialog } from '@epam/ai-dial-skills';
 ```
 
 Presentation for a skill-archive upload: a `Popup` with a drop area showing the accepted formats
-and any local rejection message. It has no dependency on an import controller — wire
+and any rejection or upload-failure message. While `isUploading` is set the drop area is disabled and a spinner is shown; the dialog is expected to stay open until the upload succeeds, so a failure is shown in place. It has no dependency on an import controller — wire
 `onFilesSelected`/`onFilesRejected` to `@epam/ai-dial-chat-hooks`' `useSkillArchiveImport` (or an
 equivalent host controller). Every label falls back to an English default, so `labels` may be
 omitted entirely for an English-only host.
@@ -251,41 +390,76 @@ const {
   commandMenu,
   skillCatalogModal,
   skillDetailsPanel,
-  selectedSkillElement,
-  selectedSkillPath,
-  selectedSkills,
+  message,
+  messageRevision,
+  activeMentions,
+  onDraftChange,
+  onBackspaceAtCaret,
+  caretPositionOverride,
   isSkillUnsupported,
-  selectSkill,
-  removeSelectedSkill,
+  selectedSkills,
+  resetSkillMentions,
+  seedSkillMentions,
+  renderHistorySkillSegments,
   renderHistorySkills,
 }: UseSkillSelectorOverlayResult = useSkillSelectorOverlay({
-  isEnabled: isSkillUsageEnabled,
   isSkillsSupported: selectedDeployment?.features?.skillsSupported === true,
   skills,
   sharedWithMe,
   publicSkills,
   favoriteIds,
+  viewerBucket: user.bucket,
   onToggleFavorite: (id) => unfavoriteSkill(id),
   labels: {
     addMenuLabel: 'Skills',
     backLabel: 'Back',
     emptyQueryHintLabel: 'Type to filter',
+    deletedTooltipLabel:
+      'This skill has been deleted. Its details are no longer available.',
+    notSharedTooltipLabel:
+      "You don't have access to this skill, so its details aren't shown. Ask the chat owner to share it with you.",
+    unsupportedTooltipLabel:
+      'Selected model does not support skills. Remove the skill or select different model to proceed.',
   },
   renderCatalogContent: (onSelect, onClose) => (
     <CatalogView onSelect={onSelect} onClose={onClose} />
   ),
   detailsPanelComponent: SkillDetailsPanel,
 });
+
+// Forwarded straight through to ConversationInput/EditMessageInput:
+<ConversationInput
+  message={message}
+  messageRevision={messageRevision}
+  activeMentions={activeMentions}
+  onChange={(text) => {
+    onDraftChange(text);
+    /* ...whatever else the host already does with the typed text... */
+  }}
+  onBackspaceAtCaret={onBackspaceAtCaret}
+  caretPositionOverride={caretPositionOverride}
+  menuOverlays={skillMenuOverlay ? [skillMenuOverlay] : undefined}
+  commandMenu={commandMenu}
+  isSendDisabled={isSkillUnsupported}
+  onSend={async (text, attachments) => {
+    await sendMessage(text, attachments, { skills: selectedSkills });
+    resetSkillMentions();
+  }}
+/>;
 ```
 
-Owns the Skills Add-menu flow's state. `skillMenuOverlay` is the entry for
-the `menuOverlays` prop of `ConversationInput`/`Input`; `commandMenu` is the
+Owns the Skills Add-menu flow's state — a message can carry any number of
+skill mentions, interleaved anywhere with free text, each tracked as a
+character-range anchor within the composer's draft text. `skillMenuOverlay`
+is the entry for the `menuOverlays` prop of
+`ConversationInput`/`EditMessageInput`/`Input`; `commandMenu` is the
 `/`-prefix command-menu config for the input's `commandMenu` prop — the same
 favorites panel in search mode over the typed query, with
-`labels.emptyQueryHintLabel` as its empty-query hint. Both entries are
-`undefined` while `isEnabled` is `false` or `isSkillsSupported` is `false`
-(the current deployment does not support skills), so the host omits the
-menu item and the slash dropdown entirely; the hook renders
+`labels.emptyQueryHintLabel` as its empty-query hint, rendered in listbox
+mode so ArrowDown/ArrowUp and Enter in the input pick a skill. Both entries are
+`undefined` while `isSkillsSupported` is `false` (the current deployment does
+not support skills), so the host omits the menu item and the slash dropdown
+entirely; the hook renders
 `FavoriteSkillsPanel` as both entries' content, forwarding
 `labels.panelLabels`. `skillCatalogModal` renders the lib's `SkillCatalogModal`
 shell with `labels.catalogModalTitleLabel` as its title and
@@ -294,36 +468,56 @@ stable level outside the popover. `skillDetailsPanel` renders the injected
 `detailsPanelComponent` (wrapped in `Suspense`, so a lazily loaded component
 is fine); the open state of the modal and the panel, and the wiring of "View
 details" and "Use in chat" back to selection, are the hook's.
-`selectedSkillElement` is the selected skill as a `ChatSkill` element for the
-conversation input's `inlineStartSlot` — at most one, replaced on every
-selection, with the shared tooltip (the listing-sourced description, same as
-the rows) and no remove control of its own (removal is the input's
-Backspace-at-position-0 gesture, wired through `removeSelectedSkill`).
-`isSkillUnsupported` is `true` while a skill is selected and
-`isSkillsSupported` is `false` (always `false` while `isEnabled` is `false`):
-the selected chip renders in `ChatSkill`'s error state — the error-state
-tooltip message comes from `labels.unsupportedTooltipLabel`, which has an
-English default — and hosts fold the flag into their send-disabled
-condition, while the chip, its removal gesture, and the details panel stay
-available.
-`selectedSkillPath` is the selected skill's resource URL
-(`skills/{bucket}/{path}`) — the value the host sends as the `{ url }` entry
-of the outgoing message's `custom_content.skills` (`null` while nothing is
-selected or `isEnabled` is `false`) — and `selectSkill` selects by that same
-resource URL. `selectedSkills` is that send-time payload ready-made —
-`[{ url: <selected path> }]` while a skill is selected, `undefined` otherwise
-(so `custom_content.skills` is omitted from the message entirely).
-`renderHistorySkills` renders a history message's
-`custom_content.skills` entries as `ChatSkill` elements beside the
-message bubble's first text line, with the text word-flowing after them
-(user and assistant messages alike): each entry's name and description are
-resolved from the injected listing pools matched on its url (the name falling
-back to the url's last non-empty segment, the description omitted when no
-pool carries the url), and "View details" opens the same details panel;
-it returns `null` while `isEnabled` is `false` or the array is empty. The
-chip renders beside the bubble's first text line, so pass
-`historyChipLabelClassName` with the label class the bubbles' body text
-uses, keeping the chip's height matched to that line.
+
+`message`/`messageRevision` carry the draft text after the most recent
+selection, with every `/{name}` mention spliced in — pass straight through
+to the composer's own `message`/`messageRevision` props, the same one-shot
+"populated by a starter selection" mechanism those props already support
+(not a value fed back on every keystroke). `activeMentions` is every
+currently-tracked mention's character range, for the composer's
+`activeMentions` prop (the live-composing highlighted-run render).
+`onDraftChange` reconciles tracked mentions against the composer's own
+`onChange` value on ordinary typing — wire it alongside whatever else the
+host already does with that callback. `onBackspaceAtCaret` and
+`caretPositionOverride` forward straight to the composer's identically-named
+props. `isSkillUnsupported` is `true` while at least one mention exists and
+`isSkillsSupported` is `false`: hosts fold it into their send-disabled condition — a live-composing mention
+has no per-mention error styling of its own (it's a plain highlighted run,
+not a `ChatSkill`), so this boolean is the only unsupported-state signal
+while composing. `selectedSkills` is the send-time
+`custom_content.skills` payload — every tracked mention's `{ url }`, in
+left-to-right text order, or `undefined` while nothing is mentioned (so the
+field is omitted from the message entirely; order, not the shared `/{name}`
+label, is what disambiguates two mentions that display the same name but
+resolve to different skills). `resetSkillMentions` clears every tracked
+mention and the draft alongside it — call after a successful send.
+`seedSkillMentions(content, skills)` seeds the draft and its tracked mentions
+from a persisted message — call once when entering edit mode on a message
+that carries `custom_content.skills`.
+
+`renderHistorySkillSegments(content, skills)` renders a **user** message's
+`content` and `custom_content.skills` as an ordered array interleaving
+plain-text runs and `ChatSkill` elements at each mention's actual text
+position — for `UserMessageBubble`'s `textSegments` prop. `renderHistorySkills(skills)`
+renders every entry as a flat list of `ChatSkill` elements, ignoring text
+position — for `AssistantMessageBubble`'s `beforeContent` slot, since
+assistant text is model-generated markdown and never authors positioned
+mentions. Both resolve each entry's name and description from the injected
+listing pools matched on its url (the name falling back to the url's last
+non-empty segment, the description omitted when no pool carries the url),
+and share the same "View details" panel; both return `null` while the array
+is empty/absent, and a mention
+`renderHistorySkillSegments` cannot locate in `content` is simply omitted
+from the render. The chips render beside the bubble's first text line, so
+pass `historyChipLabelClassName` with the label class the bubbles' body text
+uses, keeping the chips' height matched to that line. History chips open
+their tooltip on hover and keyboard focus by default; pass
+`historyDetailsTrigger: 'click'` on touch layouts, where hover never fires, so
+a tap opens it instead.
+
+A live-composing mention also renders as a real `ChatSkill` chip — with
+`isUnsupported` error styling applied when the skill is not supported — via
+`HighlightedTextRange.render`, consistent with how history segments render.
 
 Row and chip descriptions come from the listing entries the host injects —
 no per-skill fetch happens anywhere in the flow, and opening a tooltip
@@ -378,7 +572,7 @@ elements therefore carry a stable public class.
 | Key              | Class                         | Element                                                                |
 | ---------------- | ----------------------------- | ---------------------------------------------------------------------- |
 | `favoritesPanel` | `dial-skills-favorites-panel` | The `FavoriteSkillsPanel` root, which carries the themed CSS variables |
-| `chip`           | `dial-skills-chip`            | The `/name` chip a `ChatSkill` renders inside the composer             |
+| `chip`           | `dial-skills-chip`            | The inline `/name` span a `ChatSkill` renders (composer and history)   |
 
 ```tsx
 import { SKILLS_CLASS } from '@epam/ai-dial-skills';
@@ -405,3 +599,12 @@ is in [`openspec/lib-styling-guide.md`](../../openspec/lib-styling-guide.md).
 
 Write host overrides with CSS logical properties (`margin-inline-start`,
 `inset-inline-end`) so they keep working under `dir="rtl"`.
+
+### Multiple skill selection
+
+`SkillSelectorField` accepts `value: string[]`,
+`onChange: (value: string[]) => void`, and optional `displayNames` keyed by
+reference. The host supplies `labels.fieldLabel` as the Select's accessible
+name. Unavailable metadata falls back to the URL. Unsupported models disable
+adding but allow removal; submission makes the Select inert and disables all
+actions. `SkillSelectorFieldProps` is the single exported field contract.

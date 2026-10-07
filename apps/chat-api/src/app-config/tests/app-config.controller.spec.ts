@@ -90,6 +90,20 @@ describe('AppConfigController (integration)', () => {
   });
 
   describe('GET /v1/client-config', () => {
+    it.each(['halloween', 'new-year', 'product-launch-2027', null])(
+      'returns event selection %s in the public client configuration',
+      async (activeEventId) => {
+        mockService.getClientConfig.mockResolvedValue({
+          ...DEFAULT_RESPONSE,
+          config: { ...DEFAULT_RESPONSE.config, activeEventId },
+        });
+        const result = await request(app.getHttpServer())
+          .get('/v1/client-config?appId=chat-ui')
+          .expect(200);
+        expect(result.body.config.activeEventId).toBe(activeEventId);
+      },
+    );
+
     it('returns 200 with ASR configured response', async () => {
       mockService.getClientConfig.mockResolvedValue(ASR_RESPONSE);
 
@@ -115,7 +129,7 @@ describe('AppConfigController (integration)', () => {
     });
 
     /* A cached response keeps serving the previous deployment's announcements
-       and feature flags after a redeploy (issue #8827). */
+       and feature flags after a redeploy ([#8827](https://github.com/epam/ai-dial-chat/issues/8827)). */
     it('forbids caching the response', async () => {
       mockService.getClientConfig.mockResolvedValue(DEFAULT_RESPONSE);
 

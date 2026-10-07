@@ -21,7 +21,9 @@ import {
   getJobTitleClaim,
   type SessionUser,
 } from '../auth/session/session.types';
+import { ApiDialCoreErrors } from '../common/dial/api-dial-core-errors.decorator';
 import {
+  endsWithNewline,
   releaseSseResponse,
   SSE_DRAIN_TIMEOUT_MS,
   SSE_KEEPALIVE_PAYLOAD,
@@ -67,6 +69,7 @@ import {
 import { SendCompletionDto } from './dto/send-completion.dto';
 import { StopCompletionDto } from './dto/stop-completion.dto';
 import { WatchConversationBodyDto } from './dto/watch-conversation.dto';
+import { BackgroundStopResult } from './generation/background-generation.service';
 import {
   completionResponseTerminations,
   CompletionResponseTermination,
@@ -113,6 +116,7 @@ export class ConversationController {
     description:
       'Creates a new conversation with an initial user message and returns it with a server-assigned ID.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 201,
     description: 'Conversation created successfully',
@@ -144,6 +148,7 @@ export class ConversationController {
     description:
       'Returns a flat conversation list for the authenticated user. Without limit or nextToken, follows all personal and public DIAL Core metadata pages with recursive=true, merges shared conversations, and sorts the complete result by latest activity. Explicit pagination parameters request one page per bucket.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Paginated list of conversation metadata',
@@ -168,6 +173,7 @@ export class ConversationController {
 
   @Get('metadata')
   @ApiOperation({ summary: 'Get metadata for a conversation' })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Conversation metadata',
@@ -193,6 +199,7 @@ export class ConversationController {
 
   @Get()
   @ApiOperation({ summary: 'Get a conversation by path' })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Conversation retrieved',
@@ -210,6 +217,7 @@ export class ConversationController {
 
   @Put()
   @ApiOperation({ summary: 'Save (overwrite) a conversation by path' })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Conversation saved',
@@ -219,14 +227,18 @@ export class ConversationController {
   @ApiResponse({ status: 401, description: 'Not authenticated' })
   @ApiResponse({ status: 404, description: 'Conversation not found' })
   @ApiResponse({ status: 502, description: 'DIAL Core error' })
-  @ApiResponse({ status: 503, description: 'DIAL Core unreachable' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'DIAL Core unreachable, or the conversation kept changing while it has a pending background answer; retry shortly',
+  })
   saveConversation(
     @Req() req: Request,
     @Query() query: SaveConversationQueryDto,
     @Body() body: SaveConversationBodyDto,
   ) {
     const { at, bucket } = req.user as SessionUser;
-    return this.conversationService.saveConversation(
+    return this.conversationService.saveClientConversation(
       query.path,
       at,
       bucket,
@@ -253,6 +265,7 @@ export class ConversationController {
       example: 'Europe/Warsaw',
     },
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, description: 'SSE stream of completion chunks' })
   @ApiResponse({
     status: 400,
@@ -267,7 +280,7 @@ export class ConversationController {
   @ApiResponse({
     status: 409,
     description:
-      'Another generation is already active for this conversation and principal',
+      'Another generation is already active for this conversation and principal, or the conversation has a pending background answer (started by any instance or session)',
   })
   @ApiResponse({ status: 502, description: 'DIAL Core error' })
   @ApiResponse({ status: 503, description: 'DIAL Core unreachable' })
@@ -292,7 +305,10 @@ export class ConversationController {
       dto.model,
       dto.custom_content,
       ownerKey,
-      () => startSseResponse(res),
+      () => {
+        startSseResponse(res);
+        startKeepalive();
+      },
       sub,
       dto.clientChannelId,
       timezone,
@@ -340,7 +356,7 @@ export class ConversationController {
      * would flush an empty 200 that leaves the exception filter nothing to
      * write. That is how a second browser tab submitting into a conversation
      * that is already generating rendered an empty answer instead of the 409
-     * this endpoint documents (issue #8688). Once the stream is open the
+     * this endpoint documents ([#8688](https://github.com/epam/ai-dial-chat/issues/8688)). Once the stream is open the
      * status is already committed, so a later failure ends the response as
      * before and only the SSE transport reports it.
      */
@@ -354,6 +370,35 @@ export class ConversationController {
         responseState = SseResponseState.BackpressureDetached;
       }
     };
+    /*
+     * A periodic comment keeps a quiet generation phase (a long "Thinking"
+     * stage) from looking dead to intermediaries and to the client's idle
+     * watchdog ([#8959](https://github.com/epam/ai-dial-chat/issues/8959)). The relay yields raw upstream byte slices that
+     * can end mid-line, so a tick only writes on a line boundary — a comment
+     * spliced into a partial line would corrupt that SSE frame. A skipped tick
+     * loses nothing: bytes are flowing.
+     */
+    let isAtLineBoundary = true;
+    let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
+    const writeToClient = (chunk: Uint8Array | string): void => {
+      try {
+        writeSseChunk(res, chunk);
+        isAtLineBoundary = endsWithNewline(chunk);
+        if (res.writableLength > SSE_COMPLETION_MAX_BUFFERED_BYTES) {
+          detachForBackpressure();
+        }
+      } catch {
+        detachForBackpressure();
+      }
+    };
+
+    const startKeepalive = (): void => {
+      keepaliveTimer = setInterval(() => {
+        if (responseState !== SseResponseState.Streaming || !isAtLineBoundary)
+          return;
+        writeToClient(SSE_KEEPALIVE_PAYLOAD);
+      }, SSE_KEEPALIVE_INTERVAL_MS);
+    };
     try {
       for await (const chunk of stream) {
         /*
@@ -363,19 +408,13 @@ export class ConversationController {
          * backend-owned work.
          */
         if (responseState !== SseResponseState.Streaming) continue;
-        try {
-          writeSseChunk(res, chunk);
-          if (res.writableLength > SSE_COMPLETION_MAX_BUFFERED_BYTES) {
-            detachForBackpressure();
-          }
-        } catch {
-          detachForBackpressure();
-        }
+        writeToClient(chunk);
       }
     } catch (err) {
       hasFailedBeforeStreamOpened = !res.headersSent;
       throw err;
     } finally {
+      if (keepaliveTimer) clearInterval(keepaliveTimer);
       res.off('close', handleClose);
       /*
        * Reached only after the generator has returned, which it does only
@@ -410,6 +449,11 @@ export class ConversationController {
   @ApiResponse({ status: 204, description: 'Generation stopped successfully' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
   @ApiResponse({
+    status: 503,
+    description:
+      'The stopped state of a background generation could not be saved; the generation keeps running and Stop can be retried',
+  })
+  @ApiResponse({
     status: 404,
     description:
       'No active generation found for this principal for the given path and generationId',
@@ -419,10 +463,44 @@ export class ConversationController {
     @Res() res: Response,
     @Body() dto: StopCompletionDto,
   ): Promise<void> {
+    const { at, bucket } = req.user as SessionUser;
     const ownerKey = resolvePrincipalKey(
       req.user as SessionUser,
       req.authSource,
     );
+    /* A non-background generation running here is stopped from the registry alone, as
+       before; any other Stop must consult the stored message. */
+    if (
+      !this.generationService.hasLocalForegroundGeneration(
+        ownerKey,
+        dto.path,
+        dto.generationId,
+      )
+    ) {
+      const backgroundStop =
+        await this.conversationService.stopBackgroundGeneration(
+          dto.path,
+          at,
+          bucket,
+          dto.generationId,
+          dto.content,
+        );
+      if (
+        backgroundStop === BackgroundStopResult.StoppedBeforeJob ||
+        backgroundStop === BackgroundStopResult.AlreadyFinished
+      ) {
+        res.status(204).end();
+        return;
+      }
+      if (backgroundStop === BackgroundStopResult.Handled) {
+        /* When this instance also runs the relay, end it now: Core cancel is not
+           always honoured, and the stopping tab must not keep receiving tokens. */
+        this.generationService.abort(ownerKey, dto.path, dto.generationId);
+        res.status(204).end();
+        return;
+      }
+    }
+
     const aborted = this.generationService.abort(
       ownerKey,
       dto.path,
@@ -461,10 +539,39 @@ export class ConversationController {
     @Res() res: Response,
     @Body() dto: AttachGenerationDto,
   ): Promise<void> {
+    const { at, bucket } = req.user as SessionUser;
     const ownerKey = resolvePrincipalKey(
       req.user as SessionUser,
       req.authSource,
     );
+    /* A non-background generation running here is replayed from the registry alone,
+       as before; any other attach must consult the stored message. */
+    if (
+      !this.generationService.hasLocalForegroundGeneration(ownerKey, dto.path)
+    ) {
+      const backgroundAbort = new AbortController();
+      const backgroundPlan =
+        await this.conversationService.resolveBackgroundAttach(
+          dto.path,
+          at,
+          bucket,
+          backgroundAbort.signal,
+        );
+      if (backgroundPlan?.kind === 'not_found') {
+        throw new NotFoundException(
+          'No active generation found for the given path',
+        );
+      }
+      if (backgroundPlan?.kind === 'stream') {
+        await this.writeBackgroundAttach(
+          res,
+          backgroundPlan.events,
+          backgroundAbort,
+        );
+        return;
+      }
+    }
+
     const attachment = this.generationService.attach(ownerKey, dto.path);
     if (!attachment) {
       throw new NotFoundException(
@@ -541,6 +648,50 @@ export class ConversationController {
     res.on('close', handleClose);
   }
 
+  /**
+   * Streams a background generation's attach events (snapshot, replayed chunks, one
+   * terminal event) with the same keepalive, backpressure detach and bounded release
+   * as the registry-based attach. Disconnect or backpressure aborts the DIAL Core replay.
+   * @param res - SSE response
+   * @param events - attach events planned by the background service
+   * @param abort - aborts the Core replay
+   */
+  private async writeBackgroundAttach(
+    res: Response,
+    events: AsyncGenerator<object, void, void>,
+    abort: AbortController,
+  ): Promise<void> {
+    startSseResponse(res);
+    const finishSubscription = trackSseSubscription(
+      SseSubscriptionKind.GenerationAttach,
+    );
+    let isCleanedUp = false;
+    const keepalive = setInterval(() => {
+      writeSseChunk(res, SSE_KEEPALIVE_PAYLOAD);
+    }, SSE_KEEPALIVE_INTERVAL_MS);
+    const cleanup = (): void => {
+      if (isCleanedUp) return;
+      isCleanedUp = true;
+      finishSubscription();
+      clearInterval(keepalive);
+      abort.abort();
+      res.off('close', cleanup);
+      void releaseSseResponse(res, SSE_RELEASE_TIMEOUT_MS);
+    };
+    res.on('close', cleanup);
+    try {
+      for await (const event of events) {
+        if (isCleanedUp || res.writableEnded) break;
+        writeSseChunk(res, `data: ${JSON.stringify(event)}\n\n`);
+        if (res.writableLength > SSE_ATTACH_MAX_BUFFERED_BYTES) break;
+      }
+    } catch (err) {
+      this.logger.warn('Background attach stream failed', err);
+    } finally {
+      cleanup();
+    }
+  }
+
   @Post('watch')
   @HttpCode(200)
   @ApiOperation({
@@ -549,6 +700,7 @@ export class ConversationController {
     description:
       'Opens an SSE stream that proxies DIAL Core resource-update events for the given conversation path. Used by the frontend to detect when LLM naming completes.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, description: 'SSE stream of resource events' })
   @ApiResponse({ status: 400, description: 'Invalid or missing path' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
@@ -651,6 +803,7 @@ export class ConversationController {
 
   @Patch()
   @ApiOperation({ summary: 'Rename a conversation by path' })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Conversation renamed — display name updated, path unchanged',
@@ -663,7 +816,11 @@ export class ConversationController {
   @ApiResponse({ status: 401, description: 'Not authenticated' })
   @ApiResponse({ status: 404, description: 'Conversation not found' })
   @ApiResponse({ status: 502, description: 'DIAL Core error' })
-  @ApiResponse({ status: 503, description: 'DIAL Core unreachable' })
+  @ApiResponse({
+    status: 503,
+    description:
+      'DIAL Core unreachable, or the conversation kept changing while it has a pending background answer; retry shortly',
+  })
   renameConversation(
     @Req() req: Request,
     @Query() query: ConversationPathDto,
@@ -686,6 +843,7 @@ export class ConversationController {
     description:
       'Generates a title for an existing conversation using the operator-configured utility model, based on the most recent messages. The suggestion is returned but NOT persisted — the caller confirms the rename separately. Does not read or set the llmNamingDone flag.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Generated title suggestion',
@@ -727,6 +885,7 @@ export class ConversationController {
   @ApiOperation({
     summary: "Duplicate a conversation into the user's own bucket",
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 201,
     description: 'Conversation duplicated — new path returned',
@@ -815,6 +974,7 @@ export class ConversationController {
   @Delete()
   @HttpCode(204)
   @ApiOperation({ summary: 'Delete a conversation by path' })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 204, description: 'Conversation deleted' })
   @ApiResponse({ status: 400, description: 'Missing or invalid path' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
@@ -834,6 +994,7 @@ export class ConversationController {
     description:
       'Idempotently records that the authenticated user has opened this conversation. Used to clear the unread indicator for scheduler-created conversations.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 204, description: 'Conversation marked as viewed' })
   @ApiResponse({ status: 400, description: 'Missing or invalid path' })
   @ApiResponse({ status: 401, description: 'Not authenticated' })

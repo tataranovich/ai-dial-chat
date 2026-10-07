@@ -29,6 +29,7 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import type { SessionUser } from '../auth/session/session.types';
+import { ApiDialCoreErrors } from '../common/dial/api-dial-core-errors.decorator';
 import { CreateSkillDto } from './dto/create-skill.dto';
 import { ApiIfMatchHeader, IF_MATCH_HEADER } from './dto/skill-file-path.dto';
 import {
@@ -80,10 +81,15 @@ export class SkillsController {
     description:
       'Returns all catalog-visible skills in one response. Organisation skills are always marked read-only.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillCatalogListResponseDto })
   @ApiResponse({ status: 401, description: 'Not authenticated' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
-  @ApiResponse({ status: 502, description: 'DIAL Core returned an error' })
+  @ApiResponse({
+    status: 502,
+    description:
+      'DIAL Core returned an error, or an invalid listing page (a repeated page token)',
+  })
   @ApiResponse({ status: 503, description: 'DIAL Core is unavailable' })
   listCatalogSkills(@Req() req: Request): Promise<SkillCatalogListResponseDto> {
     const { at, bucket } = req.user as SessionUser;
@@ -97,6 +103,7 @@ export class SkillsController {
     description:
       'Proxies DIAL Core listSkillMetadata to list the grouping folders and skills at or under the given path.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillListResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid bucket, path, or limit' })
   @ApiResponse({
@@ -132,6 +139,7 @@ export class SkillsController {
     summary: 'List files inside a skill',
     description: 'Proxies DIAL Core listSkillFileMetadata.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillFileListResponseDto })
   @ApiResponse({ status: 400, description: 'Invalid bucket, path, or limit' })
   @ApiResponse({
@@ -169,6 +177,7 @@ export class SkillsController {
     description:
       'Proxies DIAL Core listSkillMetadata for a single skill resource and returns its provenance (author, timestamps, permissions) without ownership fields — GET /api/v1/skills cannot serve this because its response is items-shaped.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillMetadataItemDto })
   @ApiResponse({
     status: 400,
@@ -205,6 +214,7 @@ export class SkillsController {
     description:
       'Proxies DIAL Core downloadSkillFolder and streams the response. Returns 400 when the path resolves to a grouping folder instead of a skill.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Streamed application/zip archive',
@@ -235,7 +245,7 @@ export class SkillsController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    const { at } = req.user as SessionUser;
+    const { at, bucket } = req.user as SessionUser;
     /*
      * Registered before the await so a client disconnect that happens while
      * skillsService.downloadSkill() is still resolving isn't missed — the
@@ -248,7 +258,12 @@ export class SkillsController {
     });
 
     const { stream, headers, abortOnDisconnect } =
-      await this.skillsService.downloadSkill(query.bucket, query.path, at);
+      await this.skillsService.downloadSkill(
+        query.bucket,
+        query.path,
+        at,
+        bucket,
+      );
 
     if (clientDisconnected) {
       abortOnDisconnect();
@@ -280,6 +295,7 @@ export class SkillsController {
     description:
       'Proxies DIAL Core downloadSkillFile and streams the response.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Streamed binary file content',
@@ -304,7 +320,7 @@ export class SkillsController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    const { at } = req.user as SessionUser;
+    const { at, bucket } = req.user as SessionUser;
     /*
      * Registered before the await so a client disconnect that happens while
      * skillsService.downloadSkillFile() is still resolving isn't missed —
@@ -321,6 +337,7 @@ export class SkillsController {
         query.path,
         query.filePath,
         at,
+        bucket,
       );
 
     if (clientDisconnected) {
@@ -378,6 +395,7 @@ export class SkillsController {
     description:
       'Validates skillManifest/filePaths/files (path safety, reserved markers, duplicates, limits), builds one multipart part per file, and sends If-None-Match: * to DIAL Core uploadSkillFolder — no ZIP is ever constructed or forwarded.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 201, type: SkillUploadResponseDto })
   @ApiResponse({
     status: 400,
@@ -444,6 +462,7 @@ export class SkillsController {
     description:
       "Accepts either a whole-skill ZIP archive or a standalone file named exactly (case-sensitive) SKILL.md in the file field, safely extracts and validates it server-side (container/structure validity, path safety, encrypted/symlink rejection, incremental decompression limits, manifest UTF-8/frontmatter checks), then creates the skill atomically via the same If-None-Match: * uploadSkillFolder call createSkill uses. The two forms are told apart by the field's exact filename, never by its declared content type. Uses the authenticated user's own bucket; a client-supplied bucket is never trusted.",
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 201, type: SkillImportResponseDto })
   @ApiResponse({
     status: 400,
@@ -530,6 +549,7 @@ export class SkillsController {
     description:
       'Validates skillManifest/filePaths/files, builds one multipart part per file, and forwards the required If-Match to DIAL Core uploadSkillFolder — no ZIP is ever constructed or forwarded.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillUploadResponseDto })
   @ApiResponse({
     status: 400,
@@ -611,6 +631,7 @@ export class SkillsController {
     summary: 'Add or replace one file in a skill',
     description: 'Proxies DIAL Core uploadSkillFile.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillFileUploadResponseDto })
   @ApiResponse({
     status: 400,
@@ -664,6 +685,7 @@ export class SkillsController {
     summary: 'Delete a whole skill',
     description: 'Proxies DIAL Core deleteSkillFolder.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillOperationResultDto })
   @ApiResponse({ status: 400, description: 'Invalid bucket or path' })
   @ApiResponse({
@@ -703,6 +725,7 @@ export class SkillsController {
     description:
       'Proxies DIAL Core deleteSkillFile. Rejects deleting SKILL.md.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillFileDeleteResponseDto })
   @ApiResponse({
     status: 400,
@@ -739,14 +762,15 @@ export class SkillsController {
   }
 
   @Post('grouping-folders')
-  @HttpCode(200)
+  @HttpCode(201)
   @ApiOperation({
     operationId: 'createSkillGroupingFolder',
     summary: 'Create a grouping folder',
     description:
       'Proxies DIAL Core createSkillGroupingFolder. Accepts no conditional request headers — the verified SDK schema declares none for this operation.',
   })
-  @ApiResponse({ status: 200, type: SkillGroupingFolderResponseDto })
+  @ApiDialCoreErrors()
+  @ApiResponse({ status: 201, type: SkillGroupingFolderResponseDto })
   @ApiResponse({
     status: 400,
     description:
@@ -757,7 +781,6 @@ export class SkillsController {
     description: 'Not authenticated — valid session cookie required',
   })
   @ApiResponse({ status: 403, description: 'Forbidden' })
-  @ApiResponse({ status: 404, description: 'Parent path not found' })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -785,6 +808,7 @@ export class SkillsController {
     summary: 'Delete an empty grouping folder',
     description: 'Proxies DIAL Core deleteSkillGroupingFolder.',
   })
+  @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: SkillOperationResultDto })
   @ApiResponse({ status: 400, description: 'Invalid bucket or path' })
   @ApiResponse({

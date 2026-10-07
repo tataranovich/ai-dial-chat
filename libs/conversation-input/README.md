@@ -25,13 +25,19 @@ import '@epam/ai-dial-conversation-input/styles.css';
 ## Peer Dependencies
 
 - `react`
-- `react-dom`
 - `@epam/ai-dial-chat-shared`
 - `@epam/ai-dial-ui-kit`
 
 ## Components
 
 ### ConversationInput
+
+`ConversationInput` and `Input` accept `focusRequestId?: number`. Providing a new
+token focuses the textarea without replacing the current draft or caret. Omit it
+to retain the normal focus behavior. Hosts can pair it with `pendingDropFiles` to
+attach a generated `File` through the same validation/upload flow as dropped files.
+Each pending file is consumed once per handoff, including React effect replay;
+clear the delivered batch from `onDropFilesConsumed` before supplying it again.
 
 The primary input component. Renders the text area, attachment tray, action buttons, and model selector. Every prop is optional — the component manages its own local attachment list and textarea state, and reports outward through callbacks. `onSend` receives the message text plus the current local attachments; the model selector is only rendered when `deployments` is supplied.
 
@@ -43,6 +49,7 @@ import { ConversationInput } from '@epam/ai-dial-conversation-input';
   placeholder="Type a message"
   welcomeText={welcomeText}
   descriptionText={descriptionText}
+  belowWelcomeSlot={starters}
   onSend={handleSend}
   onUploadAttachment={uploadAttachment}
   onAttachmentsChange={setDraftAttachments}
@@ -98,6 +105,55 @@ import type { AttachmentTrayStyles } from '@epam/ai-dial-attachment-input';
 
 `Input` takes the same object as a top-level `attachmentTray` prop.
 
+`styles.modelMenu` themes the model menu in both presentations — the desktop
+dropdown and the mobile bottom sheet — with one `ModelMenuStyles` object.
+`className` lands on the menu panel (also when `modelPickerOverlay` supplies
+its content), `searchHeaderClassName` on the search row, `itemClassName` on
+every deployment row and `selectedItemClassName` on the selected one, additive
+to `itemClassName`. Each is merged after the component's own classes, so a
+conflicting utility replaces the default instead of landing beside it.
+`colors` takes runtime values, in both presentations:
+
+| Field                    | Colours                       | Default                                                        |
+| ------------------------ | ----------------------------- | -------------------------------------------------------------- |
+| `searchHeaderBackground` | The search row                | `--bg-layer-raised` on desktop, transparent in the sheet       |
+| `itemText`               | Every row's label and icon    | `--text-primary`                                               |
+| `itemHoverBackground`    | A hovered row                 | `--bg-control-accent-alpha-hover` / `--bg-layer-raised`        |
+| `selectedItemBackground` | The selected row at rest      | None                                                           |
+| `selectedItemText`       | The selected row's label      | `itemText`                                                     |
+| `checkIcon`              | The selected row's check mark | The row's text colour on desktop, `--text-accent` in the sheet |
+
+A row colour that is not set leaves that part of the row exactly as the kit
+draws it. The desktop panel renders in a portal outside the composer, so these
+reach it as custom properties on the panel (`Dropdown.listStyle`) — CSS
+variables set on your own wrapper do not.
+
+```tsx
+<ConversationInput
+  onSend={handleSend}
+  styles={{
+    modelMenu: {
+      className: 'rounded-xl',
+      itemClassName: 'rounded-lg',
+      colors: {
+        searchHeaderBackground: 'var(--bg-layer-0)',
+        selectedItemBackground: 'var(--bg-control-accent-alpha)',
+        selectedItemText: 'var(--text-accent)',
+        checkIcon: 'var(--text-accent)',
+      },
+    },
+  }}
+/>
+```
+
+On desktop the kit's check mark inherits the row's text colour, so a `text-*`
+utility in `selectedItemClassName` recolours the label and the check together;
+`colors.checkIcon` recolours the check alone. The row colours do not reach a
+host-supplied `modelPickerOverlay`, whose content is the host's own.
+The host-supplied overlay's panel keeps its own `!w-[368px] !bg-layer-raised`,
+so overriding those needs an `!`-prefixed utility too. `Input` takes the same
+object as a top-level `modelMenu` prop.
+
 `message` and `textInsertion` are two different ways to write into the textarea,
 and they are not interchangeable. `message` sets the value: the textarea resyncs
 to it whenever the string changes, or whenever `messageRevision` changes if the
@@ -138,7 +194,14 @@ retry buttons on each attachment card in the tray. They default to English
 (`'Remove attachment'` / `'Retry upload'`); pass translated strings so the two
 adjacent buttons stay distinguishable to assistive technology. `uploadingLabel`
 (default `'Uploading'`) names the indeterminate progress bar a card shows while
-its upload is still in flight.
+its upload is still in flight. `expandLabel` (default `'Expand pasted text'`)
+names each pasted-text card, which expands its text back into the composer
+when activated. `clickLabel` names every other card when `onAttachmentClick`
+makes it interactive — name it after what your handler does (for example
+`'Open in canvas'`); when omitted the card default applies (`'Open attachment'`
+on image tiles, `'Download attachment'` on file and link tiles). `Input`,
+`ConversationInput` and `EditMessageInput` all accept these five labels and
+forward them to the attachment tray.
 
 `sendLabel` (default `'Send message'`) is the send button's accessible name.
 `sendTooltip` is an optional hover tooltip. `emptyMessageTooltip` optionally
@@ -193,10 +256,51 @@ Set `isAudioMessageSupported` to show the microphone. Pass translated `transcrib
 
 Base text input with auto-resize and keyboard shortcut handling. Use directly when a stripped-down input is needed — `ConversationInput` wraps it with the app-facing props it needs. The layout is always two rows: the textarea on its own full-width row, and the action bar (`+` button, tools chips, model selector, send/stop, mic) below it. Pass `hideActionBar` to render only the textarea and the attachment tray.
 
-`commandMenu` (on both `Input` and `ConversationInput`) mounts a host-injected slash-command menu. When provided, typing the configured `triggerPrefix` as the first character of an empty textarea opens an overlay above the input — as does pasting into an empty textarea a value that is exactly the prefix, or the prefix plus a whitespace-free query (`/` and `/test` trigger; `/s sdf`, multi-line content, or any paste into a non-empty textarea insert as a regular paste and open nothing). The menu stays open while the value keeps matching the prefix followed by a query with no whitespace or second prefix character, and closes on unmatch, Escape, or an outside click; selection typically goes through `ctx.close({ consumeQuery: true })`, which removes the `/query` text from the textarea.
+`onChange` (on `Input`, `ConversationInput`, and `EditMessageInput`) fires with the textarea's current value on every change — typing, deleting, pasting, undo/redo — not only on send/save. Omit it to ignore keystrokes between sends, as before this prop existed on `ConversationInput`/`EditMessageInput`; a host tracking live state derived from the draft (e.g. skill-mention anchors that must reconcile as the user edits around them) wires this alongside `activeMentions`/`onBackspaceAtCaret`.
+
+`commandMenu` (on `Input`, `ConversationInput`, and `EditMessageInput`) mounts a host-injected slash-command menu. The trigger is evaluated against the whitespace-delimited word around the caret, not the whole textarea value, so it opens whenever the configured `triggerPrefix` starts that word — typed as its first character anywhere in the text (start, middle, or after other words/mentions), or arriving in a paste that produces such a word. The menu stays open while the caret's word keeps matching the prefix followed by a query with no whitespace or second prefix character, and closes the moment it stops (including when the caret moves to a different, non-matching word); selection typically goes through `ctx.close({ consumeQuery: true })`, which removes that `/query` text from wherever it sits in the textarea. `ctx.caretPosition` gives the triggering word's start offset, for splicing a selection's result in at that same spot. A dismissed menu also reopens the moment its word returns to exactly the bare `triggerPrefix` — whether reached by typing it fresh, or by backspacing down to it after typing more and dismissing (e.g. `/sdf` → dismiss → Backspace ×3 → `/` reopens) — even though dismissing at any other query value keeps that same word's menu closed until the word stops matching and starts again.
+
+`menuOverlays` (on `ConversationInput` and `EditMessageInput`) adds host-injected entries to the `+` menu, alongside the built-in attach-file/tools/chat-settings items. On `EditMessageInput`, these render from its own external add-button (the edit surface hides `Input`'s built-in action bar), so they remain available even when `hideAttachFile` hides the attach-file entry. Each entry's `renderOverlay(onClose, caretPosition)` also receives the textarea's caret offset at the moment the overlay opened, so a selection made in it can splice text into `message` at that exact position (via `messageRevision`/`caretPositionOverride`) instead of always appending at the end.
+
+`activeMentions` (on `Input`, `ConversationInput`, and `EditMessageInput`) highlights ranges of the current `message` as styled runs — e.g. a host-tracked skill mention's `/{name}` text — without altering the text itself: the textarea's own text renders transparent (the caret stays visible and normally colored) and a non-interactive mirror underneath renders the identical text with each range styled, so a highlighted run stays pixel-aligned with the real characters underneath it. A range's `isUnsupported: true` renders it in an error style instead of the default highlight — e.g. a mention selected on a deployment that doesn't support it. `onBackspaceAtCaret(caretPosition)` lets the host ask, on every Backspace, whether a tracked range ends exactly at the caret; returning `{ start, length }` makes `Input` delete that whole range as one native edit (so undo still reverts it) instead of the default single-character deletion. `caretPositionOverride` places the caret once, the next time `messageRevision` bumps and the resulting `message` value takes effect — useful right after the host pushes a new `message` that spliced text in at a known position (e.g. inserting a mention) and wants the caret to land after it rather than wherever the browser defaults to.
+
+While the menu is open the textarea drives it as a list autocomplete, with focus staying in the textarea. ArrowDown/ArrowUp move an active option through the menu's `role="option"` elements, wrapping at both ends, instead of navigating message history; the textarea exposes it through `aria-activedescendant` and points `aria-controls` at `ctx.listboxId`. Enter clicks the active option, so an option's `onClick` is its one selection path for mouse and keyboard, and with no option active Enter does nothing — the `/query` is never sent while the menu is open. Shift+Enter still inserts a newline, which closes the menu. The textarea keeps its `textbox` role and carries `aria-autocomplete="list"` whenever `commandMenu` is set. To take part, the menu renders a `role="listbox"` element with `id={ctx.listboxId}`, gives each option a unique `id`, and marks the one equal to `ctx.activeOptionId` with `aria-selected="true"` and a visible highlight; `ctx.activeOptionId` resets whenever the query changes.
 
 ```tsx
-import { Input } from '@epam/ai-dial-conversation-input';
+import {
+  Input,
+  type CommandMenuConfig,
+} from '@epam/ai-dial-conversation-input';
+
+const commandMenu: CommandMenuConfig = {
+  triggerPrefix: '/',
+  menuLabel: 'Skills',
+  renderMenu: ({ query, close, listboxId, activeOptionId }) => (
+    <ul role="listbox" id={listboxId} aria-label="Skills">
+      {skills
+        .filter((skill) => skill.name.includes(query))
+        .map((skill) => {
+          const id = `${listboxId}-${skill.id}`;
+          return (
+            <li
+              key={skill.id}
+              id={id}
+              role="option"
+              aria-selected={id === activeOptionId}
+              onClick={() => {
+                close({ consumeQuery: true });
+                selectSkill(skill.id);
+              }}
+            >
+              {skill.name}
+            </li>
+          );
+        })}
+    </ul>
+  ),
+};
+
+<Input commandMenu={commandMenu} onSend={handleSend} />;
 ```
 
 ### ChatSettingsModal
@@ -222,7 +326,7 @@ import { ChatSettingsModal } from '@epam/ai-dial-conversation-input';
 
 ### BottomSheetShell
 
-Layout shell for bottom sheet panels on mobile — header with optional title, back and close buttons, and Escape/backdrop dismissal.
+Mobile bottom sheet drawn by the UI kit's `BottomSheet`: an optional header with the title, back and close buttons; Escape, backdrop and close-button dismissal; focus kept inside while open; and page scroll locked. `colors` (`BottomSheetShellColors`) themes the backdrop, panel, title and header divider, and `style` lands on the panel, so custom properties a consumer sets there reach the sheet content.
 
 ```tsx
 import { BottomSheetShell } from '@epam/ai-dial-conversation-input';
@@ -235,6 +339,31 @@ import { BottomSheetShell } from '@epam/ai-dial-conversation-input';
 >
   {sheetContent}
 </BottomSheetShell>;
+```
+
+## Hooks
+
+### useComposerSeed / useComposerSeedSource
+
+Holds the one `message`/`messageRevision` pair a composer component
+(`Input`, `ConversationInput`) accepts, with an imperative `seedMessage` for
+one-shot writes (a picked starter, route state). Pair with
+`useComposerSeedSource` for each additional externally revision-tracked
+source that should also seed the composer, such as a skill-mention hook's own
+message push — whichever source's revision last changed wins.
+
+```tsx
+import {
+  ConversationInput,
+  useComposerSeed,
+  useComposerSeedSource,
+} from '@epam/ai-dial-conversation-input';
+
+const { message, messageRevision, seedMessage } = useComposerSeed();
+
+useComposerSeedSource(skillMessageRevision, () => seedMessage(skillMessage));
+
+<ConversationInput message={message} messageRevision={messageRevision} ... />;
 ```
 
 ## Public class names
@@ -272,8 +401,8 @@ The model-selector menu carries its own set:
 | Class                              | Element                                         |
 | ---------------------------------- | ----------------------------------------------- |
 | `dial-ci-model-menu`               | The menu root, in all three presentations       |
-| `dial-ci-model-menu-search`        | The sticky search header inside the menu        |
-| `dial-ci-model-menu-item`          | Every deployment row                            |
+| `dial-ci-model-menu-search`        | The search row above the deployment list        |
+| `dial-ci-model-menu-item`          | Every deployment row, desktop and mobile        |
 | `dial-ci-model-menu-item-selected` | The selected row, **additive** to the row class |
 
 `dial-ci-model-menu` lands on three different presentations, so scope your rule
@@ -282,6 +411,17 @@ host-supplied `modelPickerOverlay` dropdown, and the mobile bottom sheet (a
 `role="dialog"`). The portal renders outside the composer's DOM subtree, which
 is why the menu needs a class of its own rather than a descendant selector from
 `dial-ci-wrapper`.
+
+The portal's stacking order comes from `@epam/ai-dial-ui-kit`'s `--z-overlay`
+token, not from this package. When your own overlay or sticky header sits above
+the menu, raise the kit's whole overlay ladder instead of overriding `z-[53]`
+or `[role='menu']`:
+
+```css
+:root {
+  --z-overlay: 1000; /* dropdowns sit at +1, tooltips at +2 and +3 */
+}
+```
 
 The selected row's **check mark has no class from this package**: it is drawn
 by `@epam/ai-dial-ui-kit` from the menu item's `mark`, so nothing here owns that
@@ -297,8 +437,13 @@ distinguish this menu from other kit menus:
 
 `dial-ci-model-menu-item` is emitted for deployment rows only — not for
 loading skeletons, nor for the single disabled row shown in the empty and error
-states. On mobile only the sheet root is marked; its rows are rendered by a
-separate virtualized list and carry no row class.
+states. The mobile sheet's rows come from a separate virtualized list and carry
+the same row and search classes. Their check is this package's own icon, not
+the kit's, so `dial-kit-menuitem-check` does not reach it; it is coloured
+`--text-accent` unless `styles.modelMenu.colors.checkIcon` sets it.
+
+Most of this no longer needs a stylesheet — `styles.modelMenu` reaches the
+same elements through props (see [ConversationInput](#conversationinput)).
 
 These classes carry no declarations of their own, so they change nothing until
 you style them, and they are additive to `className` and `inputClassName` —

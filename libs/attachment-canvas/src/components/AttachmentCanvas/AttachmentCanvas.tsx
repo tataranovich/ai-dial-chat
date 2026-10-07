@@ -39,6 +39,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
   onClose,
   content,
   fileName,
+  leftActions,
   labels: {
     ariaLabel,
     closeLabel = 'Close',
@@ -73,6 +74,11 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
     tableCopyLabel,
     tableCopiedLabel,
     tableDownloadCsvLabel,
+    codeBlockCopyLabel,
+    codeBlockCopiedLabel,
+    codeBlockDownloadLabel,
+    tableScrollRegionAriaLabel,
+    mathScrollRegionAriaLabel,
     ooxmlHighlightsLabel,
     ooxmlHighlightNavigatedLabel,
   },
@@ -90,6 +96,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
   codeBlockTheme,
   loadPdf,
   configurePdfWorker,
+  onVisualizerSendMessage,
 }) => {
   const [isCopiedText, setIsCopiedText] = useState(false);
   const [isCopiedMarkdown, setIsCopiedMarkdown] = useState(false);
@@ -201,7 +208,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
   const showHtmlToggle =
     !isLoading &&
     content.type === AttachmentContentType.Html &&
-    content.srcdoc != null;
+    (content.srcdoc != null || content.resolveSourceText != null);
 
   const showCopyText =
     !isLoading &&
@@ -249,6 +256,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
           ATTACHMENT_CANVAS_CLASS.panel,
         ),
       }}
+      leftActions={leftActions}
       rightActions={
         showHtmlToggle ||
         showCopyText ||
@@ -428,6 +436,11 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
           tableCopyLabel,
           tableCopiedLabel,
           tableDownloadCsvLabel,
+          codeBlockCopyLabel,
+          codeBlockCopiedLabel,
+          codeBlockDownloadLabel,
+          tableScrollRegionAriaLabel,
+          mathScrollRegionAriaLabel,
           ooxmlHighlightsLabel,
           ooxmlHighlightNavigatedLabel,
         }}
@@ -436,6 +449,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
         tableDownloadFilename={tableDownloadFilename}
         loadPdf={loadPdf}
         configurePdfWorker={configurePdfWorker}
+        onVisualizerSendMessage={onVisualizerSendMessage}
       />
     </SidebarPanel>
   );

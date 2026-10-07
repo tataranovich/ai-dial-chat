@@ -10,6 +10,7 @@ import {
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import type { SessionUser } from '../auth/session/session.types';
+import { ApiDialCoreErrors } from '../common/dial/api-dial-core-errors.decorator';
 import {
   getUserDisplayName,
   resolveDisplayAuthor,
@@ -25,7 +26,7 @@ import { UnpublishConversationDto } from './dto/unpublish-conversation.dto';
  * Publishes conversations to an Organization folder and reads their publish
  * history, both proxied through DIAL Core's Publication API. A sibling of
  * `ConversationController` rather than a merged set of methods on it (kept
- * separate for file-size reasons — see design.md D1) and a sibling of
+ * separate for file-size reasons — see `openspec/changes/archive/2026-07-15-add-conversation-publish/design.md` D1) and a sibling of
  * `apps/chat-api/src/publish/publish.controller.ts` rather than an extension
  * of its `entityType` enum, since conversation paths don't fit that
  * controller's single-URL-segment `entityId` shape.
@@ -51,6 +52,7 @@ export class ConversationPublishController {
       'as it always was.',
   })
   @ApiBody({ type: PublishConversationDto })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 201,
     description: 'Conversation published successfully',
@@ -69,6 +71,11 @@ export class ConversationPublishController {
     description: 'Caller lacks write access to the target folder',
   })
   @ApiResponse({ status: 404, description: 'Conversation not found' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'An answer in the conversation is still being generated in the background; publish after it finishes',
+  })
   @ApiResponse({
     status: 502,
     description: 'DIAL Core returned an error response',
@@ -107,6 +114,7 @@ export class ConversationPublishController {
       'and used as the publication name, so the request is legible in the admin queue.',
   })
   @ApiBody({ type: UnpublishConversationDto })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Unpublish request submitted for administrator approval',
@@ -157,6 +165,7 @@ export class ConversationPublishController {
       'Returns every folder this conversation has been published to, most recent first, derived from ' +
       "DIAL Core's Publication API (`getPublications`) — never from chat-api-side storage.",
   })
+  @ApiDialCoreErrors()
   @ApiResponse({
     status: 200,
     description: 'Publish history for the conversation',

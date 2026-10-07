@@ -31,12 +31,12 @@ deploymentId!: string;
 Where `DEPLOYMENT_ID_PATTERN` is defined in `apps/chat-api/src/common/validators/deployment-id.pattern.ts`:
 
 ```ts
-export const DEPLOYMENT_ID_PATTERN = /^(?:[\w.\-:@/]|%[\dA-Fa-f]{2})+$/;
+export const DEPLOYMENT_ID_PATTERN = /^(?:[\w.\-:@/()]|%[\dA-Fa-f]{2})+$/;
 export const DEPLOYMENT_ID_VALIDATION_MESSAGE =
   'Must contain only supported characters or valid percent-encoded bytes';
 ```
 
-No default is allowed. If `deploymentId` is absent or fails validation, `ValidationPipe` MUST respond 400.
+The pattern allows word characters, `.`, `-`, `:`, `@`, `/`, `(`, `)`, and valid `%XX` bytes. No default is allowed. If `deploymentId` is absent or fails validation, `ValidationPipe` MUST respond 400.
 
 The Swagger `@ApiResponse({ status: 400 })` annotation on the `createConversation` handler MUST list missing/invalid `deploymentId` as an example of a 400 case.
 
@@ -101,7 +101,7 @@ After adding `deploymentId` to `CreateConversationDto`, the following MUST run a
 3. `npm exec nx build chat-api-client -- --skip-nx-cache`
 4. `npm exec nx lint chat-api-client`
 
-`apps/chat/src/server-api/conversations.api.ts` SHALL export `createConversation` accepting and forwarding `deploymentId`:
+`apps/chat/src/server-api/conversations.api.ts` SHALL export `createConversation` accepting and forwarding `deploymentId` (plus an optional `skills` list forwarded as `custom_content.skills`):
 
 ```ts
 export const createConversation = (
@@ -110,12 +110,16 @@ export const createConversation = (
   attachments?: AttachmentDto[],
   configurationValue?: Record<string, unknown>,
   formValue?: Record<string, unknown>,
+  skills?: RequestSkill[],
 ) =>
   conversationsApi.createConversation({
     createConversationDto: {
       firstMessage,
       deploymentId,
-      ...(attachments?.length || configurationValue || formValue
+      ...(attachments?.length ||
+      configurationValue ||
+      formValue ||
+      skills?.length
         ? {
             custom_content: {
               ...(attachments?.length ? { attachments } : {}),
@@ -123,6 +127,7 @@ export const createConversation = (
                 ? { configuration_value: configurationValue }
                 : {}),
               ...(formValue ? { form_value: formValue } : {}),
+              ...(skills?.length ? { skills } : {}),
             },
           }
         : {}),
@@ -133,7 +138,7 @@ export const createConversation = (
 #### Scenario: Generated client accepts deploymentId in CreateConversationDto
 
 - **WHEN** `npm run openapi` runs
-- **THEN** the generated `CreateConversationDto` type in `@epam/chat-api-client` includes `deploymentId: string` as a required field
+- **THEN** the generated `CreateConversationDto` type in `@epam/ai-dial-chat-api-client` includes `deploymentId: string` as a required field
 
 #### Scenario: Frontend wrapper forwards all custom_content fields
 
@@ -154,12 +159,25 @@ export const createConversation = (
 // Regular message send (handleCreateConversation):
 if (!selectedItemId) return;
 const attachmentDtos = attachmentsToDtos(attachments || []);
-await apiCreateConversation(message, selectedItemId, attachmentDtos);
+await apiCreateConversation(
+  message,
+  selectedItemId,
+  attachmentDtos,
+  hasToolConfig ? toolConfigurationValue : undefined,
+  undefined,
+  skillsForSend,
+);
 
-// Schema starter with configuration (handleStarterSelect):
+// Submit starter (handleStarterSelect):
 if (!selectedItemId) return;
-const configurationValue = propertyKey ? { [propertyKey]: starter.const } : undefined;
-await apiCreateConversation(text, selectedItemId, [], configurationValue);
+const starterConfig = propertyKey ? { [propertyKey]: starter.const } : undefined;
+const mergedConfigurationValue = { ...starterConfig, ...toolConfigurationValue };
+await apiCreateConversation(
+  text,
+  selectedItemId,
+  [],
+  hasConfig ? mergedConfigurationValue : undefined,
+);
 ```
 
 The send callback SHALL NOT fire when `selectedItemId` is `null` — which can occur during initial load, when the deployments list is empty, or when explicitly cleared — enforced by the input component's disabled send button state and by explicit `if (!selectedItemId) return;` guards in `handleCreateConversation`, `handleStarterSelect`, and `NewConversationComposer.handleSend`.
@@ -167,7 +185,7 @@ The send callback SHALL NOT fire when `selectedItemId` is `null` — which can o
 #### Scenario: handleCreateConversation passes selectedItemId as deploymentId to apiCreateConversation
 
 - **WHEN** the user sends a message and `ConversationRoute`'s `handleCreateConversation` is invoked with `useDeployments().selectedItemId === 'item-1'`
-- **THEN** `apiCreateConversation` is called with `(message, 'item-1', attachmentDtos)`
+- **THEN** `apiCreateConversation` is called with `(message, 'item-1', attachmentDtos, <active tool configuration or undefined>, undefined, <selected skills>)`
 
 #### Scenario: handleCreateConversation is a no-op when selectedItemId is null
 
@@ -240,7 +258,7 @@ State ownership: `ConversationRoute` owns the derived starter list, intro text, 
 #### Scenario: Submit Quick Apps starter creates a conversation without schema configuration
 
 - **WHEN** a user selects a Quick Apps starter whose normalized `submit` flag is true
-- **THEN** `apiCreateConversation` is called with the starter text, selected deployment id, and attachments only
+- **THEN** `apiCreateConversation` is called with the starter text, the selected deployment id, an empty attachments array, and only the active tool configuration (if any) as `configurationValue`
 - **AND** no schema `configuration_value` is added to the first message
 
 #### Scenario: Each schema starter uses its own prompt even when a shared description is present
@@ -296,36 +314,128 @@ A unit test in `apps/chat/src/server-api/` SHALL verify that `createConversation
 
 ### Requirement: New Chat screen restores the user's default deployment on mount
 
-`apps/chat/src/pages/ConversationRoute/ConversationRoute.tsx` SHALL re-resolve its default deployment selection whenever it mounts, so that having previously viewed a different conversation (which updates `selectedItemId` via `restoreSelectedItemId` without persisting) never determines the next new chat's model.
+`apps/chat/src/pages/ConversationRoute/ConversationRoute.tsx` SHALL re-resolve its default
+deployment selection whenever it mounts, so that having previously viewed a different conversation
+(which updates `selectedItemId` via `restoreSelectedItemId` without persisting) never determines the
+next new chat's model.
 
 On mount, the route's effect SHALL:
 
-1. If router state carries an explicit `deploymentId` (`routeDeploymentId`, e.g. the overlay conversation-list bridge opening the composer with a preselected deployment), call `restoreSelectedItemId(routeDeploymentId)` as today — this explicit preselection takes priority.
-2. Otherwise, if the optional overlay context has a pending `overlay.pendingModelId` awaiting resolution, do nothing and let the existing overlay-pending-model effect (`apps/chat/src/app/app.tsx`) apply its own selection once deployments finish loading.
-3. Otherwise, call `useDeployments().restoreDefaultSelection()` so `selectedItemId` reflects the user's persisted preference (or operator default, or first item) rather than whatever a previously viewed conversation left in memory.
+1. If router state carries an explicit `deploymentId` (`routeDeploymentId`, e.g. the overlay
+   conversation-list bridge opening the composer with a preselected deployment), call
+   `restoreSelectedItemId(routeDeploymentId)` — this explicit preselection takes priority. The
+   state is one-shot: the effect then clears it with `navigate(pathname, { replace: true, state: null })`
+   and remembers the consumption in a ref for the lifetime of the mount, so the re-run triggered by
+   that clearing navigation does not fall through to `restoreDefaultSelection()`. A temporary
+   isolated-view branch (marked `TODO: remove in next release`) likewise pins the isolated model
+   via `restoreSelectedItemId` and never falls through to the default.
+2. Otherwise, if the optional overlay context has a pending `overlay.pendingModelId` awaiting
+   resolution, do nothing and let the overlay-pending-model hook
+   (`apps/chat/src/hooks/overlay/useOverlayPendingModel.ts`, mounted in `apps/chat/src/app/app.tsx`)
+   apply its own selection once deployments finish loading.
+3. Otherwise, call `useDeployments().restoreDefaultSelection()` so `selectedItemId` reflects the
+   user's preference rather than whatever a previously viewed conversation left in memory.
 
-This SHALL NOT change the existing requirement that `handleCreateConversation`/`handleStarterSelect` are no-ops when `selectedItemId` is `null`, nor the existing precedence for `CreateConversationDto.deploymentId`.
+`restoreDefaultSelection` resolves through `resolveInitialSelection`, whose precedence gains the
+user's `Default agent for new chats` preference. The full ordering is owned by `default-agent-preference`; in
+summary, `restoreDefaultSelection` SHALL resolve to:
+
+0. in overlay mode, the host's `modelId` (`OverlayContextType.modelId`), when a deployment with that
+   id or reference exists in the catalog;
+1. the stored preference, when it names a deployment that exists in the catalog;
+2. the operator default, when the preference is `DefaultAgentMode.DefaultAgent` and that deployment
+   exists — **not** additionally gated on `defaultDeploymentPinned`;
+3. the persisted `useUserConfig().selectedDeploymentId`, when the preference is
+   `DefaultAgentMode.LastUsedAgent` and that deployment exists;
+4. the operator default, when pinned (unchanged);
+5. the persisted `useUserConfig().selectedDeploymentId` (unchanged — the fall-through for an unset
+   preference, which is the default behaviour);
+6. the first non-hidden catalog item, else the first catalog item (unchanged).
+
+`ConversationRoute` itself is **not** changed by this: it keeps calling `restoreDefaultSelection()`
+and remains unaware of the preference and of the overlay host's `modelId`.
+
+Step 0 is what keeps the host's agent once `pendingModelId` is cleared. Clearing it changes
+`overlay?.pendingModelId`, which is in the mount effect's dependency array, so the effect re-runs
+and reaches branch 3. Before step 0 existed, that call replaced the host's agent with the user's
+persisted or first-catalog deployment, so a first-time overlay user never saw the host's agent. Putting the resolution in `DeploymentsContext` rather than in
+the route is what makes the preference apply on first load (through the post-fetch resolution
+effect) as well as on navigation.
+
+This SHALL NOT change the existing requirement that
+`handleCreateConversation`/`handleStarterSelect` are no-ops when `selectedItemId` is `null`, nor the
+existing precedence for `CreateConversationDto.deploymentId`.
 
 **i18n impact:** None.
 
 **RTL / UI impact:** None (state resolution only; no new UI).
 
-**Memoisation:** The mount effect's dependency array SHALL include `restoreSelectedItemId`, `restoreDefaultSelection`, `routeDeploymentId`, and `overlay?.pendingModelId`.
+**Memoisation:** The mount effect's dependency array SHALL include `restoreSelectedItemId`,
+`restoreDefaultSelection`, `routeDeploymentId`, and `overlay?.pendingModelId`, plus `navigate`,
+`pathname`, `isIsolatedView`, and `isolatedModelId` for the one-shot state clearing and the
+isolated-view branch.
+`restoreDefaultSelection`'s own `useCallback` dependency array SHALL remain `[]`; the preference
+reaches it through a ref, so this effect does not re-fire when the preference changes.
 
 #### Scenario: New chat after viewing a different conversation uses the user's own preference, not the viewed conversation's model
 
-- **WHEN** the user has `useUserConfig().selectedDeploymentId === "opus"`, opens an existing conversation whose last-used model is `"whisper"` (which calls `restoreSelectedItemId("whisper")`), and then navigates to `ConversationRoute` (clicks "New chat") with no router-state `deploymentId` and no pending overlay model
-- **THEN** `ConversationRoute`'s mount effect calls `restoreDefaultSelection()`, `selectedItemId` becomes `"opus"`, and a subsequently created conversation is sent with `deploymentId: "opus"`
+- **WHEN** the user has `useUserConfig().selectedDeploymentId === "opus"`, no stored `Default agent
+  for new chats` preference, no pinned operator default, opens an existing conversation whose
+  last-used model is `"whisper"` (which calls `restoreSelectedItemId("whisper")`), and then navigates
+  to `ConversationRoute` (clicks "New chat") with no router-state `deploymentId` and no pending
+  overlay model
+- **THEN** `ConversationRoute`'s mount effect calls `restoreDefaultSelection()`, `selectedItemId`
+  becomes `"opus"`, and a subsequently created conversation is sent with `deploymentId: "opus"`
+
+#### Scenario: A Default agent for new chats preference naming a specific agent determines the new chat
+
+- **WHEN** the `Default agent for new chats` preference is `"gpt-4o"` (a deployment in the catalog),
+  `useUserConfig().selectedDeploymentId` is `"whisper"`, and the user navigates to
+  `ConversationRoute` with no router-state `deploymentId` and no pending overlay model
+- **THEN** `selectedItemId` becomes `"gpt-4o"` and a subsequently created conversation is sent with
+  `deploymentId: "gpt-4o"`
+
+#### Scenario: Default agent preference resolves to the operator default
+
+- **WHEN** the `Default agent for new chats` preference is `DefaultAgentMode.DefaultAgent`,
+  `appConfig.defaultDeploymentId` is `"gpt-4o"` which exists in the catalog,
+  `defaultDeploymentPinned` is off, and the user navigates to `ConversationRoute` with no
+  router-state `deploymentId`
+- **THEN** `selectedItemId` becomes `"gpt-4o"`
 
 #### Scenario: Explicit router-state deploymentId still takes priority
 
 - **WHEN** `ConversationRoute` mounts with router state `{ deploymentId: "dep-x" }`
-- **THEN** `restoreSelectedItemId("dep-x")` is called and `restoreDefaultSelection()` is NOT called
+- **THEN** `restoreSelectedItemId("dep-x")` is called and `restoreDefaultSelection()` is NOT called,
+  regardless of the `Default agent for new chats` preference
+
+#### Scenario: The overlay host's model survives clearing the pending model id
+
+- **WHEN** the overlay host sent `modelId: "sigma"`, `useUserConfig().selectedDeploymentId` is
+  `null` (a first-time user) or `"opus"`, `useOverlayPendingModel` applies `"sigma"` and clears
+  `overlay.pendingModelId`, and `ConversationRoute`'s mount effect re-runs and calls
+  `restoreDefaultSelection()`
+- **THEN** `selectedItemId` remains `"sigma"`
+
+#### Scenario: The next overlay new chat after viewing another conversation uses the host's model
+
+- **WHEN** the overlay host sent `modelId: "sigma"`, the user opens an existing conversation whose
+  last-used model is `"whisper"`, and then clicks "New chat"
+- **THEN** `restoreDefaultSelection()` sets `selectedItemId` to `"sigma"`
 
 #### Scenario: Pending overlay model selection is not clobbered
 
-- **WHEN** `ConversationRoute` mounts with no router-state `deploymentId` and `overlay.pendingModelId` is set (awaiting the overlay-pending-model effect in `app.tsx`)
-- **THEN** `restoreDefaultSelection()` is NOT called from `ConversationRoute`'s mount effect
+- **WHEN** `ConversationRoute` mounts with no router-state `deploymentId` and
+  `overlay.pendingModelId` is set (awaiting the overlay-pending-model effect in `app.tsx`)
+- **THEN** `restoreDefaultSelection()` is NOT called from `ConversationRoute`'s mount effect,
+  regardless of the `Default agent for new chats` preference
+
+#### Scenario: Changing the preference does not re-fire the mount effect
+
+- **GIVEN** `ConversationRoute` is mounted
+- **WHEN** the user changes the `Default agent for new chats` preference in another surface
+- **THEN** `restoreDefaultSelection`'s identity is unchanged and the mount effect does not re-run,
+  leaving the current in-session selection intact
 
 ---
 

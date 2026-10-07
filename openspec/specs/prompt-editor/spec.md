@@ -8,59 +8,60 @@ The prompt create/edit screen: the `@epam/ai-dial-prompt-editor` lib that owns t
 
 ### Requirement: The editor's UI lives in `@epam/ai-dial-prompt-editor`
 
-`PromptEditor` SHALL use `EditorLayout` from `@epam/ai-dial-builder-form` as its outer shell, replacing the previous `BuilderFormContainer`. `@epam/ai-dial-builder-form` SHALL be a peer dependency of `libs/prompt-editor/package.json`.
+`PromptEditor` SHALL use `EntityEditor` from `@epam/ai-dial-builder-form` as its outer shell, the same shell every entity editor uses. `@epam/ai-dial-builder-form` SHALL be listed under `dependencies` (not `peerDependencies`) in `libs/prompt-editor/package.json`.
 
-`EditorLayout` SHALL receive:
-- `onBack` — the back/cancel navigation callback (previously `onBack` on `BuilderFormContainer`)
-- `backAriaLabel` — forwarded from `PromptEditorProps.labels.backButtonAriaLabel` (English default `'Back'`)
-- `title` — the resolved create/edit title string (previously the `title` field of `BuilderFormContainer`'s `labels`)
-- `leftContent` — the flat single-column form body (name, description, content/instructions)
-- `rightContent` absent (single-column mode)
-- `actions` — the Cancel + Save buttons
-- `isSaving` — forwarded from `isSaving` prop
+The prompt keeps its single-column arrangement on that shell. `EntityEditor` SHALL receive the following:
 
-`PromptEditorProps` changes:
-- `labels.backButtonLabel` is renamed to `labels.backButtonAriaLabel` (used as the aria-label on `EditorLayout`'s back button)
-- `onBack` prop remains; `onCancel` is passed to the Cancel button inside `actions`
+- `onBack`: the back navigation callback.
+- `labels.backAriaLabel`: forwarded from `PromptEditorProps.labels.backButtonAriaLabel` (English default `'Back to prompts'`).
+- `title`: the resolved create/edit title string.
+- `metadataTitle={null}`, so the column has no section heading.
+- `metadata`: one centred column (max 1180 px) holding the shared `MetadataForm` with `fields={[MetadataField.Name, MetadataField.Description]}`, then the Instructions `MarkdownEditor` with its label, lazy `Suspense` fallback, character-counter announcements and error. The Instructions editor fills the height left below the fields.
+- No `setup`, so the column takes the full width.
+- `onCancel`, `onSubmit` and `isSubmitting` (forwarded from `isSaving`).
+- `submitLabel`: `labels.createLabel` in create mode and `labels.saveLabel` in edit mode. The host resolves both through i18n (`buttons.create` / `buttons.save`).
 
-Division of responsibility remains unchanged: field values, character-counter announcements, a11y wiring owned by the lib; validation, API calls, notifications, routing, i18n owned by the app.
+`PROMPT_EDITOR_CLASS.form` SHALL stamp the column.
 
-#### Scenario: Header row rendered by EditorLayout
+Division of responsibility remains unchanged:
+
+- The lib owns field values, character-counter announcements and a11y wiring.
+- The app owns validation (`validatePrompt*` in `libs/chat-hooks/src/prompt/prompt.ts`), API calls, notifications, routing and i18n.
+
+#### Scenario: Header row rendered by the shared shell
 - **WHEN** `PromptEditor` renders
-- **THEN** the header row (back arrow, title, Cancel, Save) is rendered by `EditorLayout` from `@epam/ai-dial-builder-form`, not by `BuilderFormContainer`
+- **THEN** the header row (back arrow, title, Cancel, primary button) is rendered by `EntityEditor` from `@epam/ai-dial-builder-form`
 
-#### Scenario: No BuilderFormContainer usage
-- **WHEN** `libs/prompt-editor/src/**` is searched for `BuilderFormContainer` usage
-- **THEN** none are found
+#### Scenario: One column without section headings
+- **WHEN** `PromptEditor` renders
+- **THEN** Name, Description and Instructions render in one column, no "Metadata" or "Setup" heading renders, and no avatar, version, locales or tags controls exist
 
-#### Scenario: Single-column layout preserved
-- **WHEN** `PromptEditor` renders at any viewport width
-- **THEN** the form fields (Name, Description, Instructions) occupy the full available content width, with no sidebar panel beside them
+#### Scenario: Primary label follows the mode
+- **WHEN** the host opens the editor without a prompt id
+- **THEN** the primary button reads "Create"; with a prompt id it reads "Save"
 
 #### Scenario: backButtonAriaLabel labels the back button
 - **WHEN** the host passes `labels.backButtonAriaLabel = 'Back to prompts'`
 - **THEN** the back-arrow button in the header has accessible name `'Back to prompts'`
 
----
-
 ### Requirement: `PromptEditor` is a lazy-loaded, feature-gated route
 
-`apps/chat/src/types/routes.ts` SHALL add `PromptEditor = '/prompt-editor'` to `ROUTES`. `apps/chat/src/app/app.tsx` SHALL register it with `React.lazy` and a `Suspense` fallback, alongside `ToolsetEditorPage`.
+`apps/chat/src/types/routes.ts` SHALL add `PromptEditor = '/prompt-editor'` to `ROUTES`. `apps/chat/src/app/app.tsx` SHALL register it with `React.lazy` and a `Suspense` fallback, alongside `ApplicationEditorPage` and `SkillEditorPage`.
 
-`apps/chat/src/types/prompt-editor.ts` SHALL define a `PromptEditorQuery` string enum with `Id = 'id'` and `ReturnUrl = 'returnUrl'`, mirroring `ToolsetEditorQuery`.
+The page SHALL read its query through the shared `EditorQuery` string enum in `apps/chat/src/types/editor-query.ts`, which has a single member `Id = 'id'` and is shared by every entity editor route. There is no `returnUrl` query parameter; a `?returnUrl=` value is ignored.
 
-Mode resolution: `?id=<full resource path>` opens edit mode, where `<full resource path>` is exactly the value `PromptResponseDto.id` returns — `prompts/{bucket}/{path}` whether the prompt is the caller's own or shared with them; an absent `id` opens create mode. There is no separate personal-vs-shared id shape to distinguish: the same `id` query value is passed straight to `getPrompt` regardless of whose bucket it names. On save or cancel the page navigates to `returnUrl` when present, otherwise `ROUTES.Catalog`.
+Mode resolution: `?id=<full resource path>` opens edit mode, where `<full resource path>` is exactly the value `PromptResponseDto.id` returns — `prompts/{bucket}/{path}` whether the prompt is the caller's own or shared with them; an absent `id` opens create mode. There is no separate personal-vs-shared id shape to distinguish: the same `id` query value is passed straight to `getPrompt` regardless of whose bucket it names. On save or cancel the page always navigates to `ROUTES.Catalog`.
 
 When `OverlayFeature.Prompts` is disabled the route SHALL redirect to `ROUTES.Catalog` without issuing any prompt request.
 
 #### Scenario: Create mode opens with an empty form
 
-- **WHEN** the user navigates to `/prompt-editor?returnUrl=/catalog`
+- **WHEN** the user navigates to `/prompt-editor`
 - **THEN** the page renders empty name, description, and content fields
 
 #### Scenario: Edit mode loads the prompt by its full id
 
-- **WHEN** the user navigates to `/prompt-editor?id=prompts%2Fmy-bucket%2FWork%2FAI%2Fsummarize&returnUrl=/catalog`
+- **WHEN** the user navigates to `/prompt-editor?id=prompts%2Fmy-bucket%2FWork%2FAI%2Fsummarize`
 - **THEN** `getPrompt('prompts/my-bucket/Work/AI/summarize')` is called and the form is populated with the prompt's name, description, and content (the prompt's stored folder is not shown or editable on this screen — see design.md D16)
 
 #### Scenario: Shared edit mode loads the same way, by the prompt's own full id
@@ -79,9 +80,9 @@ When `OverlayFeature.Prompts` is disabled the route SHALL redirect to `ROUTES.Ca
 - **WHEN** `OverlayFeature.Prompts` is disabled and the user navigates directly to `/prompt-editor`
 - **THEN** the app redirects to `/catalog` and no `/api/v1/prompts` request is issued
 
-#### Scenario: Cancel returns to the caller
+#### Scenario: Cancel returns to the catalog
 
-- **WHEN** the user cancels with `?returnUrl=/catalog` present
+- **WHEN** the user cancels, with or without a `?returnUrl=` query value present
 - **THEN** the app navigates to `/catalog` and no mutation is dispatched
 
 ---
@@ -92,7 +93,7 @@ When `OverlayFeature.Prompts` is disabled the route SHALL redirect to `ROUTES.Ca
 
 Create SHALL call `createPrompt({ name, description, content })`. An update — personal or shared — SHALL call `updatePrompt(id, { name, description, content })`, where `id` is the prompt's full resource path exactly as loaded; there is no separate owner-bucket argument to thread through. The update payload carries the form's current name, description, and content values.
 
-On success the page SHALL call `refetchPrompts()`, show a success notification, and navigate back only after the refetch settles.
+On success the page SHALL call `refetchPrompts()`, show the shared success notification via `notifyOperationSuccess(NotifiableEntity.Prompt, EntityOperation.Created | EntityOperation.Edited, { name })`, and navigate back only after the refetch settles. A non-409 failure shows `showErrorNotification` with `promptEditor.saveError`.
 
 #### Scenario: Creating a root-level prompt
 
@@ -152,7 +153,7 @@ The form SHALL block submission and show inline errors for:
 
 | Field | Rule | Source |
 | --- | --- | --- |
-| name | required, 1–256 characters, no `/` | `CreatePromptDto.name` |
+| name | trimmed; required, 1–256 characters, matches the backend allowlist `/^(?!.{1,2}$)[a-zA-Z0-9 _.-]+$/` (letters, digits, space, `_`, `.`, `-`; not `.` or `..`), otherwise `InvalidName` | `CreatePromptDto.name` |
 | description | ≤ 2000 characters | `CreatePromptDto.description` |
 | content | required, ≤ 50 000 characters | `CreatePromptDto.content` |
 
@@ -191,7 +192,7 @@ The content and description fields SHALL show a character counter. Per the a11y 
 
 - **State ownership**: form state SHALL be local to `PromptEditor` (`useState`). No new context is introduced.
 - **Loading / empty / error states**: edit mode shows a loading state while `getPrompt` is pending, an error state with retry on failure, and a disabled submit with a pending indicator while a save is in flight.
-- **i18n**: keys under `promptEditor.*` — page titles for create and edit, field labels and placeholders for name/description/content, the three validation messages, the character-counter template, and the save/delete success and failure notifications. Save/Cancel/Delete/Edit labels reuse existing `ButtonsI18nKeys` members rather than adding duplicates. Every key is declared in `translation-keys.ts` and `en.json` in the same change. The `promptEditor.folder*`, `promptEditor.moveError`, and `promptEditor.folderError` keys the first pass added were removed once the folder field and move flow left the screen.
+- **i18n**: keys under `promptEditor.*` — page titles for create and edit, field labels and placeholders for name/description/content, the validation messages, the character-counter template, the load-error/retry/saving labels, and the `promptEditor.saveError` failure notification. Success notifications come from the shared operation-notification keys, not `promptEditor.*`. Save/Cancel/Delete/Edit labels reuse existing `ButtonsI18nKeys` members rather than adding duplicates. Every key is declared in `translation-keys.ts` and `en.json` in the same change. The `promptEditor.folder*`, `promptEditor.moveError`, and `promptEditor.folderError` keys the first pass added were removed once the folder field and move flow left the screen.
 - **RTL / direction impact**: the form and character counters use logical properties (`ps-*`, `pe-*`, `text-start`, `border-s-*`); the back/breadcrumb chevron gets `rtl:scale-x-[-1]`.
 - **Accessibility**: every field has a programmatically associated label; inline errors are associated via `aria-describedby` and announced; the pending save state is announced through a `role="status"` region.
 - **Feature flag**: gated by `OverlayFeature.Prompts` at the route level.

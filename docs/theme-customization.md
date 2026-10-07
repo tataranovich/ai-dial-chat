@@ -33,8 +33,8 @@ the themes host takes up to 5 minutes (plus that host's own cache) to appear.
 
 When `THEMES_CONFIG_URL` is unset, the configuration request fails, the
 application logs the failure and continues with its built-in palette: the
-light-theme hex fallbacks compiled into `tailwind.config.js`. The user menu then
-offers no theme entries at all.
+light-theme hex fallbacks compiled into `tailwind.config.js`. The Preferences
+tab then shows no theme row at all.
 
 ### Configuration file format
 
@@ -77,34 +77,74 @@ nothing reads — the theme still loads, and the misspelled color silently has n
 effect. A recognized key that a theme omits falls back to the built-in light
 value. This is the single most common way a theme "half applies".
 
+### Seasonal start-page branding
+
+`UI_EVENT=halloween` or `UI_EVENT=new-year` selects a bundled celebration on the
+start page. `UI_EVENT=none` or an omitted value disables it. Unknown event IDs
+leave the normal interface intact. The former `HALLOWEEN_ENABLED` setting has
+been removed; use `UI_EVENT=halloween` instead.
+
+The selected event replaces the existing favicon slot in desktop navigation
+and the mobile header. It adds no logo block to the welcome area and leaves
+the theme wordmark and browser-tab favicon unchanged. Leaving the start page
+restores the configured icon. If no favicon slot is configured, no new one is
+introduced. Event artwork loads only when its module is selected on the start
+page; it is independent of the light/dark theme choice.
+
 ### Theme ids and the theme picker
 
-The picker in the user menu is driven by the ids present in the configuration:
+The picker lives on **Settings → Preferences** and offers **every theme in the
+configuration**, whatever ids they use. `light` and `dark` always come first, in
+that order, wherever the file lists them; any other theme follows in the order
+the file lists it:
 
-| Configured ids     | Picker shows            |
-| ------------------ | ----------------------- |
-| `light` and `dark` | Light, Dark, and System |
-| only one of them   | just that one entry     |
-| neither            | no theme entries        |
+| Configured themes                | Picker shows                           |
+| -------------------------------- | -------------------------------------- |
+| `light` and `dark` (any order)   | Light, Dark, System                    |
+| `light`, `dark`, `contoso-night` | Light, Dark, Contoso Night, System     |
+| `light` and `contoso-night`      | Light, Contoso Night (no System entry) |
+| one theme only                   | no picker at all                       |
+| none                             | no picker at all                       |
 
-`System` is offered only when both `light` and `dark` exist; it follows
-`prefers-color-scheme` and re-resolves when the OS setting changes. The
-selection is stored in the browser's local storage, so it is per user and per
-device.
+The row is hidden entirely below two options: a select whose only action is to
+reselect the current value is noise, not a choice.
 
-Ids other than `light`, `dark`, and `system` can be present in the file, but the
-picker has no entry for them. They are reachable only through the overlay's
-`theme` option (see below).
+`System` is not a theme in the file — it is a synthetic entry that follows
+`prefers-color-scheme`, so it is offered only when **both** `light` and `dark`
+are configured, and it re-resolves when the OS setting changes. A stored
+`system` preference is likewise honoured only while both still exist; if one is
+removed from the configuration the user falls back to `light` rather than to a
+theme that is not there.
+
+Labels come from the application's translations for `light`, `dark`, and
+`system`. Any other id is labelled with its own `displayName` from the
+configuration file (falling back to the raw id when `displayName` is empty) —
+those labels are **not** translatable, which is the trade-off for supporting
+arbitrary ids.
+
+The selection is stored in the browser's local storage, so it is per user and
+per device, and it survives a reload. A user who has never chosen gets `light`,
+regardless of which theme the file lists first. A deployment that configures no
+`light` theme therefore renders in the built-in Tailwind light palette until the
+user picks something.
 
 ### Logos and icons
 
 The application reads exactly three image fields:
 
-| Field                    | Used for                                           |
-| ------------------------ | -------------------------------------------------- |
-| `images.chat-logo-light` | Header logo while the resolved theme is not `dark` |
-| `images.chat-logo-dark`  | Header logo while the resolved theme is `dark`     |
-| `images.chat-favicon`    | Browser tab favicon (PNG, 32×32 recommended)       |
+| Field                    | Used for                                                                                                          |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `images.chat-logo-light` | Header logo while the resolved theme is not `dark`                                                                |
+| `images.chat-logo-dark`  | Header logo while the resolved theme is `dark`                                                                    |
+| `images.chat-favicon`    | Browser tab favicon, brand icon on the Sign In page, and the navigation icon slot (SVG, or PNG 32×32 recommended) |
+
+Every image is served through `/api/themes/icon`, which derives the
+`Content-Type` from the file extension. The favicon `<link>` gets a matching
+`type` (`image/svg+xml` for `.svg`), so an SVG favicon works in browsers that
+support SVG favicons; older Safari releases do not render an SVG favicon — use
+a PNG if they matter. SVG responses carry their own sandboxed
+`Content-Security-Policy` (`default-src 'none'; sandbox`), so scripts inside an
+SVG never run, even when the file is opened directly.
 
 The remaining fields carried by the configuration contract — `themes[].app-logo`,
 `images.favicon`, `images.default-addon`, `images.default-model` — are accepted
@@ -203,7 +243,7 @@ text-visual-red      text-visual-violet-1  text-visual-violet-2
 stroke-primary      stroke-secondary     stroke-tertiary
 stroke-error        stroke-error-alpha   stroke-warning
 stroke-info         stroke-success       stroke-accent
-stroke-accent-alpha stroke-default       stroke-focus-black
+stroke-accent-alpha stroke-default       stroke-focus
 stroke-accent-focus stroke-gradient-1    stroke-gradient-2
 stroke-control-disable-primary
 ```
@@ -252,14 +292,13 @@ the content.
 ### Renamed in ui-kit 0.14
 
 The control tokens were renamed for the role they fill instead of their opacity
-or their literal hue. **A theme that sets the old variable names keeps its
-colors in the Tailwind utilities** — each one is still the next link in the new
-token's fallback chain in `tailwind.config.js`. The chains in `libs/*` are a
-separate mechanism and stop at the current name (see
-[Styling libraries](#styling-libraries)), so a theme still on the old names
-renders the hex fallback for a handful of library values. Rename them.
+or their literal hue. **The old variable names are not honored anywhere** —
+neither `tailwind.config.js` nor the chains in `libs/*` (see
+[Styling libraries](#styling-libraries)) carry them as a fallback, so a theme
+still on the old names renders the built-in light hex for every renamed token.
+Rename them.
 
-| Pre-0.14 variable                                   | Preferred now                                 |
+| Pre-0.14 variable                                   | Use now                                       |
 | --------------------------------------------------- | --------------------------------------------- |
 | `bg-control-disable`                                | `bg-control-disable-primary`                  |
 | `bg-control-neutral-hover`                          | `bg-control-neutral-hover-muted`              |
@@ -272,29 +311,24 @@ renders the hex fallback for a handful of library values. Rename them.
 | `stroke-control-accent-gradient-from` / `-to`       | `stroke-gradient-1` / `stroke-gradient-2`     |
 | `stroke-control-accent-gradient-hover-from` / `-to` | `bg-gradient-1-hover` / `bg-gradient-2-hover` |
 
-Two exceptions where the old name is **not** honored, so a theme setting it
-loses the color:
+`stroke-hover-alpha` was removed rather than renamed — it held the same value
+as `stroke-accent-alpha`. Move the value there.
 
-- `stroke-hover-alpha` was removed — it held the same value as
-  `stroke-accent-alpha`. Move the value there.
-- The `stroke-control-accent-gradient-*` stops behind the selected tab's
-  underline have no fallback chain. Rename them as in the table above.
-
-`stroke-focus-black` is unchanged as a variable; only its Tailwind class name
-moved (`outline-focus-black` → `outline-focus`).
+The focus ring variable is `stroke-focus` again. ui-kit 0.13 renamed it to
+`stroke-focus-black`; the kit now reads `--stroke-focus` first and keeps
+`--stroke-focus-black` only as its own fallback. `tailwind.config.js` and the
+`libs/*` chains read `--stroke-focus` alone, so a theme still setting
+`stroke-focus-black` recolors only the kit's focus rings. Rename it. The
+Tailwind class moved back with it (`outline-focus-black` → `outline-focus`).
 
 ### `stroke-focus-blue` → `stroke-accent-focus`
 
 The accent focus ring variable is named for the role it fills instead of its
 literal hue, matching the `border-accent-focus` / `outline-accent-focus`
-classes that consume it. The old name is still the next link in the fallback
-chain — in `tailwind.config.js` and in the `libs/*` chains that reference it —
-so a theme setting `stroke-focus-blue` keeps its focus-ring color. Rename it.
-
-One caveat: `@epam/ai-dial-ui-kit`'s own stylesheet reads
-`--stroke-focus-blue` directly, so the kit's focus rings do not pick up
-`--stroke-accent-focus`. Until the kit is updated, a theme that wants a custom
-accent focus ring everywhere has to set both variables.
+classes that consume it. `tailwind.config.js`, the `libs/*` chains, and
+`@epam/ai-dial-ui-kit`'s own stylesheet all read `--stroke-accent-focus` with
+no fallback to the old name, so a theme setting only `stroke-focus-blue` gets
+the built-in `#6785FB`. Rename it.
 
 ## Migrating a theme from the legacy chat
 
@@ -346,7 +380,7 @@ same role) are omitted: `bg-error`, `bg-warning`, `bg-info`, `bg-success`,
 
 New token groups with no legacy counterpart — `bg-visual-*`, `text-visual-*`,
 `bg-control-neutral*`, `bg-control-error*`, `text-control-accent-*`,
-`stroke-focus-black`, `stroke-error-alpha`, and `shadow-*` — start at their
+`stroke-focus`, `stroke-error-alpha`, and `shadow-*` — start at their
 built-in light values until the theme sets them. A dark theme that leaves them
 alone will show light chips, focus rings, and shadows.
 

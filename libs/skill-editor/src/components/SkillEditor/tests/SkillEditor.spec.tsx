@@ -34,9 +34,14 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
 });
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  ButtonDropdown: ({ label }: { label: ReactNode }) => (
+    <button aria-haspopup="menu">{label}</button>
+  ),
   DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { LG: 24, MD: 20, SM: 16 },
   EditorThemes: { dark: 'dark', light: 'light' },
+  TextareaResize: { Vertical: 'vertical' },
+  TagInput: () => null,
   Accordion: ({
     title,
     children,
@@ -123,36 +128,63 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {label}
     </button>
   ),
+  Label: ({
+    id,
+    htmlFor,
+    label,
+    required,
+  }: {
+    id?: string;
+    htmlFor?: string;
+    label?: ReactNode;
+    required?: boolean;
+  }) => (
+    <label id={id} htmlFor={htmlFor}>
+      {label}
+      {required && ' *'}
+    </label>
+  ),
   Input: ({
+    id,
     labelProps,
     value,
     onChange,
     error,
+    caption,
     disabled,
+    readOnly,
   }: {
+    id?: string;
     labelProps?: { label: ReactNode; required?: boolean };
     value?: string;
     onChange?: (value: string) => void;
     error?: string;
+    caption?: string;
     disabled?: boolean;
+    readOnly?: boolean;
   }) => (
     <label>
       {labelProps?.label}
       {labelProps?.required && ' *'}
+      {caption && <span>{caption}</span>}
       <input
+        id={id}
         value={value ?? ''}
         disabled={disabled}
+        readOnly={readOnly}
         onChange={(e) => onChange?.(e.target.value)}
       />
       {error && <span>{error}</span>}
     </label>
   ),
   Textarea: ({
+    id,
     labelProps,
     value,
     onChange,
     error,
   }: {
+    id?: string;
     labelProps?: { label: ReactNode; required?: boolean };
     value?: string;
     onChange?: (value: string) => void;
@@ -162,6 +194,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {labelProps?.label}
       {labelProps?.required && ' *'}
       <textarea
+        id={id}
         value={value ?? ''}
         onChange={(e) => onChange?.(e.target.value)}
       />
@@ -171,12 +204,16 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
     <div role="status">{ariaLabel}</div>
   ),
+  ButtonVariant: { Primary: 'primary', Neutral: 'neutral', Danger: 'danger' },
+  ButtonAppearance: { Solid: 'solid', Ghost: 'ghost', Link: 'link' },
+  ElementSize: { Small: 'small', Standard: 'standard', Large: 'large' },
   PopupSize: { Sm: 'sm', Md: 'md', Lg: 'lg' },
   Popup: ({
     open,
     header,
     children,
     footer,
+    mainButtons,
     onClose,
     closeAriaLabel,
   }: {
@@ -184,6 +221,11 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     header: ReactNode;
     children: ReactNode;
     footer?: ReactNode;
+    mainButtons?: {
+      label?: ReactNode;
+      onClick?: () => void;
+      disabled?: boolean;
+    }[];
     onClose: () => void;
     closeAriaLabel?: string;
   }) =>
@@ -196,6 +238,15 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
         <button onClick={onClose}>{closeAriaLabel ?? 'Close'}</button>
         {children}
         {footer}
+        {mainButtons?.map((button, index) => (
+          <button
+            key={index}
+            onClick={button.onClick}
+            disabled={button.disabled}
+          >
+            {button.label}
+          </button>
+        ))}
       </div>
     ) : null,
   GhostIconButton: ({
@@ -234,6 +285,9 @@ vi.mock('@epam/ai-dial-ui-kit/editors', () => ({
 
 vi.mock('@tabler/icons-react', () => ({
   IconArrowNarrowLeft: () => <svg />,
+  IconDatabase: () => <svg />,
+  IconFileZip: () => <svg />,
+  IconFolderPlus: () => <svg />,
   IconPlus: () => <svg />,
   IconTrashX: () => <svg />,
   IconUpload: () => <svg />,
@@ -319,6 +373,27 @@ describe('SkillEditor', () => {
     expect(screen.getByDisplayValue('my-skill')).toBeTruthy();
   });
 
+  it('renders no retry action beside a submitError the host did not mark retryable', () => {
+    renderEditor({ submitError: 'A skill with this name already exists' });
+
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
+  it('offers a retry beside submitError and keeps the typed values for it', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onRetrySubmit = vi.fn();
+    renderEditor({
+      initialValues: { name: 'my-skill' },
+      submitError: 'The service is temporarily unavailable. Please try again.',
+      onRetrySubmit,
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(onRetrySubmit).toHaveBeenCalledOnce();
+    expect(screen.getByDisplayValue('my-skill')).toBeTruthy();
+  });
+
   it('submits the current field values', async () => {
     const user = userEvent.setup({ delay: null });
     const onSubmit = vi.fn();
@@ -375,7 +450,7 @@ describe('SkillEditor', () => {
     expect(screen.getByRole('textbox', { name: /Name/ })).toBeTruthy();
   });
 
-  it('disables the Name field when isNameReadOnly is set', () => {
+  it('renders the Name field read-only when isNameReadOnly is set', () => {
     renderEditor({
       isNameReadOnly: true,
       initialValues: { name: 'good-morning-breakfast' },
@@ -383,7 +458,7 @@ describe('SkillEditor', () => {
 
     expect(
       (screen.getByDisplayValue('good-morning-breakfast') as HTMLInputElement)
-        .disabled,
+        .readOnly,
     ).toBe(true);
   });
 
@@ -578,6 +653,6 @@ describe('SkillEditor — public class names', () => {
       SKILL_EDITOR_CLASS.root,
     );
     expect(root).toBeTruthy();
-    expect(root!.getAttribute('dir')).toBe('rtl');
+    expect(root?.getAttribute('dir')).toBe('rtl');
   });
 });

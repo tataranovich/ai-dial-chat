@@ -144,7 +144,10 @@ describe('mapSkillToCatalogItem', () => {
   });
 
   it('prefixes a nested folder path with the Personal label', () => {
-    const item = mapPersonal({ parentPath: 'analysis/finance/' });
+    const item = mapPersonal({
+      parentPath: 'analysis/finance/',
+      url: 'skills/my-bucket/analysis/finance/revenue-skill',
+    });
 
     expect(item.folder).toEqual(['Personal', 'analysis', 'finance']);
   });
@@ -159,21 +162,49 @@ describe('mapSkillToCatalogItem', () => {
     expect(item.folder).toEqual(['Organization']);
   });
 
-  /*
-   * DIAL Core returns `parentPath` as plain text — only `url` is
-   * percent-encoded — so decoding it here turned a folder literally named
-   * `test%20folder` into `test folder` (Issue #8974).
-   */
-  it('keeps a literal percent escape in a folder name intact', () => {
-    const item = mapPersonal({ parentPath: 'test%20folder/' });
+  it('decodes a folder whose parentPath arrived percent-encoded (Issue #8882)', () => {
+    const item = mapPersonal({
+      parentPath: 'test%20folder/',
+      url: 'skills/my-bucket/test%20folder/revenue-skill',
+    });
+
+    expect(item.folder).toEqual(['Personal', 'test folder']);
+  });
+
+  it('preserves a folder literally named with a percent escape (Issue #8974)', () => {
+    const item = mapPersonal({
+      parentPath: 'test%20folder/',
+      url: 'skills/my-bucket/test%2520folder/revenue-skill',
+    });
 
     expect(item.folder).toEqual(['Personal', 'test%20folder']);
   });
 
+  it('keeps a literal percent sign in a folder name', () => {
+    const item = mapPersonal({
+      parentPath: '100%/',
+      url: 'skills/my-bucket/100%25/revenue-skill',
+    });
+
+    expect(item.folder).toEqual(['Personal', '100%']);
+  });
+
   it('keeps a folder name containing a raw space intact', () => {
-    const item = mapPersonal({ parentPath: 'my folder/' });
+    const item = mapPersonal({
+      parentPath: 'my folder/',
+      url: 'skills/my-bucket/my%20folder/revenue-skill',
+    });
 
     expect(item.folder).toEqual(['Personal', 'my folder']);
+  });
+
+  it('falls back to the verbatim parentPath when the url shape does not match', () => {
+    const item = mapPersonal({
+      parentPath: 'test%20folder/',
+      url: 'skills/my-bucket/revenue-skill',
+    });
+
+    expect(item.folder).toEqual(['Personal', 'test%20folder']);
   });
 
   it('carries the metadata timestamps through for sorting', () => {
@@ -427,6 +458,73 @@ describe('buildSkillContentTree', () => {
         name: 'analyzer.md',
       },
     ]);
+  });
+
+  describe('empty-folder markers', () => {
+    const countFiles = (
+      nodes: ReturnType<typeof buildSkillContentTree>,
+    ): number =>
+      nodes.reduce(
+        (count, node) =>
+          count +
+          (node.type === CatalogContentNodeType.File
+            ? 1
+            : countFiles(node.items)),
+        0,
+      );
+
+    it('shows a marked folder as an empty folder with no marker row', () => {
+      const tree = buildSkillContentTree(
+        [makeFile('SKILL.md'), makeFile('docs/.dial_folder')],
+        '',
+      );
+
+      expect(tree).toEqual([
+        { type: CatalogContentNodeType.File, id: 'SKILL.md', name: 'SKILL.md' },
+        {
+          type: CatalogContentNodeType.Folder,
+          id: 'docs',
+          name: 'docs',
+          items: [],
+        },
+      ]);
+    });
+
+    it('leaves the marker out of the file count', () => {
+      const tree = buildSkillContentTree(
+        [
+          makeFile('SKILL.md'),
+          makeFile('docs/.dial_folder'),
+          makeFile('scripts/run.py'),
+        ],
+        '',
+      );
+
+      expect(countFiles(tree)).toBe(2);
+    });
+
+    it('hides a Core-prefixed marker', () => {
+      const tree = buildSkillContentTree(
+        [
+          makeFile('revenue-skill/files/SKILL.md'),
+          makeFile('revenue-skill/files/docs/.dial_folder'),
+        ],
+        'revenue-skill',
+      );
+
+      const docs = folderNode(tree.find((node) => node.id === 'docs')!);
+      expect(docs?.items).toEqual([]);
+      expect(countFiles(tree)).toBe(1);
+    });
+
+    it('ignores a root-level marker', () => {
+      const tree = buildSkillContentTree(
+        [makeFile('SKILL.md'), makeFile('.dial_folder')],
+        '',
+      );
+
+      expect(tree.map((node) => node.id)).toEqual(['SKILL.md']);
+    });
   });
 
   it('still shows an explicit empty folder entry, with no items', () => {

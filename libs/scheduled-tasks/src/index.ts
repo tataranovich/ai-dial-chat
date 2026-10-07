@@ -33,6 +33,8 @@ export type {
 export type { ScheduledTaskItem } from './models/scheduled-task-item';
 export { ScheduledTaskPresentationStatus } from './models/scheduled-task-item';
 export { ScheduledTasksSortKey } from './types/scheduled-tasks-sort-key';
+export { ScheduledTaskStatus } from './types/scheduled-task-status';
+export { getScheduledTaskStatus } from './utils/scheduled-task-status';
 export { ScheduledTaskCreateForm } from './components/ScheduledTaskCreateForm/ScheduledTaskCreateForm';
 export type {
   ScheduledTaskCreateFormProps,
@@ -46,6 +48,7 @@ export type {
 } from './models/scheduled-task-create-form-props';
 export { DESCRIPTION_MAX_LENGTH } from './constants/scheduled-task-create-form';
 export { TIME_OF_DAY_PATTERN } from './utils/calendar-value';
+export { hasScheduledTaskFormChanges } from './utils/scheduled-task-form-values';
 export { ScheduledTaskRepeat } from './types/scheduled-task-schedule';
 export { ScheduledTaskDetailView } from './components/ScheduledTaskDetailView/ScheduledTaskDetailView';
 export type {
@@ -69,8 +72,10 @@ export type {
   ScheduledTaskRunHistoryListTypography,
 } from './models/scheduled-task-run-history-list-props';
 export { ScheduledTaskDetailsSummary } from './components/ScheduledTaskDetailsSummary/ScheduledTaskDetailsSummary';
+export type { ScheduledTaskInstructionsMarkdownLabels } from './models/scheduled-task-instructions';
 export { ScheduledTaskDeleteConfirmation } from './components/ScheduledTaskDeleteConfirmation/ScheduledTaskDeleteConfirmation';
 export type {
+  ScheduledTaskDeleteConfirmationColors,
   ScheduledTaskDeleteConfirmationProps,
   ScheduledTaskDeleteConfirmationStyles,
 } from './components/ScheduledTaskDeleteConfirmation/ScheduledTaskDeleteConfirmation';

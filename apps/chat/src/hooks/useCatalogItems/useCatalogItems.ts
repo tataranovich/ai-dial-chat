@@ -13,6 +13,7 @@ import {
   deriveFavoriteItems,
   filterCatalogItemsBySelector,
   filterHiddenOwnedItems,
+  getRunnerSchemas,
   isQuickAppSchema,
   mapPromptToCatalogItem,
   mapSkillToCatalogItem,
@@ -25,7 +26,10 @@ import {
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import type { TFunction } from 'i18next';
 import { useMemo } from 'react';
-import { CatalogI18nKeys } from '../../constants/translation-keys';
+import {
+  CatalogI18nKeys,
+  UsageI18nKeys,
+} from '../../constants/translation-keys';
 import { getDeploymentLimits } from '../../server-api/deployment-limits';
 import { getDeploymentDetails } from '../../server-api/deployments';
 import { getPrompt, getPublicPrompt } from '../../server-api/prompts.api';
@@ -41,6 +45,7 @@ import {
   mapDeploymentToCatalogItem,
   mapToolsetToCatalogItem,
 } from '../../utils/map-deployment-to-catalog-item';
+import { formatUsageResetTime } from '../../utils/usage-reset-time';
 
 interface UseCatalogItemsParams {
   schemas: ApplicationSchemaSummaryDto[];
@@ -119,6 +124,11 @@ export const useCatalogItems = ({
     [schemas],
   );
 
+  const runnerSchemaIds = useMemo(
+    () => getRunnerSchemas(schemas).map((schema) => schema.id),
+    [schemas],
+  );
+
   const quickAppDeploymentIds = useMemo(
     () =>
       new Set(
@@ -145,12 +155,10 @@ export const useCatalogItems = ({
   const deploymentLimitsLabels: DeploymentLimitsLabels = useMemo(
     () => ({
       tokenGroup: t(CatalogI18nKeys.DetailsLimitsTokenGroupLabel),
-      tokensPerDay: t(CatalogI18nKeys.DetailsLimitsTokensPerDay),
-      tokensPerWeek: t(CatalogI18nKeys.DetailsLimitsTokensPerWeek),
-      tokensPerMonth: t(CatalogI18nKeys.DetailsLimitsTokensPerMonth),
+      tokensPerDay: t(UsageI18nKeys.TodayTitle),
+      tokensPerWeek: t(UsageI18nKeys.ThisWeekTitle),
+      tokensPerMonth: t(UsageI18nKeys.ThisMonthTitle),
       followsCostLimit: t(CatalogI18nKeys.DetailsLimitsFollowsCostLimitLabel),
-      formatSpentCaption: (amount) =>
-        t(CatalogI18nKeys.DetailsLimitsSpentLabel, { amount }),
       formatValueLabel: (used, total) =>
         t(CatalogI18nKeys.DetailsLimitsValue, { used, total }),
       formatProgressAriaLabel: ({ label, used, total }) =>
@@ -164,8 +172,15 @@ export const useCatalogItems = ({
           label,
           used,
         }),
+      formatResetTime: (resetsAt) =>
+        /* Widened to the plain key/params signature, as in `UsageTab`. */
+        formatUsageResetTime(
+          resetsAt,
+          language,
+          t as (key: string, options?: Record<string, unknown>) => string,
+        ),
     }),
-    [t],
+    [t, language],
   );
 
   const catalogDetailsApi: CatalogDetailsApi = useMemo(
@@ -204,7 +219,7 @@ export const useCatalogItems = ({
         mapDeploymentToCatalogItem(d, {
           favoriteIds,
           t,
-          editableSchemaIds: quickAppSchemaId ? [quickAppSchemaId] : [],
+          editableSchemaIds: runnerSchemaIds,
           isCustomAppsEditable: isCustomAppsEnabled,
           activeLocale: language,
         }),
@@ -279,7 +294,7 @@ export const useCatalogItems = ({
     t,
     language,
     toolsets,
-    quickAppSchemaId,
+    runnerSchemaIds,
     isAdmin,
     isToolsetsEnabled,
     isCustomAppsEnabled,

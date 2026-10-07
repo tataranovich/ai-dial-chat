@@ -3,6 +3,7 @@ import {
   isHiddenPath,
   type FileManagerSelectableNode,
 } from '@epam/ai-dial-chat-shared';
+import { DialFileManagerVariant } from '@epam/ai-dial-chat-shared';
 import {
   DialFileManagerTabs,
   DialFileNodeType,
@@ -12,12 +13,12 @@ import {
 } from '@epam/ai-dial-react-file-manager';
 import { useCallback, useMemo, useState } from 'react';
 import { mimeTypesToDialFileAcceptTypes } from '../attachment-types';
+import { DIAL_FILE_MANAGER_SECTION_TABS } from '../dial-file-manager.model';
 import type {
   UseDialFileManagerOptions,
   UseDialFileManagerResult,
 } from '../dial-file-manager.types';
-import { DialFileManagerVariant } from '../file-manager-variant';
-import { useDialFileManager } from '../useDialFileManager/useDialFileManager';
+import { useDialFileManagerSections } from '../useDialFileManagerSections/useDialFileManagerSections';
 import { useDialFileManagerTabConfig } from '../useDialFileManagerTabConfig/useDialFileManagerTabConfig';
 
 /** Options accepted by {@link useFileAttachmentPicker}. */
@@ -96,6 +97,14 @@ export const useFileAttachmentPicker = ({
     tabs: allTabs,
   } = useDialFileManagerTabs(tabLabels, initialTab);
 
+  const sections = useMemo(
+    () =>
+      DIAL_FILE_MANAGER_SECTION_TABS.filter(
+        (tab) => allowedTabs == null || allowedTabs.includes(tab),
+      ).map((tab) => ({ tab, rootLabel: tabLabels[tab] })),
+    [allowedTabs, tabLabels],
+  );
+
   const [selectedPaths, setSelectedPaths] = useState(() => new Set<string>());
 
   /*
@@ -124,17 +133,23 @@ export const useFileAttachmentPicker = ({
     allowedTabs,
   );
 
-  const rootLabel =
-    tabLabels[activeTab] || tabLabels[DialFileManagerTabs.MyFiles];
-
-  const controller = useDialFileManager({
+  const controller = useDialFileManagerSections({
     ...fileManagerOptions,
     bucket,
     activeTab,
-    rootLabel,
+    sections,
     variant: DialFileManagerVariant.Attach,
     forbiddenSymbolsRegExp,
   });
+
+  /* Moving between source sections in All changes the listing under the selection. */
+  const [selectionSectionTab, setSelectionSectionTab] = useState(
+    controller.sectionTab,
+  );
+  if (selectionSectionTab !== controller.sectionTab) {
+    setSelectionSectionTab(controller.sectionTab);
+    setSelectedPaths(new Set());
+  }
 
   const isFileTypeAllowed = useCallback(
     (contentType: string): boolean => {

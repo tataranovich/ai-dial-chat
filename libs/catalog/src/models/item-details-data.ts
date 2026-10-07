@@ -84,6 +84,19 @@ export interface UsageLimitProgressRow {
   noteLabel?: string;
   /** Secondary caption shown under the row's label, e.g. "$20.00 spent". Omitted when absent. */
   captionLabel?: string;
+  /*
+   * The reset-time trio is host-preformatted. The library renders these
+   * strings verbatim and never parses, formats, or timezone-shifts them — it
+   * imports no `Intl`, and accepts no locale, timezone, or raw timestamp. All
+   * three are absent together when the host could not format a reset time, in
+   * which case the row renders exactly as it did before reset times existed.
+   */
+  /** Visible reset line, e.g. `'Resets Sep 16, 2026, 2:00 AM GMT+2'`. Omitted when absent. */
+  resetLabel?: string;
+  /** Machine-readable instant for the reset line's `<time dateTime>` attribute, e.g. `'2026-09-16T00:00:00Z'`. */
+  resetIsoValue?: string;
+  /** Accessible expansion of the reset line, rendered on a visually-hidden sibling of the `<time>`. */
+  resetAriaLabel?: string;
 }
 
 /** A named, ordered group of rows in the Limits tab, e.g. token limits vs. cost limits. */
@@ -179,6 +192,30 @@ export interface CatalogContentFolderNode {
 /** One node of the Content tab's hierarchical file tree — either a file or a folder. */
 export type CatalogContentTreeNode =
   CatalogContentFileNode | CatalogContentFolderNode;
+
+/**
+ * What the Content tab hands a host-rendered file tree (`renderContentFileTree`).
+ * Expansion and selection stay owned by the panel; the tree only reports
+ * intent back through the callbacks.
+ */
+export interface CatalogContentFileTreeRenderProps {
+  /** Root-level folder and file nodes to render. */
+  nodes: CatalogContentTreeNode[];
+  /** Id of the file currently displayed. The tree marks its row selected and focuses it on mount. */
+  selectedFileId?: string;
+  /** Ids of folders currently expanded. */
+  expandedFolderIds: ReadonlySet<string>;
+  /** Called with a folder's id when it should expand or collapse. */
+  onToggleFolder: (folderId: string) => void;
+  /** Called with a file's id when it is picked. Closes the selector overlay. */
+  onSelectFile: (fileId: string) => void;
+  /** Called on Escape, to close the selector overlay without changing the selection. */
+  onClose: () => void;
+  /** Accessible name for the tree. */
+  ariaLabel: string;
+  /** Typography class the panel applies to its own body text. */
+  rowNameClassName: string;
+}
 
 /** A picked file's content, resolved and typed for safe read-only rendering. */
 export interface CatalogContentMarkdownPreview {

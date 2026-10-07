@@ -27,12 +27,27 @@ A prompt SHALL be represented by `PromptResponseDto` with its full DIAL Core res
 }
 ```
 
-`id` is the full resource path `prompts/{bucket}/{path}` — the same shape every other resource type (`applications/`, `toolsets/`, `conversations/`, `skills/`) already exposes. There is no separate `bucket` field; a bucket is recoverable by parsing `id` wherever a caller still needs it in isolation. `folderId` is derived by dropping the last path segment of `id`'s `{path}` portion. `isMy`, `canEdit`, and `sharedWithMe` are requestor-relative flags. `permissions` carries the upstream READ/WRITE/SHARE values when available. An organisation prompt's `id` SHALL use the `public` bucket segment (`prompts/public/{path}`) and SHALL always return `isMy: false`, `canEdit: false`, and `sharedWithMe: false`, even if upstream metadata unexpectedly includes `WRITE`.
+`id` is the full resource path `prompts/{bucket}/{path}` — the same shape every other resource type (`applications/`, `toolsets/`, `conversations/`, `skills/`) already exposes. There is no separate `bucket` field; a bucket is recoverable by parsing `id` wherever a caller still needs it in isolation. `folderId` is derived by dropping the last path segment of `id`'s `{path}` portion. `isMy`, `canEdit`, and `sharedWithMe` are requestor-relative flags. Every endpoint that returns a single prompt (get by `id`, update, move) SHALL compute them the same way the list endpoint does, relative to the caller's session bucket rather than the bucket `id` names: `isMy` is true only when the `id` bucket equals the session bucket; a prompt in any other non-`public` bucket SHALL report `isMy: false` and `sharedWithMe: true`; `canEdit` SHALL follow the `WRITE` permission DIAL Core reports for the requestor on that resource's metadata (requested with `permissions=true` on the metadata read the BFF already performs, so no extra round trip), falling back to `isMy` when no permissions are reported. A successful update or move SHALL report `canEdit: true`, because the write itself proves write access. `permissions` carries the upstream READ/WRITE/SHARE values when available. An organisation prompt's `id` SHALL use the `public` bucket segment (`prompts/public/{path}`) and SHALL always return `isMy: false`, `canEdit: false`, and `sharedWithMe: false`, even if upstream metadata unexpectedly includes `WRITE`.
 
 #### Scenario: Writable shared prompt reports its owner and permissions
 
 - **WHEN** another user shares `prompts/owner-bucket/Work/AI/summarize` with `READ` and `WRITE`
 - **THEN** its response contains `id: 'prompts/owner-bucket/Work/AI/summarize'`, `isMy: false`, `canEdit: true`, `sharedWithMe: true`, and both permissions
+
+#### Scenario: Shared prompt fetched by id reports requestor-relative flags
+
+- **WHEN** a caller whose session bucket is `caller-bucket` requests `GET /api/v1/prompts/item?id=prompts/owner-bucket/Work/AI/summarize` and DIAL Core reports only `READ` for that resource
+- **THEN** the response contains `isMy: false`, `canEdit: false`, `sharedWithMe: true`, and `permissions: ['READ']`
+
+#### Scenario: Own prompt fetched by id is mine
+
+- **WHEN** the same caller requests `GET /api/v1/prompts/item?id=prompts/caller-bucket/Work/note`
+- **THEN** the response contains `isMy: true`, `canEdit: true`, and `sharedWithMe: false`
+
+#### Scenario: Updating or moving a writable shared prompt keeps it shared
+
+- **WHEN** the caller updates or moves `prompts/owner-bucket/Work/AI/summarize` and DIAL Core accepts the write
+- **THEN** the response contains `isMy: false`, `canEdit: true`, and `sharedWithMe: true`
 
 #### Scenario: Organisation prompt is always read-only
 
@@ -82,21 +97,21 @@ The backend SHALL expose `POST /api/v1/prompts`. The endpoint accepts `CreatePro
 
 ```
 {
-  "name":         "<string @IsString @MinLength(1) @MaxLength(256) @Matches(/^[^/]+$/)>",
+  "name":         "<string @IsString @MinLength(1) @MaxLength(256) @Matches(PROMPT_NAME_PATTERN)>",
   "description":  "<string | undefined @IsString @MaxLength(2000) @IsOptional>",
   "content":      "<string @IsString @MaxLength(50000)>",
-  "folderId":     "<string | undefined @IsString @Matches(/^[a-zA-Z0-9 _.\-/]*$/) @IsOptional>"
+  "folderId":     "<string | undefined @IsOptional @IsString @Matches(OPTIONAL_PROMPT_PATH_PATTERN)>"
 }
 ```
 
-`name` MUST NOT contain a `/` (names with slashes would corrupt the path).
+`name` MUST NOT contain a `/` (names with slashes would corrupt the path). Both patterns live in `apps/chat-api/src/prompts/constants/prompt-path.constants.ts`: `PROMPT_NAME_PATTERN` (`/^(?!\.{1,2}$)[a-zA-Z0-9 _.-]+$/`) allows only letters, digits, spaces, `_`, `.`, and `-` and rejects `.`/`..`; `OPTIONAL_PROMPT_PATH_PATTERN` accepts an empty string or slash-separated segments from the same character set, rejecting `.`/`..` traversal segments and `//`.
 
 On success, the service:
 1. Derives the storage path as `{folderId ? folderId + '/' : ''}{name}`.
-2. Rejects with 409 if a prompt at that path already exists.
-3. Creates the DIAL prompt resource `prompts/{sessionBucket}/{path}` via the SDK using a
-   create-only precondition.
-4. Reads the resulting Core metadata for `createdAt` and `updatedAt`.
+2. Creates the DIAL prompt resource `prompts/{sessionBucket}/{path}` via the SDK using a
+   create-only precondition (`If-None-Match: *`); there is no separate existence pre-check.
+3. Rejects with 409 when DIAL Core answers that precondition with 412 (a prompt at that path already exists).
+4. Takes `createdAt` and `updatedAt` from the save response's `ITEM` metadata, reading the prompt metadata separately only when the save response carries none.
 5. Returns HTTP 201 with `PromptResponseDto`, whose `id` is the full resource path `prompts/{sessionBucket}/{path}`.
 
 Error codes:

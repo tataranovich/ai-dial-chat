@@ -1,11 +1,13 @@
+import { useAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
 import type { ItemDetailsTexts } from '@epam/ai-dial-catalog';
 import { useSkillDetailsPanelData } from '@epam/ai-dial-chat-hooks';
 import { SkillDetailsSidePanel } from '@epam/ai-dial-skills';
-import { memo, useCallback, useMemo, type FC } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, type FC } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ButtonsI18nKeys,
   CatalogI18nKeys,
+  ChatI18nKeys,
 } from '../../constants/translation-keys';
 import { useFavoriteApplications } from '../../context/FavoriteApplicationsContext';
 import { useSkills } from '../../context/SkillsContext';
@@ -48,6 +50,12 @@ const SkillDetailsPanelContainer: FC<Props> = ({ skillId, onClose }) => {
   const { t } = useTranslation();
   const { skills, sharedWithMe, publicSkills } = useSkills();
   const { favoriteIds } = useFavoriteApplications();
+  const { closeCanvas } = useAttachmentCanvas();
+
+  /* Close the preview before paint so it cannot cover the opening details. */
+  useLayoutEffect(() => {
+    if (skillId != null) closeCanvas();
+  }, [skillId, closeCanvas]);
 
   const skillDetailsApi = useMemo(
     () => ({ downloadSkillFile, listSkillFiles, getSkillMetadata }),
@@ -87,6 +95,11 @@ const SkillDetailsPanelContainer: FC<Props> = ({ skillId, onClose }) => {
         CatalogI18nKeys.DetailsContentFileUnsupported,
       ),
       closeAriaLabel: t(ButtonsI18nKeys.Close),
+      copyCodeAriaLabel: t(ButtonsI18nKeys.Copy),
+      copiedCodeStatusLabel: t(ButtonsI18nKeys.Copied),
+      downloadCodeAriaLabel: t(ButtonsI18nKeys.Download),
+      tableScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableTable),
+      mathScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableFormula),
     }),
     [t],
   );

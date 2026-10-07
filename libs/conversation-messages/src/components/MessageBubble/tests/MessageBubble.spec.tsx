@@ -3,6 +3,7 @@ import {
   AttachmentType,
   MessageRole,
   RequestStatus,
+  ResponseFormat,
 } from '@epam/ai-dial-chat-shared';
 import {
   act,
@@ -10,6 +11,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BubblePosition } from '../../../types/bubble-position';
@@ -56,6 +58,28 @@ afterEach(() => {
 });
 
 describe('MessageBubble', () => {
+  it.each([MessageRole.User, MessageRole.Assistant])(
+    'exposes only the text body for %s messages',
+    (role) => {
+      const contentRef = { current: null as HTMLDivElement | null };
+      render(
+        <MessageBubble
+          role={role}
+          text="Selected passage"
+          contentRef={contentRef}
+          afterContent={<button>Stage control</button>}
+          attachments={[ATTACHMENT]}
+        />,
+      );
+      expect(
+        contentRef.current?.contains(screen.getByText('Selected passage')),
+      ).toBe(true);
+      expect(contentRef.current?.textContent).toBe('Selected passage');
+      expect(
+        contentRef.current?.contains(screen.queryByText('report.pdf')),
+      ).toBe(false);
+    },
+  );
   it('renders the provided text content', () => {
     render(<MessageBubble text="Hello world" role={MessageRole.User} />);
     expect(screen.getByText('Hello world')).toBeTruthy();
@@ -205,9 +229,43 @@ describe('UserMessageBubble — attachments', () => {
 
   it('tray cards are inert when onAttachmentClick is absent', () => {
     render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
-    expect(
-      screen.queryByRole('button', { name: 'Open attachment' }),
-    ).toBeNull();
+    const tray = screen.getByRole('list');
+    expect(within(tray).queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('tray cards are buttons that invoke onAttachmentClick when it is given', () => {
+    const onAttachmentClick = vi.fn();
+    render(
+      <UserMessageBubble
+        text="Hello"
+        attachments={[ATTACHMENT]}
+        onAttachmentClick={onAttachmentClick}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Download attachment' }),
+    );
+    expect(onAttachmentClick).toHaveBeenCalledWith(ATTACHMENT);
+  });
+
+  it('names the tile and its download button by separate labels', () => {
+    const onDownloadAll = vi.fn();
+    render(
+      <UserMessageBubble
+        text="Hello"
+        attachments={[ATTACHMENT]}
+        onAttachmentClick={vi.fn()}
+        onDownloadAll={onDownloadAll}
+        labels={{
+          attachmentClickLabel: 'Open in canvas',
+          attachmentDownloadLabel: 'Download file',
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Open in canvas' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Download file' }));
+    expect(onDownloadAll).toHaveBeenCalledWith([ATTACHMENT]);
   });
 });
 
@@ -303,51 +361,62 @@ describe('UserMessageBubble — collapsed text', () => {
   });
 });
 
-describe('UserMessageBubble — inline-start slot', () => {
-  const skillSlot = <span>/Summarizer</span>;
+describe('UserMessageBubble — textSegments', () => {
+  const segments = [<span key="chip">/Summarizer</span>, ' please summarize'];
 
-  it('renders the slot inline inside the text paragraph, before the text', () => {
-    render(<UserMessageBubble text="Hello world" beforeContent={skillSlot} />);
-
-    const slot = screen.getByText('/Summarizer');
-    /*
-     * The slot's DOM position — inside the text paragraph, ahead of the text —
-     * is the feature under test, and its wrapper span carries no ARIA hook, so
-     * no semantic query reaches it (see spec.md's node-access exception).
-     */
-    // eslint-disable-next-line testing-library/no-node-access -- see comment above
-    const paragraph = slot.closest('p') as HTMLParagraphElement;
-    // eslint-disable-next-line testing-library/no-node-access -- see comment above
-    const wrapper = slot.parentElement as HTMLElement;
-
-    expect(paragraph).toBeTruthy();
-    expect(wrapper.className).toContain('me-1');
-    // eslint-disable-next-line testing-library/no-node-access -- see comment above
-    expect(paragraph.firstChild).toBe(wrapper);
-  });
-
-  it('renders the bubble for the slot alone when there is no text', () => {
-    const { container } = render(
-      <UserMessageBubble beforeContent={skillSlot} />,
+  it('renders textSegments in order inside the text paragraph, in place of text', () => {
+    render(
+      <UserMessageBubble
+        text="/Summarizer please summarize"
+        textSegments={segments}
+      />,
     );
 
-    expect(screen.getByText('/Summarizer')).toBeTruthy();
-    expect(screen.getByRole('group', { name: 'User message' })).toBeTruthy();
-    /* Slot-only: the slot stays in flow in a plain div, with no text paragraph. */
-    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
-    expect(container.querySelector('p')).toBeNull();
+    const chip = screen.getByText('/Summarizer');
+    /*
+     * The segments' DOM position — inside the text paragraph, in reading
+     * order — is the feature under test; the chip's wrapper span carries no
+     * ARIA hook, so no semantic query reaches the paragraph directly (see
+     * spec.md's node-access exception).
+     */
+    // eslint-disable-next-line testing-library/no-node-access -- see comment above
+    const paragraph = chip.closest('p') as HTMLParagraphElement;
+
+    expect(paragraph).toBeTruthy();
+    expect(paragraph.textContent).toBe('/Summarizer please summarize');
+    // eslint-disable-next-line testing-library/no-node-access -- see comment above
+    expect(paragraph.firstElementChild).toBe(chip);
   });
 
-  it('renders no slot wrapper inside the paragraph when beforeContent is absent', () => {
+  it('renders text unchanged, byte-identical, when textSegments is absent', () => {
     render(<UserMessageBubble text="Hello world" />);
 
     const paragraph = findMessageParagraph('Hello world');
     /*
-     * The absence of a slot wrapper — a plain span with no ARIA hook — inside
-     * the paragraph cannot be queried semantically, so the check is DOM-level.
+     * No segment wrapper — a plain span with no ARIA hook — should appear
+     * inside the paragraph, so the check is DOM-level.
      */
     // eslint-disable-next-line testing-library/no-node-access -- see comment above
     expect(paragraph.firstElementChild).toBeNull();
+    expect(paragraph.textContent).toBe('Hello world');
+  });
+
+  it('renders interleaved segments correctly under dir="rtl"', () => {
+    render(
+      <div dir="rtl">
+        <UserMessageBubble
+          text="/Summarizer please summarize"
+          textSegments={segments}
+        />
+      </div>,
+    );
+
+    const chip = screen.getByText('/Summarizer');
+    // eslint-disable-next-line testing-library/no-node-access -- see comment above
+    const paragraph = chip.closest('p') as HTMLParagraphElement;
+
+    expect(paragraph.textContent).toBe('/Summarizer please summarize');
+    expect(paragraph.className).toContain('text-start');
   });
 });
 
@@ -438,6 +507,21 @@ describe('AssistantMessageBubble — attachments', () => {
     rerender(<AssistantMessageBubble text={tableText} isStreaming />);
 
     expect(screen.getByRole('table')).toBeTruthy();
+  });
+
+  it('forwards code block labels to assistant code blocks', () => {
+    render(
+      <AssistantMessageBubble
+        text={'```ts\nconst x = 1;\n```'}
+        labels={{
+          codeBlockCopyLabel: 'Kopieren',
+          codeBlockDownloadLabel: 'Herunterladen',
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Kopieren' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Herunterladen' })).toBeTruthy();
   });
 
   it('forwards table action labels to completed assistant tables', () => {
@@ -570,6 +654,37 @@ describe('AssistantMessageBubble — attachments', () => {
     );
     expect(screen.queryByRole('button', { name: /remove/i })).toBeNull();
   });
+
+  it('tray cards are inert when onAttachmentClick is absent', () => {
+    render(
+      <AssistantMessageBubble
+        text="Here is your file"
+        attachments={[ATTACHMENT]}
+      />,
+    );
+    const tray = screen.getByRole('list');
+    expect(within(tray).queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('names the tile and its download button by separate labels', () => {
+    const onDownloadAll = vi.fn();
+    render(
+      <AssistantMessageBubble
+        text="Here is your file"
+        attachments={[ATTACHMENT]}
+        onAttachmentClick={vi.fn()}
+        onDownloadAll={onDownloadAll}
+        labels={{
+          attachmentClickLabel: 'Open in canvas',
+          attachmentDownloadLabel: 'Download file',
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Open in canvas' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Download file' }));
+    expect(onDownloadAll).toHaveBeenCalledWith([ATTACHMENT]);
+  });
 });
 
 describe('AssistantMessageBubble — markdown URLs', () => {
@@ -691,6 +806,20 @@ describe('AssistantMessageBubble — inline-start slot', () => {
     expect(slotIndex).toBeLessThan(placeholderIndex);
   });
 
+  it('omits the thinking placeholder when hasThinkingPlaceholder is false', () => {
+    render(
+      <AssistantMessageBubble
+        isStreaming
+        hasThinkingPlaceholder={false}
+        afterContent={<span>Stages</span>}
+        labels={{ thinkingLabel: 'Thinking…' }}
+      />,
+    );
+
+    expect(screen.queryByText('Thinking…')).toBeNull();
+    expect(screen.getByText('Stages')).toBeTruthy();
+  });
+
   it('renders the slot on its own line for a message with no text at all', () => {
     const { container } = render(
       <AssistantMessageBubble beforeContent={skillSlot} />,
@@ -753,5 +882,74 @@ describe('StatusMessageBubble', () => {
      */
     // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
     expect(container.querySelector('svg')).not.toBeNull();
+  });
+});
+
+describe('AssistantMessageBubble — response format', () => {
+  it('renders markdown by default', () => {
+    render(<AssistantMessageBubble text={TABLE_MARKDOWN} />);
+
+    expect(screen.getByRole('table')).toBeTruthy();
+  });
+
+  it('renders the body verbatim when the format is plain text', () => {
+    render(
+      <AssistantMessageBubble
+        text={TABLE_MARKDOWN}
+        responseFormat={ResponseFormat.PlainText}
+      />,
+    );
+
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(findMessageParagraph(TABLE_MARKDOWN)).toBeTruthy();
+  });
+
+  it('forwards the format through the role-switching MessageBubble', () => {
+    render(
+      <MessageBubble
+        role={MessageRole.Assistant}
+        text="**bold**"
+        responseFormat={ResponseFormat.PlainText}
+      />,
+    );
+
+    expect(findMessageParagraph('**bold**')).toBeTruthy();
+  });
+
+  it('keeps the plain-text body inside the markdown wrapper the indent targets', () => {
+    /* The overlaid slot is measured by a ResizeObserver, absent in jsdom. */
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {
+          // No-op in JSDOM.
+        }
+        unobserve() {
+          // No-op in JSDOM.
+        }
+        disconnect() {
+          // No-op in JSDOM.
+        }
+      },
+    );
+
+    render(
+      <AssistantMessageBubble
+        text="plain body"
+        beforeContent={<span>slot</span>}
+        responseFormat={ResponseFormat.PlainText}
+      />,
+    );
+
+    /*
+     * The first-line indent selector is
+     * `.cm-bubble-markdown > div > *:first-child`, so the plain-text body has
+     * to keep the element shape a markdown body has. Only the DOM shape can
+     * show that.
+     */
+    const body = findMessageParagraph('plain body');
+    expect(body.parentElement?.parentElement?.className).toContain(
+      'cm-bubble-markdown',
+    );
   });
 });

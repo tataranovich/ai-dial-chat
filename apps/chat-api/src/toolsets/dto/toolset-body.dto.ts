@@ -1,4 +1,4 @@
-﻿import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -11,6 +11,7 @@ import {
   Matches,
   ValidateIf,
   ValidateNested,
+  MaxLength,
 } from 'class-validator';
 import { LocaleTextEntryDto } from '../../common/dto/locale-text-entry.dto';
 import {
@@ -18,10 +19,18 @@ import {
   DISPLAY_NAME_VALIDATION_MESSAGE,
 } from '../../common/validators/display-name.pattern';
 import {
+  ENTITY_DESCRIPTION_MAX_LENGTH,
+  ENTITY_NAME_MAX_LENGTH,
+} from '../../common/validators/entity-field-limits';
+import {
   LOCALE_CODE_PATTERN,
   LOCALE_CODE_VALIDATION_MESSAGE,
 } from '../../common/validators/locale-code.pattern';
 import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
+import {
+  SEMVER_VERSION_PATTERN,
+  SEMVER_VERSION_VALIDATION_MESSAGE,
+} from '../../common/validators/semver-version.pattern';
 
 export enum ToolsetTransport {
   Http = 'HTTP',
@@ -44,9 +53,7 @@ export enum ToolsetAuthType {
 const ENDPOINT_URL_PATTERN = /^https?:\/\/[^\s]+$/;
 const ENDPOINT_URL_MESSAGE = 'Must be a valid http(s) URL';
 
-const VERSION_PATTERN = /^[\w.+-]{1,64}$/;
-const VERSION_MESSAGE =
-  'Must contain only word characters, dots, hyphens, and plus signs (max 64 chars)';
+const VERSION_MAX_LENGTH = 64;
 
 export class ToolsetAuthSettingsBodyDto {
   @ApiProperty({ enum: ToolsetAuthType, example: ToolsetAuthType.None })
@@ -105,7 +112,7 @@ export class ToolsetAuthSettingsBodyDto {
 }
 
 export class ToolsetBodyDto {
-  @ApiProperty({ example: 'My toolset' })
+  @ApiProperty({ example: 'My toolset', maxLength: ENTITY_NAME_MAX_LENGTH })
   @IsString()
   @IsNotEmpty()
   @Matches(DISPLAY_NAME_PATTERN, { message: DISPLAY_NAME_VALIDATION_MESSAGE })
@@ -114,12 +121,19 @@ export class ToolsetBodyDto {
   @ApiPropertyOptional({ example: '0.0.1' })
   @IsString()
   @IsOptional()
-  @Matches(VERSION_PATTERN, { message: VERSION_MESSAGE })
+  @MaxLength(VERSION_MAX_LENGTH)
+  @Matches(SEMVER_VERSION_PATTERN, {
+    message: SEMVER_VERSION_VALIDATION_MESSAGE,
+  })
   version?: string;
 
-  @ApiPropertyOptional({ example: 'My toolset description' })
+  @ApiPropertyOptional({
+    example: 'My toolset description',
+    maxLength: ENTITY_DESCRIPTION_MAX_LENGTH,
+  })
   @IsString()
   @IsOptional()
+  @MaxLength(ENTITY_DESCRIPTION_MAX_LENGTH)
   description?: string;
 
   @ApiPropertyOptional({

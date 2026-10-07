@@ -11,6 +11,7 @@ import { ClientChannelModule } from '../client-channel/client-channel.module';
 import { MetricsInterceptor } from '../common/interceptors/metrics.interceptor';
 import { validate } from '../config/validation';
 import { ConversationModule } from '../conversations/conversation.module';
+import { CustomApiModule } from '../custom-api/custom-api.module';
 import { DeploymentsModule } from '../deployments/deployments.module';
 import { DialCoreModule } from '../dial/dial-core.module';
 import { ExternalServicesModule } from '../external-services/external-services.module';
@@ -25,6 +26,7 @@ import { ScheduledTasksModule } from '../scheduled-tasks/scheduled-tasks.module'
 import { ShareModule } from '../share/share.module';
 import { SkillsModule } from '../skills/skills.module';
 import { TelemetryShutdownService } from '../telemetry/telemetry-shutdown.service';
+import { TextRefinementModule } from '../text-refinement/text-refinement.module';
 import { ThemesModule } from '../themes/themes.module';
 import { ToolsetsModule } from '../toolsets/toolsets.module';
 import { TranscriptionModule } from '../transcription/transcription.module';
@@ -66,6 +68,8 @@ import { createAppCacheOptions } from './cache.config';
     ScheduledTasksModule,
     OfflineCredentialsModule,
     SkillsModule,
+    TextRefinementModule,
+    CustomApiModule,
   ],
   controllers: [AppController, HealthController],
   providers: [

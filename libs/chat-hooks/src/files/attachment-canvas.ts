@@ -36,7 +36,7 @@ import {
   tryBase64ToBytes,
 } from '@epam/ai-dial-chat-shared';
 import {
-  annotationHighlightId,
+  annotationHighlightIds,
   annotationsToPdfHighlights,
   annotationToOfficeHighlightLocations,
   gatherSameSourceAnnotations,
@@ -60,6 +60,8 @@ export interface AttachmentCanvasUrlResolvers {
   resolveDialUrl: (attachment: DisplayAttachment) => string | undefined;
   /** Resolves a DIAL Core file id to a fetchable metadata URL (used for cache-freshness validation). */
   resolveDialFileMetadataUrl: (fileId: string) => string | undefined;
+  /** URL of a host-served bootstrap document that renders HTML with no download URL (inline `data`) under its own response CSP instead of the embedding page's — forwarded as `HtmlCanvasContent.srcdocHostUrl`. When omitted, that HTML renders via plain `srcdoc`. */
+  htmlSrcdocHostUrl?: string;
 }
 
 /**
@@ -453,26 +455,84 @@ export const resolveCodeCanvasContent = async (
 };
 
 /**
+ * Returns the origin of `url`, or `undefined` when it cannot be parsed. A
+ * relative `url` resolves against the current document location, since a
+ * relative URL is always same-origin.
+ */
+const extractOrigin = (url: string): string | undefined => {
+  try {
+    return new URL(url, window.location.href).origin;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
  * Resolves an HTML canvas content payload from a DisplayAttachment.
- * Fetches and inlines the HTML as `srcdoc` when the attachment has a download URL or inline data.
- * Returns `null` if no source is available, or an `ErrorCanvasContent` on fetch failure.
- * Rejects `srcdoc` payloads larger than 1 MiB to prevent browser truncation.
+ * When the attachment has a download URL, that URL is the primary render
+ * target so the preview loads via `src` and gets its own response-level CSP
+ * instead of inheriting the host document's — no HTML text is fetched up
+ * front; `resolveSourceText` fetches it lazily, only when the "View source"
+ * toggle is used, and rejects if that fetch fails. `isSameOriginUrl` reflects
+ * a real comparison against the embedding document's own origin.
+ * With no download URL (local file or inline data), falls back to `srcdoc`,
+ * rejecting payloads larger than 1 MiB to prevent browser truncation, and
+ * forwards `resolvers.htmlSrcdocHostUrl` so that HTML can still render under
+ * its own response-level CSP.
+ * Returns `null` if no source is available, or an `ErrorCanvasContent` when
+ * that fallback fetch fails.
  */
 export const resolveHtmlCanvasContent = async (
   attachment: DisplayAttachment,
   resolvers: AttachmentCanvasUrlResolvers,
 ): Promise<HtmlCanvasContent | ErrorCanvasContent | null> => {
+  const downloadUrl = resolvers.resolveDialUrl(attachment) ?? undefined;
+  if (downloadUrl != null) {
+    return {
+      type: AttachmentContentType.Html,
+      url: downloadUrl,
+      isSameOriginUrl:
+        extractOrigin(downloadUrl) === extractOrigin(window.location.href),
+      resolveSourceText: async () => {
+        const result = await resolveAttachmentText(attachment, resolvers);
+        if (result == null || typeof result !== 'string') {
+          throw new Error('Failed to resolve HTML source text');
+        }
+        return result;
+      },
+    };
+  }
+
   const result = await resolveAttachmentText(attachment, resolvers);
   if (result == null) return null;
   if (typeof result !== 'string') return result;
+
   if (result.length > HTML_SRCDOC_SIZE_LIMIT) return null;
-  const url = resolvers.resolveDialUrl(attachment) ?? undefined;
-  return { type: AttachmentContentType.Html, srcdoc: result, url };
+  return {
+    type: AttachmentContentType.Html,
+    srcdoc: result,
+    srcdocHostUrl: resolvers.htmlSrcdocHostUrl,
+  };
 };
+
+/*
+ * An invisible, zero-area highlight at the top of `page`. Selecting it routes
+ * the viewer through highlight navigation, which runs after the initial
+ * auto-zoom; a plain page request is applied before that zoom and reset to
+ * page 1 by it.
+ */
+const pageAnchorHighlight = (id: string, page: number) => ({
+  id,
+  bboxes: [{ page, x1: 0, y1: 0, x2: 0, y2: 0 }],
+  style: { backgroundColor: 'transparent', opacity: 0 },
+});
 
 /**
  * Builds a `PdfCanvasContent` for a PDF citation annotation, including highlights
  * for the clicked annotation's document within its citation group.
+ * When the clicked annotation has a page but no selector with valid geometry,
+ * an invisible page-anchor highlight is added and selected so the viewer
+ * still opens that page.
  * Returns `null` if the annotation has no PDF source attachment.
  */
 export const annotationToPdfCanvasContent = (
@@ -494,18 +554,29 @@ export const annotationToPdfCanvasContent = (
   );
   const selectedIndex = allAnnotations.indexOf(annotation);
   const highlights = annotationsToPdfHighlights(allAnnotations);
-  const highlightId = annotationHighlightId(annotation, selectedIndex);
+  const highlightId = annotationHighlightIds(allAnnotations)[selectedIndex];
+  const page = getAnnotationPdfPage(annotation);
+  const hasSelectedHighlight = highlights.some(
+    (highlight) => highlight.id === highlightId,
+  );
+
+  if (!hasSelectedHighlight && page != null) {
+    const anchorId = `page-anchor-${highlightId}`;
+    return {
+      type: AttachmentContentType.Pdf,
+      url,
+      highlights: [...highlights, pageAnchorHighlight(anchorId, page)],
+      selectedHighlightId: anchorId,
+      page,
+    };
+  }
 
   return {
     type: AttachmentContentType.Pdf,
     url,
     highlights,
-    selectedHighlightId: highlights.some(
-      (highlight) => highlight.id === highlightId,
-    )
-      ? highlightId
-      : undefined,
-    page: getAnnotationPdfPage(annotation),
+    selectedHighlightId: hasSelectedHighlight ? highlightId : undefined,
+    page,
   };
 };
 
@@ -514,7 +585,7 @@ export const annotationToPdfCanvasContent = (
  * wire's own `type` string) to the `OoxmlHighlightLocation` shape
  * `libs/attachment-canvas` renders (discriminated by its own
  * `OoxmlHighlightKind` enum). This is the layer boundary noted in
- * `design.md`'s architecture diagram: `libs/quotations` cannot depend on
+ * `openspec/changes/archive/2026-09-10-highlight-office-document-annotations/design.md`'s architecture diagram: `libs/quotations` cannot depend on
  * `libs/attachment-canvas` (a real circular dependency — `attachment-canvas`
  * already depends on `quotations` for the PDF highlight path), so the
  * translation happens here, in the one lib that already depends on both.
@@ -598,13 +669,17 @@ export const annotationToOoxmlCanvasContent = (
   const highlights: OoxmlHighlight[] = [];
   let selectedHighlightId: string | undefined;
 
+  const ids = annotationHighlightIds(sameSource);
+
   sameSource.forEach((entry, index) => {
     const locations = annotationToOfficeHighlightLocations(entry);
     if (locations.length === 0) return;
 
-    const id = annotationHighlightId(entry, index);
+    const id = ids[index];
     highlights.push({ id, locations: locations.map(toOoxmlHighlightLocation) });
-    if (entry === annotation) selectedHighlightId = id;
+    if (entry === annotation && selectedHighlightId == null) {
+      selectedHighlightId = id;
+    }
   });
 
   return {
@@ -642,13 +717,7 @@ export const referenceAttachmentToPdfCanvasContent = (
   return {
     type: AttachmentContentType.Pdf,
     url,
-    highlights: [
-      {
-        id: selectedHighlightId,
-        bboxes: [{ page: parsed.page, x1: 0, y1: 0, x2: 0, y2: 0 }],
-        style: { backgroundColor: 'transparent', opacity: 0 },
-      },
-    ],
+    highlights: [pageAnchorHighlight(selectedHighlightId, parsed.page)],
     selectedHighlightId,
     page: parsed.page,
   };

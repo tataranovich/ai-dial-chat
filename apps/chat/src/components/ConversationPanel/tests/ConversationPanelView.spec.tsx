@@ -39,86 +39,113 @@ import {
 } from '../../../server-api/share.api';
 import ConversationPanelView from '../ConversationPanelView';
 
+/* Counts renders of the mocked lib panel, which stays `memo`-wrapped like the real one. */
+const panelRenderCount = vi.hoisted(() => ({ current: 0 }));
+/* Props of every render of the mocked lib panel, to compare identities across renders. */
+const panelPropsLog = vi.hoisted(
+  (): Array<{ conversations?: unknown; getActions?: unknown }> => [],
+);
+
 vi.mock('@epam/ai-dial-conversation-panel', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@epam/ai-dial-conversation-panel')>();
+  const { memo } = await import('react');
   return {
     ...actual,
-    ConversationPanel: ({
-      headerActions,
-      conversations: panelConversations,
-      getActions,
-      onActionMenuOpen,
-      className,
-    }: {
-      headerActions?: ReactNode;
-      conversations?: Array<{ id: string; isUnread?: boolean }>;
-      getActions?: (item: { id: string }) => Array<{
-        key: string;
-        label: ReactNode;
-        onClick?: () => void;
-        children?: Array<{
+    ConversationPanel: memo(
+      ({
+        headerActions,
+        conversations: panelConversations,
+        getActions,
+        onActionMenuOpen,
+        className,
+      }: {
+        headerActions?: ReactNode;
+        conversations?: Array<{
+          id: string;
+          isUnread?: boolean;
+          leadingIcon?: ReactNode;
+        }>;
+        getActions?: (item: { id: string }) => Array<{
           key: string;
           label: ReactNode;
           onClick?: () => void;
+          children?: Array<{
+            key: string;
+            label: ReactNode;
+            onClick?: () => void;
+          }>;
         }>;
-      }>;
-      onActionMenuOpen?: (
-        item: { id: string },
-        trigger: HTMLButtonElement,
-      ) => void;
-      className?: string;
-    }) => (
-      <div role="region" aria-label="conversation panel" className={className}>
-        {headerActions}
-        {panelConversations?.map((item) => {
-          /* Captures the trigger button via a ref callback instead of looking
+        onActionMenuOpen?: (
+          item: { id: string },
+          trigger: HTMLButtonElement,
+        ) => void;
+        className?: string;
+      }) => {
+        panelRenderCount.current += 1;
+        panelPropsLog.push({ conversations: panelConversations, getActions });
+        return (
+          <div
+            role="region"
+            aria-label="conversation panel"
+            className={className}
+          >
+            {headerActions}
+            {panelConversations?.map((item) => {
+              /* Captures the trigger button via a ref callback instead of looking
              it up through the DOM, so the mock stays within React APIs. */
-          let triggerRef: HTMLButtonElement | null = null;
+              let triggerRef: HTMLButtonElement | null = null;
 
-          return (
-            <div key={item.id}>
-              <button
-                ref={(node) => {
-                  triggerRef = node;
-                }}
-                id={`action-trigger-${item.id}`}
-                aria-label={`action trigger ${item.id}`}
-                onClick={(event) =>
-                  onActionMenuOpen?.(item, event.currentTarget)
-                }
-              />
-              {item.isUnread && (
-                <span aria-label={`unread indicator ${item.id}`} />
-              )}
-              {(getActions?.(item) ?? []).map((action) =>
-                // eslint-disable-next-line testing-library/no-node-access -- `action.children` is this mock's own action-data shape, not a DOM node
-                action.children ? (
-                  // Simulates the hover-revealed submenu: children render as sibling buttons.
-                  <div key={action.key}>
-                    <span>{action.label}</span>
-                    {action.children.map((child) => (
-                      <button key={child.key} onClick={child.onClick}>
-                        {child.label}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
+              return (
+                <div key={item.id}>
                   <button
-                    key={action.key}
-                    onClick={() => {
-                      if (triggerRef) onActionMenuOpen?.(item, triggerRef);
-                      action.onClick?.();
+                    ref={(node) => {
+                      triggerRef = node;
                     }}
-                  >
-                    {action.label}
-                  </button>
-                ),
-              )}
-            </div>
-          );
-        })}
-      </div>
+                    id={`action-trigger-${item.id}`}
+                    aria-label={`action trigger ${item.id}`}
+                    onClick={(event) =>
+                      onActionMenuOpen?.(item, event.currentTarget)
+                    }
+                  />
+                  {item.isUnread && (
+                    <span aria-label={`unread indicator ${item.id}`} />
+                  )}
+                  {item.leadingIcon && (
+                    <span data-testid={`leading icon ${item.id}`}>
+                      {item.leadingIcon}
+                    </span>
+                  )}
+                  {(getActions?.(item) ?? []).map((action) =>
+                    // eslint-disable-next-line testing-library/no-node-access -- `action.children` is this mock's own action-data shape, not a DOM node
+                    action.children ? (
+                      // Simulates the hover-revealed submenu: children render as sibling buttons.
+                      <div key={action.key}>
+                        <span>{action.label}</span>
+                        {action.children.map((child) => (
+                          <button key={child.key} onClick={child.onClick}>
+                            {child.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <button
+                        key={action.key}
+                        onClick={() => {
+                          if (triggerRef) onActionMenuOpen?.(item, triggerRef);
+                          action.onClick?.();
+                        }}
+                      >
+                        {action.label}
+                      </button>
+                    ),
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      },
     ),
   };
 });
@@ -210,12 +237,14 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
       header,
       children,
       onClose,
+      footer,
       mainButtons,
     }: {
       open: boolean;
       header?: ReactNode;
       children?: ReactNode;
       onClose?: () => void;
+      footer?: ReactNode;
       mainButtons?: Array<{
         label: ReactNode;
         disabled?: boolean;
@@ -231,6 +260,7 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
           {header && <h2>{header}</h2>}
           <button aria-label="Close popup" onClick={onClose} />
           {children}
+          {footer}
           {mainButtons?.map((button, index) => (
             <button
               key={index}
@@ -247,11 +277,13 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
 });
 
 vi.mock('@tabler/icons-react', () => ({
+  IconClockHour3: () => null,
   IconCopy: () => null,
   IconDotsVertical: () => null,
   IconDownload: () => null,
   IconFileArrowLeft: () => null,
   IconFileArrowRight: () => null,
+  IconMessageCircle: () => null,
   IconPencilMinus: () => null,
   IconPin: () => null,
   IconPinnedFilled: () => null,
@@ -313,39 +345,42 @@ vi.mock('react-i18next', async () => {
     return typeof value === 'string' ? value : undefined;
   };
 
+  /* One stable `t`, like react-i18next's own, so memos keyed on it hold. */
+  const t = (
+    key: string,
+    params?: {
+      title?: string;
+      fileName?: string;
+      count?: number;
+      names?: string;
+    },
+  ) => {
+    if (
+      key === 'conversationImport.warningAttachmentSkipped' ||
+      key === 'conversationImport.jobWarningAttachmentSkipped' ||
+      key === 'conversationImport.nameListWithRest'
+    ) {
+      return warningI18n.t(key, params);
+    }
+    if (!translatedKeys.has(key)) return key;
+
+    const { count } = params ?? {};
+    const plural =
+      count === undefined
+        ? undefined
+        : resolveTranslation(`${key}_${count === 1 ? 'one' : 'other'}`);
+
+    return (plural ?? resolveTranslation(key) ?? key)
+      .replace('{{title}}', params?.title ?? '')
+      .replace('{{fileName}}', params?.fileName ?? '')
+      .replace('{{count}}', String(count ?? ''));
+  };
+  const translation = { t, i18n: { language: 'en' } };
+
   return {
-    useTranslation: () => ({
-      t: (
-        key: string,
-        params?: {
-          title?: string;
-          fileName?: string;
-          count?: number;
-          names?: string;
-        },
-      ) => {
-        if (
-          key === 'conversationImport.warningAttachmentSkipped' ||
-          key === 'conversationImport.jobWarningAttachmentSkipped' ||
-          key === 'conversationImport.nameListWithRest'
-        ) {
-          return warningI18n.t(key, params);
-        }
-        if (!translatedKeys.has(key)) return key;
-
-        const { count } = params ?? {};
-        const plural =
-          count === undefined
-            ? undefined
-            : resolveTranslation(`${key}_${count === 1 ? 'one' : 'other'}`);
-
-        return (plural ?? resolveTranslation(key) ?? key)
-          .replace('{{title}}', params?.title ?? '')
-          .replace('{{fileName}}', params?.fileName ?? '')
-          .replace('{{count}}', String(count ?? ''));
-      },
-      i18n: { language: 'en' },
-    }),
+    useTranslation: () => translation,
+    /* Mirrors the suite-wide mock: the key itself, no markup. */
+    Trans: ({ i18nKey }: { i18nKey?: string }) => i18nKey ?? null,
   };
 });
 
@@ -371,8 +406,10 @@ vi.mock('../../../server-api/api-client', () => ({
   conversationsApi: {},
   filesApi: {},
 }));
+/* A stable value, like the provider's state-backed `items`. */
+const deploymentsValue = vi.hoisted(() => ({ items: [] }));
 vi.mock('../../../context/DeploymentsContext', () => ({
-  useDeployments: () => ({ items: [] }),
+  useDeployments: () => deploymentsValue,
 }));
 const mockUseIsMobile = vi.hoisted(() => vi.fn(() => false));
 vi.mock('../../../hooks/breakpoint/useBreakpoint', () => ({
@@ -548,7 +585,9 @@ const openDeleteAllPopup = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockUseIsMobile.mockReturnValue(false);
-  vi.mocked(useUiFeature).mockReturnValue(true);
+  vi.mocked(useUiFeature).mockImplementation(
+    (feature) => feature !== OverlayFeature.HideConversationExport,
+  );
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   vi.mocked(useConversations).mockReturnValue(baseContextValue as any);
   vi.mocked(useNotification).mockReturnValue(
@@ -570,6 +609,81 @@ beforeEach(() => {
     dismissJob: mockDismissImportJob,
     retryJob: mockRetryImportJob,
     dismissAll: vi.fn(),
+  });
+});
+
+describe('ConversationPanelView — memo boundary', () => {
+  it('does not re-render the lib panel when its inputs are unchanged', () => {
+    const { rerender } = render(<ConversationPanelView {...defaultProps} />);
+    const rendersAfterMount = panelRenderCount.current;
+
+    /* On desktop `onClose` is not forwarded to the lib panel (it becomes
+       `onToggle` only on mobile), so a new one re-renders just the view. */
+    rerender(<ConversationPanelView {...defaultProps} onClose={vi.fn()} />);
+
+    expect(panelRenderCount.current).toBe(rendersAfterMount);
+  });
+
+  it('re-renders the lib panel when the active conversation changes', () => {
+    const { rerender } = render(<ConversationPanelView {...defaultProps} />);
+    const rendersAfterMount = panelRenderCount.current;
+
+    rerender(
+      <ConversationPanelView {...defaultProps} activeConversationId="conv2" />,
+    );
+
+    expect(panelRenderCount.current).toBeGreaterThan(rendersAfterMount);
+  });
+});
+
+describe('ConversationPanelView — navigation keeps panel inputs', () => {
+  const ordinary = (id: string) => ({
+    id,
+    title: id,
+    isPinned: false,
+    updatedAt: 0,
+    sharedWithMe: false,
+    publishedWithMe: false,
+  });
+
+  it('keeps the conversations array and getActions when switching between ordinary conversations', () => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [ordinary('conv1'), ordinary('conv2')],
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const { rerender } = render(
+      <ConversationPanelView {...defaultProps} activeConversationId="conv1" />,
+    );
+    const before = panelPropsLog[panelPropsLog.length - 1];
+
+    rerender(
+      <ConversationPanelView {...defaultProps} activeConversationId="conv2" />,
+    );
+    const after = panelPropsLog[panelPropsLog.length - 1];
+
+    expect(after).not.toBe(before);
+    expect(after.conversations).toBe(before.conversations);
+    expect(after.getActions).toBe(before.getActions);
+  });
+
+  it('still reports duplicating the open read-only conversation', async () => {
+    const onDuplicateReadonly = vi.fn();
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations: [{ ...ordinary('conv1'), sharedWithMe: true }],
+      duplicateConversation: vi.fn().mockResolvedValue('conv1-copy'),
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+    render(
+      <ConversationPanelView
+        {...defaultProps}
+        activeConversationId="conv1"
+        onDuplicateReadonly={onDuplicateReadonly}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'buttons.duplicate' }));
+
+    await waitFor(() => expect(onDuplicateReadonly).toHaveBeenCalledOnce());
   });
 });
 
@@ -717,6 +831,9 @@ describe('ConversationPanelView — delete-all header action', () => {
       variant: 'error',
       message: PARTIAL_ERROR,
     });
+    expect(mockShowNotification).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'success' }),
+    );
     expect(mockNavigate).toHaveBeenCalledWith('/');
   });
 
@@ -856,20 +973,27 @@ describe('ConversationPanelView — mark conversation viewed on open', () => {
     isUnread: true,
   };
 
-  it('calls markConversationViewed when an unread task conversation becomes active (row click / initial render)', () => {
-    const mockMarkConversationViewed = vi.fn();
-    vi.mocked(useConversations).mockReturnValue({
-      ...baseContextValue,
-      conversations: [unreadTaskConversation],
-      markConversationViewed: mockMarkConversationViewed,
-    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+  it.each([true, false])(
+    'marks an active task conversation viewed with the panel open: %s',
+    (isOpen) => {
+      const mockMarkConversationViewed = vi.fn();
+      vi.mocked(useConversations).mockReturnValue({
+        ...baseContextValue,
+        conversations: [unreadTaskConversation],
+        markConversationViewed: mockMarkConversationViewed,
+      } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
 
-    render(
-      <ConversationPanelView {...defaultProps} activeConversationId="task1" />,
-    );
+      render(
+        <ConversationPanelView
+          {...defaultProps}
+          isOpen={isOpen}
+          activeConversationId="task1"
+        />,
+      );
 
-    expect(mockMarkConversationViewed).toHaveBeenCalledWith('task1');
-  });
+      expect(mockMarkConversationViewed).toHaveBeenCalledWith('task1');
+    },
+  );
 
   it('calls markConversationViewed again when activeConversationId changes to another unread task conversation (direct navigation)', () => {
     const secondUnreadTask = {
@@ -944,6 +1068,126 @@ describe('ConversationPanelView — mark conversation viewed on open', () => {
     );
 
     expect(screen.queryByLabelText('unread indicator task1')).toBeNull();
+  });
+});
+
+describe('ConversationPanelView — one row per scheduled task', () => {
+  const taskRun = (runId: string, createdAt: number, isUnread = false) => ({
+    id: `conversations/bucket/.scheduler/s1/gpt-4__Daily__${runId}`,
+    title: 'Daily',
+    isPinned: false,
+    createdAt,
+    updatedAt: createdAt,
+    sharedWithMe: false,
+    publishedWithMe: false,
+    isReadonly: false,
+    isScheduledTask: true,
+    scheduleId: 's1',
+    runId,
+    isUnread,
+  });
+  const plainChat = {
+    id: 'conversations/bucket/gpt-4__Plain chat',
+    title: 'Plain chat',
+    isPinned: false,
+    updatedAt: 50,
+    sharedWithMe: false,
+    publishedWithMe: false,
+    isReadonly: false,
+    isScheduledTask: false,
+  };
+  const oldest = taskRun('run-a', 100);
+  const older = taskRun('run-b', 200, true);
+  const newest = taskRun('run-c', 300);
+
+  const mockContextList = (
+    conversations: unknown[],
+    overrides: Record<string, unknown> = {},
+  ) => {
+    vi.mocked(useConversations).mockReturnValue({
+      ...baseContextValue,
+      conversations,
+      ...overrides,
+    } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+  };
+
+  const rowFor = (runId: string) =>
+    screen.queryByRole('button', { name: new RegExp(`__${runId}$`) });
+
+  it('renders several runs of one task as a single row for the newest run', () => {
+    mockContextList([oldest, newest, older, plainChat]);
+
+    render(
+      <ConversationPanelView
+        {...defaultProps}
+        activeConversationId={undefined}
+      />,
+    );
+
+    expect(rowFor('run-c')).toBeTruthy();
+    expect(rowFor('run-a')).toBeNull();
+    expect(rowFor('run-b')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: /gpt-4__Plain chat$/ }),
+    ).toBeTruthy();
+  });
+
+  it('gives every task row the scheduled-task icon and no TASK label', () => {
+    mockContextList([newest, plainChat]);
+
+    render(
+      <ConversationPanelView
+        {...defaultProps}
+        activeConversationId={undefined}
+      />,
+    );
+
+    expect(screen.getByTestId(/^leading icon .*__run-c$/)).toBeTruthy();
+    expect(screen.queryByTestId(/^leading icon .*Plain chat$/)).toBeNull();
+    expect(screen.queryByText('TASK')).toBeNull();
+  });
+
+  it('shows the next run once the shown run is gone from the list', () => {
+    mockContextList([oldest, older, newest]);
+    const { rerender } = render(
+      <ConversationPanelView
+        {...defaultProps}
+        activeConversationId={undefined}
+      />,
+    );
+    expect(rowFor('run-c')).toBeTruthy();
+
+    mockContextList([oldest, older]);
+    /* A fresh callback defeats the view's `memo`, standing in for the
+       re-render a real context update would trigger. */
+    rerender(
+      <ConversationPanelView
+        {...defaultProps}
+        onClose={vi.fn()}
+        activeConversationId={undefined}
+      />,
+    );
+
+    expect(rowFor('run-b')).toBeTruthy();
+    expect(rowFor('run-c')).toBeNull();
+  });
+
+  it('shows an opened older run as the task row and still marks it viewed', () => {
+    const mockMarkConversationViewed = vi.fn();
+    mockContextList([oldest, older, newest], {
+      markConversationViewed: mockMarkConversationViewed,
+    });
+
+    render(
+      <ConversationPanelView
+        {...defaultProps}
+        activeConversationId={older.id}
+      />,
+    );
+
+    expect(rowFor('run-b')).toBeTruthy();
+    expect(rowFor('run-c')).toBeNull();
+    expect(mockMarkConversationViewed).toHaveBeenCalledWith(older.id);
   });
 });
 
@@ -1369,6 +1613,17 @@ describe('ConversationPanelView — export/import notification mapping', () => {
 });
 
 describe('ConversationPanelView — export', () => {
+  it('hides the row Export item and Export all when hide-conversation-export is on', () => {
+    vi.mocked(useUiFeature).mockReturnValue(true);
+    render(<ConversationPanelView {...defaultProps} />);
+    expect(screen.queryByText(EXPORT_LABEL)).toBeNull();
+    openDropdown();
+    expect(screen.queryByRole('button', { name: EXPORT_ALL_LABEL })).toBeNull();
+    expect(
+      screen.getAllByRole('button', { name: DELETE_ALL_LABEL }),
+    ).toHaveLength(1);
+  });
+
   it('row action list contains an Export item (submenu trigger, no onClick of its own)', () => {
     render(<ConversationPanelView {...defaultProps} />);
     expect(screen.getByText(EXPORT_LABEL)).toBeTruthy();
@@ -2129,10 +2384,13 @@ describe('ConversationPanelView — revoke access', () => {
   };
 
   /* The default lookup resolves one recipient, so the menu entry carries the
-   * counted label; the confirmation's own button keeps the plain one. */
-  const openRevokeConfirmation = () => {
+   * counted label; the confirmation's own button keeps the plain one. The
+   * count arrives asynchronously after openRowMenu's own wait (which only
+   * confirms the request was issued), so the counted label must be awaited
+   * here rather than queried synchronously. */
+  const openRevokeConfirmation = async () => {
     fireEvent.click(
-      screen.getByRole('button', { name: REVOKE_BUTTON_WITH_COUNT }),
+      await screen.findByRole('button', { name: REVOKE_BUTTON_WITH_COUNT }),
     );
     return screen.getByRole('dialog');
   };
@@ -2244,7 +2502,7 @@ describe('ConversationPanelView — revoke access', () => {
   it('clicking Revoke access opens confirmation without calling the revoke API', async () => {
     render(<ConversationPanelView {...defaultProps} />);
     await openRowMenu();
-    const dialog = openRevokeConfirmation();
+    const dialog = await openRevokeConfirmation();
 
     expect(within(dialog).getByText(REVOKE_CONFIRM_TITLE)).toBeTruthy();
     expect(revokeSharedAccess).not.toHaveBeenCalled();
@@ -2260,7 +2518,7 @@ describe('ConversationPanelView — revoke access', () => {
 
     render(<ConversationPanelView {...defaultProps} />);
     await openRowMenu();
-    const dialog = openRevokeConfirmation();
+    const dialog = await openRevokeConfirmation();
     const confirmButton = within(dialog).getByRole('button', {
       name: REVOKE_BUTTON,
     });
@@ -2286,7 +2544,7 @@ describe('ConversationPanelView — revoke access', () => {
 
     render(<ConversationPanelView {...defaultProps} />);
     await openRowMenu();
-    const dialog = openRevokeConfirmation();
+    const dialog = await openRevokeConfirmation();
     fireEvent.click(
       within(dialog).getByRole('button', { name: REVOKE_BUTTON }),
     );
@@ -2311,7 +2569,7 @@ describe('ConversationPanelView — revoke access', () => {
 
     render(<ConversationPanelView {...defaultProps} />);
     await openRowMenu();
-    const dialog = openRevokeConfirmation();
+    const dialog = await openRevokeConfirmation();
     fireEvent.click(
       within(dialog).getByRole('button', { name: REVOKE_BUTTON }),
     );
@@ -2332,7 +2590,7 @@ describe('ConversationPanelView — revoke access', () => {
 
     render(<ConversationPanelView {...defaultProps} />);
     await openRowMenu();
-    const dialog = openRevokeConfirmation();
+    const dialog = await openRevokeConfirmation();
     fireEvent.click(
       within(dialog).getByRole('button', { name: REVOKE_BUTTON }),
     );
@@ -2347,7 +2605,7 @@ describe('ConversationPanelView — revoke access', () => {
   it('cancel closes the popup without calling the revoke API', async () => {
     render(<ConversationPanelView {...defaultProps} />);
     await openRowMenu();
-    const dialog = openRevokeConfirmation();
+    const dialog = await openRevokeConfirmation();
     fireEvent.click(
       within(dialog).getByRole('button', { name: CANCEL_BUTTON }),
     );
@@ -2361,7 +2619,7 @@ describe('ConversationPanelView — revoke access', () => {
     try {
       render(<ConversationPanelView {...defaultProps} />);
       await openRowMenu();
-      const dialog = openRevokeConfirmation();
+      const dialog = await openRevokeConfirmation();
       expect(within(dialog).getByText(REVOKE_CONFIRM_TITLE)).toBeTruthy();
       expect(
         within(dialog).getByRole('button', { name: REVOKE_BUTTON }),
@@ -2562,9 +2820,7 @@ describe('ConversationPanelView — unpublish confirmation', () => {
     );
     expect(confirmButton().hasAttribute('disabled')).toBe(true);
 
-    await userEvent.click(
-      dialog().getByRole('radio', { name: 'Organization/Ops' }),
-    );
+    await userEvent.click(dialog().getByRole('radio', { name: 'Ops' }));
 
     expect(confirmButton().hasAttribute('disabled')).toBe(false);
 

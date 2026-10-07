@@ -79,6 +79,8 @@ interface QuotationSource {
 }
 ```
 
+For a PDF source, `url` may carry a `#page=N` fragment naming the cited page (e.g. `files/bucket/report.pdf#page=12`). The panel keys rows by `url` and passes the source to `onSourceClick` unchanged, fragment included. Opening the document at that page is up to the host.
+
 ### ConversationSourcesPanelLabels
 
 Override default English UI strings with translated values.
@@ -98,6 +100,14 @@ const labels: ConversationSourcesPanelLabels = {
   copySourceLabel: t('Copy link'),
   sourceCopiedLabel: t('Copied!'),
   attachmentClickLabel: t('Download'),
+  // Optional: name the controls of code blocks, tables and block formulas
+  // inside a source quote. Default to 'Copy code' / 'Copied!' /
+  // 'Download code' / 'Scrollable table' / 'Scrollable formula'.
+  codeBlockCopyLabel: t('Copy'),
+  codeBlockCopiedLabel: t('Copied!'),
+  codeBlockDownloadLabel: t('Download'),
+  tableScrollRegionAriaLabel: t('Scrollable table'),
+  mathScrollRegionAriaLabel: t('Scrollable formula'),
 };
 ```
 

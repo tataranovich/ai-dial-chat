@@ -121,6 +121,7 @@ const makeController = (
     onValidateUpload: vi.fn(),
     uploadBatchState: null,
     cancelUpload: vi.fn(),
+    cancelUploadFile: vi.fn(),
     clearUploadBatch: vi.fn(),
     onCreateFolder: vi.fn(),
     onCreateFolderValidate: vi.fn(),
@@ -212,6 +213,16 @@ const renderModal = ({
 describe('FileManagerAttachModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('leaves file-manager panel spacing to the shell', () => {
+    renderModal();
+
+    const classList = screen.getByRole('button', {
+      name: 'select file',
+    }).parentElement?.parentElement?.classList;
+    expect(classList?.contains('px-5')).toBe(false);
+    expect(classList?.contains('py-4')).toBe(false);
   });
 
   describe('Attach button disabled state', () => {

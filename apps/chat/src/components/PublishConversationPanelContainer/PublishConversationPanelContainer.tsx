@@ -51,10 +51,6 @@ interface Props {
    * one request. Defaults to an empty list.
    */
   history?: PublishHistoryEntry[];
-  /** Whether the handed-down history lookup is still in flight. Default: `false`. */
-  isHistoryLoading?: boolean;
-  /** Whether the handed-down history lookup failed. Default: `false`. */
-  hasHistoryError?: boolean;
 }
 
 /**
@@ -62,7 +58,7 @@ interface Props {
  * `StandalonePublishPanel`, `usePublishFolders`) to the conversation publish
  * backend endpoints for a single conversation. Unlike catalog publish, there
  * is no version — republishing to a folder that already has this
- * conversation is blocked (see design.md D2) rather than offered as an
+ * conversation is blocked (see `openspec/changes/archive/2026-07-15-add-conversation-publish/design.md` D2) rather than offered as an
  * update.
  */
 const PublishConversationPanelContainer: FC<Props> = ({
@@ -72,8 +68,6 @@ const PublishConversationPanelContainer: FC<Props> = ({
   onClose,
   returnFocusRef,
   history = EMPTY_HISTORY,
-  isHistoryLoading = false,
-  hasHistoryError = false,
 }) => {
   const { t } = useTranslation();
   const { notifyOperationSuccess } = useOperationNotification();
@@ -145,9 +139,6 @@ const PublishConversationPanelContainer: FC<Props> = ({
     <StandalonePublishPanel
       isOpen={isOpen}
       resource={resource}
-      history={history}
-      isHistoryLoading={isHistoryLoading}
-      hasHistoryError={hasHistoryError}
       folderItems={publishFlow.folderItems}
       selectedFolderPath={publishFlow.selectedFolderPath}
       onSelectedFolderPathChange={publishFlow.setSelectedFolderPath}

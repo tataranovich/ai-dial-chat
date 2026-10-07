@@ -78,11 +78,44 @@ describe('UpdateApplicationBodyDto', () => {
   it('passes with version, endpoint, features, inputAttachmentTypes, and maxInputAttachments', async () => {
     const errors = await validateDto({
       ...BASE_BODY,
-      version: '2.0',
+      version: '2.0.0',
       endpoint: 'https://api.example.com/chat',
       features: { system_prompt: true },
       inputAttachmentTypes: ['image/png'],
       maxInputAttachments: 5,
+    });
+    expect(errors).toHaveLength(0);
+  });
+
+  it('accepts a SemVer 2.0.0 version with pre-release and build metadata', async () => {
+    const errors = await validateDto({
+      ...BASE_BODY,
+      version: '1.0.0-beta+build',
+    });
+    expect(errors).toHaveLength(0);
+  });
+
+  it.each(['2.0', '1.0.0.0', '01.0.0'])(
+    'rejects the non-SemVer version %s',
+    async (version) => {
+      const errors = await validateDto({ ...BASE_BODY, version });
+      expect(errors.some((e) => e.property === 'version')).toBe(true);
+    },
+  );
+
+  it('passes with an in-cluster endpoint whose hostname has a trailing dot', async () => {
+    const errors = await validateDto({
+      ...BASE_BODY,
+      endpoint:
+        'http://dial-echo.dial-echo.svc.cluster.local./openai/deployments/echo/chat/completions',
+    });
+    expect(errors).toHaveLength(0);
+  });
+
+  it('passes with a single-label hostname endpoint', async () => {
+    const errors = await validateDto({
+      ...BASE_BODY,
+      endpoint: 'http://application1/chat/completions',
     });
     expect(errors).toHaveLength(0);
   });

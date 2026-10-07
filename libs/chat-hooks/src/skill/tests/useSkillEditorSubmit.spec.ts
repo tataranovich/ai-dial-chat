@@ -1,4 +1,7 @@
-import type { SkillEditorValues } from '@epam/ai-dial-skill-editor';
+import {
+  SkillFileNodeKind,
+  type SkillEditorValues,
+} from '@epam/ai-dial-skill-editor';
 import { act, renderHook } from '@testing-library/react';
 import { createRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,6 +25,7 @@ const PASTED_MANIFEST = [
 
 const messages: SkillEditorSubmitMessages = {
   required: 'This field is required',
+  tooLong: (maxLength) => `Use ${maxLength} characters or fewer.`,
   instructionsFrontmatter: 'Front matter belongs in the fields above',
   nameInvalid: 'Invalid name',
   nameConflict: 'Name already taken',
@@ -100,6 +104,49 @@ const makeHarness = (isEditMode: boolean): Harness => {
     },
   };
 };
+
+describe('useSkillEditorSubmit length limits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('blocks a submit whose name, description and instructions are over their limits', async () => {
+    const { client, params } = makeHarness(false);
+    const { result } = renderHook(() => useSkillEditorSubmit(params));
+
+    await act(async () => {
+      await result.current.handleSubmit(
+        makeValues({
+          name: 'a'.repeat(257),
+          description: 'a'.repeat(2001),
+          instructions: 'a'.repeat(50001),
+        }),
+      );
+    });
+
+    expect(result.current.errors).toEqual({
+      name: 'Use 256 characters or fewer.',
+      description: 'Use 2000 characters or fewer.',
+      instructions: 'Use 50000 characters or fewer.',
+    });
+    expect(client.createSkill).not.toHaveBeenCalled();
+  });
+
+  it('shows the too-long message while typing and clears it once back under the limit', () => {
+    const { params } = makeHarness(false);
+    const { result } = renderHook(() => useSkillEditorSubmit(params));
+
+    act(() => {
+      result.current.handleValuesChange(makeValues({ name: 'a'.repeat(257) }));
+    });
+    expect(result.current.errors.name).toBe('Use 256 characters or fewer.');
+
+    act(() => {
+      result.current.handleValuesChange(makeValues({ name: 'a'.repeat(256) }));
+    });
+    expect(result.current.errors.name).toBeUndefined();
+  });
+});
 
 describe('useSkillEditorSubmit front-matter guard', () => {
   beforeEach(() => {
@@ -181,5 +228,118 @@ describe('useSkillEditorSubmit front-matter guard', () => {
 
     expect(result.current.errors.instructions).toBeUndefined();
     expect(client.createSkill).toHaveBeenCalledOnce();
+  });
+});
+
+describe('useSkillEditorSubmit navigation', () => {
+  it('uses the host-provided destination for a created skill', async () => {
+    const { params } = makeHarness(false);
+    params.getCreateReturnUrl = (path) =>
+      `/catalog?itemId=skills%2Fbucket-1%2F${path}`;
+
+    const { result } = renderHook(() => useSkillEditorSubmit(params));
+
+    await act(async () => {
+      await result.current.handleSubmit(makeValues({ name: 'New skill' }));
+    });
+
+    expect(params.onNavigate).toHaveBeenCalledWith(
+      '/catalog?itemId=skills%2Fbucket-1%2Fnew-skill',
+    );
+  });
+});
+
+describe('useSkillEditorSubmit retryable failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /*  reads , and only when it looks like a Response. */
+  /* `getApiErrorStatus` reads `error.response`, and only when it looks like a Response. */
+  const rejectWith = (status: number) =>
+    Object.assign(new Error(`HTTP ${status}`), {
+      response: { status, json: () => Promise.resolve({}) },
+    });
+
+  it('offers a retry when the service is unavailable', async () => {
+    const { client, params } = makeHarness(false);
+    vi.mocked(client.createSkill).mockRejectedValueOnce(rejectWith(503));
+    const { result } = renderHook(() => useSkillEditorSubmit(params));
+
+    await act(async () => {
+      await result.current.handleSubmit(makeValues());
+    });
+
+    expect(result.current.submitError).toBe(messages.serviceUnavailable);
+    expect(result.current.isSubmitErrorRetryable).toBe(true);
+  });
+
+  it('re-sends the failed attempt and clears the error once it succeeds', async () => {
+    const { client, params } = makeHarness(false);
+    vi.mocked(client.createSkill).mockRejectedValueOnce(rejectWith(503));
+    const { result } = renderHook(() => useSkillEditorSubmit(params));
+
+    await act(async () => {
+      await result.current.handleSubmit(makeValues());
+    });
+
+    await act(async () => {
+      result.current.retrySubmit();
+    });
+
+    expect(client.createSkill).toHaveBeenCalledTimes(2);
+    expect(client.createSkill).toHaveBeenLastCalledWith(
+      'bucket-1',
+      'my-copy',
+      expect.stringContaining('name: my-copy'),
+      [],
+      [],
+    );
+    expect(result.current.submitError).toBeUndefined();
+    expect(result.current.isSubmitErrorRetryable).toBe(false);
+  });
+
+  it('offers no retry for a failure a re-send cannot clear', async () => {
+    const { client, params } = makeHarness(false);
+    vi.mocked(client.createSkill).mockRejectedValueOnce(rejectWith(413));
+    const { result } = renderHook(() => useSkillEditorSubmit(params));
+
+    await act(async () => {
+      await result.current.handleSubmit(makeValues());
+    });
+
+    expect(result.current.submitError).toBe(messages.archiveTooLarge);
+    expect(result.current.isSubmitErrorRetryable).toBe(false);
+  });
+
+  it('does nothing when retried before any submit', async () => {
+    const { client, params } = makeHarness(false);
+    const { result } = renderHook(() => useSkillEditorSubmit(params));
+
+    await act(async () => {
+      result.current.retrySubmit();
+    });
+
+    expect(client.createSkill).not.toHaveBeenCalled();
+  });
+});
+
+describe('useSkillEditorSubmit empty folders', () => {
+  it('sends an empty folder as a zero-byte marker on an edit save', async () => {
+    const { client, params } = makeHarness(true);
+    params.files = [
+      { path: 'docs', name: 'docs', kind: SkillFileNodeKind.Folder },
+    ];
+    const { result } = renderHook(() => useSkillEditorSubmit(params));
+
+    await act(async () => {
+      await result.current.handleSubmit(makeValues());
+    });
+
+    expect(client.updateSkill).toHaveBeenCalledOnce();
+    const [, , , filePaths, blobs] = vi.mocked(client.updateSkill).mock
+      .calls[0];
+    expect(filePaths).toEqual(['docs/.dial_folder']);
+    expect(blobs.map((blob) => blob.size)).toEqual([0]);
   });
 });

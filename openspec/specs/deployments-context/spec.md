@@ -1,4 +1,4 @@
-# Spec: deployments-context
+# deployments-context Specification
 
 ## Purpose
 
@@ -22,12 +22,16 @@ The provider SHALL:
 - Fetch deployments on mount using `getDeployments([ListDeploymentsInterfaceTypeEnum.Chat, ListDeploymentsInterfaceTypeEnum.Mcp])` from `server-api/deployments.api.ts`, so `items` includes both chat-capable and MCP-capable models/applications.
 - Use a `cancelled` flag inside `useEffect` to guard against setState-on-unmount.
 - Use `useMemo` to memoize the context value.
-- Determine the initial `selectedItemId` using the following precedence (evaluated in order after deployments, user config, and app config are available). Step 2 is active only when `useFeatureFlag('defaultDeploymentPinned')` is `true`; while the flag is `false`, the provider skips step 2 and preserves the previous user-preference-first behavior:
+- Determine the initial `selectedItemId` through `resolveInitialSelection`, evaluated after deployments, user config, and app config are available. The full precedence is owned by `default-agent-preference` ("resolveInitialSelection consults the preference before the operator default"); in summary:
   1. Current in-memory `selectedItemId` if it is still present in the new `items` list (handles deployment list reload).
-  2. `useAppConfig().defaultDeploymentId` if non-null and present in `items`.
-  3. `useUserConfig().selectedDeploymentId` if non-null and present in `items`.
-  4. `items[0]?.id` (first sorted deployment).
-  5. `null` if `items` is empty.
+  2. In overlay mode, the host's `modelId` (`useOptionalOverlay()?.modelId`) if a deployment with that `id` or `reference` is in `items`.
+  3. The user's stored `Default agent for new chats` preference, resolved as `default-agent-preference` specifies.
+  4. `useAppConfig().defaultDeploymentId` if `useFeatureFlag('defaultDeploymentPinned')` is `true`, the id is non-null, and it is present in `items`; while the flag is `false` this step is skipped.
+  5. `useUserConfig().selectedDeploymentId` if non-null and present in `items`.
+  6. The `id` of the first sorted deployment that is not `isHidden` (falling back to `items[0]?.id` when every item is hidden).
+  7. `null` if `items` is empty.
+
+  Steps 3–5 use `isDeploymentSelectable`, which skips a deployment the operator hid via `HIDDEN_ENTITY_TAGS` (`isHidden: true`, Issue #9150); steps 1–2 only check presence in `items`.
 - When the deployments reload and the previously selected `id` is no longer in `items`, re-apply the full precedence chain from step 2 onward.
 - **NOT re-trigger the full deployments/schemas/toolsets fetch merely because `setSelectedItemId` is called.** `setSelectedItemId` optimistically updates `useUserConfig().selectedDeploymentId` before its persistence call resolves; the initial-load fetch (and the `isLoading` flag it drives) SHALL NOT react to that value changing after the initial load has already completed. If user/app config becomes known after deployments load, the provider SHALL re-sort and MAY re-evaluate an automatically resolved provisional selection without a network call. It SHALL NOT override a selection explicitly established by `setSelectedItemId` or `restoreSelectedItemId`.
 - Export a `useDeployments()` hook that throws a clear error when called outside the provider.
@@ -77,7 +81,12 @@ The state management pattern SHALL follow `ThemeContext.tsx` as the reference im
 #### Scenario: User config and operator default absent — falls back to first sorted deployment
 
 - **WHEN** deployments load and both `selectedDeploymentId` and `defaultDeploymentId` are `null`
-- **THEN** `selectedItemId` is `items[0].id`
+- **THEN** `selectedItemId` is the `id` of the first item in `items` that is not `isHidden`
+
+#### Scenario: Hidden deployment is not selected through a stored preference
+
+- **WHEN** `useUserConfig().selectedDeploymentId === "dep-a"`, `"dep-a"` is in `items` with `isHidden: true`, and `"dep-b"` is a non-hidden item
+- **THEN** `selectedItemId` is not `"dep-a"`; it resolves to the first non-hidden item
 
 #### Scenario: Operator default not in catalog — falls through to user-persisted preference
 
@@ -102,7 +111,7 @@ The state management pattern SHALL follow `ThemeContext.tsx` as the reference im
 #### Scenario: Previously selected item removed after reload
 
 - **WHEN** `selectedItemId` is `"old-dep"` and deployments reload returning items that do not include `"old-dep"`
-- **THEN** selection re-evaluates precedence: user config → operator default → first item → null
+- **THEN** selection re-evaluates precedence: overlay `modelId` → `Default agent for new chats` preference → pinned operator default → user config → first non-hidden item → null
 
 #### Scenario: setSelectedItemId calls user config persistence
 
@@ -161,32 +170,35 @@ The state management pattern SHALL follow `ThemeContext.tsx` as the reference im
 - **WHEN** `resolvedSelectedDeploymentId` is already `"dep-a"` and the effect re-runs for an unrelated reason without `resolvedSelectedDeploymentId` changing
 - **THEN** `getDeploymentDetails` is not called again beyond the one call already made for `"dep-a"`
 
+#### Scenario: Overlay host modelId determines the initial selection
+
+- **WHEN** `useOptionalOverlay()?.modelId === "dep-b"`, deployments load with items `["dep-a", "dep-b"]`, `useFeatureFlag('defaultDeploymentPinned') === true`, `useAppConfig().defaultDeploymentId === "dep-a"`, and `useUserConfig().selectedDeploymentId === "dep-a"`
+- **THEN** `selectedItemId` is `"dep-b"`
+
 ---
 
 ### Requirement: ConversationRoute and ConversationView use DeploymentsContext
 
 `apps/chat/src/pages/ConversationRoute/ConversationRoute.tsx` and `apps/chat/src/components/ConversationView/ConversationView.tsx` SHALL consume `useDeployments()` instead of `useCatalog()`.
 
-The props passed to `ConversationInput` SHALL use `items` from `useDeployments()` (typed as `DeploymentItemDto[]`) for `catalogItems`, and `selectedItemId` / `setSelectedItemId` from `useDeployments()` for `selectedCatalogItemId` / `onSelectedCatalogItemChange`.
-
-`DeploymentItemDto` satisfies the structural requirements of `CatalogItemDto` (both have `id`, `displayName`, `type`, `iconUrl`), so the `ConversationInput` component requires no prop interface changes.
+`ConversationRoute` SHALL map `useDeployments().items` (`DeploymentItemDto[]`) to `deploymentItems: DeploymentItem[]` (`@epam/ai-dial-chat-shared`) and render `NewConversationComposer` (`apps/chat/src/components/NewConversationComposer/NewConversationComposer.tsx`) with `deployments={deploymentItems}`, `selectedDeploymentId={selectedItemId}` and `onDeploymentChange={setSelectedItemId}`; the composer forwards them to `ConversationInput` (`@epam/ai-dial-conversation-input`) as `deployments` / `selectedDeploymentId` / `onDeploymentChange`.
 
 `DeploymentsProvider` SHALL wrap the conversation routes. All `CatalogProvider` references SHALL be removed.
 
 #### Scenario: ConversationRoute uses deployments items in selector
 
 - **WHEN** `ConversationRoute` renders
-- **THEN** the `catalogItems` prop of `ConversationInput` is sourced from `useDeployments().items`
+- **THEN** the `deployments` prop of `NewConversationComposer` is the `DeploymentItem[]` mapped from `useDeployments().items`
 
-#### Scenario: onSelectedCatalogItemChange updates DeploymentsContext
+#### Scenario: onDeploymentChange updates DeploymentsContext
 
-- **WHEN** the user selects a deployment with `id: "dep-2"` via the `DialDropdownIcon` menu
-- **THEN** `useDeployments().selectedItemId === "dep-2"` in `DeploymentsContext`
+- **WHEN** the user selects a deployment with `id: "dep-2"` in the model selector
+- **THEN** `onDeploymentChange` calls `setSelectedItemId("dep-2")` and `useDeployments().selectedItemId === "dep-2"` in `DeploymentsContext`
 
-#### Scenario: handleSend passes selectedItemId as catalogItemId
+#### Scenario: handleSend passes selectedItemId as the deployment id
 
-- **WHEN** `handleSend('Hello', [])` is called with `useDeployments().selectedItemId === 'item-1'`
-- **THEN** `apiCreateConversation` is called with `('Hello', 'item-1', [])`
+- **WHEN** a new conversation is sent with message `'Hello'` and `useDeployments().selectedItemId === 'item-1'`
+- **THEN** `apiCreateConversation` (`createConversation` from `apps/chat/src/server-api/conversations.api.ts`) is called as `('Hello', 'item-1', attachments, toolConfigurationValue | undefined, undefined, skills)`
 
 ---
 
@@ -250,7 +262,7 @@ All imports of `CatalogContext`, `useCatalog`, `CatalogProvider`, `getCatalogIte
 7. `restoreSelectedItemId` updates `selectedItemId` without calling `setSelectedDeployment`.
 8. `useDeployments()` throws when called outside provider.
 9. Unmount before fetch — no setState called.
-10. Previously selected id not in new items → re-evaluate precedence from user config onward.
+10. Previously selected id not in new items → re-evaluate precedence from step 2 (overlay `modelId`) onward.
 11. Fetch error → `error` is set, `isLoading: false`.
 
 All `getDeployments` calls SHALL be mocked; no live network calls.
@@ -269,7 +281,7 @@ All `getDeployments` calls SHALL be mocked; no live network calls.
 
 ### Requirement: Backend maps dial:chatMessageInputDisabled to isChatMessageInputDisabled
 
-`apps/chat-api/src/deployments/deployments.service.ts` SHALL, in `getDeploymentConfiguration`, map the raw DIAL Core JSON Schema response to a `DeploymentConfigurationDto` before returning it to the frontend. The mapping SHALL extract `raw['dial:chatMessageInputDisabled']` into a clean camelCase field `isChatMessageInputDisabled?: boolean`, following the same pattern as `ApplicationSchemasService` maps `dial:applicationTypeDisplayName` to `displayName`.
+`DeploymentsDetailsService.getDeploymentConfiguration` (`apps/chat-api/src/deployments/details/deployments-details.service.ts`; `DeploymentsService.getDeploymentConfiguration` only delegates to it) SHALL map the raw DIAL Core JSON Schema response to a `DeploymentConfigurationDto` before returning it to the frontend. The mapping SHALL extract `raw['dial:chatMessageInputDisabled']` into a clean camelCase field `isChatMessageInputDisabled?: boolean`, following the same pattern as `ApplicationSchemasService` maps `dial:applicationTypeDisplayName` to `displayName`.
 
 The raw `Record<string, unknown>` SHALL NOT be returned directly — a typed DTO is the contract.
 
@@ -331,11 +343,11 @@ The raw `'dial:chatMessageInputDisabled'` field SHALL be removed — the backend
 
 ### Requirement: `refetchDeployments`/`refetchToolsets` guard against stale in-flight responses
 
-`DeploymentsContext` SHALL expose `refetchToolsets(): Promise<void>` and `refetchDeployments(): Promise<void>` (already part of `DeploymentsContextType`) that re-fetch and replace `toolsets`/`rawDeployments` respectively. The provider SHALL maintain two monotonic per-resource request-id counters (one for deployments, one for toolsets). Every call site that can set `rawDeployments` (the initial mount-time `loadDeployments`, and `refetchDeployments`) SHALL increment the deployments counter at dispatch time and only apply its result if the counter is unchanged when the response arrives; the same pattern applies to `toolsets` (initial load's toolsets fetch and `refetchToolsets`) against the toolsets counter. A response whose captured id no longer matches the current counter SHALL be silently discarded (no state update, no error surfaced) — it does not represent an error, only a superseded request.
+`DeploymentsContext` SHALL expose `refetchToolsets(): Promise<void>` and `refetchDeployments(refresh?: boolean): Promise<void>` (already part of `DeploymentsContextType`) that re-fetch and replace `toolsets`/`rawDeployments` respectively. The provider SHALL maintain two monotonic per-resource request-id counters (one for deployments, one for toolsets). Every call site that can set `rawDeployments` (the initial mount-time `loadDeployments`, and `refetchDeployments`) SHALL increment the deployments counter at dispatch time and only apply its result if the counter is unchanged when the response arrives; the same pattern applies to `toolsets` (initial load's toolsets fetch and `refetchToolsets`) against the toolsets counter. A response whose captured id no longer matches the current counter SHALL be silently discarded (no state update, no error surfaced) — it does not represent an error, only a superseded request.
 
 This prevents a race where the initial mount-time list fetch (unavoidably in flight before any resource could have been shared to the user) resolves *after* a later, deliberate `refetchDeployments()`/`refetchToolsets()` call (e.g. one triggered right after accepting a share invitation) and overwrites its fresher result with the stale pre-share snapshot.
 
-`refetchDeployments()` SHALL call `getDeployments([ListDeploymentsInterfaceTypeEnum.Chat, ListDeploymentsInterfaceTypeEnum.Mcp], true)` so app create/delete/share/save flows that need a just-written Quick App deployment bypass the deployments endpoint's 30-second browser/server cache window.
+`refetchDeployments(refresh = true)` SHALL call `getDeployments([ListDeploymentsInterfaceTypeEnum.Chat, ListDeploymentsInterfaceTypeEnum.Mcp], refresh)`. The default `true` lets app create/delete/share/save flows that need a just-written Quick App deployment bypass the deployments endpoint's 30-second browser/server cache window; a caller MAY pass `false` when the backend already invalidated its own cache or brief staleness is acceptable.
 
 #### Scenario: A later refetch's result is not clobbered by a slower initial load
 
@@ -395,14 +407,16 @@ This closes a defense-in-depth gap: even if a future code path (e.g. a different
 
 Calling `restoreDefaultSelection()` SHALL re-evaluate the same precedence chain used to determine the *initial* `selectedItemId` (see "DeploymentsContext owns deployment selection for conversation selector"), but starting from `inMemoryId = null` instead of the current in-memory `selectedItemId`:
 
-1. `useAppConfig().defaultDeploymentId` if `useFeatureFlag('defaultDeploymentPinned')` is `true`, the id is non-null, and it is present in `items`.
-2. `useUserConfig().selectedDeploymentId` if non-null and present in `items`.
-3. `items[0]?.id` (first sorted deployment).
-4. Leave `selectedItemId` unchanged if none of the above resolve (e.g. `items` is empty).
+1. In overlay mode, the host's `modelId` if a deployment with that `id` or `reference` is in `items`.
+2. The user's stored `Default agent for new chats` preference, resolved as `default-agent-preference` specifies.
+3. `useAppConfig().defaultDeploymentId` if `useFeatureFlag('defaultDeploymentPinned')` is `true`, the id is non-null, and it is present in `items`.
+4. `useUserConfig().selectedDeploymentId` if non-null and present in `items`.
+5. The first sorted non-hidden deployment (`items[0]?.id` when every item is hidden).
+6. Leave `selectedItemId` unchanged if none of the above resolve (e.g. `items` is empty).
 
-`restoreDefaultSelection` SHALL NOT call `setSelectedDeployment` (it does not persist anything — the resolved value is, by construction, already either the persisted preference, the operator default, or a fallback) and SHALL NOT trigger a deployments/schemas/toolsets refetch.
+`restoreDefaultSelection` SHALL NOT call `setSelectedDeployment` (it does not persist anything — the resolved value is, by construction, already either the overlay host's model, the stored preference, the persisted selection, the operator default, or a fallback) and SHALL NOT trigger a deployments/schemas/toolsets refetch.
 
-**Memoisation:** `restoreDefaultSelection` SHALL be wrapped in `useCallback` with an empty dependency array, so its identity never changes for the lifetime of the provider. It SHALL read `items`, the latest persisted preference, and the effective operator default from refs. Neither `useUserConfig().selectedDeploymentId` changing after a manual deployment selection nor `items` being rebuilt by a deployments refetch may change its identity: the new-conversation route calls it from an effect keyed on that identity, so any change re-fires default restoration and discards the user's current selection.
+**Memoisation:** `restoreDefaultSelection` SHALL be wrapped in `useCallback` with an empty dependency array, so its identity never changes for the lifetime of the provider. It SHALL read `items`, the latest persisted preference, the stored `Default agent for new chats` preference, the overlay host's `modelId`, and the effective operator default from refs. Neither `useUserConfig().selectedDeploymentId` changing after a manual deployment selection nor `items` being rebuilt by a deployments refetch may change its identity: the new-conversation route calls it from an effect keyed on that identity, so any change re-fires default restoration and discards the user's current selection.
 
 #### Scenario: Deployments refetch does not reset the current selection
 
@@ -428,6 +442,11 @@ Calling `restoreDefaultSelection()` SHALL re-evaluate the same precedence chain 
 
 - **WHEN** pinning is enabled, the user manually selects a non-default deployment, and persistence updates `useUserConfig().selectedDeploymentId`
 - **THEN** `restoreDefaultSelection` retains its callback identity and the route does NOT re-run default restoration, so the manually selected deployment remains selected
+
+#### Scenario: restoreDefaultSelection returns to the overlay host's model
+
+- **WHEN** `useOptionalOverlay()?.modelId === "dep-b"`, `useUserConfig().selectedDeploymentId === "dep-a"`, `items` contains both, and in-memory `selectedItemId` currently holds `"dep-a"` (left over from `restoreSelectedItemId`)
+- **THEN** calling `restoreDefaultSelection()` sets `selectedItemId` to `"dep-b"`
 
 ---
 

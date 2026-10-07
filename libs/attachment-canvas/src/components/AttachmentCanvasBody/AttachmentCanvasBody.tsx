@@ -126,6 +126,11 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
     tableCopyLabel,
     tableCopiedLabel,
     tableDownloadCsvLabel,
+    codeBlockCopyLabel,
+    codeBlockCopiedLabel,
+    codeBlockDownloadLabel,
+    tableScrollRegionAriaLabel,
+    mathScrollRegionAriaLabel,
     ooxmlHighlightsLabel,
     ooxmlHighlightNavigatedLabel,
   } = {},
@@ -136,6 +141,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
   hidePdfToolbar = false,
   configurePdfWorker,
   onAppInfo,
+  onVisualizerSendMessage,
 }) => {
   const {
     colors,
@@ -263,6 +269,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
         return (
           <audio
             controls
+            controlsList="nodownload"
             src={content.url}
             aria-label={fileName ?? 'Audio attachment'}
             className="w-full max-w-sm"
@@ -279,6 +286,11 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
             content={content.text}
             isStreaming={false}
             codeBlockTheme={codeBlockTheme}
+            codeBlockCopyLabel={codeBlockCopyLabel}
+            codeBlockCopiedLabel={codeBlockCopiedLabel}
+            codeBlockDownloadLabel={codeBlockDownloadLabel}
+            tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
+            mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
             classNames={DEFAULT_MARKDOWN_CLASS_NAMES}
           />
         );
@@ -288,6 +300,11 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
             content={content.text}
             isStreaming={false}
             codeBlockTheme={codeBlockTheme}
+            codeBlockCopyLabel={codeBlockCopyLabel}
+            codeBlockCopiedLabel={codeBlockCopiedLabel}
+            codeBlockDownloadLabel={codeBlockDownloadLabel}
+            tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
+            mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
             containerClassName="flex h-full min-h-0 flex-col"
             classNames={{
               ...DEFAULT_MARKDOWN_CLASS_NAMES,
@@ -427,6 +444,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
           <VisualizerCanvasRenderer
             content={content}
             errorLabel={visualizerErrorLabel}
+            onSendMessage={onVisualizerSendMessage}
           />
         );
       case AttachmentContentType.McpApp:
@@ -472,6 +490,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
     loadErrorLabel,
     forbiddenErrorLabel,
     visualizerErrorLabel,
+    onVisualizerSendMessage,
     htmlFrameBlockedLabel,
     htmlOpenInNewTabLabel,
     isHtmlSourceView,
@@ -497,6 +516,11 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
     tableCopyLabel,
     tableCopiedLabel,
     tableDownloadCsvLabel,
+    codeBlockCopyLabel,
+    codeBlockCopiedLabel,
+    codeBlockDownloadLabel,
+    tableScrollRegionAriaLabel,
+    mathScrollRegionAriaLabel,
     ooxmlHighlightsLabel,
     ooxmlHighlightNavigatedLabel,
   ]);

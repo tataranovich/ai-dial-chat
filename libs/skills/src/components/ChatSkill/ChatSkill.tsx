@@ -1,46 +1,107 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
+import { InteractiveTooltip, TooltipPlacement } from '@epam/ai-dial-ui-kit';
 import {
-  GhostButton,
-  InteractiveTooltip,
-  TooltipPlacement,
-} from '@epam/ai-dial-ui-kit';
-import { useState, type FC } from 'react';
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FC,
+  type KeyboardEvent,
+} from 'react';
 import { SKILLS_CLASS } from '../../constants/public-class-names';
 import type { ChatSkillProps } from '../../models/chat-skill-props';
 import { SkillInfoTooltipContent } from '../SkillInfoTooltipContent/SkillInfoTooltipContent';
 
 /**
- * A used skill rendered as a `/name` ghost button with a description tooltip
- * and a "View details" action, or the error state while unsupported.
+ * A used skill rendered as a `/name` chip — plain, selectable text styled to
+ * read as a button, with a description tooltip and a "View details" action,
+ * or the error state while unsupported.
  */
 export const ChatSkill: FC<ChatSkillProps> = ({
   name,
   path,
   description,
   isUnsupported = false,
-  labelClassName = 'dial-body-paragraph-text',
+  unresolvedReason,
+  labelClassName = 'dial-body-paragraph-text text-accent',
   unsupportedLabelClassName = 'text-error',
   unsupportedClassName = 'bg-error',
+  detailsTrigger = 'hover',
   onViewDetails,
   labels = {},
 }) => {
   const {
     viewDetailsLabel = 'View details',
     unsupportedTooltipLabel = 'Selected model does not support skills. Remove the skill or select different model to proceed.',
+    deletedTooltipLabel = 'This skill has been deleted. Its details are no longer available.',
+    notSharedTooltipLabel = "You don't have access to this skill, so its details aren't shown. Ask the chat owner to share it with you.",
   } = labels;
 
   /*
-   * The tooltip is uncontrolled (the kit opens it on hover/focus) and exposes
-   * no imperative close, so a "View details" click remounts it — the fresh
-   * instance's open state starts closed. This mirrors the favorites rows,
-   * whose tooltip unmounts with the Add menu on the same click; reopening
-   * takes a fresh hover or focus, not the pointer already resting on the chip.
+   * Hover mode leaves the tooltip uncontrolled. Click mode supplies its open
+   * state, disabling the kit's hover/focus triggers while retaining dismissal.
+   * A "View details" click remounts the card in its closed state.
    */
   const [tooltipGeneration, setTooltipGeneration] = useState(0);
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const isClickTriggered = detailsTrigger === 'click';
 
   const handleViewDetails = () => {
+    setIsTooltipOpen(false);
     setTooltipGeneration((generation) => generation + 1);
     onViewDetails(path);
+  };
+
+  const openTooltipOnKeyboardActivation = (event: KeyboardEvent) => {
+    if (!isClickTriggered || (event.key !== 'Enter' && event.key !== ' ')) {
+      return;
+    }
+
+    event.preventDefault();
+    setIsTooltipOpen(true);
+  };
+
+  /*
+   * `/` is rendered out-of-flow so it can be styled independently; the
+   * measured width becomes the label's start padding, keeping the chip's
+   * total width equal to the invisible `/{name}` text it overlays. See
+   * `openspec/changes/archive/2026-09-25-multi-skill-message-mentions/design.md` Decision 3a (multi-skill-message-mentions).
+   */
+  const slashRef = useRef<HTMLSpanElement | null>(null);
+  const [slashWidth, setSlashWidth] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    setSlashWidth(slashRef.current?.getBoundingClientRect().width ?? null);
+  }, [labelClassName]);
+
+  /*
+   * Branch order matches `openspec/changes/archive/2026-09-29-add-unresolved-skill-indicator/design.md` Decision 1: an unresolved url takes
+   * precedence over the unsupported-model state, which takes precedence
+   * over the normal description + "View details" content.
+   */
+  const renderTooltipContent = () => {
+    if (unresolvedReason != null) {
+      return (
+        <SkillInfoTooltipContent
+          unresolvedReason={unresolvedReason}
+          deletedMessage={deletedTooltipLabel}
+          notSharedMessage={notSharedTooltipLabel}
+        />
+      );
+    }
+
+    if (isUnsupported) {
+      return (
+        <SkillInfoTooltipContent unsupportedMessage={unsupportedTooltipLabel} />
+      );
+    }
+
+    return (
+      <SkillInfoTooltipContent
+        description={description}
+        viewDetailsLabel={viewDetailsLabel}
+        onViewDetails={handleViewDetails}
+      />
+    );
   };
 
   return (
@@ -48,51 +109,53 @@ export const ChatSkill: FC<ChatSkillProps> = ({
       key={tooltipGeneration}
       asChild
       placement={TooltipPlacement.Top}
+      open={isClickTriggered ? isTooltipOpen : undefined}
+      onOpenChange={isClickTriggered ? setIsTooltipOpen : undefined}
       contentClassName="max-w-[550px]"
-      content={
-        isUnsupported ? (
-          <SkillInfoTooltipContent
-            unsupportedMessage={unsupportedTooltipLabel}
-          />
-        ) : (
-          <SkillInfoTooltipContent
-            description={description}
-            viewDetailsLabel={viewDetailsLabel}
-            onViewDetails={handleViewDetails}
-          />
-        )
-      }
+      content={renderTooltipContent()}
     >
       {/*
-       * The span is the tooltip's trigger (`asChild`), so the tooltip stays
-       * open while the pointer moves between it and the button. The button
-       * body is presentation only — activating it does nothing beyond opening
-       * the tooltip; removal is the host input's Backspace-at-start gesture.
+       * Plain, selectable text span, not a `<button>` — sized to net-zero
+       * extra width so the composer mirror can overlay it on the real
+       * textarea text. See `openspec/changes/archive/2026-09-25-multi-skill-message-mentions/design.md` Decision 3a (multi-skill-message-mentions)
+       * for the full rationale. `inline`, not `inline-block`: the textarea
+       * may break the raw `/{name}` after any hyphen, and an atomic chip
+       * cannot, so the mirror would wrap onto an extra line the textarea
+       * never grows to show ([#9243](https://github.com/epam/ai-dial-chat/issues/9243)).
        */}
-      <span className="inline-flex items-center">
-        {/*
-         * `h-auto px-2 py-0` overrides the kit button's `h-[40px] px-4` so
-         * the chip is exactly its label line (26px with the default
-         * `dial-body-paragraph-text` label) plus 8px of horizontal padding —
-         * no vertical padding, so the total height stays at the label line's
-         * height and the chip's text aligns with the input's first text line.
-         * In the error state the color classes join the layout/typography
-         * classes so the whole chip reads as the error: error-tinted
-         * background, error-colored `/{name}` label.
-         */}
-        <GhostButton
-          label={`/${name}`}
-          textClassName={
-            isUnsupported
-              ? mergeClasses(labelClassName, unsupportedLabelClassName)
-              : labelClassName
-          }
-          className={mergeClasses(
-            'h-auto px-2 py-0',
-            isUnsupported && unsupportedClassName,
-            SKILLS_CLASS.chip,
-          )}
-        />
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- click/keydown only act in click-triggered mode; hover mode's tooltip is reachable via focus alone */}
+      <span
+        tabIndex={0}
+        className={mergeClasses(
+          'relative -me-1 -ms-1 inline cursor-pointer select-text rounded-full pe-1 ps-1',
+          isUnsupported
+            ? unsupportedClassName
+            : 'hover:bg-info focus-visible:bg-info active:bg-info',
+          isUnsupported
+            ? mergeClasses(labelClassName, unsupportedLabelClassName)
+            : labelClassName,
+          SKILLS_CLASS.chip,
+        )}
+        aria-label={`/${name}`}
+        onClick={isClickTriggered ? () => setIsTooltipOpen(true) : undefined}
+        onKeyDown={openTooltipOnKeyboardActivation}
+      >
+        <span
+          ref={slashRef}
+          aria-hidden
+          className="inset-inline-start-0 pointer-events-none absolute top-0 select-none"
+        >
+          /
+        </span>
+        <span
+          aria-hidden
+          className="select-none"
+          style={{
+            paddingInlineStart: slashWidth != null ? slashWidth : undefined,
+          }}
+        >
+          {name}
+        </span>
       </span>
     </InteractiveTooltip>
   );

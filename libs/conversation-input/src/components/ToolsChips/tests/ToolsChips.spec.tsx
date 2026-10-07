@@ -84,7 +84,7 @@ describe('ToolsChips', () => {
 
   it('labels the × button through the removeLabel prop', () => {
     renderChips([buildTool('web-search', 'Web Search', false)], {
-      removeLabel: (label) => `Drop ${label}`,
+      removeLabel: (label: string) => `Drop ${label}`,
     });
 
     expect(
@@ -123,6 +123,33 @@ describe('ToolsChips', () => {
       await userEvent.click(chip);
 
       expect(onToolToggle).toHaveBeenCalledWith('web-search');
+    });
+  });
+
+  describe('state labels', () => {
+    it('shows the ON/OFF state after the label when both state labels are set', () => {
+      renderChips(
+        [
+          buildTool('deep-research', 'Deep Research', true),
+          buildTool('web-search', 'Web Search', false),
+        ],
+        { stateOnLabel: 'On', stateOffLabel: 'Off' },
+      );
+
+      const onChip = screen.getByRole('button', { name: 'Deep Research' });
+      const offChip = screen.getByRole('button', { name: 'Web Search' });
+      expect(onChip.textContent).toBe('Deep Research:On');
+      expect(offChip.textContent).toBe('Web Search:Off');
+    });
+
+    it('renders no state text when only one state label is set', () => {
+      renderChips([buildTool('web-search', 'Web Search', false)], {
+        stateOnLabel: 'On',
+      });
+
+      expect(
+        screen.getByRole('button', { name: 'Web Search' }).textContent,
+      ).toBe('Web Search');
     });
   });
 });

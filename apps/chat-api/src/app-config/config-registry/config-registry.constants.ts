@@ -93,7 +93,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     defaultValue: null,
     critical: false,
     description:
-      'Host application identifier sent to MCP App Views in hostContext.userAgent. Defaults to "ai-dial-chat" when MCP_APP_USER_AGENT is not configured.',
+      "Host application identifier sent to MCP App Views in hostContext.userAgent. When MCP_APP_USER_AGENT is not configured, the client falls back to the browser's navigator.userAgent.",
     owner: 'chat-team',
     envVar: 'MCP_APP_USER_AGENT',
   },
@@ -117,7 +117,7 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     defaultValue: null,
     critical: false,
     description:
-      'Version string shown in the footer version label and substituted for the %%VERSION%% footer token. Sourced from CHAT_VERSION so CI/CD can stamp the deployed build; falls back to the application package.json version when unset or blank.',
+      'Version string shown in the footer version label and substituted for the %%VERSION%% footer token. Sourced from CHAT_VERSION so CI/CD can stamp the deployed build; falls back to the workspace root package.json version — the one the release pipeline stamps — when unset or blank.',
     owner: 'chat-team',
     envVar: 'CHAT_VERSION',
   },
@@ -252,16 +252,28 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     envVar: 'RESPONSES_API_ENABLED',
   },
   {
-    key: 'features.skillUsageEnabled',
+    key: 'features.responsesBackgroundEnabled',
     type: 'feature',
     valueType: 'boolean',
-    visibility: 'client',
+    visibility: 'server',
     defaultValue: false,
     critical: false,
     description:
-      'Client-visible kill switch for all skill-usage UI in the chat app: the catalog skill "Use in chat" primary action and the conversation input\'s Skills menu (favorites panel, browse modal, selected-skill chip). Exposed to the frontend client-config endpoint (visibility: client) because it gates UI; every entry point is hidden while false. Defaults to false — the backend contract for sending skills with completions is not designed yet, so the flag ships dark. Role-based rollout (SKILL_USAGE_ENABLED_ROLES) is not implemented — out of scope.',
+      'Server-side switch for starting eligible Responses generations as DIAL Core background jobs (background: true, store: true). Requires features.responsesApiEnabled, the deployment capability features.responsesApi, and "openaiResponses" in the deployment interfaces. Affects only how new generations start: in-flight background jobs stay recoverable, stoppable and finalizable when it is off. Defaults to false. Not exposed to the frontend client-config endpoint (visibility: server). Requires DIAL Core >= 0.48.0.',
     owner: 'chat-team',
-    envVar: 'SKILL_USAGE_ENABLED',
+    envVar: 'RESPONSES_BACKGROUND_ENABLED',
+  },
+  {
+    key: 'ui.activeEventId',
+    type: 'config',
+    valueType: 'string',
+    visibility: 'client',
+    defaultValue: null,
+    critical: false,
+    description:
+      'Active start-page celebration module ID selected by UI_EVENT. Missing or none disables celebrations. The frontend owns the event registry and ignores IDs it does not support; adding an event does not require a backend enum change.',
+    owner: 'chat-team',
+    envVar: 'UI_EVENT',
   },
   {
     key: 'overlay.enabled',
@@ -274,6 +286,18 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
       'Whether the chat-overlay embedded runtime mode is reachable. Distinct from ALLOWED_IFRAME_ORIGINS: has no effect unless at least one origin is also allowlisted there.',
     owner: 'chat-team',
     envVar: 'OVERLAY_ENABLED',
+  },
+  {
+    key: 'documents.allowedConnectOrigins',
+    type: 'config',
+    valueType: 'json',
+    visibility: 'client',
+    defaultValue: [],
+    critical: false,
+    description:
+      'External connection origins permitted by CSP. PDF previews may use browser credentials for matching HTTP(S) origins.',
+    owner: 'chat-team',
+    envVar: 'ALLOWED_CONNECT_ORIGINS',
   },
   {
     key: 'overlay.allowedOrigins',
@@ -292,10 +316,10 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     type: 'config',
     valueType: 'json',
     visibility: 'client',
-    defaultValue: ['my_files', 'shared', 'organization'],
+    defaultValue: ['all', 'my_files', 'shared', 'organization'],
     critical: false,
     description:
-      'Which File Manager tabs are shown to users. Defaults to all three currently-supported tabs when FILE_MANAGER_AVAILABLE_TABS is unset or resolves to no valid ids.',
+      'Which File Manager tabs are shown to users. Defaults to the All tab plus the three source tabs when FILE_MANAGER_AVAILABLE_TABS is unset or resolves to no valid ids.',
     owner: 'chat-team',
     envVar: 'FILE_MANAGER_AVAILABLE_TABS',
   },
@@ -342,6 +366,20 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
       'when resolving the initial selection for a new chat.',
     owner: 'chat-team',
     envVar: 'DEFAULT_DEPLOYMENT_PINNED',
+  },
+  {
+    key: 'features.visualizerSendMessages',
+    type: 'feature',
+    valueType: 'boolean',
+    visibility: 'client',
+    defaultValue: false,
+    critical: false,
+    description:
+      'When enabled, a custom or application visualizer iframe may post ' +
+      '`SEND_MESSAGE` to send its text as a user message in the conversation ' +
+      'that renders it. Off by default; port of the legacy ALLOW_VISUALIZER_SEND_MESSAGES.',
+    owner: 'chat-team',
+    envVar: 'ALLOW_VISUALIZER_SEND_MESSAGES',
   },
   {
     key: 'uiFeatures.enabledUiFeatures',

@@ -2,6 +2,8 @@ import { AttachmentContentType } from '@epam/ai-dial-attachment-canvas';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
   MessageRole,
+  StageStatus,
+  type Annotation,
   type ApplicationVisualizer,
   type ApplicationVisualizerRegistry,
   type Message,
@@ -10,7 +12,8 @@ import {
   MessageBubble,
   type MessageActionsProps,
 } from '@epam/ai-dial-conversation-messages';
-import { fireEvent, render, screen } from '@testing-library/react';
+import type { AnnotationGroup } from '@epam/ai-dial-quotations';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -82,6 +85,8 @@ vi.mock('../../../context/ThemeContext', () => ({
   useTheme: () => ({ currentTheme: 'dark' }),
 }));
 
+let capturedStageGroupProps:
+  { stages: unknown[]; labels?: Record<string, unknown> } | undefined;
 let isMobileMock = false;
 
 vi.mock('../../../hooks/breakpoint/useBreakpoint', () => ({
@@ -97,6 +102,8 @@ vi.mock('../../../hooks/attachment/useApplicationVisualizers', () => ({
 /* The real connector mounts an iframe and subscribes to window messages; the
  * handshake never settles in jsdom, so the inline frame would sit in its
  * loading state. Only the surface around it is under test here. */
+const visualizerSubscriptions = new Map<string, (payload: unknown) => void>();
+
 vi.mock('@epam/ai-dial-visualizer-connector', () => ({
   VisualizerConnector: vi.fn().mockImplementation(function (root: HTMLElement) {
     root.appendChild(document.createElement('iframe'));
@@ -104,12 +111,58 @@ vi.mock('@epam/ai-dial-visualizer-connector', () => ({
       ready: () => new Promise(() => undefined),
       send: vi.fn(),
       destroy: vi.fn(),
+      subscribe: (eventType: string, callback: (payload: unknown) => void) => {
+        visualizerSubscriptions.set(eventType, callback);
+        return vi.fn();
+      },
     };
   }),
 }));
 
 vi.mock('@epam/ai-dial-conversation-stages', () => ({
   StagesPanel: () => null,
+  CollapsedGroup: ({
+    stages,
+    labels,
+    onAttachmentClick,
+  }: {
+    labels?: Record<string, unknown>;
+    stages: {
+      attachments?: {
+        title: string;
+        data?: string;
+        reference_url?: string;
+      }[];
+    }[];
+    onAttachmentClick?: (attachment: {
+      name: string;
+      data?: string;
+      referenceUrl?: string;
+    }) => void;
+  }) => {
+    capturedStageGroupProps = { stages, labels };
+    return (
+      <>
+        {stages
+          .flatMap((stage) => stage.attachments ?? [])
+          .map((attachment) => (
+            <button
+              key={attachment.title}
+              type="button"
+              onClick={() =>
+                onAttachmentClick?.({
+                  name: attachment.title,
+                  data: attachment.data,
+                  referenceUrl: attachment.reference_url,
+                })
+              }
+            >
+              {attachment.title}
+            </button>
+          ))}
+      </>
+    );
+  },
 }));
 
 vi.mock('@epam/ai-dial-conversation-input', async (importOriginal) => {
@@ -171,6 +224,7 @@ beforeEach(() => {
   isMobileMock = false;
   capturedActions = undefined;
   capturedLabels = undefined;
+  capturedStageGroupProps = undefined;
   vi.mocked(useUiFeatureModule.useUiFeature).mockImplementation(
     (feature) =>
       feature !== OverlayFeature.HideEditUserMessage &&
@@ -181,6 +235,39 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+/*
+ * A file tile that opens the canvas and its corner download button are two
+ * controls; giving both the download label made them indistinguishable to
+ * assistive technology.
+ */
+describe('ConversationMessageItem — attachment tile labels', () => {
+  it('names a canvas-opening tile and its download button separately', () => {
+    render(
+      <ConversationMessageItem {...defaultProps} onAttachmentClick={vi.fn()} />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: ButtonsI18nKeys.OpenInCanvas }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: AttachmentsI18nKeys.Download }),
+    ).toBeTruthy();
+    expect(capturedLabels).toMatchObject({
+      attachmentClickLabel: ButtonsI18nKeys.OpenInCanvas,
+      attachmentDownloadLabel: AttachmentsI18nKeys.Download,
+    });
+  });
+
+  it('names a tile that downloads by the download label', () => {
+    render(<ConversationMessageItem {...defaultProps} />);
+
+    expect(capturedLabels).toMatchObject({
+      attachmentClickLabel: AttachmentsI18nKeys.Download,
+      attachmentDownloadLabel: AttachmentsI18nKeys.Download,
+    });
+  });
 });
 
 describe('ConversationMessageItem — reference-only attachments', () => {
@@ -269,6 +356,7 @@ describe('ConversationMessageItem — inline citations', () => {
     if (type === 'text/html') {
       expect(onAttachmentClick).toHaveBeenCalledWith(
         expect.objectContaining({ url, contentType: type }),
+        1,
       );
     } else {
       expect(mockOpenCanvas).toHaveBeenCalledWith(
@@ -472,7 +560,7 @@ describe('ConversationMessageItem — inline citations', () => {
      * Before Office citation highlighting existed, every non-PDF citation
      * fell through to the plain-attachment path. This citation carries no
      * selector at all (a legacy annotation, or one the backend previously
-     * stripped) — per design.md's acceptance criteria, a missing selector
+     * stripped) — per `openspec/changes/archive/2026-09-10-highlight-office-document-annotations/design.md`'s acceptance criteria, a missing selector
      * still opens the Office document, just with no highlight, rather than
      * falling through.
      */
@@ -780,6 +868,7 @@ describe('ConversationMessageItem — inline citations', () => {
     expect(mockOpenCanvas).not.toHaveBeenCalled();
     expect(onAttachmentClick).toHaveBeenCalledWith(
       expect.objectContaining({ url: 'files/account/uploads/export.csv' }),
+      1,
     );
   });
 
@@ -1021,11 +1110,11 @@ describe('ConversationMessageItem — inline citations', () => {
   });
 
   /*
-   * Fixture trimmed from a user-confirmed reproduction of issue #8822: the
+   * Fixture trimmed from a user-confirmed reproduction of [#8822](https://github.com/epam/ai-dial-chat/issues/8822): the
    * assistant response's `content`/`custom_content.annotations`, source URL
    * replaced with a test value, execution history/model state omitted.
    * Findings from that payload (recorded in task 4.1 of
-   * `openspec/changes/fix-repeated-citation-popup-identity/tasks.md`):
+   * `openspec/changes/archive/2026-09-16-fix-repeated-citation-popup-identity/tasks.md`):
    * source is a PDF (not the issue's original DOCX); `ff3390`/`7bba1b` each
    * occur twice in `content` against exactly one annotation each (no
    * `index`); `ff3390`'s annotation carries two `pdf_region` selectors. This
@@ -1263,6 +1352,77 @@ describe('ConversationMessageItem — message action gates', () => {
   });
 });
 
+describe('ConversationMessageItem — user message Copy action', () => {
+  const writeText = vi.fn(() => Promise.resolve());
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+  });
+
+  it('renders a Copy message button on a user message', () => {
+    render(<ConversationMessageItem {...defaultProps} msg={USER_MESSAGE} />);
+    expect(screen.getByRole('button', { name: 'Copy message' })).toBeTruthy();
+  });
+
+  it('keeps Copy message enabled while the assistant is typing', () => {
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={USER_MESSAGE}
+        isAssistantTyping
+      />,
+    );
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Copy message',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  });
+
+  it('renders Copy message when edit and delete are hidden', () => {
+    vi.mocked(useUiFeatureModule.useUiFeature).mockImplementation(
+      (feature) =>
+        feature === OverlayFeature.HideEditUserMessage ||
+        feature === OverlayFeature.HideDeleteUserMessage,
+    );
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={USER_MESSAGE}
+        onStartEdit={vi.fn()}
+        onDeleteMessage={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Edit message' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy message' })).toBeTruthy();
+  });
+
+  it('copies the full multiline content without editing or deleting the message', () => {
+    const onStartEdit = vi.fn();
+    const onDeleteMessage = vi.fn();
+    const content = 'Line one\n\n- item a\n- item b';
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={{ ...USER_MESSAGE, content }}
+        onStartEdit={onStartEdit}
+        onDeleteMessage={onDeleteMessage}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }));
+
+    expect(writeText).toHaveBeenCalledWith(content);
+    expect(onStartEdit).not.toHaveBeenCalled();
+    expect(onDeleteMessage).not.toHaveBeenCalled();
+    expect(screen.getByText(/Line one/)).toBeTruthy();
+  });
+});
+
 describe('ConversationMessageItem — Markdown table actions', () => {
   const TABLE_MARKDOWN = '| Name | Value |\n| --- | --- |\n| Alpha | 1 |';
 
@@ -1338,6 +1498,69 @@ describe('ConversationMessageItem — Markdown table actions', () => {
       ChatI18nKeys.MarkdownTableTitle,
     );
     vi.unstubAllGlobals();
+  });
+});
+
+describe('ConversationMessageItem — stage attachment click handling', () => {
+  const renderWithStageAttachment = (attachment: {
+    title: string;
+    data?: string;
+    reference_url?: string;
+  }) =>
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={{
+          role: MessageRole.Assistant,
+          content: 'Here are the results',
+          timestamp: '2024-01-01T00:00:05Z',
+          custom_content: {
+            stages: [
+              {
+                index: 0,
+                name: 'Combined search',
+                status: StageStatus.Completed,
+                attachments: [attachment],
+              },
+            ],
+          },
+        }}
+        index={1}
+      />,
+    );
+
+  it('opens a stage attachment with inline data as markdown in the attachment canvas', () => {
+    renderWithStageAttachment({
+      title: 'result.csv',
+      data: 'Some markdown search result',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'result.csv' }));
+
+    expect(mockOpenCanvas).toHaveBeenCalledWith(
+      {
+        type: AttachmentContentType.Markdown,
+        text: 'Some markdown search result',
+      },
+      'result.csv',
+    );
+  });
+
+  it('opens a reference-only stage attachment (no inline data) in a new tab via the resolved download URL', () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderWithStageAttachment({
+      title: 'result.csv',
+      reference_url: 'files/bucket-1/generated/report.txt',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'result.csv' }));
+
+    expect(openSpy).toHaveBeenCalledWith(
+      '/api/v1/files/download?bucket=bucket-1&path=generated%2Freport.txt',
+      '_blank',
+      'noopener,noreferrer',
+    );
+    openSpy.mockRestore();
   });
 });
 
@@ -1418,6 +1641,46 @@ describe('ConversationMessageItem — application visualizers', () => {
 
     expect(screen.getByText('my-viz')).toBeTruthy();
     expect(screen.getByTitle('my-viz')).toBeTruthy();
+  });
+
+  it('hides the inline header title when the entry sets withoutTitle', () => {
+    applicationVisualizersMock = registryWith({ withoutTitle: true });
+
+    renderItem();
+
+    expect(screen.queryByText('my-viz')).toBeNull();
+    expect(screen.getByTitle('my-viz')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'attachmentCanvas.expandAppLabel' }),
+    ).toBeTruthy();
+  });
+
+  it('renders the inline frame without its border when the entry sets borderless', () => {
+    applicationVisualizersMock = registryWith({ borderless: true });
+
+    renderItem();
+
+    const toolbar = screen.getByRole('toolbar', {
+      name: 'attachmentCanvas.visualizerActionsAriaLabel',
+    });
+    // eslint-disable-next-line testing-library/no-node-access -- the frame root is a presentational wrapper with no accessible role to query
+    const frame = toolbar.closest('.overflow-hidden');
+
+    expect(frame?.classList.contains('border')).toBe(false);
+  });
+
+  it('forwards a SEND_MESSAGE from the inline visualizer to onVisualizerSendMessage', () => {
+    applicationVisualizersMock = registryWith();
+    const onVisualizerSendMessage = vi.fn();
+
+    renderItem({ onVisualizerSendMessage });
+    act(() => {
+      visualizerSubscriptions.get('my-viz/SEND_MESSAGE')?.({
+        message: 'Next page',
+      });
+    });
+
+    expect(onVisualizerSendMessage).toHaveBeenCalledWith('Next page');
   });
 
   it('renders no inline visualizer when the registry is empty', () => {
@@ -1593,5 +1856,373 @@ describe('ConversationMessageItem — application visualizer sizing and fallback
 
     expect(screen.queryByText('my-viz')).toBeNull();
     expect(screen.getByTitle('unresolvable')).toBeTruthy();
+  });
+});
+
+describe('ConversationMessageItem — conversation-level annotation pool', () => {
+  const poolAnnotation: Annotation = {
+    target: { selector: { type: 'html_tag', tag: 'cit', id: 'pooled-1' } },
+    body: {
+      title: 'earlier-turn.pdf',
+      source: {
+        type: 'attachment',
+        attachment: {
+          type: 'application/pdf',
+          url: 'https://example.com/earlier-turn.pdf',
+        },
+      },
+    },
+  };
+  const poolGroup: AnnotationGroup = {
+    groupKey: 'cit:pooled-1',
+    sourceUrl: 'https://example.com/earlier-turn.pdf',
+    sourceName: 'earlier-turn.pdf',
+    annotations: [poolAnnotation],
+    primaryAnnotation: poolAnnotation,
+  };
+  const message: Message = {
+    role: MessageRole.Assistant,
+    content: 'This claim<cit data-id="pooled-1"></cit> was cited earlier.',
+    timestamp: '2026-09-22T10:00:00Z',
+  };
+
+  it('renders an interactive citation marker for a citation resolved only from the pool', () => {
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={message}
+        index={1}
+        fallbackCitationGroups={[poolGroup]}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: CitationsI18nKeys.MarkerAriaLabel }),
+    ).toBeTruthy();
+  });
+
+  it("invokes the canvas with the pooled annotation's attachment on Preview", async () => {
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={message}
+        index={1}
+        fallbackCitationGroups={[poolGroup]}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: CitationsI18nKeys.MarkerAriaLabel }),
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: BasicI18nKeys.Preview }),
+    );
+
+    expect(mockOpenCanvas).toHaveBeenCalledWith(
+      expect.objectContaining({ url: 'https://example.com/earlier-turn.pdf' }),
+      expect.any(String),
+    );
+  });
+
+  it('renders literal text for the same message when the pool is empty', () => {
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={message}
+        index={1}
+        fallbackCitationGroups={[]}
+      />,
+    );
+
+    expect(
+      screen.queryByRole('button', { name: CitationsI18nKeys.MarkerAriaLabel }),
+    ).toBeFalsy();
+    expect(
+      screen.getByText(
+        'This claim<cit data-id="pooled-1"></cit> was cited earlier.',
+      ),
+    ).toBeTruthy();
+  });
+});
+
+describe('ConversationMessageItem — stream error banner (issue #8979)', () => {
+  const failedMessage = (streamErrorMessage: string): Message => ({
+    role: MessageRole.Assistant,
+    content: 'Partial answer',
+    timestamp: '2024-01-01T00:00:02Z',
+    streamErrorMessage,
+  });
+
+  const renderFailed = (
+    streamErrorMessage: string,
+    props: Partial<ComponentProps<typeof ConversationMessageItem>> = {},
+  ) =>
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={failedMessage(streamErrorMessage)}
+        index={3}
+        onRegenerateMessage={vi.fn()}
+        {...props}
+      />,
+    );
+
+  it('shows the title and the localized fallback when the error carries no text', () => {
+    renderFailed('');
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain(ChatI18nKeys.StreamErrorTitle);
+    expect(alert.textContent).toContain(ChatI18nKeys.StreamError);
+  });
+
+  it('shows upstream error text under the same title', () => {
+    renderFailed('Rate limit exceeded');
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain(ChatI18nKeys.StreamErrorTitle);
+    expect(alert.textContent).toContain('Rate limit exceeded');
+    expect(screen.queryByText(ChatI18nKeys.StreamError)).toBeNull();
+  });
+
+  it.each([
+    { mobile: false, direction: 'ltr' },
+    { mobile: true, direction: 'ltr' },
+    { mobile: false, direction: 'rtl' },
+    { mobile: true, direction: 'rtl' },
+  ])(
+    'keeps an unsaved answer beside its accessible warning ($mobile, $direction)',
+    ({ mobile, direction }) => {
+      isMobileMock = mobile;
+      const warning =
+        'The response could not be saved. Copy it before continuing.';
+      render(
+        <div dir={direction}>
+          <ConversationMessageItem
+            {...defaultProps}
+            msg={failedMessage(warning)}
+            index={3}
+          />
+        </div>,
+      );
+      expect(screen.getByText('Partial answer')).toBeTruthy();
+      expect(screen.getByRole('alert').textContent).toContain(warning);
+    },
+  );
+
+  it('renders no error banner for a successful message', () => {
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={{
+          role: MessageRole.Assistant,
+          content: 'Done',
+          timestamp: '2024-01-01T00:00:02Z',
+        }}
+        onRegenerateMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: ButtonsI18nKeys.TryAgain }),
+    ).toBeNull();
+  });
+
+  it('regenerates the failed message when Try again is clicked', async () => {
+    const onRegenerateMessage = vi.fn();
+    renderFailed('', { onRegenerateMessage });
+
+    const alert = screen.getByRole('alert');
+    const retry = screen.getByRole('button', {
+      name: ButtonsI18nKeys.TryAgain,
+    });
+    expect(alert.contains(retry)).toBe(true);
+
+    await userEvent.click(retry);
+
+    expect(onRegenerateMessage).toHaveBeenCalledOnce();
+    expect(onRegenerateMessage).toHaveBeenCalledWith(3);
+  });
+
+  it('regenerates the failed message when Try again is activated with the keyboard', async () => {
+    const onRegenerateMessage = vi.fn();
+    renderFailed('', { onRegenerateMessage });
+
+    screen.getByRole('button', { name: ButtonsI18nKeys.TryAgain }).focus();
+    await userEvent.keyboard('{Enter}');
+
+    expect(onRegenerateMessage).toHaveBeenCalledWith(3);
+  });
+
+  it('hides Try again when hide-regenerate-assistant-message is enabled', () => {
+    vi.mocked(useUiFeatureModule.useUiFeature).mockImplementation(
+      (feature) => feature === OverlayFeature.HideRegenerateAssistantMessage,
+    );
+    renderFailed('');
+
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: ButtonsI18nKeys.TryAgain }),
+    ).toBeNull();
+  });
+
+  it('hides Try again when no regenerate handler is provided', () => {
+    renderFailed('', { onRegenerateMessage: undefined });
+
+    expect(
+      screen.queryByRole('button', { name: ButtonsI18nKeys.TryAgain }),
+    ).toBeNull();
+  });
+
+  it('disables Try again while the assistant is typing', async () => {
+    const onRegenerateMessage = vi.fn();
+    renderFailed('', { onRegenerateMessage, isAssistantTyping: true });
+
+    const retry = screen.getByRole('button', {
+      name: ButtonsI18nKeys.TryAgain,
+    }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+
+    await userEvent.click(retry);
+
+    expect(onRegenerateMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps Try again reachable in a right-to-left layout without physical-direction classes', () => {
+    render(
+      <div dir="rtl">
+        <ConversationMessageItem
+          {...defaultProps}
+          msg={failedMessage('')}
+          index={3}
+          onRegenerateMessage={vi.fn()}
+        />
+      </div>,
+    );
+
+    expect(
+      screen.getByRole('button', { name: ButtonsI18nKeys.TryAgain }),
+    ).toBeTruthy();
+    const alertMarkup = screen.getByRole('alert').innerHTML;
+    expect(alertMarkup).not.toMatch(/\b(ml|mr|pl|pr|left|right)-/);
+    expect(alertMarkup).not.toMatch(/\btext-(left|right)\b/);
+  });
+});
+
+describe('ConversationMessageItem — stage normalization at the app boundary', () => {
+  const assistantWith = (stages: unknown[]): Message => ({
+    role: MessageRole.Assistant,
+    content: 'Result',
+    timestamp: '2024-01-01T00:00:05Z',
+    custom_content: { stages: stages as never },
+  });
+
+  it('gives unindexed history stages positional indexes and keeps their parents', () => {
+    const history = [
+      { name: 'Plan', status: 'completed' },
+      { name: 'Search', status: 'completed', parent_stage_index: 0 },
+      { name: 'Read', parent_stage_index: 1 },
+    ];
+    const snapshot = structuredClone(history);
+
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={assistantWith(history)}
+        index={1}
+      />,
+    );
+
+    expect(capturedStageGroupProps?.stages).toEqual([
+      { index: 0, name: 'Plan', status: StageStatus.Completed },
+      {
+        index: 1,
+        name: 'Search',
+        status: StageStatus.Completed,
+        parent_stage_index: 0,
+      },
+      { index: 2, name: 'Read', status: null, parent_stage_index: 1 },
+    ]);
+    expect(history).toEqual(snapshot);
+  });
+
+  it('keeps explicit live indexes and parents from streamed or replayed data', () => {
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={assistantWith([
+          { index: 4, name: 'Plan', status: null },
+          { index: 9, name: 'Search', status: null, parent_stage_index: 4 },
+        ])}
+        index={1}
+        totalCount={2}
+        isAssistantTyping
+      />,
+    );
+
+    expect(capturedStageGroupProps?.stages).toEqual([
+      { index: 4, name: 'Plan', status: null },
+      { index: 9, name: 'Search', status: null, parent_stage_index: 4 },
+    ]);
+  });
+
+  it('reuses the normalized stages for the same stored array and refreshes on a new snapshot', () => {
+    const msg = assistantWith([{ index: 0, name: 'Plan', status: null }]);
+    const { rerender } = render(
+      <ConversationMessageItem {...defaultProps} msg={msg} index={1} />,
+    );
+    const first = capturedStageGroupProps?.stages;
+
+    rerender(<ConversationMessageItem {...defaultProps} msg={msg} index={1} />);
+    expect(capturedStageGroupProps?.stages).toBe(first);
+
+    rerender(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={assistantWith([
+          { index: 0, name: 'Plan', status: 'completed' },
+          { index: 1, name: 'Search', status: 'failed', parent_stage_index: 0 },
+        ])}
+        index={1}
+      />,
+    );
+    expect(capturedStageGroupProps?.stages).toEqual([
+      { index: 0, name: 'Plan', status: StageStatus.Completed },
+      {
+        index: 1,
+        name: 'Search',
+        status: StageStatus.Failed,
+        parent_stage_index: 0,
+      },
+    ]);
+  });
+
+  it('passes translated stage labels for nested attempts, status and actions', () => {
+    render(
+      <ConversationMessageItem
+        {...defaultProps}
+        msg={assistantWith([{ index: 0, name: 'Plan', status: null }])}
+        index={1}
+      />,
+    );
+
+    const labels = capturedStageGroupProps?.labels as {
+      executedLabel: string;
+      runningAriaLabel: string;
+      failedAriaLabel: string;
+      failedCountLabel: (count: number) => string;
+      attemptLabel: (number: number) => string;
+      copyAriaLabel: string;
+      attachmentClickLabel: string;
+    };
+    expect(labels).toMatchObject({
+      executedLabel: 'Executed',
+      runningAriaLabel: 'conversation.stages.running',
+      failedAriaLabel: 'conversation.stages.failed',
+      copyAriaLabel: 'conversation.stages.copyContent',
+      attachmentClickLabel: 'conversation.stages.previewAttachment',
+    });
+    expect(labels.attemptLabel(2)).toBe('conversation.stages.attempt');
+    expect(labels.failedCountLabel(3)).toBe('conversation.stages.failedCount');
   });
 });

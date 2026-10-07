@@ -1,4 +1,8 @@
 import { parse as parseYaml } from 'yaml';
+import {
+  ENTITY_DESCRIPTION_MAX_LENGTH,
+  ENTITY_NAME_MAX_LENGTH,
+} from '../../common/validators/entity-field-limits';
 
 /** A line consisting solely of `---`, opening or closing the frontmatter block. */
 const FENCE_LINE = /^---[ \t]*$/;
@@ -20,7 +24,7 @@ export class InvalidSkillManifestError extends Error {}
 /**
  * Strict backend counterpart to the frontend's `parseSkillManifest`: requires
  * well-formed YAML frontmatter with non-empty string `name`/`description`
- * (design.md D6, `add-skill-archive-import`). Backend code cannot import the
+ * (`openspec/changes/archive/2026-08-20-add-skill-archive-import/design.md` D6, `add-skill-archive-import`). Backend code cannot import the
  * frontend utility (apps may not import from each other), and the frontend
  * version is deliberately lossy for rendering — this one is deliberately
  * strict for validating untrusted archive content before a Skill is created.
@@ -71,6 +75,17 @@ export const parseSkillManifestFrontmatter = (
   if (typeof description !== 'string' || description.trim() === '') {
     throw new InvalidSkillManifestError(
       'SKILL.md frontmatter must include a non-empty "description"',
+    );
+  }
+
+  if (name.trim().length > ENTITY_NAME_MAX_LENGTH) {
+    throw new InvalidSkillManifestError(
+      `SKILL.md frontmatter "name" must be ${ENTITY_NAME_MAX_LENGTH} characters or fewer`,
+    );
+  }
+  if (description.trim().length > ENTITY_DESCRIPTION_MAX_LENGTH) {
+    throw new InvalidSkillManifestError(
+      `SKILL.md frontmatter "description" must be ${ENTITY_DESCRIPTION_MAX_LENGTH} characters or fewer`,
     );
   }
 

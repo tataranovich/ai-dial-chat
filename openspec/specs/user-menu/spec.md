@@ -16,7 +16,7 @@ A Logout confirmation dialog guards the logout action.
 
 ### Requirement: Avatar trigger opens the dropdown
 
-`UserMenu` SHALL render a `<button type="button">` carrying `aria-label={labels.trigger}` — the host passes `t('auth.signedInAs', { email })` — wrapping a `Tooltip` whose content is `profile.email` and whose visibility is controlled by the `isTooltipHidden` prop. The button SHALL open a `Dropdown` with `placement="top-end"` and `matchReferenceWidth={false}`.
+`UserMenu` SHALL render the kit `Button` carrying `aria-label={labels.trigger}` — the host passes `t('auth.signedInAs', { email })` — with `iconBefore` set to the `UserAvatar` and `tooltipProps={{ tooltip: profile.email, hideTooltip: isTooltipHidden }}`, so the email tooltip is attached to the button itself. The button SHALL open a `Dropdown` with `placement="top-end"` and `matchReferenceWidth={false}`.
 
 `UserMenu` itself has no viewport logic. Desktop-only placement is the host's: `Navigation` renders `UserMenu` only inside the `!isMobile` branch, as the `NavigationPanel`'s `footer`. On mobile the `NavigationSheet` owns the settings surface instead, and it is passed only the keyboard-shortcut group — the locale picker stays desktop-only.
 
@@ -39,17 +39,25 @@ i18n keys: `auth.signedInAs`, `auth.userAvatar`, `buttons.logOut`, `basic.settin
 `UserMenu` SHALL assemble its dropdown items in exactly this order:
 
 1. `identity` — a `DropdownItemType.PlainText` row (see below).
-2. One item per entry of `groups` whose `options` array is non-empty, in the order given, each rendered as a submenu via `DropdownItem.children`.
+2. One item per entry of `groups` whose `options` array is non-empty, in the order given, each
+   rendered as a submenu via `DropdownItem.children`.
 3. `divider-1` — a single `DropdownItemType.Divider`.
 4. `settings` — present only when the host passes `onSettings`.
 5. `logout` — always present, last.
 
-There is exactly **one** divider, and it sits **after** the preference groups, separating them from Settings and Log out. A group whose `options` array is empty is dropped entirely, so a host that supplies no groups yields `identity → divider → [settings] → logout`.
+There is exactly **one** divider, and it sits **after** the preference groups, separating them from
+Settings and Log out. A group whose `options` array is empty is dropped entirely, so a host that
+supplies no groups yields `identity → divider → [settings] → logout`.
 
-#### Scenario: Full desktop order with one preference group
-- **GIVEN** the host supplies only the keyboard-shortcut group and passes `onSettings`
-- **WHEN** the user opens the dropdown
-- **THEN** the items are, in order: identity header, Keyboard shortcuts, a divider, Settings, Log out
+`Navigation` passes `groups={languageGroup ? [languageGroup] : undefined}` — `undefined` in every
+shipping build, since only one locale ships — and passes `onSettings` unless
+`OverlayFeature.HideSettingsPage` is enabled, so the rendered menu is
+`identity → divider → Settings → Log out` (or `identity → divider → Log out` when the overlay hides
+the settings page).
+
+#### Scenario: Desktop order in this app
+- **WHEN** a signed-in user opens the dropdown
+- **THEN** the items are, in order: identity header, a divider, Settings, Log out
 
 #### Scenario: Empty groups are dropped
 - **GIVEN** a group is supplied whose `options` array is empty
@@ -57,7 +65,7 @@ There is exactly **one** divider, and it sits **after** the preference groups, s
 - **THEN** no item is rendered for that group
 
 #### Scenario: Settings is omitted when the host offers no handler
-- **GIVEN** the host passes no `onSettings`
+- **GIVEN** a host passes no `onSettings`
 - **WHEN** the dropdown is rendered
 - **THEN** no Settings item appears and Log out immediately follows the divider
 
@@ -82,15 +90,15 @@ The first item SHALL be a non-interactive `DropdownItemType.PlainText` row showi
 
 When the host passes `onSettings`, `UserMenu` SHALL render a `settings` item with `IconSettings` (`DIAL_ICON_SIZE.SM`, `aria-hidden`, `stroke={DIAL_KIT_ICON_STROKE}`) and the label `labels.settings`, placed between the divider and Log out.
 
-The host SHALL pass `onSettings` only when the `settingsPageEnabled` feature flag is on, and its handler SHALL navigate to `ROUTES.Settings`. The same flag gates the `labels.settings` string, so the entry never renders without its label.
+The host SHALL pass `onSettings` unless `OverlayFeature.HideSettingsPage` is enabled, and its handler SHALL navigate to `ROUTES.Settings`. `labels.settings` (`t('basic.settings')`) is always passed. The same handler is also passed to the mobile `NavigationSheet`.
 
 #### Scenario: Settings navigates to the settings route
-- **GIVEN** `settingsPageEnabled` is on
+- **GIVEN** `OverlayFeature.HideSettingsPage` is not enabled
 - **WHEN** the user activates the Settings item
 - **THEN** the app navigates to `ROUTES.Settings`
 
-#### Scenario: Settings is hidden behind its flag
-- **GIVEN** `settingsPageEnabled` is off
+#### Scenario: Settings is hidden by the overlay feature
+- **GIVEN** `OverlayFeature.HideSettingsPage` is enabled
 - **WHEN** the dropdown is rendered
 - **THEN** no Settings item appears
 
@@ -98,34 +106,67 @@ The host SHALL pass `onSettings` only when the `settingsPageEnabled` feature fla
 
 ### Requirement: Preference groups are supplied by the host
 
-The submenus in the dropdown SHALL NOT be built by `UserMenu`. `useNavigationMenuGroups` (`apps/chat/src/hooks/navigation/useNavigationMenuGroups.tsx`) builds them as `NavigationMenuGroup` values — `{ id, label, icon, options }`, each option carrying `{ id, label, isActive, onSelect }` — and `Navigation` passes the non-`undefined` ones as `groups`.
+The submenus in the dropdown SHALL NOT be built by `UserMenu`. `useNavigationMenuGroups`
+(`apps/chat/src/hooks/navigation/useNavigationMenuGroups.tsx`) builds them as `NavigationMenuGroup`
+values — `{ id, label, icon, options }`, each option carrying `{ id, label, isActive, onSelect }` —
+and `Navigation` passes them to the surface that needs them.
 
-Every group SHALL be suppressed when `OverlayFeature.HideUserSettings` is enabled.
+`useNavigationMenuGroups` SHALL return two fields:
 
-Two groups exist today:
+- `languageGroup?` (`id: 'language'`, `IconLanguage`, label `t('settings.language')`) — one option
+  per entry of `SUPPORTED_LANGUAGES`, selecting one calls `changeLanguage(code)`. Built only when
+  `SUPPORTED_LANGUAGES.length > 1` **and** `OverlayFeature.HideUserSettings` is off. `Navigation`
+  passes it to the desktop `UserMenu`.
+- `keyboardGroup?` (`id: 'keyboard-shortcuts'`, `IconKeyboard`) — the send-on-Enter picker for the
+  **mobile `NavigationSheet`**, suppressed by `OverlayFeature.HideUserSettings` or
+  `OverlayFeature.HideKeyboardShortcuts`. `Navigation` passes it to the sheet as
+  `groups={keyboardGroup ? [keyboardGroup] : undefined}`; the sheet also receives the same
+  `onSettings` handler as the desktop menu (omitted under `OverlayFeature.HideSettingsPage`).
 
-- **Language** (`id: 'language'`, `IconLanguage`, label `t('settings.language')`) — one option per entry of `SUPPORTED_LANGUAGES`, selecting one calls `changeLanguage(code)`. Built **only when `SUPPORTED_LANGUAGES.length > 1`**.
-- **Keyboard shortcuts** (`id: 'keyboard-shortcuts'`, `IconKeyboard`, label `t('settings.keyboardShortcuts')`) — two options bound to `useKeyboardShortcutPreference`. Additionally suppressed by `OverlayFeature.HideKeyboardShortcuts`.
+The locale picker is therefore offered on **two** surfaces — this menu and the Preferences tab —
+while theme and "Default agent for new chats" are offered only in the Preferences tab. Both language surfaces
+write through the same `useLanguage().changeLanguage`, so they cannot disagree; the duplication is
+deliberate, so that a multi-locale deployment keeps the quick picker it has always had.
 
-The active option in each group SHALL be visually indicated through `MenuItemLabel`'s `isActive`.
+Since `SUPPORTED_LANGUAGES` holds one entry today, `languageGroup` is `undefined` in every shipping
+build and the rendered menu is `identity → divider → Settings → Log out`. The field stays wired so
+the group appears the moment a second locale is registered.
 
-i18n keys: `settings.language`, `settings.keyboardShortcuts`, `settings.shortcutEnter`, `settings.shortcutMetaEnter`
+The `settingsPageEnabled` gating that briefly conditioned these fields is removed along with the
+flag; neither field is gated on it.
 
-#### Scenario: Language group is absent while only one locale ships
-- **GIVEN** `SUPPORTED_LANGUAGES` holds a single entry
-- **WHEN** the dropdown is rendered
-- **THEN** no Language item appears
+The active option of a group SHALL be visually indicated from its `isActive` flag: in the
+`UserMenu` dropdown each option is rendered with `mark: MenuItemMark.Check` and
+`checked: option.isActive` (a trailing check announced as a radio item); in the sheet's
+`OptionListPage` it drives the row's `isCurrent` state.
 
-This is the shipping state today: `SUPPORTED_LANGUAGES` contains only `{ code: 'en', nativeName: 'English' }`, so no build currently renders a Language item. A test that asserts the entry's presence, or that asserts a locale round-trip through it, cannot pass until a second locale is registered.
+i18n keys: `settings.language`, `settings.keyboardShortcuts`, `settings.shortcutEnter`,
+`settings.shortcutMetaEnter`
 
-#### Scenario: Language group appears once a second locale is registered
+#### Scenario: The user menu offers no submenus while one locale ships
+- **GIVEN** `SUPPORTED_LANGUAGES` holds a single entry — the shipping state
+- **WHEN** a signed-in user opens the `UserMenu` dropdown
+- **THEN** no Language, Keyboard shortcuts, or Theme item appears, and the items are
+  `identity → divider → Settings → Log out`
+
+#### Scenario: The user menu offers the language group once a second locale is registered
 - **GIVEN** `SUPPORTED_LANGUAGES` holds two or more entries
-- **WHEN** the dropdown is rendered
+- **WHEN** a signed-in user opens the `UserMenu` dropdown
 - **THEN** a Language item appears above the divider, with one option per entry
 
+#### Scenario: The mobile sheet keeps the keyboard group
+- **WHEN** the mobile `NavigationSheet` is opened and the user enters its profile page
+- **THEN** a Keyboard shortcuts item is present with its two options
+
+#### Scenario: The keyboard group is not offered in the user menu
+- **WHEN** a signed-in user opens the `UserMenu` dropdown
+- **THEN** no Keyboard shortcuts item appears — the Preferences tab and the mobile sheet are its
+  only surfaces
+
 #### Scenario: Selecting a shortcut option persists it
-- **WHEN** the user activates a keyboard-shortcut option
-- **THEN** `setPreference` is called with the corresponding `SendOnEnter` value and the chat input reflects the new shortcut immediately
+- **WHEN** the user activates a keyboard-shortcut option in the sheet
+- **THEN** `setPreference` is called with the corresponding `SendOnEnter` value and the chat input
+  reflects the new shortcut immediately
 
 #### Scenario: Platform-aware modifier key label
 - **WHEN** the user is on macOS
@@ -133,29 +174,37 @@ This is the shipping state today: `SUPPORTED_LANGUAGES` contains only `{ code: '
 - **WHEN** the user is on Windows or Linux
 - **THEN** it interpolates `Ctrl`
 
-#### Scenario: Hiding user settings removes every group
+#### Scenario: Hiding user settings removes both groups
 - **GIVEN** `OverlayFeature.HideUserSettings` is enabled
-- **WHEN** the dropdown is rendered
-- **THEN** neither the Language nor the Keyboard shortcuts item appears
+- **WHEN** navigation renders
+- **THEN** both `languageGroup` and `keyboardGroup` are `undefined`; no Language item appears in the
+  menu and the sheet offers no Keyboard shortcuts item
 
-#### Scenario: Hiding keyboard shortcuts leaves the other groups untouched
-- **GIVEN** only `OverlayFeature.HideKeyboardShortcuts` is enabled
-- **WHEN** the dropdown is rendered
-- **THEN** no Keyboard shortcuts item appears, and every other group the host would otherwise supply is unaffected
-
-Note that "unaffected" is not the same as "rendered": with a single locale shipping, the Language group is absent for its own reason, independently of this flag.
+#### Scenario: Hiding keyboard shortcuts leaves the language group alone
+- **GIVEN** `OverlayFeature.HideKeyboardShortcuts` is enabled and two or more locales are registered
+- **WHEN** navigation renders
+- **THEN** `keyboardGroup` is `undefined` and `languageGroup` is still built
 
 ---
 
 ### Requirement: Theme selection is not offered in the user menu
 
-No Theme group SHALL be built today. `useNavigationMenuGroups` carries an explicit `TODO` recording the intent to reinstate one from `useThemeOptions`, which still exposes `hasDark`, `hasLight`, `selectedTheme`, `setTheme` and `themes` for that purpose. Only the light theme ships, so a Theme submenu would offer a single option.
+No Theme group SHALL be built. The `TODO` in `useNavigationMenuGroups` that recorded the intent to
+reinstate one from `useThemeOptions` SHALL be **deleted**: the intent is discharged elsewhere, by the
+theme selector in the Settings page's Preferences tab (`settings-preferences-tab`), which is
+`useThemeOptions`' first call site.
 
-Until that group is built, the user menu SHALL NOT render a Theme item, and the resolved-versus-stored-preference behaviour of `ThemeContext` is specified by the theming documentation rather than here.
+The user menu SHALL NOT render a Theme item. `ThemeContext`'s resolved-versus-stored-preference
+behaviour continues to be specified by the theming documentation rather than here.
 
 #### Scenario: No Theme item is present
 - **WHEN** the dropdown is rendered
 - **THEN** no Theme item appears
+
+#### Scenario: The reinstatement TODO no longer exists
+- **WHEN** `useNavigationMenuGroups.tsx` is read
+- **THEN** it carries no `TODO` about building a theme group, because `useThemeOptions` now has a
+  real consumer
 
 ---
 
@@ -165,13 +214,13 @@ Until that group is built, the user menu SHALL NOT render a Theme item, and the 
 
 Props: `isOpen`, `onClose`.
 
-Confirming SHALL `await logout()`, log and swallow a failure so the client still tears down its session, `reset()` the auth state, and — unless the app is running as an overlay — navigate to `ROUTES.Login`. Cancelling and closing SHALL call `onClose` without logging out.
+Confirming SHALL `await logout()` and log and swallow a failure so the client still tears down its session. In overlay mode it SHALL then `reset()` the auth state without navigating. Outside overlay mode it SHALL perform a full document load with `window.location.replace(ROUTES.Login)` instead of a client-side navigate and SHALL skip `reset()` — a fresh `index.html` drops all in-memory state and references the current chunks (Issue #9254), and an `Unauthenticated` status would let `useAuthRedirect` race the navigation with a single-provider SSO redirect. Cancelling and closing SHALL call `onClose` without logging out.
 
 i18n keys: `auth.logOutConfirmTitle`, `auth.logOutConfirmDescription`, `buttons.logOut`
 
 #### Scenario: Confirm logs out and returns to login
 - **WHEN** the user confirms in the dialog and the app is not an overlay
-- **THEN** `logout()` is awaited, the auth state is reset, and the app navigates to `ROUTES.Login`
+- **THEN** `logout()` is awaited and the page is replaced with a full load of `ROUTES.Login` via `window.location.replace`, without calling `reset()`
 
 #### Scenario: Confirm in overlay mode does not navigate
 - **GIVEN** the app is running as an overlay
@@ -180,7 +229,7 @@ i18n keys: `auth.logOutConfirmTitle`, `auth.logOutConfirmDescription`, `buttons.
 
 #### Scenario: A failed logout request still resets the client
 - **WHEN** `logout()` rejects
-- **THEN** the error is logged and the auth state is still reset
+- **THEN** the error is logged and the client still tears down its session — `reset()` in overlay mode, the full `ROUTES.Login` load otherwise
 
 #### Scenario: Cancel closes without logging out
 - **WHEN** the user clicks Cancel or presses Escape

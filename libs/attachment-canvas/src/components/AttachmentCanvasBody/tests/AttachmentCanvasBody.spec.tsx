@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { MarkdownRenderer } from '@epam/ai-dial-chat-shared';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AttachmentCanvasContent } from '../../../models/attachment-canvas';
 import {
@@ -14,9 +15,9 @@ vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
     await importOriginal<typeof import('@epam/ai-dial-chat-shared')>();
   return {
     ...actual,
-    MarkdownRenderer: ({ content }: { content: string }) => (
+    MarkdownRenderer: vi.fn(({ content }: { content: string }) => (
       <section aria-label="markdown-renderer">{content}</section>
-    ),
+    )),
   };
 });
 
@@ -27,12 +28,18 @@ vi.mock('react-json-view-lite', () => ({
   defaultStyles: {},
 }));
 
+const visualizerSubscriptions = new Map<string, (payload: unknown) => void>();
+
 vi.mock('@epam/ai-dial-visualizer-connector', () => ({
   VisualizerConnector: vi.fn().mockImplementation(function () {
     return {
       ready: vi.fn().mockReturnValue(new Promise(() => undefined)),
       send: vi.fn(),
       destroy: vi.fn(),
+      subscribe: (eventType: string, callback: (payload: unknown) => void) => {
+        visualizerSubscriptions.set(eventType, callback);
+        return vi.fn();
+      },
     };
   }),
 }));
@@ -112,7 +119,7 @@ describe('AttachmentCanvasBody', () => {
     expect(screen.getByText('Broken image')).toBeTruthy();
   });
 
-  it('renders an audio element with the given mimeType', () => {
+  it('renders an audio element with the given mimeType and no native download', () => {
     renderBody(
       {
         type: AttachmentContentType.Audio,
@@ -121,7 +128,9 @@ describe('AttachmentCanvasBody', () => {
       },
       { fileName: 'track.mp3' },
     );
-    expect(screen.getByLabelText('track.mp3')).toBeTruthy();
+    expect(
+      screen.getByLabelText('track.mp3').getAttribute('controlsList'),
+    ).toBe('nodownload');
   });
 
   it('renders MarkdownRenderer for Markdown content', () => {
@@ -147,6 +156,29 @@ describe('AttachmentCanvasBody', () => {
     // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- same unlabeled wrapper; verifying the body itself is not clipped
     expect(container.querySelector('.overflow-hidden')).toBeNull();
   });
+
+  it.each([
+    AttachmentContentType.Markdown,
+    AttachmentContentType.MarkdownTable,
+  ])(
+    'forwards code-block, table and formula labels to MarkdownRenderer for %s content',
+    (type) => {
+      const markdownLabels = {
+        codeBlockCopyLabel: 'Kopieren',
+        codeBlockCopiedLabel: 'Kopiert!',
+        codeBlockDownloadLabel: 'Herunterladen',
+        tableScrollRegionAriaLabel: 'Scrollbare Tabelle',
+        mathScrollRegionAriaLabel: 'Scrollbare Formel',
+      };
+      renderBody({ type, text: '# Title' } as AttachmentCanvasContent, {
+        labels: markdownLabels,
+      });
+
+      expect(vi.mocked(MarkdownRenderer).mock.calls[0]?.[0]).toMatchObject(
+        markdownLabels,
+      );
+    },
+  );
 
   it('clips the body for MarkdownTable content so the table scrolls itself', () => {
     const { container } = renderBody({
@@ -396,6 +428,47 @@ describe('AttachmentCanvasBody', () => {
     });
     expect(screen.getByRole('status')).toBeTruthy();
   });
+
+  it.each([
+    [
+      'Visualizer',
+      {
+        type: AttachmentContentType.Visualizer,
+        url: 'https://viz.example.com',
+        mimeType: 'application/x-my-viz',
+        data: {},
+        layout: { themeId: 'light' },
+        visualizerName: 'my-viz',
+      },
+    ],
+    [
+      'GroupedVisualizer',
+      {
+        type: AttachmentContentType.GroupedVisualizer,
+        url: 'https://viz.example.com',
+        attachments: [],
+        layout: { themeId: 'light' },
+        visualizerName: 'my-viz',
+      },
+    ],
+  ] as const)(
+    'forwards SEND_MESSAGE from %s content to onVisualizerSendMessage',
+    (_label, visualizerContent) => {
+      visualizerSubscriptions.clear();
+      const onVisualizerSendMessage = vi.fn();
+      renderBody(visualizerContent as AttachmentCanvasContent, {
+        onVisualizerSendMessage,
+      });
+
+      act(() => {
+        visualizerSubscriptions.get('my-viz/SEND_MESSAGE')?.({
+          message: 'Zoom in',
+        });
+      });
+
+      expect(onVisualizerSendMessage).toHaveBeenCalledWith('Zoom in');
+    },
+  );
 
   it('renders the unsupported-format message', () => {
     renderBody(

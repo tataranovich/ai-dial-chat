@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1
 
 # ─────────────────────────────────────────────
-# Stage 0: install the patched package manager used by all stages
+# Stage 0: install the package manager used during builds
 # ─────────────────────────────────────────────
-FROM node:24.17-alpine AS node-base
+# Keep in sync with the root Dockerfile and apps/chat-api/Dockerfile when bumping the base image or npm.
+FROM node:24.21-alpine3.24 AS node-base
 
-# npm 12.0.x still bundles vulnerable brace-expansion, ip-address, and tar.
+# Pin npm for builds; remove its bundled dependencies from the final image below.
 RUN apk upgrade --no-cache libcrypto3 libssl3 \
-    && npm install --global npm@11.19.1
+    && npm install --global npm@12.1.0
 
 # ─────────────────────────────────────────────
 # Stage 1: install all workspace dependencies
@@ -49,7 +50,12 @@ COPY --from=builder /workspace/apps/mcp-app-sandbox/dist ./apps/mcp-app-sandbox/
 # Install only production dependencies using the pruned lockfile
 # (workspace_modules are referenced via file: entries in the pruned package.json)
 WORKDIR /app/apps/mcp-app-sandbox/dist
-RUN npm ci --omit=dev
+# Runtime starts with node directly. Project overrides do not patch global npm's
+# bundled dependencies, so remove npm/npx and its cache after the last install.
+RUN npm ci --omit=dev \
+    && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx
 
 WORKDIR /app
 

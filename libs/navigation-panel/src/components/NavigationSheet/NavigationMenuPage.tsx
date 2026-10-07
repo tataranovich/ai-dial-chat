@@ -20,6 +20,10 @@ export interface NavigationMenuPageProps {
   logOutLabel: string;
   /** Called when the user taps "Log out" on the profile page. */
   onLogout: () => void;
+  /** Label of the settings row on the profile page; required when `onSettings` is provided. */
+  settingsLabel?: string;
+  /** Called when the user taps the profile page's settings row; omit to hide the row. */
+  onSettings?: () => void;
   /** Signed-in user details; omit to hide the profile row entirely. */
   profile?: NavigationUserProfile;
   /** Settings groups listed on the profile page; empty groups are skipped. */
@@ -38,6 +42,8 @@ export const NavigationMenuPage: FC<NavigationMenuPageProps> = memo(
     profileLabel,
     logOutLabel,
     onLogout,
+    settingsLabel,
+    onSettings,
     profile,
     groups,
     footer,
@@ -60,6 +66,8 @@ export const NavigationMenuPage: FC<NavigationMenuPageProps> = memo(
             groups={groups}
             logOutLabel={logOutLabel}
             onLogout={onLogout}
+            settingsLabel={settingsLabel}
+            onSettings={onSettings}
             textClassName={textClassName}
           />
         ),
@@ -69,22 +77,24 @@ export const NavigationMenuPage: FC<NavigationMenuPageProps> = memo(
     return (
       <>
         <ul className="flex flex-col pb-4">
-          {items.map((item) => (
-            <SheetRow
-              key={item.id}
-              label={item.label}
-              textClassName={textClassName}
-              isCurrent={item.isActive}
-              isHighlighted={item.isActive}
-              icon={
-                <item.icon
-                  size={BASE_ICON_SIZE}
-                  stroke={DIAL_KIT_ICON_STROKE}
-                />
-              }
-              onClick={() => handleSelectItem(item)}
-            />
-          ))}
+          {items.map((item) => {
+            /* Mirrors the rail: the current row shows its filled glyph. */
+            const Icon = (item.isActive && item.activeIcon) || item.icon;
+
+            return (
+              <SheetRow
+                key={item.id}
+                label={item.label}
+                textClassName={textClassName}
+                isCurrent={item.isActive}
+                isHighlighted={item.isActive}
+                icon={
+                  <Icon size={BASE_ICON_SIZE} stroke={DIAL_KIT_ICON_STROKE} />
+                }
+                onClick={() => handleSelectItem(item)}
+              />
+            );
+          })}
           {profile && (
             <SheetRow
               label={profileLabel}

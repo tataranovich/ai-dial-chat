@@ -2,13 +2,24 @@ import type {
   ScheduledTaskDto,
   ScheduledTaskRunDto,
 } from '@epam/ai-dial-chat-api-client';
-import type { DisplayAttachment } from '@epam/ai-dial-chat-shared';
-import { AttachmentType, RequestStatus } from '@epam/ai-dial-chat-shared';
+import type { DisplayAttachment, Message } from '@epam/ai-dial-chat-shared';
+import {
+  AttachmentType,
+  MIMEType,
+  RequestStatus,
+} from '@epam/ai-dial-chat-shared';
+import type { QuotationSource } from '@epam/ai-dial-source-panel';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ConversationSourcesPanelContainer from '../ConversationSourcesPanel';
+vi.mock('../../../context/SkillsContext', () => ({
+  useSkills: () => ({ skills: [], publicSkills: [], sharedWithMe: [] }),
+}));
+vi.mock('../../../server-api/skills.api', () => ({
+  getSkillMetadata: vi.fn().mockRejectedValue(new Error('Unavailable')),
+}));
 
 const mockNavigate = vi.fn();
 vi.mock('react-router', () => ({
@@ -16,8 +27,13 @@ vi.mock('react-router', () => ({
 }));
 
 let mockConversations: { id: string; isUnread?: boolean }[] = [];
+const MockConversationsContext = createContext<
+  typeof mockConversations | undefined
+>(undefined);
 vi.mock('../../../context/ConversationsContext', () => ({
-  useConversations: () => ({ conversations: mockConversations }),
+  useConversations: () => ({
+    conversations: useContext(MockConversationsContext) ?? mockConversations,
+  }),
 }));
 
 const mockDownloadAttachment = vi.fn();
@@ -29,6 +45,8 @@ const mockRefetch = vi.fn();
 
 let mockUploaded: DisplayAttachment[] = [];
 let mockGenerated: DisplayAttachment[] = [];
+let mockSources: QuotationSource[] = [];
+const mockOpenAttachmentCanvas = vi.hoisted(() => vi.fn());
 
 const activeScheduledTaskMock = vi.hoisted(() => ({
   status: 'not-a-task-conversation' as
@@ -52,34 +70,62 @@ vi.mock('@epam/ai-dial-source-panel', () => ({
     onDownloadAll,
     title,
     additionalSections,
+    sources,
+    onSourceClick,
   }: {
     onDownloadAll?: () => void;
     title?: ReactNode;
     additionalSections?: ReactNode;
+    sources?: QuotationSource[];
+    onSourceClick?: (source: QuotationSource) => void;
   }) => (
     <div>
       {title && <h1>{title}</h1>}
       {additionalSections}
-      <button
-        type="button"
-        aria-label="Download all"
-        disabled={!onDownloadAll}
-        onClick={onDownloadAll}
-      />
+      {sources?.map((source) => (
+        <button
+          key={source.url}
+          type="button"
+          onClick={() => onSourceClick?.(source)}
+        >
+          {source.title}
+        </button>
+      ))}
+      {onDownloadAll && (
+        <button
+          type="button"
+          aria-label="Download all"
+          onClick={onDownloadAll}
+        />
+      )}
     </div>
   ),
 }));
 
+let mockSidebarConversationModelId: string | undefined;
+let mockSidebarIsOpen = true;
+const mockSidebarMessages: Message[] = [];
+/* Messages argument of every `useConversationSources` call, in order. */
+const sourcesDerivationInputs: Message[][] = [];
+
 vi.mock('../../../context/SourcesSidebarContext', () => ({
   useSourcesSidebar: () => ({
     handleClose: mockHandleClose,
-    isOpen: true,
-    messages: [],
+    isOpen: mockSidebarIsOpen,
   }),
+  useSourcesSidebarData: () => ({
+    messages: mockSidebarMessages,
+    conversationModelId: mockSidebarConversationModelId,
+  }),
+}));
+
+const mockRouteConversationId = vi.hoisted(() => ({
+  value: null as string | null,
 }));
 
 vi.mock('../../../context/ActiveScheduledTaskContext', () => ({
   useActiveScheduledTask: () => ({
+    routeConversationId: mockRouteConversationId.value,
     status: activeScheduledTaskMock.status,
     scheduleId: activeScheduledTaskMock.scheduleId,
     runId: activeScheduledTaskMock.runId,
@@ -103,7 +149,10 @@ vi.mock('../../../context/ActiveScheduledTaskContext', () => ({
 
 vi.mock('../../../context/DeploymentsContext', () => ({
   useDeployments: () => ({
-    items: [{ id: 'gpt-5', displayName: 'GPT-5' }],
+    items: [
+      { id: 'gpt-5', displayName: 'GPT-5' },
+      { id: 'gpt-4o', displayName: 'GPT-4o' },
+    ],
   }),
 }));
 
@@ -113,7 +162,7 @@ vi.mock('@epam/ai-dial-attachment-canvas', async (importOriginal) => {
   return {
     ...actual,
     useOpenAttachmentCanvas: () => ({
-      openAttachmentCanvas: vi.fn().mockResolvedValue(false),
+      openAttachmentCanvas: mockOpenAttachmentCanvas,
     }),
   };
 });
@@ -150,11 +199,14 @@ vi.mock(
       >();
     return {
       ...actual,
-      useConversationSources: () => ({
-        uploaded: mockUploaded,
-        generated: mockGenerated,
-        sources: [],
-      }),
+      useConversationSources: (messages: Message[]) => {
+        sourcesDerivationInputs.push(messages);
+        return {
+          uploaded: mockUploaded,
+          generated: mockGenerated,
+          sources: mockSources,
+        };
+      },
     };
   },
 );
@@ -203,6 +255,7 @@ const makeAttachment = (
 });
 
 const resetActiveScheduledTaskMock = () => {
+  mockRouteConversationId.value = null;
   activeScheduledTaskMock.status = 'not-a-task-conversation';
   activeScheduledTaskMock.scheduleId = undefined;
   activeScheduledTaskMock.runId = undefined;
@@ -218,6 +271,34 @@ const resetActiveScheduledTaskMock = () => {
   activeScheduledTaskMock.historyHasMore = false;
 };
 
+describe('ConversationSourcesPanelContainer — derivation while closed', () => {
+  afterEach(() => {
+    mockSidebarIsOpen = true;
+    sourcesDerivationInputs.length = 0;
+  });
+
+  it('derives sources from an empty list while the sidebar is closed', () => {
+    mockSidebarIsOpen = false;
+
+    render(<ConversationSourcesPanelContainer />);
+
+    const lastInput =
+      sourcesDerivationInputs[sourcesDerivationInputs.length - 1];
+    expect(lastInput).not.toBe(mockSidebarMessages);
+    expect(lastInput).toEqual([]);
+  });
+
+  it('derives sources from the published messages while the sidebar is open', () => {
+    mockSidebarIsOpen = true;
+
+    render(<ConversationSourcesPanelContainer />);
+
+    expect(sourcesDerivationInputs[sourcesDerivationInputs.length - 1]).toBe(
+      mockSidebarMessages,
+    );
+  });
+});
+
 describe('ConversationSourcesPanelContainer — download all', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -225,6 +306,7 @@ describe('ConversationSourcesPanelContainer — download all', () => {
     mockUploaded = [];
     mockGenerated = [];
     mockConversations = [];
+    mockSidebarConversationModelId = undefined;
     resetActiveScheduledTaskMock();
   });
 
@@ -232,19 +314,13 @@ describe('ConversationSourcesPanelContainer — download all', () => {
     vi.useRealTimers();
   });
 
-  it('renders the download-all button disabled when there is no downloadable attachment', () => {
+  it('hides the download-all button when there is no downloadable attachment', () => {
     mockUploaded = [
       makeAttachment('reference.pdf', { url: 'https://external.com/f.pdf' }),
     ];
     render(<ConversationSourcesPanelContainer />);
 
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'Download all',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Download all' })).toBeNull();
   });
 
   it('renders the download-all button enabled when a downloadable attachment is present', () => {
@@ -264,11 +340,54 @@ describe('ConversationSourcesPanelContainer — download all', () => {
 });
 
 describe('ConversationSourcesPanelContainer — scheduled-task sections', () => {
+  it('shows a saved skill fallback in task Details', async () => {
+    activeScheduledTaskMock.status = 'task-conversation';
+    activeScheduledTaskMock.scheduleId = 'schedule-1';
+    activeScheduledTaskMock.taskState = 'success';
+    activeScheduledTaskMock.task = {
+      id: 'schedule-1',
+      displayName: 'Task',
+      prompt: '',
+      skillUrls: ['skills/public/deleted'],
+    } as ScheduledTaskDto;
+    render(<ConversationSourcesPanelContainer />);
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: 'scheduledTasks.create.detailsSectionTitle',
+      }),
+    );
+    expect(screen.getByText('skills/public/deleted')).toBeTruthy();
+  });
+
+  it('shows the deployment used for the run in Details, not the schedule current model', async () => {
+    activeScheduledTaskMock.status = 'task-conversation';
+    activeScheduledTaskMock.scheduleId = 'schedule-1';
+    activeScheduledTaskMock.runId = 'run-1';
+    activeScheduledTaskMock.taskState = 'success';
+    activeScheduledTaskMock.task = {
+      id: 'schedule-1',
+      displayName: 'Weekly digest',
+      model: 'gpt-5',
+      prompt: 'Do the thing',
+    } as ScheduledTaskDto;
+    mockSidebarConversationModelId = 'gpt-4o';
+
+    render(<ConversationSourcesPanelContainer />);
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: 'scheduledTasks.create.detailsSectionTitle',
+      }),
+    );
+
+    expect(screen.getByText('GPT-4o')).toBeTruthy();
+    expect(screen.queryByText('GPT-5')).toBeNull();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mockUploaded = [];
     mockGenerated = [];
     mockConversations = [];
+    mockSidebarConversationModelId = undefined;
     resetActiveScheduledTaskMock();
   });
 
@@ -382,13 +501,7 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
 
     render(<ConversationSourcesPanelContainer />);
 
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'Download all',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Download all' })).toBeNull();
   });
 
   it('shows the "Show more" button only while hasMore is true, wired to loadMore', async () => {
@@ -588,7 +701,11 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
 
     render(<ConversationSourcesPanelContainer />);
 
-    expect(screen.queryByText('Do the thing')).toBeNull();
+    /* The Accordion keeps collapsed content mounted, so keyboard reachability
+       is governed by the inert wrapper rather than by unmounting. */
+    const collapsedContent = screen.getByText('Do the thing');
+    // eslint-disable-next-line testing-library/no-node-access -- `inert` has no Testing Library query
+    expect(collapsedContent.closest('[inert]')).toBeTruthy();
   });
 
   it('navigates to the conversation route when a History run with a conversationId is activated', async () => {
@@ -647,7 +764,7 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it('shows the unread indicator on a History run whose matched conversation is unread', () => {
+  it('updates the History unread indicator when the shared conversation becomes read', () => {
     activeScheduledTaskMock.status = 'task-conversation';
     activeScheduledTaskMock.scheduleId = 'schedule-1';
     activeScheduledTaskMock.runId = 'run-1';
@@ -668,12 +785,154 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       { id: 'bucket/.scheduler/schedule-1/run-2', isUnread: true },
     ];
 
-    render(<ConversationSourcesPanelContainer />);
+    const { rerender } = render(
+      <MockConversationsContext.Provider value={mockConversations}>
+        <ConversationSourcesPanelContainer />
+      </MockConversationsContext.Provider>,
+    );
 
     expect(
       screen.getByRole('button', {
         name: /conversationPanel\.unreadIndicatorLabel$/,
       }),
     ).toBeTruthy();
+    mockConversations = [{ ...mockConversations[0], isUnread: false }];
+    rerender(
+      <MockConversationsContext.Provider value={mockConversations}>
+        <ConversationSourcesPanelContainer />
+      </MockConversationsContext.Provider>,
+    );
+    expect(
+      screen.queryByRole('button', {
+        name: /conversationPanel\.unreadIndicatorLabel$/,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('ConversationSourcesPanelContainer — source clicks', () => {
+  const makeSource = (url: string, contentType = ''): QuotationSource => ({
+    url,
+    title: 'Report',
+    contentType,
+  });
+
+  const clickSource = async () => {
+    render(<ConversationSourcesPanelContainer />);
+    await userEvent.click(screen.getByRole('button', { name: 'Report' }));
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUploaded = [];
+    mockGenerated = [];
+    mockSources = [];
+    mockConversations = [];
+    mockSidebarConversationModelId = undefined;
+    resetActiveScheduledTaskMock();
+    mockOpenAttachmentCanvas.mockResolvedValue(true);
+    vi.spyOn(window, 'open').mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('opens a DIAL PDF page reference through its reference URL and closes the sidebar', async () => {
+    mockSources = [makeSource('files/bucket/report.pdf#page=81')];
+
+    await clickSource();
+
+    const [attachment] = mockOpenAttachmentCanvas.mock.lastCall ?? [];
+    expect(attachment).toMatchObject({
+      referenceUrl: 'files/bucket/report.pdf#page=81',
+      contentType: MIMEType.PDF,
+    });
+    expect(attachment.url).toBeUndefined();
+    expect(mockHandleClose).toHaveBeenCalledOnce();
+  });
+
+  it('opens an external PDF page reference through its reference URL', async () => {
+    mockSources = [makeSource('https://example.com/docs/outlook.pdf#page=12')];
+
+    await clickSource();
+
+    const [attachment] = mockOpenAttachmentCanvas.mock.lastCall ?? [];
+    expect(attachment).toMatchObject({
+      referenceUrl: 'https://example.com/docs/outlook.pdf#page=12',
+    });
+    expect(attachment.url).toBeUndefined();
+  });
+
+  it('downloads the fragment-free DIAL file when a page reference fails to open', async () => {
+    mockOpenAttachmentCanvas.mockResolvedValue(false);
+    mockSources = [makeSource('files/bucket/report.pdf#page=81')];
+
+    await clickSource();
+
+    expect(mockHandleAttachmentClick).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'files/bucket/report.pdf',
+        referenceUrl: undefined,
+      }),
+    );
+    expect(window.open).not.toHaveBeenCalled();
+    expect(mockHandleClose).not.toHaveBeenCalled();
+  });
+
+  it('opens an external page reference in a new tab with its page fragment when the canvas fails', async () => {
+    mockOpenAttachmentCanvas.mockResolvedValue(false);
+    mockSources = [makeSource('https://example.com/docs/outlook.pdf#page=12')];
+
+    await clickSource();
+
+    expect(window.open).toHaveBeenCalledWith(
+      'https://example.com/docs/outlook.pdf#page=12',
+      '_blank',
+      'noopener,noreferrer',
+    );
+  });
+
+  it('opens a PDF without a page fragment through its regular URL', async () => {
+    mockSources = [makeSource('files/bucket/report.pdf', MIMEType.PDF)];
+
+    await clickSource();
+
+    const [attachment] = mockOpenAttachmentCanvas.mock.lastCall ?? [];
+    expect(attachment).toMatchObject({ url: 'files/bucket/report.pdf' });
+    expect(attachment.referenceUrl).toBeUndefined();
+  });
+
+  it('opens a web-search redirect URL without a file extension in a new tab', async () => {
+    const url =
+      'https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc';
+    mockSources = [makeSource(url, 'text/markdown')];
+
+    await clickSource();
+
+    expect(window.open).toHaveBeenCalledWith(
+      url,
+      '_blank',
+      'noopener,noreferrer',
+    );
+    expect(mockOpenAttachmentCanvas).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConversationSourcesPanelContainer — sidebar reset on subject change', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetActiveScheduledTaskMock();
+  });
+
+  /*
+   * The reset-on-switch matrix is the useCloseSourcesSidebarOnSubjectChange
+   * spec; this only pins the wiring — mounting the container while the
+   * sidebar is open does not close it.
+   */
+  it('does not close the sidebar on initial mount while it is open', () => {
+    render(<ConversationSourcesPanelContainer />);
+
+    expect(mockHandleClose).not.toHaveBeenCalled();
   });
 });

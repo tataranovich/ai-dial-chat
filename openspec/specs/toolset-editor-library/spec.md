@@ -2,30 +2,28 @@
 
 ## Purpose
 Specifies `libs/toolset-editor`'s host-agnostic `ToolsetEditor` and `GeneralForm` React components: their public package surface, host-isolation boundary (no REST/i18n/routing knowledge, no `@epam/ai-dial-chat-api-client` import), form-state ownership with re-seeding, validation and dirty-field error surfacing, save/persist orchestration through injected callbacks, the injected auth-actions boundary for the OAuth login/logout flow, the Connect-section gating, and accessibility/RTL support.
-
 ## Requirements
-
 ### Requirement: Public package surface
-`libs/toolset-editor/src/index.ts` SHALL export the composed `ToolsetEditor` component, the shared `GeneralForm` component (also consumed by the Custom App editor), and every TypeScript type reachable through their props (`ToolsetEditorProps`/`ToolsetEditorLabels` with its nested `layout`/`general`/`settings`/`validation` label groups, `GeneralFormProps`/`GeneralFormLabels`, `SettingsFormLabels`, `AuthSectionLabels`, `ConnectMcpUrlContentLabels`, the form models `ToolsetFormData`/`ToolsetAuthFormData`/`DeploymentGeneralFormData`/`ToolsetFormErrors`, the injected-auth request shapes `ToolsetLoginRequest`/`ToolsetLogoutRequest`/`ToolsetAuthActions`, the `ToolsetTransportType` enum, the `DEFAULT_TOOLSET_NAME`/`DEFAULT_TOOLSET_VERSION` constants, and the pure utils `getDefaultToolsetForm`, `getStorageSafeUniqueToolsetName`, `isValidEndpointUrl`, `normalizeReturnedEndpointUrl`, `isToolsetAuthValid`, `isToolsetFormValid`). The internal `SettingsForm`, `AuthSection`, and `ConnectMcpUrlContent` components SHALL NOT be re-exported from the barrel — only `ToolsetEditor` and `GeneralForm` render them.
+`libs/toolset-editor/src/index.ts` SHALL export the composed `ToolsetEditor` component, the shared `GeneralForm` component (also consumed by the Custom App editor), and every TypeScript type reachable through their props (`ToolsetEditorProps`/`ToolsetEditorLabels` with its nested `layout`/`general`/`settings`/`validation` label groups and their `ToolsetEditorLayoutLabels`/`ToolsetEditorValidationLabels` types, `GeneralFormProps`/`GeneralFormLabels`, `SettingsFormLabels`, `AuthSectionLabels`, `ConnectMcpUrlContentLabels`, the form models `ToolsetFormData`/`ToolsetAuthFormData`/`DeploymentGeneralFormData`/`ToolsetFormErrors`, the injected-auth request shapes `ToolsetLoginRequest`/`ToolsetLogoutRequest`/`ToolsetAuthActions`, the host OAuth handoff `ToolsetOAuthLoginStatus` enum with the `ToolsetOAuthLoginHandler`/`ToolsetOAuthLoginRequest`/`ToolsetOAuthLoginResult` types, the `ToolsetTransportType` enum, the `AUTH_TYPE_ICONS`/`DEFAULT_TOOLSET_NAME`/`DEFAULT_TOOLSET_VERSION` constants, the `TOOLSET_EDITOR_CLASS` public class-name map, and the pure utils `getDefaultToolsetForm`, `getStorageSafeUniqueToolsetName`, `isValidEndpointUrl`, `normalizeReturnedEndpointUrl`, `isToolsetAuthValid`, `isToolsetFormValid`). The internal `SettingsForm`, `AuthSection`, and `ConnectMcpUrlContent` components SHALL NOT be re-exported from the barrel — only `ToolsetEditor` and `GeneralForm` render them.
 
-The package `libs/toolset-editor/package.json` SHALL declare `name: "@epam/ai-dial-toolset-editor"`, `description`, `license: "Apache-2.0"`, an `exports` map matching `libs/skill-editor/package.json`'s shape (source/types/import/default for `.`, plus `./package.json`), and peer dependencies on `react`, `@epam/ai-dial-ui-kit`, `@epam/ai-dial-chat-shared`, `@epam/ai-dial-chat-hooks`, `@epam/ai-dial-builder-form`, and `@tabler/icons-react`.
+The package `libs/toolset-editor/package.json` SHALL declare `name: "@epam/ai-dial-toolset-editor"`, `description`, `license: "Apache-2.0"`, an `exports` map matching `libs/skill-editor/package.json`'s shape (`@epam/source`/types/import/default for `.`, plus `./package.json` and `./styles.css`), `dependencies` on `@epam/ai-dial-builder-form` and `@tabler/icons-react`, and peer dependencies on `react`, `@epam/ai-dial-ui-kit`, `@epam/ai-dial-chat-shared`, and `@epam/ai-dial-chat-hooks`.
 
 #### Scenario: Consumer imports the library's public surface
-- **WHEN** `apps/chat/src/pages/ToolsetEditor/ToolsetEditor.tsx` writes `import { ToolsetEditor, getDefaultToolsetForm } from '@epam/ai-dial-toolset-editor'` and `import type { ToolsetEditorLabels, ToolsetFormData, ToolsetAuthActions } from '@epam/ai-dial-toolset-editor'`
+- **WHEN** `apps/chat/src/pages/ApplicationEditor/toolset/ToolsetApplicationEditor.tsx` writes `import { ToolsetEditor, getDefaultToolsetForm } from '@epam/ai-dial-toolset-editor'` and `import type { ToolsetEditorLabels, ToolsetFormData, ToolsetAuthActions } from '@epam/ai-dial-toolset-editor'`
 - **THEN** the import resolves successfully and every named export is defined
 
-#### Scenario: Custom App editor imports the shared GeneralForm
-- **WHEN** `apps/chat/src/pages/ToolsetEditor/CustomAppEditorView.tsx` writes `import { GeneralForm } from '@epam/ai-dial-toolset-editor'`
-- **THEN** the import resolves and the General step renders through the library component with the Custom App editor's own labels
+#### Scenario: GeneralForm stays importable for external consumers
+- **WHEN** a consumer writes `import { GeneralForm } from '@epam/ai-dial-toolset-editor'`
+- **THEN** the import resolves; inside this repo only `ToolsetEditor` renders it, while the Custom App editor (`apps/chat/src/pages/ApplicationEditor/ApplicationFormEditor.tsx`) renders `MetadataForm` from `@epam/ai-dial-builder-form` directly
 
 #### Scenario: Internal component is not part of the public surface
 - **WHEN** code outside `libs/toolset-editor` attempts to import `SettingsForm`, `AuthSection`, or `ConnectMcpUrlContent` from `@epam/ai-dial-toolset-editor`
 - **THEN** the import fails to resolve, since the barrel does not re-export them
 
 ### Requirement: No host, REST, or i18n dependency
-`libs/toolset-editor/src/**` SHALL NOT import `react-i18next`, `i18next`, any module under `apps/chat/src/server-api`, `@epam/ai-dial-chat-api-client`, any app-level React Context/provider, `react-router`/`react-router-dom`, or any environment/feature-flag/analytics module. All user-visible strings SHALL be supplied via nested `labels` props with English-language defaults applied at leaf read sites. Every backend call SHALL arrive through injected callbacks: persistence and post-save login through `onPersist`/`onPostSaveLogin`, auth operations through the `authActions` prop (`login`, `logout`, `fetchAuthSettings`), and notifications through `onNotifySuccess`/`onNotifyError`. Request bodies SHALL be typed by the lib-local `ToolsetLoginRequest`/`ToolsetLogoutRequest` structural interfaces; the host adapter maps them to its generated DTOs at the app edge.
+`libs/toolset-editor/src/**` SHALL NOT import `react-i18next`, `i18next`, any module under `apps/chat/src/server-api`, `@epam/ai-dial-chat-api-client`, any app-level React Context/provider, `react-router`/`react-router-dom`, or any environment/feature-flag/analytics module. All user-visible strings SHALL be supplied via nested `labels` props with English-language defaults applied at leaf read sites. Every backend call SHALL arrive through injected callbacks: persistence and post-save login through `onPersist`/`onPostSaveLogin`, API-key login/logout through the `authActions` prop (`login`, `logout`, `fetchAuthSettings`), the OAuth flow through `onOAuthLogin`, the Allowed-tools list through `listToolNames`, the Connect URL through `buildMcpUrl`, and notifications through `onNotifySuccess`/`onNotifyError`. Request bodies SHALL be typed by the lib-local `ToolsetLoginRequest`/`ToolsetLogoutRequest` structural interfaces; the host adapter maps them to its generated DTOs at the app edge.
 
-This is the first `libs/*` (besides the `chat-hooks` exception) dependency on `@epam/ai-dial-chat-hooks`. It is justified because the OAuth helpers the auth block needs (`initiateOAuthLogin`, `navigateToolsetOAuthPopup`, `openToolsetOAuthPopup`, `waitForToolsetOAuthResult`, `getApiErrorDetails`, `buildToolsetMcpUrl`, and the `ToolsetAuthTypes`/`WithLogin`/`ToolsetCredentialsLevel` enums) are host-agnostic in `libs/chat-hooks/src/oauth/` (the callback path is a parameter, no routes or i18n). The lib SHALL import only the chat-hooks root barrel, never a subpath.
+This is the first `libs/*` (besides the `chat-hooks` exception) dependency on `@epam/ai-dial-chat-hooks`. It is justified because the helpers the lib needs (`getApiErrorDetails`, `dialFileToAttachment`, and the `ToolsetAuthTypes`/`WithLogin`/`ToolsetCredentialsLevel` enums) are host-agnostic in `libs/chat-hooks` (no routes or i18n); the OAuth popup helpers stay with the host adapter (`apps/chat/src/hooks/toolsets/useToolsetEditorOAuthLogin.ts`). The lib SHALL import only the chat-hooks root barrel, never a subpath.
 
 #### Scenario: No i18n import
 - **WHEN** `libs/toolset-editor/src/**` is searched for `react-i18next`/`i18next` imports
@@ -37,7 +35,7 @@ This is the first `libs/*` (besides the `chat-hooks` exception) dependency on `@
 
 #### Scenario: No routing or app-context import
 - **WHEN** `libs/toolset-editor/src/**` is searched for `react-router` imports or imports of any `apps/chat/src/context` module
-- **THEN** none are found; navigation is exposed only via `onBack`/`onSaveComplete` callbacks and context values arrive as plain props (`bucket`, `connectUrl` inputs)
+- **THEN** none are found; navigation is exposed only via `onBack`/`onSaveComplete` callbacks and context values arrive as plain props (`bucket`, the `buildMcpUrl` resolver)
 
 #### Scenario: Chat-hooks is imported through the root barrel only
 - **WHEN** `libs/toolset-editor/src/**` is searched for imports from `@epam/ai-dial-chat-hooks/`
@@ -55,14 +53,18 @@ This is the first `libs/*` (besides the `chat-hooks` exception) dependency on `@
 - **THEN** the editor resets its form values, errors, dirty fields, and draft toolset id to a fresh-edit state
 
 ### Requirement: Validation and dirty-field error surfacing
-`ToolsetEditor` SHALL validate the form through the lib's own `isToolsetFormValid`/`isValidEndpointUrl` utils (which delegate the name/version checks to `builder-form`'s `validateDeploymentCreationFields` with `validateVersionPattern: true`), building error messages from the `labels.validation` group. Field errors SHALL surface only for fields the user has touched (the dirty-field set); patches that change `authenticationType`, `withLogin`, or `isLoggedIn` SHALL clear all auth-field errors at once. The Save action SHALL stay disabled until `isToolsetFormValid` passes.
+`ToolsetEditor` SHALL validate the form through the lib's own `isToolsetFormValid`/`isValidEndpointUrl` utils (which delegate the name/version/description checks to `builder-form`'s `validateDeploymentCreationFields` with `TOOLSET_METADATA_VALIDATION_OPTIONS`, i.e. `validateVersionPattern: SEMVER_VERSION_PATTERN`), building error messages from the `labels.validation` group. That group SHALL include `nameTooLong`, `nameControlCharacters` and `descriptionTooLong`, which default to `Use 256 characters or fewer.`, `Remove line breaks, tabs and other control characters.` and `Use 2000 characters or fewer.` respectively. Field errors SHALL surface only for fields the user has touched — Metadata fields through `useMetadataForm`'s touched state (`name`/`version` are marked touched on edit, and too-long or control-character codes show at once), Setup fields (`endpoint` and the auth fields) through the editor's own dirty-field set — and SHALL be recomputed on every change, so an over-limit name or description is flagged while the user types. Patches that change `authenticationType`, `withLogin`, or `isLoggedIn` SHALL clear all auth-field errors at once. The Save action SHALL stay disabled until `isToolsetFormValid` passes.
 
 #### Scenario: Untouched invalid fields show no error
 - **WHEN** the editor opens with an empty endpoint and the user edits only the name
 - **THEN** no endpoint error is shown, because the endpoint field is not dirty
 
+#### Scenario: Over-long name shows inline while typing
+- **WHEN** the user types a 257-character name
+- **THEN** `labels.validation.nameTooLong` is shown under the Name field and Save is disabled, with no notification raised
+
 #### Scenario: Save is disabled while the form is invalid
-- **WHEN** any validation rule fails (missing name/endpoint, invalid version or endpoint URL, incomplete auth configuration)
+- **WHEN** any validation rule fails (missing, over-long or control-character name, over-long description, missing endpoint, invalid version or endpoint URL, incomplete auth configuration)
 - **THEN** the Save/Create action is disabled until the failing fields are corrected
 
 #### Scenario: Switching auth type clears auth errors
@@ -107,7 +109,6 @@ The internal `AuthSection` SHALL run the login/logout flows through the `authAct
 - **WHEN** the login flow is busy (`isAuthBusy`)
 - **THEN** the Log In action is disabled and no second `onOAuthLogin` call starts
 
-
 ### Requirement: Connect section gating
 The Connect toolset section SHALL render inside the Setup section only when the host supplies a `buildMcpUrl` resolver (i.e. an external core URL is configured) AND a persisted toolset id exists (edit mode, or a draft id created during the create session by Log In/Save). The composed editor resolves the URL by calling `buildMcpUrl` with the current persisted id and passes the resolved string to the internal SettingsForm; it SHALL never construct the URL itself. When either condition is absent the section SHALL NOT render.
 
@@ -124,7 +125,16 @@ The Connect toolset section SHALL render inside the Setup section only when the 
 - **THEN** the Connect section never renders, even in edit mode
 
 ### Requirement: EditorLayout composition
-`ToolsetEditor` SHALL use `EditorLayout` from `@epam/ai-dial-builder-form` as its outer shell, with the Metadata `EditorSection` (rendering `GeneralForm`) as `leftContent`, the Setup `EditorSection` (rendering the internal `SettingsForm`) as `rightContent`, and Cancel + Save/Create in the `actions` slot. On mobile the two sections SHALL stack vertically (Metadata first). No footer button bar, wizard indicator, or preview pane SHALL be rendered by the lib.
+`ToolsetEditor` SHALL use `EntityEditor` from `@epam/ai-dial-builder-form` as its outer shell. `EntityEditor` in turn composes `EditorLayout` with a Metadata `EditorSection` and a Setup `EditorSection`. `ToolsetEditor` passes:
+
+- `metadata`: the deprecated `GeneralForm` wrapper, which renders `MetadataForm` with every field.
+- `setup`: the internal `SettingsForm`.
+- `title` and `submitLabel`: the resolved create/edit title and Create or Save label.
+- `onSubmit`, `onCancel`, `onBack`, `isSubmitting` and `isSubmitDisabled`.
+
+The metadata values, touched state and validation codes SHALL come from `useMetadataForm` (with `TOOLSET_METADATA_VALIDATION_OPTIONS`, i.e. `validateVersionPattern: SEMVER_VERSION_PATTERN`). The endpoint and auth validation stays in `ToolsetEditor`.
+
+On mobile the two sections SHALL stack vertically (Metadata first). The lib SHALL NOT render a footer button bar, a wizard indicator or a preview pane.
 
 #### Scenario: Both sections visible at desktop width
 - **WHEN** the editor renders at desktop width
@@ -134,16 +144,30 @@ The Connect toolset section SHALL render inside the Setup section only when the 
 - **WHEN** the editor renders at mobile width
 - **THEN** Metadata renders above Setup, both reachable by scrolling, with no tab or step navigation
 
+#### Scenario: Shell comes from EntityEditor
+- **WHEN** `libs/toolset-editor/src/**` is searched for direct `EditorLayout` or `EditorSection` usage
+- **THEN** none are found, and the shell renders through `EntityEditor`
+
 ### Requirement: GeneralForm shared surface
-The exported `GeneralForm` SHALL render the Metadata field set through `builder-form`'s `DeploymentCreationForm` plus the `AvatarPickerModal`, with every host concern injected: `bucket` (storage bucket), `FileManagerModal` (host file-manager modal component), `resolveIconUrl` (icon URL resolution), `allowedMimeTypes`/`maxFileSizeBytes` (avatar restrictions), and `availableLocaleOptions` (locale choices). It SHALL NOT resolve the current user, import a file-manager implementation, or build locale options itself. Its labels SHALL be a `GeneralFormLabels` object whose `form` and `avatarPicker` groups are each optional and replaced as a whole when supplied.
+The Metadata field set SHALL live in `@epam/ai-dial-builder-form` as `MetadataForm` (see `builder-form`). `@epam/ai-dial-toolset-editor` SHALL keep exporting `GeneralForm`, `GeneralFormProps` and `GeneralFormLabels` with their current props, marked `@deprecated`. `GeneralForm` SHALL be a thin wrapper that renders `MetadataForm` and supplies `avatarPicker.resolveAttachedIconUrl` through `dialFileToAttachment` from `@epam/ai-dial-chat-hooks`. It SHALL contain no field markup or picker state of its own.
+
+Every host concern stays injected:
+
+- `bucket` (storage bucket)
+- `FileManagerModal` (host file-manager modal component)
+- `resolveIconUrl` (icon URL resolution)
+- `allowedMimeTypes` / `maxFileSizeBytes` (avatar restrictions)
+- `availableLocaleOptions` (locale choices)
+
+The form SHALL NOT resolve the current user, import a file-manager implementation or build locale options itself. Its labels SHALL be an object whose `form` and `avatarPicker` groups are each optional and are replaced as a whole when supplied.
 
 #### Scenario: Avatar picking goes through the host file manager
 - **WHEN** a user clicks "Add avatar" and picks a file
 - **THEN** the file is resolved through the host-supplied `FileManagerModal` and bucket, and the resulting URL is reported through `onChange({ iconUrl })`
 
-#### Scenario: Custom App editor supplies its own placeholders
-- **WHEN** the Custom App editor renders `GeneralForm` with its own `labels.form.name.placeholder`
-- **THEN** the Name field uses that placeholder while the rest of the form keeps the shared default labels
+#### Scenario: Deprecated wrapper renders the shared component
+- **WHEN** a consumer imports `GeneralForm` from `@epam/ai-dial-toolset-editor`
+- **THEN** it renders `MetadataForm` from `@epam/ai-dial-builder-form` with the same fields, labels and avatar behaviour as before
 
 ### Requirement: Accessibility of the editor surface
 The lib SHALL keep the existing accessible patterns: the Connect section's copy feedback announced via an `aria-live="polite"` status region separate from the button's stable label; auth segment icons `aria-hidden` with their text available to screen readers; the saving status announced through `EditorLayout`'s live region; disabled (not hidden) auth controls while logged in or saving so their state is programmatically observable.

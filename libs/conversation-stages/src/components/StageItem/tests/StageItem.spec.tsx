@@ -1,20 +1,35 @@
 import { StageStatus } from '@epam/ai-dial-chat-shared';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { StageItem } from '../StageItem';
 
-vi.mock('@epam/ai-dial-ui-kit', () => ({
-  DIAL_KIT_ICON_STROKE: 1.5,
-  DIAL_ICON_SIZE: { SM: 14, MD: 16 },
-  Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
-    <span role="status" aria-label={ariaLabel} />
-  ),
-  EllipsisTooltip: ({ text }: { text: string }) => <>{text}</>,
-}));
+/* Disclosures are the real kit `Accordion`, so their button, region and inert state are what a user gets. */
+vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
+  const { Accordion } =
+    await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
+  return {
+    Accordion,
+    DIAL_KIT_ICON_STROKE: 1.5,
+    DIAL_ICON_SIZE: { SM: 14, MD: 16 },
+    Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
+      <span role="status" aria-label={ariaLabel} />
+    ),
+    EllipsisTooltip: ({ text }: { text: string }) => <>{text}</>,
+  };
+});
 
 vi.mock('@epam/ai-dial-attachment-input', () => ({
-  AttachmentCard: ({ attachment }: { attachment: { name: string } }) => (
-    <div>{attachment.name}</div>
+  AttachmentCard: ({
+    attachment,
+    onClick,
+  }: {
+    attachment: { id: string; name: string };
+    onClick?: (id: string) => void;
+  }) => (
+    <button type="button" onClick={() => onClick?.(attachment.id)}>
+      {attachment.name}
+    </button>
   ),
 }));
 
@@ -23,6 +38,68 @@ const baseStage = {
   name: 'Parsed user intent',
   status: StageStatus.Completed,
 };
+
+describe('StageItem deferred content', () => {
+  it('mounts details and attachments only while open and renders updated data on reopening', () => {
+    const onAttachmentClick = vi.fn();
+    const { rerender } = render(
+      <StageItem
+        stage={{
+          ...baseStage,
+          content: '[Original link](https://example.com)',
+          attachments: [
+            { title: 'Original attachment', data: 'Original data' },
+          ],
+        }}
+        isLive={false}
+        onAttachmentClick={onAttachmentClick}
+      />,
+    );
+    const toggle = screen.getByRole('button', { name: /Parsed user intent/ });
+    expect(screen.queryByText('Original link')).toBeNull();
+    expect(screen.queryByText('Original attachment')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole('link', { name: 'Original link' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Original attachment' }),
+    ).toBeTruthy();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const controlledId = toggle.getAttribute('aria-controls');
+    expect(controlledId).toBeTruthy();
+
+    fireEvent.click(toggle);
+    expect(screen.queryByText('Original link')).toBeNull();
+    expect(screen.queryByText('Original attachment')).toBeNull();
+    expect(screen.queryByRole('link', { hidden: true })).toBeNull();
+
+    rerender(
+      <StageItem
+        stage={{
+          ...baseStage,
+          content: '[Updated link](https://example.com)',
+          attachments: [{ title: 'Updated attachment', data: 'Updated data' }],
+        }}
+        isLive={false}
+        onAttachmentClick={onAttachmentClick}
+      />,
+    );
+    expect(screen.queryByText('Updated link')).toBeNull();
+    expect(screen.queryByText('Updated attachment')).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('link', { name: 'Updated link' })).toBeTruthy();
+    expect(screen.queryByText('Original attachment')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Updated attachment' }));
+    expect(onAttachmentClick).toHaveBeenCalledOnce();
+    expect(onAttachmentClick).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Updated attachment',
+        data: 'Updated data',
+      }),
+    );
+    expect(toggle.getAttribute('aria-controls')).toBe(controlledId);
+  });
+});
 
 describe('StageItem — optional-field rendering', () => {
   it('renders only the icon and name when no other field has data (minimum row)', () => {
@@ -96,6 +173,122 @@ describe('StageItem — optional-field rendering', () => {
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe(
       'false',
     );
+  });
+
+  it('renders a disclosure button when the stage has only attachments (no content)', () => {
+    render(
+      <StageItem
+        stage={{
+          ...baseStage,
+          attachments: [{ title: 'result.csv', data: 'Some markdown' }],
+        }}
+        isLive={false}
+        typography={{}}
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Parsed user intent' }),
+    ).toBeTruthy();
+  });
+
+  it('renders no toggle when the stage has neither content nor attachments', () => {
+    render(
+      <StageItem
+        stage={{ ...baseStage, attachments: [] }}
+        isLive={false}
+        typography={{}}
+      />,
+    );
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
+describe('StageItem — attachment rendering', () => {
+  it('renders a tile for each attachment, in order', async () => {
+    const user = userEvent.setup();
+    render(
+      <StageItem
+        stage={{
+          ...baseStage,
+          attachments: [
+            { index: 0, title: 'First', data: 'first body' },
+            { index: 1, title: 'Second', data: 'second body' },
+          ],
+        }}
+        isLive={false}
+        typography={{}}
+      />,
+    );
+    await user.click(
+      screen.getByRole('button', { name: /Parsed user intent/ }),
+    );
+    const tiles = screen.getAllByRole('button', { name: /First|Second/ });
+    expect(tiles.map((el) => el.textContent)).toEqual(['First', 'Second']);
+  });
+
+  it('calls onAttachmentClick with the mapped display attachment when a tile is activated', async () => {
+    const user = userEvent.setup();
+    const onAttachmentClick = vi.fn();
+    render(
+      <StageItem
+        stage={{
+          ...baseStage,
+          attachments: [{ title: 'result.csv', data: 'Some markdown text' }],
+        }}
+        isLive={false}
+        typography={{}}
+        onAttachmentClick={onAttachmentClick}
+      />,
+    );
+    await user.click(
+      screen.getByRole('button', { name: /Parsed user intent/ }),
+    );
+    await user.click(screen.getByRole('button', { name: 'result.csv' }));
+    expect(onAttachmentClick).toHaveBeenCalledOnce();
+    expect(onAttachmentClick).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'result.csv',
+        data: 'Some markdown text',
+      }),
+    );
+  });
+
+  it('renders a tile for a reference-only attachment (no inline data)', async () => {
+    const user = userEvent.setup();
+    render(
+      <StageItem
+        stage={{
+          ...baseStage,
+          attachments: [
+            { title: 'result.csv', reference_url: 'files/abc/result.csv' },
+          ],
+        }}
+        isLive={false}
+        typography={{}}
+      />,
+    );
+    await user.click(
+      screen.getByRole('button', { name: /Parsed user intent/ }),
+    );
+    expect(screen.getByRole('button', { name: 'result.csv' })).toBeTruthy();
+  });
+
+  it('renders the tile even when no onAttachmentClick handler is supplied', async () => {
+    const user = userEvent.setup();
+    render(
+      <StageItem
+        stage={{
+          ...baseStage,
+          attachments: [{ title: 'result.csv', data: 'Some markdown text' }],
+        }}
+        isLive={false}
+        typography={{}}
+      />,
+    );
+    await user.click(
+      screen.getByRole('button', { name: /Parsed user intent/ }),
+    );
+    expect(screen.getByText('result.csv')).toBeTruthy();
   });
 });
 
@@ -187,5 +380,82 @@ describe('StageItem — nameOverride (used for ×N attempts)', () => {
     );
     const nameEl = screen.getByText('Attempt_1');
     expect(nameEl.className).not.toMatch(/monoName/);
+  });
+});
+
+describe('StageItem — child stages', () => {
+  const childList = (
+    <ul role="list" aria-label="Child stages">
+      <li role="listitem">Child stage</li>
+    </ul>
+  );
+
+  it('renders a stage with only child stages as a disclosure', async () => {
+    const user = userEvent.setup();
+    render(
+      <StageItem
+        stage={{ index: 0, name: 'Plan', status: StageStatus.Completed }}
+        isLive={false}
+        childList={childList}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: /Plan/ });
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    await user.click(button);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('renders own markdown, then attachments, then child stages', async () => {
+    const user = userEvent.setup();
+    render(
+      <StageItem
+        stage={{
+          index: 0,
+          name: 'Plan',
+          status: StageStatus.Completed,
+          content: 'Own output',
+          attachments: [{ title: 'doc.pdf', url: 'files/doc.pdf' }],
+        }}
+        isLive={false}
+        childList={childList}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /Plan/ }));
+
+    const markdown = screen.getByText('Own output');
+    const attachment = screen.getByRole('button', { name: 'doc.pdf' });
+    const children = screen.getByRole('list', { name: 'Child stages' });
+    expect(
+      markdown.compareDocumentPosition(attachment) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      attachment.compareDocumentPosition(children) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /Plan/ }).contains(children),
+    ).toBe(false);
+  });
+
+  it('follows a controlled expanded state and reports toggles', async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(
+      <StageItem
+        stage={{ index: 0, name: 'Plan', status: StageStatus.Completed }}
+        isLive={false}
+        childList={childList}
+        isExpanded
+        onToggle={onToggle}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: /Plan/ });
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    await user.click(button);
+    expect(onToggle).toHaveBeenCalledWith(false);
   });
 });

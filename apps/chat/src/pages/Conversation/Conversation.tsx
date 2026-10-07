@@ -2,8 +2,9 @@ import type { ConversationResponseDto } from '@epam/ai-dial-chat-api-client';
 import {
   getApiErrorDetails,
   getConversationPath,
+  getFormSchemaToolSyncKey,
   getLastDeploymentId,
-  getLastUserMessageToolConfiguration,
+  getLatestToolConfiguration,
   isAwaitingGenerationResume,
   isConversationNotFoundError,
   shouldWatchForDisplayNameUpdate,
@@ -54,6 +55,7 @@ import { useOptionalOverlay } from '../../context/overlay/OverlayContext';
 import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
 import { useActiveConversationBridge } from '../../hooks/conversation/useActiveConversationBridge';
 import { useAudioTranscription } from '../../hooks/conversation/useAudioTranscription';
+import { useVisualizerMessageSendHandler } from '../../hooks/conversation/useVisualizerMessageSendHandler';
 import { useDeploymentChangeEffect } from '../../hooks/useDeploymentChangeEffect';
 import {
   conversationsApi as configuredConversationsApi,
@@ -68,7 +70,10 @@ import {
 import { ActiveScheduledTaskStatus } from '../../types/active-scheduled-task';
 import { ROUTES } from '../../types/routes';
 import { buildNetworkUploadErrorNotification } from '../../utils/attachment-network-error-notification';
-import { conversationStreamTransport } from '../../utils/conversation-stream-transport';
+import {
+  conversationStreamTransport,
+  logConversationStreamError,
+} from '../../utils/conversation-stream-transport';
 
 interface Props {
   onDuplicateReadonly?: () => void;
@@ -90,6 +95,8 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   const displayNameWatchKeyRef = useRef<string | null>(null);
   const notificationShownForRef = useRef<string | null>(null);
   const restoredToolConfigIdRef = useRef<string | null>(null);
+  /* Key of the last assistant `form_schema` tool values applied to the toggles. */
+  const appliedFormSchemaKeyRef = useRef<string | null>(null);
   const navigate = useNavigate();
   const { t } = useTranslation();
   const {
@@ -114,8 +121,25 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
       />
     ),
   });
-  const { handleClose: handleCloseSourcesSidebar, setMessages } =
-    useSourcesSidebar();
+  /*
+   * `toolsMenuItems` is a new array on every render (the inline `toolIcon`
+   * is part of its memo), so the ids are memoised by value instead.
+   */
+  const toolIdsSignature = JSON.stringify(toolsMenuItems.map(({ id }) => id));
+  const toolIds = useMemo(
+    (): string[] => JSON.parse(toolIdsSignature),
+    [toolIdsSignature],
+  );
+  /* Read by `loadConversation` without making it depend on the tool list. */
+  const toolIdsRef = useRef(toolIds);
+  useEffect(() => {
+    toolIdsRef.current = toolIds;
+  }, [toolIds]);
+  const {
+    handleClose: handleCloseSourcesSidebar,
+    setMessages,
+    setConversationModelId,
+  } = useSourcesSidebar();
   const { user } = useUser();
   const bucket = user?.bucket ?? '';
   const { status: activeScheduledTaskStatus } = useActiveScheduledTask();
@@ -133,7 +157,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
    * One-shot text hand-off into the composer's textarea. The two writers differ
    * in kind, so they own separate channels: the overlay bridge's setInputContent
    * replaces the whole draft, while a picked prompt is inserted at the caret and
-   * must leave the user's own writing alone (issue #8754).
+   * must leave the user's own writing alone ([#8754](https://github.com/epam/ai-dial-chat/issues/8754)).
    */
   const [pendingInputContent, setPendingInputContent] = useState({
     revision: 0,
@@ -219,30 +243,56 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
 
   useEffect(() => {
     setMessages(conversation?.messages ?? []);
-  }, [conversation?.messages, setMessages]);
+    setConversationModelId(
+      conversation?.assistantModelId || conversation?.model.id,
+    );
+  }, [
+    conversation?.messages,
+    conversation?.assistantModelId,
+    conversation?.model.id,
+    setMessages,
+    setConversationModelId,
+  ]);
 
   /*
-   * Switching to another conversation resets the sidebar, matching how the
-   * history panel and the attachment canvas behave on navigation. Route
-   * changes within `/conversations/*` do not unmount this page, so the reset
-   * has to be keyed on the id rather than left to the unmount cleanup below.
+   * A DIAL app can switch a tool toggle per assistant message through its
+   * `form_schema` (e.g. `deep_research` on while a run streams, off with the
+   * final report). Each distinct value is applied once, so a toggle the user
+   * flips afterwards survives re-renders until the app sends a new value.
+   * Waits for the load-time restore of this id: until then `conversation`
+   * may still hold the previous conversation's messages.
    */
   useEffect(() => {
-    handleCloseSourcesSidebar();
-  }, [conversationId, handleCloseSourcesSidebar]);
+    if (!conversationId || !conversation) return;
+    if (restoredToolConfigIdRef.current !== conversationId) return;
+    const sync = getFormSchemaToolSyncKey(
+      conversationId,
+      conversation.messages,
+      toolIds,
+    );
+    if (!sync || sync.key === appliedFormSchemaKeyRef.current) return;
+    appliedFormSchemaKeyRef.current = sync.key;
+    restoreToolConfiguration(sync.values);
+  }, [conversation, conversationId, restoreToolConfiguration, toolIds]);
 
   /*
    * Cleanup must run only on unmount. Both callbacks are stable, so keeping
    * `conversation?.messages` out of the deps stops the sources sidebar from
    * closing on every message mutation (stream chunk, the post-stream
    * conversation refetch, send, regenerate, edit, delete, status message).
+   * Resets within `/conversations/*` are owned by
+   * `useCloseSourcesSidebarOnSubjectChange` (mounted in the sources panel),
+   * which closes the sidebar only when its subject changes — not on every
+   * conversation-id change, so switching between runs of the same task keeps
+   * it open ([#8840](https://github.com/epam/ai-dial-chat/issues/8840)).
    */
   useEffect(
     () => () => {
       handleCloseSourcesSidebar();
       setMessages([]);
+      setConversationModelId(undefined);
     },
-    [handleCloseSourcesSidebar, setMessages],
+    [handleCloseSourcesSidebar, setMessages, setConversationModelId],
   );
 
   const addStatusMessage = useCallback(
@@ -310,6 +360,9 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     restoreBufferedGeneration,
     isStreaming,
     canStopStreaming,
+    hasConversationReloadError,
+    isReloadingConversation,
+    retryConversationReload,
   } = useConversationStream({
     conversationId,
     state: { setConversation, conversationRef },
@@ -319,6 +372,12 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     overlay,
     onStopError: handleStopError,
     generationConflictMessage: t(ChatI18nKeys.GenerationConflict),
+    generationPersistenceErrorMessage: t(
+      ChatI18nKeys.GenerationPersistenceError,
+    ),
+    onStreamError: logConversationStreamError,
+    /* One commit per frame while a reply streams, not one per network read. */
+    batchChunksPerFrame: true,
   });
 
   /*
@@ -413,9 +472,10 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         }
         if (restoredToolConfigIdRef.current !== id) {
           restoredToolConfigIdRef.current = id;
-          restoreToolConfiguration(
-            getLastUserMessageToolConfiguration(result.messages),
-          );
+          restoreToolConfiguration(getLatestToolConfiguration(result.messages));
+          appliedFormSchemaKeyRef.current =
+            getFormSchemaToolSyncKey(id, result.messages, toolIdsRef.current)
+              ?.key ?? null;
         }
 
         const lastMsg = result.messages[result.messages.length - 1];
@@ -457,6 +517,12 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
               lastMsg.custom_content,
               generateUUID(),
               CompletionMode.ContinueLastUser,
+              /*
+               * A reload can land here before the backend saved this turn's
+               * start state while it still generates it; its 409 then means
+               * "join that generation", not "conflict".
+               */
+              { resumeOnConflict: true },
             );
           }
         } else {
@@ -610,6 +676,13 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     }));
   }, []);
 
+  const handleVisualizerSendMessage = useVisualizerMessageSendHandler({
+    conversationId,
+    isStreaming,
+    isReadOnly,
+    handleSend,
+  });
+
   useActiveConversationBridge({
     conversation,
     conversationId,
@@ -660,6 +733,25 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     setPendingDislikeMessageIndex(null);
   }, []);
 
+  /* Stable props so memo(ConversationView) skips re-rendering long message lists. */
+  const toolsChipLabels = useMemo(
+    () => ({
+      removeLabel: (label: string) => t(ToolsI18nKeys.RemoveTool, { label }),
+      stateOnLabel: t(ToolsI18nKeys.StateOn),
+      stateOffLabel: t(ToolsI18nKeys.StateOff),
+    }),
+    [t],
+  );
+
+  const topContent = useMemo(
+    () =>
+      activeScheduledTaskStatus ===
+      ActiveScheduledTaskStatus.TaskConversation ? (
+        <ScheduledTaskConversationBanner />
+      ) : undefined,
+    [activeScheduledTaskStatus],
+  );
+
   if (isFetching)
     return (
       <div className="flex size-full items-center justify-center">
@@ -691,9 +783,13 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
           onEditMessage={handleEditMessage}
           editingMessageIndexes={editingMessageIndexes}
           isAssistantTyping={isStreaming}
+          hasConversationReloadError={hasConversationReloadError}
+          isReloadingConversation={isReloadingConversation}
+          onRetryConversationReload={retryConversationReload}
           canStopAssistant={canStopStreaming}
           placeholder={t(ChatI18nKeys.Placeholder)}
           onSelectStarter={handleButtonSelect}
+          onVisualizerSendMessage={handleVisualizerSendMessage}
           stoppedGeneratingText={t(ChatI18nKeys.StoppedGenerating)}
           isReadOnly={isReadOnly}
           onDuplicateConversation={handleDuplicateConversation}
@@ -710,15 +806,8 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
           toolsMenuItems={toolsMenuItems}
           onToolToggle={onToolToggle}
           toolsMenuTitle={t(ToolsI18nKeys.MenuTitle)}
-          toolsChipLabels={{
-            removeLabel: (label) => t(ToolsI18nKeys.RemoveTool, { label }),
-          }}
-          topContent={
-            activeScheduledTaskStatus ===
-            ActiveScheduledTaskStatus.TaskConversation ? (
-              <ScheduledTaskConversationBanner />
-            ) : undefined
-          }
+          toolsChipLabels={toolsChipLabels}
+          topContent={topContent}
         />
       </div>
 

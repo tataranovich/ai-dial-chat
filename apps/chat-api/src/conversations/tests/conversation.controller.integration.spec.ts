@@ -29,7 +29,9 @@ import {
 import { ConversationNamingService } from '../conversation-naming.service';
 import { ConversationController } from '../conversation.controller';
 import { ConversationService } from '../conversation.service';
+import { BackgroundGenerationService } from '../generation/background-generation.service';
 import { ChatCompletionsAdapter } from '../generation/chat-completions.adapter';
+import { CoreResponsesClient } from '../generation/core-responses.client';
 import { ResponsesAdapter } from '../generation/responses.adapter';
 import { ConversationLifecycleService } from '../lifecycle/conversation-lifecycle.service';
 import { ConversationListingService } from '../listing/conversation-listing.service';
@@ -56,10 +58,16 @@ describe('ConversationController (integration)', () => {
     deleteConversations: ReturnType<typeof vi.fn>;
     deleteAllConversations: ReturnType<typeof vi.fn>;
     markConversationViewed: ReturnType<typeof vi.fn>;
+    resolveBackgroundAttach: ReturnType<typeof vi.fn>;
+    stopBackgroundGeneration: ReturnType<typeof vi.fn>;
+    saveClientConversation: ReturnType<typeof vi.fn>;
+    getConversation: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
     service = {
+      resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
+      stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
       createConversation: vi.fn(),
       listConversations: vi.fn(),
       renameConversation: vi.fn(),
@@ -67,11 +75,15 @@ describe('ConversationController (integration)', () => {
       deleteConversations: vi.fn(),
       deleteAllConversations: vi.fn(),
       markConversationViewed: vi.fn(),
+      saveClientConversation: vi.fn(),
+      getConversation: vi.fn(),
     };
 
     const mockGenerationService = {
       register: vi.fn().mockReturnValue(new AbortController()),
       abort: vi.fn().mockReturnValue(true),
+      hasLocalForegroundGeneration: vi.fn().mockReturnValue(false),
+      setBackground: vi.fn(),
       complete: vi.fn(),
       error: vi.fn(),
       getStatus: vi.fn().mockReturnValue(GenerationStatus.Active),
@@ -266,6 +278,8 @@ describe('ConversationController (integration)', () => {
           ConversationGenerationService,
           ChatCompletionsAdapter,
           ResponsesAdapter,
+          CoreResponsesClient,
+          BackgroundGenerationService,
           {
             provide: ConversationNamingService,
             useValue: { maybeRenameAfterFirstReply: vi.fn() },
@@ -656,6 +670,84 @@ describe('ConversationController (integration)', () => {
     });
   });
 
+  describe('PUT and GET /conversations — nested stages', () => {
+    const path = 'test-bucket/nested.json';
+    const nestedConversation = (parent: unknown) => ({
+      id: path,
+      folderId: 'test-bucket',
+      name: 'Nested stages',
+      model: { id: 'agent' },
+      prompt: '',
+      temperature: 1,
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Result',
+          timestamp: '2026-09-30T10:00:00.000Z',
+          custom_content: {
+            stages: [
+              { index: 0, name: 'Plan', status: 'completed' },
+              {
+                index: 1,
+                parent_stage_index: parent,
+                name: 'Search',
+                status: 'completed',
+              },
+            ],
+          },
+        },
+      ],
+      lastActivityDate: 1790762400000,
+      updatedAt: 1790762400000,
+      selectedAddons: [],
+      assistantModelId: 'agent',
+    });
+
+    /* In-memory storage behind the real controller, pipe and serializer. */
+    const useInMemoryStorage = () => {
+      let stored: unknown;
+      service.saveClientConversation.mockImplementation(
+        async (_path: string, _at: string, _bucket: string, body: unknown) => {
+          stored = body;
+          return stored;
+        },
+      );
+      service.getConversation.mockImplementation(async () => stored);
+    };
+
+    it('round-trips a zero parent reference through save and get', async () => {
+      useInMemoryStorage();
+      const conversation = nestedConversation(0);
+
+      const saved = await request(app.getHttpServer())
+        .put(`/conversations?path=${encodeURIComponent(path)}`)
+        .send({ conversation })
+        .expect(200);
+      const fetched = await request(app.getHttpServer())
+        .get(`/conversations?path=${encodeURIComponent(path)}`)
+        .expect(200);
+
+      for (const response of [saved, fetched]) {
+        expect(response.body.messages[0].custom_content.stages).toEqual(
+          conversation.messages[0].custom_content.stages,
+        );
+      }
+    });
+
+    it('keeps the opaque whole-conversation save policy for stage metadata', async () => {
+      useInMemoryStorage();
+
+      const saved = await request(app.getHttpServer())
+        .put(`/conversations?path=${encodeURIComponent(path)}`)
+        .send({ conversation: nestedConversation(-1) })
+        .expect(200);
+
+      expect(
+        saved.body.messages[0].custom_content.stages[1].parent_stage_index,
+      ).toBe(-1);
+    });
+  });
+
   describe('PATCH /conversations', () => {
     it('returns 200 with the renamed name and the path unchanged', async () => {
       const renamed = { name: 'New Title' };
@@ -929,6 +1021,8 @@ describe('ConversationController (integration)', () => {
       realGenerationService.beginFinalizing(existingLease);
 
       const streamingStub = {
+        resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
+        stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
         streamCompletion: vi.fn().mockImplementation(async function* (
           streamPath: string,
           _at: string,

@@ -3,16 +3,17 @@ import {
   AttachmentType,
   buildCssVars,
   DeploymentIcon,
-  DisplayAttachment,
   MDMessageViewer,
   mergeClasses,
   MessageRole,
+  ResponseFormat,
 } from '@epam/ai-dial-chat-shared';
 import { NeutralButton } from '@epam/ai-dial-ui-kit';
 import { FC, useMemo } from 'react';
 import { CONVERSATION_MESSAGES_CLASS } from '../../constants/public-class-names';
 import { useInlineStartIndent } from '../../hooks/useInlineStartIndent/useInlineStartIndent';
 import type { AssistantMessageBubbleProps } from '../../models/message-bubble';
+import { copySelectionWithoutStyles } from '../../utils/clipboard';
 import { MessageActions } from '../MessageActions/MessageActions';
 import styles from './MessageBubble.module.scss';
 
@@ -27,13 +28,16 @@ const FIRST_LINE_INDENT_CLASS_NAME =
 /** Assistant-authored message bubble, start-aligned with markdown content and optional quick-reply starters. */
 export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
   text,
+  contentRef,
   styles: bubbleStyles,
   actions,
   hasAlwaysVisibleActions,
   isStreaming,
   attachments,
   beforeContent,
+  responseFormat,
   afterContent,
+  hasThinkingPlaceholder = true,
   starters,
   onSelectStarter,
   deploymentIconUrl,
@@ -52,18 +56,21 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
   const { colors, typography, className, bubbleClassName } = bubbleStyles ?? {};
   const {
     attachmentClickLabel,
+    attachmentDownloadLabel,
     attachmentRetryLabel,
     attachmentOpenInNewTabLabel,
     startersAriaLabel = 'Quick reply buttons',
     thinkingLabel,
     codeBlockCopyLabel,
     codeBlockCopiedLabel,
+    codeBlockDownloadLabel,
     tableCopyLabel,
     tableCopiedLabel,
     tableDownloadCsvLabel,
     tableOpenInCanvasLabel,
     tableDownloadFilename,
     tableScrollRegionAriaLabel,
+    mathScrollRegionAriaLabel,
     assistantMessageAriaLabel = 'Assistant message',
     deploymentIconFallbackLabel = 'AI',
   } = labels ?? {};
@@ -102,6 +109,7 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
       role="group"
       aria-label={assistantMessageAriaLabel}
       style={cssVars}
+      onCopy={copySelectionWithoutStyles}
       className={mergeClasses('flex w-full items-start gap-3', className)}
     >
       {hasDeploymentIcon && (
@@ -137,7 +145,7 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
           {beforeContent != null && !text && (
             <div className="min-w-0">{beforeContent}</div>
           )}
-          {(text || isStreaming) && (
+          {(text || (isStreaming && hasThinkingPlaceholder)) && (
             <div
               aria-live="polite"
               aria-atomic="false"
@@ -168,9 +176,13 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
                * The plain marker class (not a CSS-module hash) keeps the
                * indent selector above a static string Tailwind can generate.
                */}
-              <div className="cm-bubble-markdown min-w-0 max-w-full">
+              <div
+                ref={contentRef}
+                className="cm-bubble-markdown min-w-0 max-w-full"
+              >
                 <MDMessageViewer
                   content={text ?? ''}
+                  isPlainText={responseFormat === ResponseFormat.PlainText}
                   isStreaming={isStreaming}
                   thinkingLabel={thinkingLabel}
                   components={markdownComponents}
@@ -178,26 +190,32 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
                   urlTransform={markdownUrlTransform}
                   codeBlockCopyLabel={codeBlockCopyLabel}
                   codeBlockCopiedLabel={codeBlockCopiedLabel}
+                  codeBlockDownloadLabel={codeBlockDownloadLabel}
                   codeBlockTheme={codeBlockTheme}
                   tableActionLabels={tableActionLabels}
                   tableDownloadFilename={tableDownloadFilename}
                   tableOnOpenInCanvas={tableOnOpenInCanvas}
                   tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
+                  mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
                 />
               </div>
             </div>
           )}
           <AttachmentGroup
             attachments={visibleAttachments}
-            onAttachmentClick={(id) =>
-              onAttachmentClick?.(
-                attachments?.find((a) => a.id === id) as DisplayAttachment,
-              )
+            onAttachmentClick={
+              onAttachmentClick
+                ? (id) => {
+                    const attachment = attachments?.find((a) => a.id === id);
+                    if (attachment) onAttachmentClick(attachment);
+                  }
+                : undefined
             }
             onDownloadAll={onDownloadAll}
             onRetry={onAttachmentRetry}
             labels={{
               clickLabel: attachmentClickLabel,
+              downloadLabel: attachmentDownloadLabel,
               retryLabel: attachmentRetryLabel,
               openInNewTabLabel: attachmentOpenInNewTabLabel,
             }}

@@ -15,6 +15,7 @@ import type { ConversationResponseDto } from '../../openapi/openapi-response.dto
 import { ConversationNamingService } from '../conversation-naming.service';
 import type { ConversationPersistencePort } from '../conversation-persistence.port';
 import { ConversationMessageRole } from '../dto/conversation-message.dto';
+import { runConditionalUpdate } from '../persistence/conversation-persistence.service';
 import { CONVERSATION_NAMING_SYSTEM_PROMPT } from '../prompts/conversation-naming.prompt';
 
 const makeConversation = (
@@ -53,8 +54,10 @@ describe('ConversationNamingService', () => {
   let mockConversationPersistence: Mocked<ConversationPersistencePort>;
   let mockConfigService: Pick<ConfigService<EnvironmentVariables>, 'get'>;
   let mockDialClient: DialClientService;
+  let namingPrompt: string | undefined;
 
   beforeEach(() => {
+    namingPrompt = undefined;
     mockAppConfigService = {
       isEnabled: vi.fn().mockResolvedValue(true),
     };
@@ -65,9 +68,23 @@ describe('ConversationNamingService', () => {
           makeConversation({ name: 'Docker networking basics' }),
         ),
       saveConversation: vi.fn().mockResolvedValue(makeConversation()),
+      readConversationWithEtag: vi.fn().mockResolvedValue({
+        conversation: makeConversation({ name: 'Docker networking basics' }),
+        etag: '"v1"',
+      }),
+      saveConversationIfMatch: vi
+        .fn()
+        .mockResolvedValue({ isSaved: true, conversation: makeConversation() }),
+      updateConversation: vi.fn(
+        (
+          ...args: Parameters<ConversationPersistencePort['updateConversation']>
+        ) =>
+          runConditionalUpdate(mockConversationPersistence as never, ...args),
+      ),
     };
     mockConfigService = {
       get: vi.fn((key: string) => {
+        if (key === 'CONVERSATION_NAMING_SYSTEM_PROMPT') return namingPrompt;
         if (key === 'DIAL_CORE_URL') return 'http://localhost:3000';
         if (key === 'UTILITY_MODEL') return 'utility-model';
         if (key === 'DIAL_API_KEY') return 'dial-api-key';
@@ -98,6 +115,56 @@ describe('ConversationNamingService', () => {
       },
     } as never);
   });
+
+  it.each([
+    undefined,
+    '',
+    ' \t\n ',
+    '  Return only a title.\nPreserve العربية.\n',
+  ])(
+    'uses the configured prompt or default in both naming flows (%j)',
+    async (prompt) => {
+      namingPrompt = prompt;
+      await service['runMaybeRenameAfterFirstReply'](
+        'gpt-4o__Hello',
+        'test-token',
+        'test-bucket',
+        makeConversation(),
+      );
+      await service.generateTitle('gpt-4o__Hello', 'test-token', 'test-bucket');
+      const send = vi.mocked(mockDialClient.client.sendChatCompletionRequest);
+      expect(send).toHaveBeenCalledTimes(2);
+      for (const [index, headers] of [
+        { 'Api-Key': 'dial-api-key' },
+        { Authorization: 'Bearer test-token' },
+      ].entries()) {
+        expect(send).toHaveBeenNthCalledWith(
+          index + 1,
+          'utility-model',
+          expect.objectContaining({
+            body: {
+              messages: [
+                {
+                  role: 'system',
+                  content: prompt?.trim()
+                    ? prompt
+                    : CONVERSATION_NAMING_SYSTEM_PROMPT,
+                },
+                {
+                  role: 'user',
+                  content: expect.stringContaining(
+                    'How does Docker networking work?',
+                  ),
+                },
+              ],
+              stream: false,
+            },
+            headers,
+          }),
+        );
+      }
+    },
+  );
 
   it('renames the conversation after a successful LLM response', async () => {
     await service['runMaybeRenameAfterFirstReply'](
@@ -134,12 +201,12 @@ describe('ConversationNamingService', () => {
         headers: { 'Api-Key': 'dial-api-key' },
       }),
     );
-    expect(mockConversationPersistence.getConversation).toHaveBeenCalledWith(
-      'test-bucket/gpt-4o__Hello',
-      'test-token',
-      'test-bucket',
-    );
-    expect(mockConversationPersistence.saveConversation).toHaveBeenCalledWith(
+    expect(
+      mockConversationPersistence.readConversationWithEtag,
+    ).toHaveBeenCalledWith('gpt-4o__Hello', 'test-token', 'test-bucket');
+    expect(
+      mockConversationPersistence.saveConversationIfMatch,
+    ).toHaveBeenCalledWith(
       'gpt-4o__Hello',
       'test-token',
       'test-bucket',
@@ -147,7 +214,57 @@ describe('ConversationNamingService', () => {
         name: 'Docker networking basics',
         llmNamingDone: true,
       }),
+      '"v1"',
     );
+  });
+
+  it('re-reads and writes the newer version when the conversation changed concurrently', async () => {
+    mockConversationPersistence.readConversationWithEtag
+      .mockResolvedValueOnce({
+        conversation: makeConversation({ name: 'stale' }),
+        etag: '"v1"',
+      })
+      .mockResolvedValueOnce({
+        conversation: makeConversation({ name: 'fresh' }),
+        etag: '"v2"',
+      });
+    mockConversationPersistence.saveConversationIfMatch
+      .mockResolvedValueOnce({ isSaved: false })
+      .mockResolvedValueOnce({
+        isSaved: true,
+        conversation: makeConversation(),
+      });
+
+    await service['runMaybeRenameAfterFirstReply'](
+      'gpt-4o__Hello',
+      'test-token',
+      'test-bucket',
+      makeConversation(),
+    );
+
+    const calls =
+      mockConversationPersistence.saveConversationIfMatch.mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1][4]).toBe('"v2"');
+    expect(mockConversationPersistence.saveConversation).not.toHaveBeenCalled();
+  });
+
+  it('gives up after three concurrent changes instead of overwriting', async () => {
+    mockConversationPersistence.saveConversationIfMatch.mockResolvedValue({
+      isSaved: false,
+    });
+
+    await service['runMaybeRenameAfterFirstReply'](
+      'gpt-4o__Hello',
+      'test-token',
+      'test-bucket',
+      makeConversation(),
+    );
+
+    expect(
+      mockConversationPersistence.saveConversationIfMatch,
+    ).toHaveBeenCalledTimes(3);
+    expect(mockConversationPersistence.saveConversation).not.toHaveBeenCalled();
   });
 
   it('qualifies an application conversation path with the session bucket before reading it back', async () => {
@@ -160,16 +277,21 @@ describe('ConversationNamingService', () => {
       }),
     );
 
-    expect(mockConversationPersistence.getConversation).toHaveBeenCalledWith(
-      'test-bucket/applications/public/pg/pg-agent__1.0.0__hello__6df498f6-df3c-446c-a651-5ad321f1e53c',
+    expect(
+      mockConversationPersistence.readConversationWithEtag,
+    ).toHaveBeenCalledWith(
+      'applications/public/pg/pg-agent__1.0.0__hello__6df498f6-df3c-446c-a651-5ad321f1e53c',
       'test-token',
       'test-bucket',
     );
-    expect(mockConversationPersistence.saveConversation).toHaveBeenCalledWith(
+    expect(
+      mockConversationPersistence.saveConversationIfMatch,
+    ).toHaveBeenCalledWith(
       'applications/public/pg/pg-agent__1.0.0__hello__6df498f6-df3c-446c-a651-5ad321f1e53c',
       'test-token',
       'test-bucket',
       expect.objectContaining({ llmNamingDone: true }),
+      '"v1"',
     );
   });
 
@@ -289,6 +411,9 @@ describe('ConversationNamingService', () => {
     await promise;
 
     expect(mockConversationPersistence.saveConversation).not.toHaveBeenCalled();
+    expect(
+      mockConversationPersistence.saveConversationIfMatch,
+    ).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 
@@ -309,12 +434,16 @@ describe('ConversationNamingService', () => {
     );
 
     expect(mockConversationPersistence.saveConversation).not.toHaveBeenCalled();
+    expect(
+      mockConversationPersistence.saveConversationIfMatch,
+    ).not.toHaveBeenCalled();
   });
 
   it('skips save when llmNamingDone is already true after refresh', async () => {
-    mockConversationPersistence.getConversation.mockResolvedValue(
-      makeConversation({ llmNamingDone: true }),
-    );
+    mockConversationPersistence.readConversationWithEtag.mockResolvedValue({
+      conversation: makeConversation({ llmNamingDone: true }),
+      etag: '"v1"',
+    });
 
     await service['runMaybeRenameAfterFirstReply'](
       'gpt-4o__Hello',

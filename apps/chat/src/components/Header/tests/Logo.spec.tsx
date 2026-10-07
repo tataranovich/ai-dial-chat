@@ -5,6 +5,13 @@ import * as ThemeContext from '../../../context/ThemeContext';
 import * as iconPathUtils from '../../../utils/icon-path';
 import Logo from '../Logo';
 
+const celebration = vi.hoisted(() => ({
+  event: null as { iconUrl: string } | null,
+}));
+vi.mock('@epam/ai-dial-celebrations', () => ({
+  useCelebration: () => celebration,
+}));
+
 vi.mock('../../../context/ThemeContext');
 vi.mock('../../../utils/icon-path');
 
@@ -14,6 +21,7 @@ describe('Logo', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    celebration.event = null;
   });
 
   it('should render logo with correct theme', () => {
@@ -34,17 +42,74 @@ describe('Logo', () => {
     const { container } = render(<Logo />);
 
     const logo = screen.getByLabelText(ChatI18nKeys.Logo);
-    /* This is a decorative background-image span with no accessible role
-       or text; asserting its inline style/class is CSS-level behavior with
-       no semantic query equivalent. */
     // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
     const logoImage = container.querySelector('span.desktop\\:block');
     expect(logo).toBeTruthy();
     expect(logoImage).toBeTruthy();
-    expect((logoImage as HTMLElement).style.backgroundImage).toBe(
-      `url(${mockIconPath})`,
+    expect((logoImage as HTMLElement).style.backgroundImage).toContain(
+      mockIconPath,
     );
     expect(mockGetIconPath).toHaveBeenCalledWith(mockLogoName);
+  });
+
+  it('replaces the existing mobile icon and restores it when the event is disabled', () => {
+    mockUseTheme.mockReturnValue({
+      currentTheme: 'dark',
+      selectedTheme: 'dark',
+      currentThemeFavicon: 'favicon.svg',
+      themes: [],
+      setTheme: vi.fn(),
+      isLoading: false,
+    });
+    mockGetIconPath.mockReturnValue('/theme/favicon.svg');
+    celebration.event = { iconUrl: '/events/test-icon.svg' };
+    const { rerender } = render(<Logo />);
+    /* The existing icon is a decorative CSS background inside the logo link. */
+    // eslint-disable-next-line testing-library/no-node-access
+    const icon = screen.getByRole('link').firstElementChild as HTMLElement;
+    expect(icon.style.backgroundImage).toContain('/events/test-icon.svg');
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+    celebration.event = null;
+    /* The mocked hook has no React subscription; remount to apply its value. */
+    rerender(<Logo key="normal" />);
+    const restoredLink = screen.getByRole('link');
+    // eslint-disable-next-line testing-library/no-node-access
+    const restoredIcon = restoredLink.firstElementChild as HTMLElement;
+    expect(restoredIcon.style.backgroundImage).toContain('/theme/favicon.svg');
+  });
+
+  it('hides the full logo below desktop when the theme has a favicon', () => {
+    mockUseTheme.mockReturnValue({
+      currentTheme: 'dark',
+      selectedTheme: 'dark',
+      currentThemeLogo: 'logo.svg',
+      currentThemeFavicon: 'favicon.svg',
+      themes: [],
+      setTheme: vi.fn(),
+      isLoading: false,
+    });
+    const { container } = render(<Logo />);
+    /* Breakpoint visibility is CSS-level behavior with no semantic query. */
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+    const logoImage = container.querySelector('span.desktop\\:block');
+    expect(logoImage?.classList.contains('hidden')).toBe(true);
+  });
+
+  it('shows the full logo below desktop when the theme has no favicon', () => {
+    mockUseTheme.mockReturnValue({
+      currentTheme: 'dark',
+      selectedTheme: 'dark',
+      currentThemeLogo: 'logo.svg',
+      themes: [],
+      setTheme: vi.fn(),
+      isLoading: false,
+    });
+    const { container } = render(<Logo />);
+    /* Breakpoint visibility is CSS-level behavior with no semantic query. */
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+    const logoImage = container.querySelector('span.desktop\\:block');
+    expect(logoImage?.classList.contains('hidden')).toBe(false);
+    expect(logoImage?.classList.contains('block')).toBe(true);
   });
 
   it('should return null when logo is not available', () => {
@@ -84,8 +149,8 @@ describe('Logo', () => {
     // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
     const logoImage = container.querySelector('span.desktop\\:block');
     expect(logoImage).toBeTruthy();
-    expect((logoImage as HTMLElement).style.backgroundImage).toBe(
-      `url(${mockLightPath})`,
+    expect((logoImage as HTMLElement).style.backgroundImage).toContain(
+      mockLightPath,
     );
     expect(mockGetIconPath).toHaveBeenCalledWith(mockLightLogo);
   });
@@ -134,7 +199,7 @@ describe('Logo', () => {
     expect((logoImage as HTMLElement).classList.contains('bg-contain')).toBe(
       true,
     );
-    expect((logoImage as HTMLElement).classList.contains('bg-right')).toBe(
+    expect((logoImage as HTMLElement).classList.contains('bg-center')).toBe(
       true,
     );
     expect((logoImage as HTMLElement).classList.contains('bg-no-repeat')).toBe(

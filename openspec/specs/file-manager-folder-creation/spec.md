@@ -1,4 +1,4 @@
-# Spec: File Manager Folder Creation
+# file-manager-folder-creation Specification
 
 ## Purpose
 
@@ -6,16 +6,11 @@ Creating folders as zero-byte markers, with inline name validation and the cache
 
 ## State ownership
 
-`useDialFileManager` (`libs/chat-hooks/src/files/useDialFileManager/useDialFileManager.ts (@epam/ai-dial-chat-hooks)`) owns folder-creation state.
-
-New state field:
-```ts
-const [isCreatingFolder, setIsCreatingFolder] = useState(false);
-```
+`useDialFileMutations` (`libs/chat-hooks/src/files/useDialFileMutations/useDialFileMutations.ts (@epam/ai-dial-chat-hooks)`) owns folder-creation state (`const [isCreatingFolder, setIsCreatingFolder] = useState(false)`). `useDialFileManager` composes it and exposes the result.
 
 Exposed in `UseDialFileManagerResult`:
 - `onCreateFolder(file, folderPath, fileId)` — creates the folder via BFF
-- `onCreateFolderValidate(name, parentFolder)` — validates inline before BFF call
+- `onCreateFolderValidate(name, parentFolder)` — validates inline before BFF call; returns `string | null` by passing the lib's structured `FileNameValidationError` through the host-supplied `buildValidationErrorMessage` option
 - `isCreatingFolder` — disables conflicting actions while creating
 
 ---
@@ -36,25 +31,21 @@ Exposed in `UseDialFileManagerResult`:
 class CreateFolderDto {
   @IsString()
   @IsNotEmpty()
-  @Matches(/^[\w.-]+$/)
+  @Matches(BUCKET_NAME_PATTERN, { message: BUCKET_NAME_VALIDATION_MESSAGE })
   @MaxLength(256)
-  @ApiProperty({ description: 'DIAL Core bucket', example: 'user-bucket' })
   bucket!: string;
 
-  @IsString()
   @IsOptional()
-  @Matches(/^([\w.\-]+\/)*$/)
-  @MaxLength(1024)
+  @IsString()
   @IsValidFilePath()
-  @ApiPropertyOptional({ description: 'Parent folder path (trailing slash required, empty for root)', example: 'reports/' })
-  parentPath?: string;
+  @MaxLength(1024)
+  parentPath?: string; // no leading slash, no `..`; empty for root
 
   @IsString()
   @IsNotEmpty()
-  @MaxLength(255)
-  @Matches(/^[^/\\.\0][^/\\\0]{0,253}$/)
-  @IsNotEqual(MARKER_NAME)  // custom validator: rejects '.dial_folder'
-  @ApiProperty({ description: 'New folder name (no slashes, no traversal, not the reserved marker name)', example: '2026' })
+  @Matches(/^(?!\.+$)[^/\\\0]{1,254}$/)  // leading dot allowed (hidden folder); dot-only names rejected
+  @IsNotReservedMarkerName()  // rejects '.dial_folder'
+  @MaxLength(254)
   name!: string;
 }
 ```
@@ -80,14 +71,14 @@ class CreateFolderDto {
 }
 ```
 
-**Response DTO** (`apps/chat-api/src/files/dto/create-folder-response.dto.ts`):
+**Response DTO** (declared in the same `apps/chat-api/src/files/dto/create-folder.dto.ts`):
 ```ts
 class CreateFolderResponseDto {
   @ApiProperty() name!: string;
   @ApiProperty() path!: string;
   @ApiProperty() parentPath!: string;
   @ApiProperty() bucket!: string;
-  @ApiProperty() nodeType!: 'folder';
+  @ApiProperty({ example: FOLDER_NODE_TYPE }) nodeType!: string; // always 'folder'
   @ApiProperty() folderId!: string;
 }
 ```
@@ -101,7 +92,7 @@ class CreateFolderResponseDto {
 | `403` | User lacks permission on the bucket |
 | `404` | Parent folder not found (DIAL Core 404) |
 | `409` | A folder (or file) with the same name already exists at the parent path |
-| `429` | DIAL Core rate limit exceeded |
+| `429` | DIAL Core rate limit exceeded (mapped by the DIAL error mapper; not declared in the controller's Swagger responses) |
 | `502` | DIAL Core returned an error |
 | `503` | DIAL Core unreachable or timed out |
 
@@ -110,14 +101,7 @@ class CreateFolderResponseDto {
 - Generated method: `filesApi.createFolder({ bucket, parentPath?, name })` → `Promise<CreateFolderResponseDto>`
 - Frontend callers use the normal generated method (not Raw).
 
-**Frontend wrapper** in `apps/chat/src/server-api/files.api.ts`:
-```ts
-export const createFolder = (params: {
-  bucket: string;
-  parentPath?: string;
-  name: string;
-}): Promise<CreateFolderResponseDto> => filesApi.createFolder(params);
-```
+**Frontend wiring**: `apps/chat/src/server-api/files.api.ts` builds `createFilesApiClient(filesApi, uploadFileWithProgress)` (from `@epam/ai-dial-chat-hooks`) and re-exports its `createFolder`. File-manager hooks reach it through the injected `DialFilesApi` port (`filesApi.createFolder(...)`), not a hand-written wrapper.
 
 ---
 
@@ -134,12 +118,11 @@ The DIAL TypeScript SDK (`0.1.0-dev.24`) provides no dedicated `createFolder` me
    - If `200` **and** `markerMetadataMatches(data, bucket, markerPath)` → throw `ConflictException` (`409`).
    - If `200` but probe does **not** match the requested marker path (false positive from parent marker) → proceed to upload.
    - If `404` → proceed.
-   - If `403` → throw `ForbiddenException`.
-   - Any other error → `handleDialError`.
-3. Upload zero-byte marker via `FilesUploadService.uploadFile(bucket, markerPath, { body: emptyBlob })`.
-4. Return `CreateFolderResponseDto` with full DIAL resource paths (`files/{bucket}/...`).
+   - Any other error (including `403`) → `handleDialSdkError`.
+3. Upload zero-byte marker via `FilesUploadService.uploadFile(bucket, markerPath, { buffer: Buffer.alloc(0), mimetype: 'application/octet-stream', originalname: MARKER_NAME }, at)`.
+4. Return `CreateFolderResponseDto` with full DIAL resource paths (`files/{bucket}/...`). Non-`HttpException` failures are logged and passed to `handleDialSdkError`.
 
-**MARKER_NAME constant**: `HIDDEN_FILE` (`.dial_folder`) from `@epam/ai-dial-chat-shared`, re-exported from `apps/chat-api/src/files/files.constants.ts`.
+**MARKER_NAME constant**: a local literal `'.dial_folder'` in `apps/chat-api/src/files/files.constants.ts`, with a comment requiring it to stay in sync with `HIDDEN_FILE` in `libs/chat-shared/src/constants/dial.ts`.
 
 ---
 
@@ -160,44 +143,48 @@ The DIAL TypeScript SDK (`0.1.0-dev.24`) provides no dedicated `createFolder` me
 Called by `DialFileManager` during name input (before `onCreateFolder`):
 
 ```ts
+// useDialFileMutations (lib, no `t`)
+onCreateFolderValidate: (name: string, parentFolder: DialFile): FileNameValidationError | null
+// useDialFileManager result (string for the grid)
 onCreateFolderValidate: (name: string, parentFolder: DialFile): string | null
 ```
 
-Rules, evaluated **in this order** by `@epam/ai-dial-react-file-manager`, which returns on
-the first match (synchronous — no BFF call):
-1. Empty name → error key `dialFileManager.folderNameEmpty`
-2. Contains `..` anywhere → error key `dialFileManager.nameConsecutiveDots`
-3. Starts with `.` → error key `dialFileManager.folderNameHidden`
-4. Duplicate sibling name (case-insensitive check against `parentFolder.items`) → error key `dialFileManager.folderConflict`
-5. Contains a path separator or a forbidden symbol from `forbiddenSymbolsRegExp` → error key `dialFileManager.folderNameInvalidChars`
-6. Equals `.dial_folder` → error key `dialFileManager.folderNameReserved`
-7. Exceeds 255 characters → error key `dialFileManager.folderNameTooLong`
+The lib returns a structured `FileNameValidationError` (`{ reason: FileNameValidationErrorReason, symbols?, maxLength?, existingName? }`). `useDialFileManager` turns it into text with the host's `buildValidationErrorMessage` option; in `apps/chat` that is `buildValidationErrorMessage(t, error)` in `apps/chat/src/components/DialFileManagerShell/file-manager-notification-adapter.ts`, which uses the folder wording when no rename item is passed.
 
-The order matters for names that break several rules at once, and it is owned by the
-third-party package, not by this repository: a name is rejected with the message of the
-**first** rule it trips, not the most specific one. `../secret` breaks rules 2 and 5 and
-therefore reports the consecutive-dots message. A test that asserts a specific message for
-a multi-fault name MUST assert the message of the earliest matching rule.
+Rules, evaluated **in this order** by `useDialFileMutations.onCreateFolderValidate`, which returns on the first match (synchronous — no BFF call):
+1. Empty or whitespace-only name → `Empty` → `dialFileManager.folderNameEmpty`
+2. Contains a path separator (`/`, `\`) or a symbol matched by `forbiddenSymbolsRegExp` → `ForbiddenSymbols` (`symbols: NOT_ALLOWED_SYMBOLS`) → `dialFileManager.folderNameInvalidChars`
+3. Equals `.dial_folder` → `ReservedName` → `dialFileManager.folderNameReserved`
+4. Exceeds 255 characters → `TooLong` (`maxLength: 255`) → `dialFileManager.folderNameTooLong`
+5. Duplicate sibling name (case-insensitive check against `parentFolder.items`) → `DuplicateName` (`existingName`) → `dialFileManager.folderConflict`
+
+There is no `..` rule and no leading-dot rule: a leading dot is accepted, so the folder is created as a hidden folder and appears once "Show hidden files" is on. A name that breaks several rules reports the first one it trips; `../secret` reports the forbidden-symbols message because it contains `/`.
+
+Each call also records its result as the last live validation error; `onCreateFolder` refuses to call the BFF when either its own re-validation of the resolved name or that last live result is non-null.
 
 Forbidden-symbol validation SHALL use the same effective symbol set as rename validation: path separators (`/` and `\`) are always rejected, and all other forbidden characters come from the `forbiddenSymbolsRegExp` option passed to `useDialFileManager`. Production File Manager hosts pass `NOT_ALLOWED_SYMBOLS_REGEXP` from `@epam/ai-dial-ui-kit`, so names such as `reports:2026` are rejected before `onCreateFolder` is called.
 
 Conflict check in `onCreateFolderValidate` is against the **cached** `items` — it is a best-effort pre-check. The authoritative `409` check is server-side (`markerMetadataMatches` on the marker probe in `FilesFolderService.createFolder`).
 
-`onCreateFolder` does not catch BFF errors locally — failures (including `409`) propagate to `DialFileManager`, which surfaces them inline in the folder-creation dialog.
+`onCreateFolder` catches BFF errors (including `409`) locally and emits `onNotification({ variant: NotificationVariant.Error, reason: FileManagerNotificationReason.FolderCreateFailed })`; the app adapter shows it as the `dialFileManager.folderCreateError` error toast. The promise resolves without rethrowing.
 
 ---
 
 ## Cache update after creation
 
-After `onCreateFolder` resolves successfully:
+After `filesApi.createFolder` resolves successfully, `onCreateFolder` (`useDialFileMutations`) calls:
 ```ts
-setCache((prev) =>
-  mergeCreatedFolderIntoCache(prev, parentApiPath, created, listingPermissions),
+mergeCreatedFolder(
+  parentApiPath,
+  created,
+  listingPermissionsCache.get(parentApiPath),
 );
-setRetryCounter((c) => c + 1);
+bumpRetry();
 ```
 
-`mergeListingItems` unions cached items with incoming DIAL results on refetch so optimistically created folders are not lost when Core lags.
+`mergeCreatedFolder` (`libs/chat-hooks/src/files/useDialFileListing/useDialFileListing.ts`) runs `setCache((prev) => mergeCreatedFolderIntoCache(prev, parentApiPath, created, inheritedPermissions))`. `mergeCreatedFolderIntoCache` (`libs/chat-hooks/src/files/dial-file-manager-mapping.util.ts`) returns a new `Map` whose `parentApiPath` entry has a synthesized folder `ListFilesItemDto` appended — unless a case-insensitive same-name item is already there — so the folder shows immediately, including when it was created from a destination-folder popup browsing a different parent. `bumpRetry` increments `retryCounter`, which refetches the currently browsed `folderPath`.
+
+This optimistic entry is **not** preserved across a refetch. Every listing fetch in `useDialFileListing` (the `retryCounter`-driven current-folder effect, tree expansion, and destination-popup loads) writes its result with `next.set(apiPath, flat)` / `new Map(prev).set(apiPath, flat)`, replacing the folder's cache entry outright; there is no merge of cached and incoming items (no `mergeListingItems` helper exists). After the next refetch of the parent, the folder is shown only if DIAL Core's listing returns it. DIAL Core has no empty-folder concept — a folder exists only while some object is stored under its prefix — so a created folder that the listing does not return disappears from the grid at that refetch and reappears once an object exists under it (for example after a file is uploaded into it). This is expected behaviour: the hooks keep no client-side record of created folders beyond that cache entry. A tab or session change (`setCache(new Map())`) also discards it.
 
 ---
 
@@ -205,13 +192,11 @@ setRetryCounter((c) => c + 1);
 
 | Key | English |
 |-----|---------|
-| `dialFileManager.newFolder` | `"New folder"` |
+| `dialFileManager.newFolder` | `"Folder"` |
 | `dialFileManager.folderCreateError` | `"Failed to create folder"` — shown as an error toast through `useNotification` |
 | `dialFileManager.folderConflict` | `"A folder with this name already exists"` |
 | `dialFileManager.folderNameEmpty` | `"Folder name cannot be empty"` |
 | `dialFileManager.folderNameInvalidChars` | `"Folder name should not contain special symbols {{notAllowedSymbols}}"` |
-| `dialFileManager.folderNameHidden` | `"Folder name cannot start with a dot"` |
-| `dialFileManager.nameConsecutiveDots` | `"Name cannot contain consecutive dots"` — shared with rename validation |
 | `dialFileManager.folderNameReserved` | `"This folder name is reserved"` |
 | `dialFileManager.folderNameTooLong` | `"Folder name is too long"` |
 
@@ -233,8 +218,8 @@ setRetryCounter((c) => c + 1);
 
 ## Memoisation
 
-- `onCreateFolder` wrapped in `useCallback` in `useDialFileManager`.
-- `onCreateFolderValidate` wrapped in `useCallback` (depends on `t` and `forbiddenSymbolsRegExp`; sibling conflict input is supplied by the `parentFolder` argument).
+- `onCreateFolder` wrapped in `useCallback` in `useDialFileMutations`.
+- `onCreateFolderValidate` wrapped in `useCallback` in `useDialFileMutations` with deps `[forbiddenSymbolsRegExp]` (sibling conflict input is supplied by the `parentFolder` argument); `useDialFileManager` re-wraps it with deps `[mutations, buildValidationErrorMessage]`.
 
 ---
 
@@ -276,12 +261,13 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 
 ---
 
-### Scenario: Empty folder remains visible after refresh
+### Scenario: Created folder after a refetch depends only on DIAL Core's listing
 
-- **GIVEN** a folder `empty-folder` was created at root with only a marker file
-- **WHEN** the user closes and reopens the modal (re-fetching the root listing)
-- **THEN** `empty-folder` appears in the grid (from optimistic cache merge and/or DIAL Core prefix listing)
-- **AND** navigating into `empty-folder` may list the `.dial_folder` marker (hidden by default via ui-kit "Hidden files" toggle)
+- **GIVEN** a folder `empty-folder` was created at root and is shown through the optimistic `mergeCreatedFolderIntoCache` entry
+- **WHEN** the root listing is re-fetched (for example the user closes and reopens the modal)
+- **THEN** the root cache entry is replaced by the DIAL Core result; the optimistic entry is not carried over
+- **AND** `empty-folder` appears only if DIAL Core's root listing returns it; otherwise it stays absent until an object (such as an uploaded file) exists under its prefix
+- **AND** when it is listed, navigating into it may list the `.dial_folder` marker (hidden by default via ui-kit "Hidden files" toggle)
 
 ---
 
@@ -293,7 +279,7 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 - **AND** the ui-kit shows the error inline; the user cannot confirm until the name changes
 - **WHEN** two users race and both slip past the client-side check
 - **THEN** the BFF probes the marker path; when `markerMetadataMatches` confirms the marker exists, `createFolder` returns `409`
-- **AND** `DialFileManager` surfaces the error inline to the second user
+- **AND** `onCreateFolder` catches it and the second user sees the `dialFileManager.folderCreateError` error toast
 
 ---
 
@@ -311,9 +297,7 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 - **GIVEN** the user types `../secret`
 - **WHEN** `onCreateFolderValidate` runs
 - **THEN** the name is rejected inline before `onCreateFolder` is called
-- **AND** the inline message is `nameConsecutiveDots` ("Name cannot contain consecutive
-  dots"), because the `..` rule is evaluated before the forbidden-character rule — the name
-  breaks both, and the earlier rule wins
+- **AND** the inline message is `folderNameInvalidChars`, because the name contains the path separator `/`
 - **AND** if a crafted request bypasses the frontend and hits the BFF directly
 - **THEN** `CreateFolderDto` `@Matches` validation rejects the name with `400 Bad Request`
 
@@ -327,11 +311,14 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 
 ---
 
-### Scenario: Folder name starts with dot (reserved)
+### Scenario: Folder name starts with dot (hidden folder)
 
 - **GIVEN** the user types `.hidden-folder`
-- **WHEN** `onCreateFolderValidate` runs
-- **THEN** the `folderNameHidden` error is returned inline
+- **WHEN** the name is validated
+- **THEN** the package shows the hidden-item soft warning inline and `onCreateFolderValidate` returns `null`
+- **AND** confirming calls `createFolder` and the BFF creates `.hidden-folder/`
+- **AND** the folder is not listed until "Show hidden files" is toggled on, then it is listed
+- **AND** a name consisting only of dots (`.`, `..`) is rejected by `CreateFolderDto` with `400 Bad Request`
 
 ---
 
@@ -340,7 +327,7 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 - **GIVEN** the user types `.dial_folder`
 - **WHEN** `onCreateFolderValidate` runs
 - **THEN** the `folderNameReserved` error is returned inline
-- **AND** even if the BFF is called directly, the `@IsNotEqual(MARKER_NAME)` validator returns `400`
+- **AND** even if the BFF is called directly, the `@IsNotReservedMarkerName()` validator returns `400`
 
 ---
 
@@ -350,7 +337,7 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 - **WHEN** `GET /api/v1/files/list?bucket=...&path=that-folder/` is called
 - **THEN** the `.dial_folder` item is included in `items`
 - **AND** the ui-kit hides it by default via the "Hidden files" toggle
-- **AND** the folder node itself is visible in the parent listing when DIAL Core returns it (optimistic cache merge covers Core lag)
+- **AND** the folder node itself is visible in the parent listing only when DIAL Core returns it; the optimistic cache entry covers only the window before the parent's next refetch
 
 ---
 
@@ -368,7 +355,7 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 
 #### Scenario: Enter confirms an invalid folder name
 
-- **WHEN** a user is creating a new folder, types a name that fails validation (empty, contains a forbidden symbol such as `/` or `:`, starts with `.`, equals the reserved marker name, or exceeds 255 characters) so the inline error is shown, and presses Enter to confirm
+- **WHEN** a user is creating a new folder, types a name that fails validation (empty, contains a forbidden symbol such as `/` or `:`, equals the reserved marker name, or exceeds 255 characters) so the inline error is shown, and presses Enter to confirm
 - **THEN** `onCreateFolder` does not call the `createFolder` BFF endpoint and no folder is created
 
 #### Scenario: Clicking the folder row confirms an invalid folder name
@@ -384,14 +371,12 @@ No new metrics or analytics events beyond `MetricsInterceptor` (request duration
 #### Scenario: Parent folder resolution when creating outside the currently browsed folder
 
 - **WHEN** a folder is created from a destination-folder popup browsing a different folder than the outer grid, so no cached sibling list is available for the new folder's actual parent
-- **THEN** `onCreateFolder` still runs the empty-name, forbidden-symbol, leading-dot, reserved-name, and length checks against the resolved name
+- **THEN** `onCreateFolder` still runs the empty-name, forbidden-symbol, reserved-name, and length checks against the resolved name
 - **AND** the client-side sibling-duplicate check is best-effort only for this case; a genuine conflict is still caught by the BFF's `409` response, exactly as already specified for the existing conflict-check scenario
 ---
 ### Requirement: A created folder confirms itself
 
-`onCreateFolder` (`libs/chat-hooks/src/files/useDialFileMutations/useDialFileMutations.ts (@epam/ai-dial-chat-hooks)`) SHALL raise a success notification after the `POST /api/v1/files/folders` call resolves and the created folder has been merged into the listing cache, through `useOperationNotification` (see `entity-operation-notifications`) with `NotifiableEntity.Folder` + `EntityOperation.Created` and `name` = the created folder's resolved name.
-
-Today only the failure path notifies (`dialFileManager.folderCreateError`), so a folder created into a collapsed or non-visible parent — from a destination-folder popup, for example — produces no feedback at all.
+`onCreateFolder` (`libs/chat-hooks/src/files/useDialFileMutations/useDialFileMutations.ts (@epam/ai-dial-chat-hooks)`) SHALL emit `onOperationSuccess({ kind: FileOperationKind.FolderCreated, name })` (`name` = the created folder's resolved name) after the `POST /api/v1/files/folders` call resolves and the created folder has been merged into the listing cache. The lib calls no app hook; the app adapter `handleFileOperationSuccess` (`apps/chat/src/components/DialFileManagerShell/file-manager-notification-adapter.ts`) maps that event to `notifyOperationSuccess(NotifiableEntity.Folder, EntityOperation.Created, { name })` from `useOperationNotification` (see `entity-operation-notifications`), so a folder created into a collapsed or non-visible parent still produces feedback.
 
 The notification SHALL NOT be raised when validation rejects the name locally or when the BFF returns `409`; those paths keep their existing inline error and error-toast behaviour.
 
@@ -409,3 +394,27 @@ The notification SHALL NOT be raised when validation rejects the name locally or
 
 - **WHEN** the name fails client-side validation, or the BFF responds `409`
 - **THEN** no success notification is raised and the existing inline error / error toast behaviour is unchanged
+
+---
+
+### Requirement: An optimistically created folder lives only until the parent's next listing refetch
+
+After a successful `createFolder`, `useDialFileMutations.onCreateFolder` SHALL insert the created folder into its parent's listing cache through `mergeCreatedFolder` → `mergeCreatedFolderIntoCache` (`libs/chat-hooks/src/files/dial-file-manager-mapping.util.ts`) so it is displayed immediately, and SHALL NOT persist that entry beyond the parent's next listing fetch: `useDialFileListing` replaces a folder's cache entry with the fetched items (`next.set(apiPath, flat)`) and does not merge previously cached items back in. Because DIAL Core has no empty folders, a created folder that DIAL Core's listing does not return disappears from the grid at that refetch and reappears once an object (for example an uploaded file) is stored under it; this is the expected behaviour, not a defect.
+
+#### Scenario: Created folder is shown immediately
+
+- **WHEN** `createFolder` resolves for folder `drafts` under the root
+- **THEN** `mergeCreatedFolderIntoCache` appends a `drafts` folder item to the root cache entry (skipped if a case-insensitive same-name item already exists) and the folder appears in the grid before any refetch completes
+
+#### Scenario: Optimistic folder disappears on refetch when DIAL Core does not list it
+
+- **GIVEN** folder `drafts` is displayed only through the optimistic cache entry
+- **WHEN** the root listing is re-fetched and DIAL Core's response does not include `drafts`
+- **THEN** the root cache entry is replaced by the response and `drafts` is no longer shown
+- **AND** no error or notification is raised
+
+#### Scenario: Folder reappears once it holds a file
+
+- **GIVEN** folder `drafts` disappeared after a refetch
+- **WHEN** a file is uploaded into `drafts/` and the root listing is re-fetched
+- **THEN** DIAL Core lists `drafts` and it is shown again

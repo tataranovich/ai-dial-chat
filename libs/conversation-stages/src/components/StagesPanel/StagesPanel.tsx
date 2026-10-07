@@ -1,169 +1,31 @@
-import {
-  buildCssVars,
-  mergeClasses,
-  StageStatus,
-} from '@epam/ai-dial-chat-shared';
-import {
-  DIAL_ICON_SIZE,
-  DIAL_KIT_ICON_STROKE,
-  EllipsisTooltip,
-} from '@epam/ai-dial-ui-kit';
-import { IconChevronDown, IconChevronRight } from '@tabler/icons-react';
-import { FC, useState } from 'react';
+import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import { FC, useMemo } from 'react';
 import { CONVERSATION_STAGES_CLASS } from '../../constants/public-class-names';
-import { StageRow } from '../../models/stage-grouping';
-import type {
-  StagesPanelLabels,
-  StagesPanelProps,
-  StageTypography,
-} from '../../models/stages-props';
-import { groupStagesByName } from '../../utils/stage-grouping';
-import {
-  calculateStagesDurationSeconds,
-  formatTotalDuration,
-} from '../../utils/stage-name';
-import { StageIcon } from '../StageIcon/StageIcon';
-import { StageItem } from '../StageItem/StageItem';
+import { useStageExpansion } from '../../hooks/useStageExpansion/useStageExpansion';
+import type { StageExpansion } from '../../models/stage-tree';
+import type { StagesPanelProps } from '../../models/stages-props';
+import { buildStageTree } from '../../utils/stage-tree';
+import { StageList } from '../StageList/StageList';
 import styles from './StagesPanel.module.scss';
 
-interface StageGroupRowProps {
-  /** The collapsed `×N` group to render. */
-  row: StageRow;
-  /** Whether this stage group contains the currently executing (live) stage. */
-  isLive: boolean;
-  /** Typography configuration applied to stage text elements. */
-  typography?: StageTypography;
-  /** User-visible strings. */
-  labels?: StagesPanelLabels;
+/** Props for {@link StagesPanelView}. */
+export interface StagesPanelViewProps extends StagesPanelProps {
+  /** Disclosure state owned by the caller, so it survives the caller re-parenting the panel. */
+  expansion: StageExpansion;
 }
 
-/** Expandable summary row for a collapsed `×N` group of identical stage attempts. */
-const StageGroupRow: FC<StageGroupRowProps> = ({
-  row,
-  isLive,
-  typography,
-  labels,
-}) => {
-  const {
-    runningAriaLabel,
-    failedAriaLabel,
-    attemptLabel = (n: number) => `Attempt ${n}`,
-  } = labels ?? {};
-  const [isOpen, setIsOpen] = useState(false);
-
-  const hasUnresolved = row.attempts?.some((a) => a.status == null) ?? false;
-  const hasFailed = row.attempts?.some((a) => a.status === StageStatus.Failed);
-  const groupStatus = hasUnresolved
-    ? null
-    : hasFailed
-      ? StageStatus.Failed
-      : StageStatus.Completed;
-  const totalSeconds = calculateStagesDurationSeconds(
-    (row.attempts || []).map((attempt) => attempt.name),
-  );
-  const totalDurationLabel =
-    totalSeconds > 0 ? formatTotalDuration(totalSeconds) : undefined;
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
-        aria-expanded={isOpen}
-        className={mergeClasses(
-          'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-start',
-          styles.collapseButton,
-          styles.row,
-        )}
-      >
-        <span className="flex flex-none items-center">
-          <StageIcon
-            status={groupStatus}
-            isLive={isLive}
-            runningLabel={runningAriaLabel}
-            failedLabel={failedAriaLabel}
-          />
-        </span>
-        <span
-          className={mergeClasses(
-            'min-w-0 max-w-[22rem] truncate',
-            typography?.fontClassName ?? 'dial-small-text',
-            styles.stageName,
-            hasFailed && styles.stageNameFailed,
-          )}
-        >
-          <EllipsisTooltip text={row.name} />
-        </span>
-        <span
-          className={mergeClasses(
-            'flex-none',
-            typography?.countFontClassName ?? 'dial-tiny-text',
-            styles.count,
-          )}
-        >
-          ×{row.attempts?.length ?? 0}
-        </span>
-        {totalDurationLabel && (
-          <span
-            className={mergeClasses(
-              'flex-none',
-              typography?.countFontClassName ?? 'dial-tiny-text',
-              styles.duration,
-            )}
-          >
-            {totalDurationLabel}
-          </span>
-        )}
-        <span className={mergeClasses('flex-none', styles.iconSecondary)}>
-          {isOpen ? (
-            <IconChevronDown
-              size={DIAL_ICON_SIZE.SM}
-              aria-hidden
-              stroke={DIAL_KIT_ICON_STROKE}
-            />
-          ) : (
-            <IconChevronRight
-              size={DIAL_ICON_SIZE.SM}
-              className="rtl:scale-x-[-1]"
-              aria-hidden
-              stroke={DIAL_KIT_ICON_STROKE}
-            />
-          )}
-        </span>
-      </button>
-      <div
-        className={mergeClasses(
-          'grid overflow-hidden transition-[grid-template-rows] duration-[250ms] ease-in-out',
-          isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
-        )}
-      >
-        <div className="overflow-hidden">
-          <ul role="list" className="mt-1 flex flex-col gap-0.5 ps-6">
-            {row.attempts?.map((attempt, i) => (
-              <li key={attempt.index} role="listitem">
-                <StageItem
-                  stage={attempt}
-                  nameOverride={attemptLabel(i + 1)}
-                  isLive={isLive && attempt.status == null}
-                  typography={typography}
-                  labels={labels}
-                />
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-/** Flat inline list of agent stages; repeated identical names collapse into a ×N group row. */
-export const StagesPanel: FC<StagesPanelProps> = ({
+/**
+ * Internal panel body with externally owned disclosure state. `CollapsedGroup`
+ * uses it so stage choices survive its one-stage → many-stage layout switch.
+ */
+export const StagesPanelView: FC<StagesPanelViewProps> = ({
   stages,
   isStreaming,
   className,
   styles: panelStyles,
   labels,
+  onAttachmentClick,
+  expansion,
 }) => {
   const { colors, typography } = panelStyles ?? {};
 
@@ -185,45 +47,37 @@ export const StagesPanel: FC<StagesPanelProps> = ({
     '--cs-border': colors?.borderColor,
   });
 
-  const rows = groupStagesByName(stages);
+  const tree = useMemo(() => buildStageTree(stages), [stages]);
 
   return (
     <div
       style={cssVars}
       className={mergeClasses(
-        'w-full',
+        'w-full min-w-0',
         styles.panel,
         className,
         CONVERSATION_STAGES_CLASS.panel,
       )}
     >
-      <ul role="list" className="flex w-full flex-col gap-0.5 ps-5">
-        {rows.map((row) =>
-          row.stage ? (
-            <li key={row.key} role="listitem">
-              <StageItem
-                stage={row.stage}
-                isLive={isStreaming && row.stage.status == null}
-                typography={typography}
-                labels={labels}
-              />
-            </li>
-          ) : (
-            <li key={row.key} role="listitem">
-              <StageGroupRow
-                row={row}
-                isLive={
-                  isStreaming &&
-                  (row.attempts?.some((attempt) => attempt.status == null) ??
-                    false)
-                }
-                typography={typography}
-                labels={labels}
-              />
-            </li>
-          ),
-        )}
-      </ul>
+      <StageList
+        nodes={tree}
+        depth={0}
+        className="w-full ps-5"
+        isStreaming={isStreaming}
+        expansion={expansion}
+        typography={typography}
+        labels={labels}
+        onAttachmentClick={onAttachmentClick}
+      />
     </div>
   );
+};
+
+/**
+ * Inline list of agent stages, nested by `parent_stage_index`; repeated
+ * identical names within one sibling list collapse into a ×N group row.
+ */
+export const StagesPanel: FC<StagesPanelProps> = (props) => {
+  const expansion = useStageExpansion();
+  return <StagesPanelView {...props} expansion={expansion} />;
 };

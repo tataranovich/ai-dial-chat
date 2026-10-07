@@ -202,21 +202,33 @@ The system SHALL NOT attempt token refresh for a header-authenticated request, a
 
 ### Requirement: /auth/logout is a no-op for header-authenticated callers
 
-`POST /api/v1/auth/logout` SHALL respond successfully without attempting to clear a session cookie or perform RP-initiated logout when called by a header-authenticated caller, since no session was created for that caller.
+`POST /api/v1/auth/logout` SHALL respond successfully without attempting to clear a session cookie or perform RP-initiated logout when called by a header-authenticated caller, since no session was created for that caller. Because the route is `@Public()`, no strategy runs on it: the handler treats any request carrying an `Authorization` header as such a caller (regardless of `AUTH_HEADER_TOKEN_ENABLED` or token validity) and responds `200` with an empty body, skipping the Origin check and the cookie/redirect flow.
 
 #### Scenario: Logout succeeds as a no-op under header auth
 
 - **WHEN** `POST /api/v1/auth/logout` is called by a header-authenticated caller
-- **THEN** the response is a success status, no `Set-Cookie` clearing header is emitted, and no RP-initiated logout redirect is attempted
+- **THEN** the response is `200`, no `Set-Cookie` clearing header is emitted, and no RP-initiated logout redirect is attempted
 
 ### Requirement: OpenAPI documents both authentication schemes
 
-`apps/chat-api`'s OpenAPI document SHALL declare a `bearer` HTTP security scheme (`scheme: bearer`, `bearerFormat: JWT`) alongside the existing `session` cookie scheme — both registered on the document builder in `apps/chat-api/src/openapi/openapi.config.ts` — and operations reachable under both auth sources SHALL be annotated with both security requirements.
+`apps/chat-api`'s OpenAPI document SHALL declare a `bearer` HTTP security scheme (`scheme: bearer`, `bearerFormat: JWT`) alongside a cookie `apiKey` scheme registered under the security key `session` (`addCookieAuth(cookieName, options, 'session')` — the cookie name is the default `AUTH_SESSION_COOKIE_NAME`, `__Host-chat.sess`, not the key), both registered on the document builder in `apps/chat-api/src/openapi/openapi.config.ts`. No other security scheme key (such as the `@nestjs/swagger` default `cookie`) SHALL be emitted, so every `@ApiCookieAuth('session')` / `@ApiSecurity('bearer')` reference resolves to a declared scheme.
+
+The document SHALL carry a document-level `security` requirement of two alternative requirement objects — `[{ session: [] }, { bearer: [] }]` — so every operation is documented as authenticated by the session cookie OR a bearer token. Every operation the global `SessionGuard` lets through unauthenticated (a handler or controller carrying `@Public()`) SHALL opt out with an operation-level `security: []`. This SHALL be derived generically: `@Public()` stamps an `x-public` vendor extension next to its `isPublic` route metadata, and `createOpenApiDocument` (shared by `main.ts` Swagger UI and `openapi-spec.ts`) rewrites that marker to `security: []` and strips it, so the marker never reaches the published spec and no controller hand-annotates its own opt-out.
 
 #### Scenario: Generated OpenAPI document lists both schemes
 
 - **WHEN** the OpenAPI document is generated via `npm run openapi`
-- **THEN** the `components.securitySchemes` object contains both a cookie-based `session` scheme and a `bearer` HTTP scheme with `scheme: bearer` and `bearerFormat: JWT`
+- **THEN** the `components.securitySchemes` object contains exactly a cookie-based `session` scheme (`in: cookie`) and a `bearer` HTTP scheme with `scheme: bearer` and `bearerFormat: JWT`
+
+#### Scenario: Operations default to session-or-bearer
+
+- **WHEN** the OpenAPI document is generated
+- **THEN** its top-level `security` is `[{ "session": [] }, { "bearer": [] }]` and an operation without `@Public()` carries no operation-level override
+
+#### Scenario: Public operations opt out
+
+- **WHEN** a handler or its controller carries `@Public()` (health, auth providers/login/callback/logout, client-config, themes)
+- **THEN** its operation carries `security: []` and no `x-public` extension
 
 ### Requirement: No endpoint rejects a header-authenticated caller for lacking a session artifact
 

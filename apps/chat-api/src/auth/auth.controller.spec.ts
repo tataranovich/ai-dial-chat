@@ -318,6 +318,18 @@ describe('AuthController (integration)', () => {
       expect(res.headers.location).toContain('keycloak.example.com');
     });
 
+    it('still accepts a callbackUrl on the auth callback base origin when CORS_ORIGIN is unset', async () => {
+      configOverride = { CORS_ORIGIN: undefined };
+      const callbackUrl = encodeURIComponent(
+        `${CALLBACK_BASE}/conversation?x=1`,
+      );
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/auth/login/keycloak?callbackUrl=${callbackUrl}`)
+        .expect(302);
+
+      expect(res.headers.location).toContain('keycloak.example.com');
+    });
+
     it('passes provider audience to authorization request when configured', async () => {
       await app?.close();
       providerConfigOverride = { audience: 'https://dial-core.example.com' };
@@ -861,6 +873,46 @@ describe('AuthController (integration)', () => {
 
       expect(await loginAndGetClaims()).toEqual({ sub: 'user-1' });
       expect(MOCK_CLIENT.userinfo).not.toHaveBeenCalled();
+    });
+
+    it.each(['', '   ', 42, null, ['Engineer']])(
+      'stores no job_title key for an unusable ID-token job title (%j)',
+      async (jobTitle) => {
+        providerConfigOverride = { id: 'auth0' };
+
+        const claims = await loginAndGetClaims({ job_title: jobTitle });
+
+        expect(claims).toEqual({ sub: 'user-1' });
+        expect(claims).not.toHaveProperty('job_title');
+      },
+    );
+
+    it('stores a valid ID-token job title for non-Keycloak providers', async () => {
+      providerConfigOverride = { id: 'auth0' };
+
+      const claims = await loginAndGetClaims({ job_title: 'Lead Engineer' });
+
+      expect(claims).toEqual({ sub: 'user-1', job_title: 'Lead Engineer' });
+    });
+
+    it('falls back to UserInfo when the ID-token job title is whitespace', async () => {
+      MOCK_CLIENT.userinfo.mockResolvedValue({
+        sub: 'user-1',
+        job_title: 'Lead Engineer',
+      });
+
+      const claims = await loginAndGetClaims({ job_title: '   ' });
+
+      expect(claims).toEqual({ sub: 'user-1', job_title: 'Lead Engineer' });
+      expect(MOCK_CLIENT.userinfo).toHaveBeenCalledWith('at');
+    });
+
+    it('stores no job_title key when both ID token and UserInfo values are unusable', async () => {
+      MOCK_CLIENT.userinfo.mockResolvedValue({ sub: 'user-1', job_title: ' ' });
+
+      expect(await loginAndGetClaims({ job_title: '' })).toEqual({
+        sub: 'user-1',
+      });
     });
 
     it('keeps other providers on their existing ID-token claim path', async () => {

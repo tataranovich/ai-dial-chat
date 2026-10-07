@@ -12,7 +12,10 @@ import {
   publishCatalogEntity,
   unpublishCatalogEntity,
 } from '../../../server-api/publish.api';
-import { EntityOperation } from '../../../types/entity-notification';
+import {
+  EntityOperation,
+  NotifiableEntity,
+} from '../../../types/entity-notification';
 import { useCatalogPublishing } from '../useCatalogPublishing';
 
 vi.mock('../../../server-api/publish.api', async (importOriginal) => ({
@@ -52,6 +55,7 @@ const renderPublishing = (
   const view = renderHook(() =>
     useCatalogPublishing({
       deployments: [] as DeploymentItemDto[],
+      schemas: [],
       rememberPublishFolder,
       notifyOperationSuccess,
       showPublishError,
@@ -70,6 +74,20 @@ const renderPublishing = (
 };
 
 const PUBLIC_AGENT_ID = 'applications/public/Data Science/Revenue bot';
+
+const EXTERNAL_SCHEMA_ID = 'https://example.com/schemas/externalapps';
+const SCHEMA_APP_ITEM = makeCatalogItem({
+  id: 'applications/bucket/classifier',
+  type: CatalogEntityType.Agent,
+  name: 'Classifier',
+});
+/* An agent whose deployment carries a non-QuickApp schema with a display name. */
+const SCHEMA_APP_PUBLISHING = {
+  deployments: [
+    { id: SCHEMA_APP_ITEM.id, applicationTypeSchemaId: EXTERNAL_SCHEMA_ID },
+  ] as DeploymentItemDto[],
+  schemas: [{ id: EXTERNAL_SCHEMA_ID, displayName: 'External app' }],
+};
 
 describe('useCatalogPublishing', () => {
   beforeEach(() => {
@@ -311,7 +329,7 @@ describe('useCatalogPublishing', () => {
 
     /*
      * The public root has no path segments, so naming its leaf produced
-     * `folder ""` in the confirmation (GH #8704).
+     * `folder ""` in the confirmation ([#8704](https://github.com/epam/ai-dial-chat/issues/8704)).
      */
     it('names the root label when the target folder is the public root', () => {
       const { result, notifyOperationSuccess } = renderPublishing();
@@ -322,6 +340,23 @@ describe('useCatalogPublishing', () => {
         expect.anything(),
         EntityOperation.PublishRequested,
         { name: 'My toolset', folder: BasicI18nKeys.Organization },
+      );
+    });
+
+    it('names a schema app by its schema in the publish confirmation', () => {
+      const { result, notifyOperationSuccess } = renderPublishing(
+        SCHEMA_APP_PUBLISHING,
+      );
+
+      result.current.handlePublishSuccess(SCHEMA_APP_ITEM, [
+        'Organization',
+        'Data Science',
+      ]);
+
+      expect(notifyOperationSuccess).toHaveBeenCalledWith(
+        NotifiableEntity.SchemaApp,
+        EntityOperation.PublishRequested,
+        { name: 'Classifier', folder: 'Data Science', type: 'External app' },
       );
     });
 
@@ -432,7 +467,7 @@ describe('useCatalogPublishing', () => {
     });
 
     /*
-     * GH #8691: Publish used to be withheld from an item that had already been
+     * [#8691](https://github.com/epam/ai-dial-chat/issues/8691): Publish used to be withheld from an item that had already been
      * published, leaving Unpublish as the owner's only action even on a brand
      * new version. The predicate must not consult publish state at all.
      */
@@ -541,6 +576,23 @@ describe('useCatalogPublishing', () => {
       );
     });
 
+    it('names a schema app by its schema in the unpublish confirmation', async () => {
+      const { result, notifyOperationSuccess } = renderPublishing(
+        SCHEMA_APP_PUBLISHING,
+      );
+
+      await result.current.handleUnpublish(SCHEMA_APP_ITEM, [
+        'Organization',
+        'Data Science',
+      ]);
+
+      expect(notifyOperationSuccess).toHaveBeenCalledWith(
+        NotifiableEntity.SchemaApp,
+        EntityOperation.UnpublishRequested,
+        { name: 'Classifier', folder: 'Data Science', type: 'External app' },
+      );
+    });
+
     it('raises no success notification when the request fails, notifying then rethrowing', async () => {
       vi.mocked(unpublishCatalogEntity).mockRejectedValue(
         new Error('Forbidden'),
@@ -564,7 +616,7 @@ describe('useCatalogPublishing', () => {
     });
 
     /*
-     * GH #8691: Unpublish used to ride the same predicate as Publish, which
+     * [#8691](https://github.com/epam/ai-dial-chat/issues/8691): Unpublish used to ride the same predicate as Publish, which
      * put it on the author's private item — where it could target a folder
      * that item was never published to — and kept it off the published copy,
      * the only thing an unpublish request actually removes.

@@ -6,7 +6,7 @@ import { CompletionMode } from '../dto/send-completion.dto';
  * ConversationService is a pure delegation facade — its business logic now
  * lives in ConversationPersistenceService, ConversationListingService,
  * ConversationLifecycleService, and ConversationStreamingService (see
- * openspec/changes/split-conversation-service/design.md). These tests only
+ * openspec/changes/archive/2026-08-07-split-conversation-service/design.md). These tests only
  * verify each facade method forwards to the right sub-service unchanged;
  * behavior is covered by that sub-service's own spec.
  */
@@ -14,7 +14,6 @@ describe('ConversationService facade', () => {
   const makeService = () => {
     const persistenceService = {
       getConversation: vi.fn().mockResolvedValue('persistence-get'),
-      saveConversation: vi.fn().mockResolvedValue('persistence-save'),
     };
     const listingService = {
       listConversations: vi.fn().mockResolvedValue('listing-list'),
@@ -34,6 +33,9 @@ describe('ConversationService facade', () => {
     }
     const streamingService = {
       streamCompletion: vi.fn().mockReturnValue(fakeStream()),
+      resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
+      saveClientConversation: vi.fn().mockResolvedValue('client-save'),
+      stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
       watchConversation: vi.fn().mockResolvedValue('streaming-watch'),
     };
     const conversationNamingService = {
@@ -74,26 +76,6 @@ describe('ConversationService facade', () => {
       'bucket',
     );
     expect(result).toBe('persistence-get');
-  });
-
-  it('delegates saveConversation to ConversationPersistenceService', async () => {
-    const { service, persistenceService } = makeService();
-    const conversation = { id: 'conv' } as never;
-
-    const result = await service.saveConversation(
-      'path',
-      'token',
-      'bucket',
-      conversation,
-    );
-
-    expect(persistenceService.saveConversation).toHaveBeenCalledWith(
-      'path',
-      'token',
-      'bucket',
-      conversation,
-    );
-    expect(result).toBe('persistence-save');
   });
 
   it('delegates listConversations to ConversationListingService', async () => {

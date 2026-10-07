@@ -1,6 +1,7 @@
 import { FavoriteEntityType } from '@epam/ai-dial-chat-hooks';
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import {
+  getSkillFallbackName,
   useSkillSelectorOverlay as useHostAgnosticSkillSelectorOverlay,
   type SkillSelectorOverlayLabels,
   type UseSkillSelectorOverlayResult,
@@ -14,7 +15,7 @@ import {
   PromptSelectorI18nKeys,
   SkillSelectorI18nKeys,
 } from '../../constants/translation-keys';
-import { useFeatureFlag } from '../../context/AppConfigContext';
+import { useUser } from '../../context/auth/UserContext';
 import { useFavoriteApplications } from '../../context/FavoriteApplicationsContext';
 import { useSkills } from '../../context/SkillsContext';
 import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
@@ -45,21 +46,33 @@ const renderCatalogContent = (
   />
 );
 
+/** {@link UseSkillSelectorOverlayResult} plus an app-level convenience for the route-driven one-shot skill selection (the catalog's "Use in chat" action), which only has a URL and no caret position to work from. */
+export interface AppSkillSelectorOverlayResult extends UseSkillSelectorOverlayResult {
+  /**
+   * Seeds the composer's draft with a single mention for `url`, resolving its
+   * display name from the loaded skill listings (falling back to the url's
+   * last segment). For a one-shot selection that has no caret position and no
+   * `SkillListingEntry` in hand — e.g. a catalog "Use in chat" action or a
+   * route-state deep link — unlike `insertMention`-backed flows, which always
+   * have both.
+   */
+  selectSkillByUrl: (url: string) => void;
+}
+
 /**
- * Host wiring for the lib's skill selector overlay hook: the
- * `skillUsageEnabled` feature flag, the deployment's skills support signal,
- * the skills and favorites contexts, i18n labels, the catalog picker
- * content, and the app-owned details panel component.
+ * Host wiring for the lib's skill selector overlay hook: the deployment's
+ * skills support signal, the skills and favorites contexts, i18n labels, the
+ * catalog picker content, and the app-owned details panel component.
  */
 export const useSkillSelectorOverlay = ({
   isSkillsSupported,
 }: {
   /** Whether the input's current deployment supports skills (`features.skillsSupported === true`). */
   isSkillsSupported: boolean;
-}): UseSkillSelectorOverlayResult => {
-  const isEnabled = useFeatureFlag('skillUsageEnabled');
+}): AppSkillSelectorOverlayResult => {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const { user } = useUser();
   const { skills, sharedWithMe, publicSkills } = useSkills();
   const { favoriteIds, toggleFavorite } = useFavoriteApplications();
 
@@ -82,6 +95,8 @@ export const useSkillSelectorOverlay = ({
       backLabel: t(NavigationI18nKeys.Back),
       catalogModalTitleLabel: t(SkillSelectorI18nKeys.ModalTitle),
       emptyQueryHintLabel: t(SkillSelectorI18nKeys.EmptyQueryHint),
+      deletedTooltipLabel: t(SkillSelectorI18nKeys.DeletedTooltipLabel),
+      notSharedTooltipLabel: t(SkillSelectorI18nKeys.NotSharedTooltipLabel),
       unsupportedTooltipLabel: t(SkillSelectorI18nKeys.UnsupportedTooltipLabel),
       panelLabels: {
         myCollectionLabel: t(PromptSelectorI18nKeys.MyCollectionLabel),
@@ -101,20 +116,46 @@ export const useSkillSelectorOverlay = ({
    * 24px line height, keeping the chip's height matched to the line.
    */
   const historyChipLabelClassName = isMobile
-    ? 'dial-small-paragraph-text'
-    : 'dial-body-text';
+    ? 'dial-small-paragraph-text text-accent'
+    : 'dial-body-text text-accent';
 
-  return useHostAgnosticSkillSelectorOverlay({
-    isEnabled,
+  const overlay = useHostAgnosticSkillSelectorOverlay({
     isSkillsSupported,
     skills,
     sharedWithMe,
     publicSkills,
     favoriteIds,
+    viewerBucket: user?.bucket ?? '',
     onToggleFavorite: handleToggleFavorite,
     labels,
     historyChipLabelClassName,
+    /* Touch screens never fire hover, so a tap must open the chip's tooltip ([#9250](https://github.com/epam/ai-dial-chat/issues/9250)). */
+    historyDetailsTrigger: isMobile ? 'click' : undefined,
     renderCatalogContent,
     detailsPanelComponent: SkillDetailsPanelContainer,
   });
+
+  const { seedSkillMentions } = overlay;
+
+  /*
+   * `allSkills`/name resolution mirrors the lib hook's own internal
+   * `skillByUrl` lookup — duplicated here (not exported by the lib) because
+   * this is the one call site with a URL but no `SkillListingEntry` in hand.
+   */
+  const selectSkillByUrl = useCallback(
+    (url: string) => {
+      const allSkills = [
+        ...skills,
+        ...(sharedWithMe ?? []),
+        ...(publicSkills ?? []),
+      ];
+      const name =
+        allSkills.find((skill) => skill.url === url)?.name ??
+        getSkillFallbackName(url);
+      seedSkillMentions(`/${name} `, [{ url }]);
+    },
+    [skills, sharedWithMe, publicSkills, seedSkillMentions],
+  );
+
+  return { ...overlay, selectSkillByUrl };
 };

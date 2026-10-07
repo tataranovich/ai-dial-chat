@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Cache } from 'cache-manager';
 import {
   extractDialErrorMessage,
@@ -15,6 +16,9 @@ import {
 import { getBearerAuthHeaders } from '../../common/utils/auth-header';
 import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
 import { resolveLocalizedValue } from '../../common/utils/localized-value';
+import { StringUtils } from '../../common/utils/string-utils';
+import type { EnvironmentVariables } from '../../config/environment.config';
+import { withCachedDialRequest } from '../../dial/cached-dial-request.helper';
 import { DialClientService } from '../../dial/dial-client.service';
 import type {
   DeploymentLimitsResponseDto,
@@ -23,12 +27,14 @@ import type {
 import type { DeploymentConfigurationDto } from '../dto/deployment-configuration.dto';
 import type { DeploymentDetailsDto } from '../dto/deployment-details.dto';
 import { DeploymentItemType } from '../dto/deployment-item.dto';
+import type { DeploymentType } from '../dto/deployment-type';
 import {
   getNumber,
   isRecord,
   mapCatalogProperties,
   mapDeploymentFeatures,
   mapToolsetAuthSettings,
+  redactApplicationFunctionEnv,
   redactToolsetAuthSettings,
   toAdditionalProperties,
 } from '../utils/deployment-mapper.util';
@@ -51,6 +57,7 @@ export class DeploymentsDetailsService {
   constructor(
     private readonly dialClient: DialClientService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly configService: ConfigService<EnvironmentVariables, true>,
   ) {}
 
   /**
@@ -71,6 +78,52 @@ export class DeploymentsDetailsService {
       (this.cacheGenerations.get(cacheKey) ?? 0) + 1,
     );
     this.pendingDetailsRequests.delete(cacheKey);
+    await this.cacheManager.del(
+      `deployments:interfaces:${userSub}:${deployment}`,
+    );
+  }
+
+  /**
+   * Returns the DIAL Core `interfaces` of one deployment (e.g. `openaiResponses`), read
+   * from `GET /v1/deployments/{id}` with the caller's token and cached like the details.
+   * Any failure resolves to an empty list, so a lookup problem only makes the deployment
+   * look less capable and never fails the calling request.
+   * @param userSub - caller's subject, part of the cache key
+   * @param deployment - deployment id
+   * @param accessToken - caller's bearer token
+   */
+  async getDeploymentInterfaces(
+    userSub: string,
+    deployment: string,
+    accessToken: string,
+  ): Promise<string[]> {
+    const cacheKey = `deployments:interfaces:${userSub}:${deployment}`;
+    const cached = await this.cacheManager.get<string[]>(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const result = await this.dialClient.client.getDeploymentInfo(
+        encodeDialResourcePath(deployment),
+        { headers: getBearerAuthHeaders(accessToken) },
+      );
+      if (result.error) {
+        this.logger.warn(
+          `DIAL Core getDeploymentInfo for "${StringUtils.sanitizeForLog(deployment)}" returned ${result.response.status}`,
+        );
+        return [];
+      }
+      const raw = (result.data ?? {}) as { interfaces?: unknown };
+      const interfaces = Array.isArray(raw.interfaces)
+        ? raw.interfaces.filter((i): i is string => typeof i === 'string')
+        : [];
+      await this.cacheManager.set(cacheKey, interfaces, 60 * 1000);
+      return interfaces;
+    } catch (err) {
+      this.logger.warn(
+        `DIAL Core getDeploymentInfo for "${StringUtils.sanitizeForLog(deployment)}" failed: ${err instanceof Error ? err.name : 'unknown error'}`,
+      );
+      return [];
+    }
   }
 
   async getDeploymentConfiguration(
@@ -78,55 +131,46 @@ export class DeploymentsDetailsService {
     userSub: string,
     accessToken: string,
   ): Promise<DeploymentConfigurationDto> {
-    const cacheKey = `deployments:configuration:${userSub}:${name}`;
-    const cached =
-      await this.cacheManager.get<DeploymentConfigurationDto>(cacheKey);
-    if (cached) {
-      this.logger.debug(
-        `Cache hit for deployment configuration "${name}" (sub: ${userSub})`,
-      );
-      return cached;
-    }
-
-    try {
-      const result = await this.dialClient.client.configurationDeployment(
-        encodeDialResourcePath(name),
-        {
-          headers: getBearerAuthHeaders(accessToken),
-        },
-      );
-      this.logger.debug(
-        `DIAL Core configurationDeployment for "${name}": ${JSON.stringify(result)}`,
-      );
-      if (result.error) {
-        return mapDialHttpStatus(
-          result.response.status,
-          `get deployment configuration "${name}"`,
-          this.logger,
+    const context = `get deployment configuration "${name}"`;
+    return withCachedDialRequest({
+      cacheManager: this.cacheManager,
+      cacheKey: `deployments:configuration:${userSub}:${name}`,
+      ttlMs: 60 * 1000,
+      context,
+      logger: this.logger,
+      fetch: async (): Promise<DeploymentConfigurationDto> => {
+        const result = await this.dialClient.client.configurationDeployment(
+          encodeDialResourcePath(name),
+          {
+            headers: getBearerAuthHeaders(accessToken),
+          },
         );
-      }
-      const raw = result.data ?? {};
+        this.logger.debug(
+          `DIAL Core configurationDeployment for "${name}": ${JSON.stringify(result)}`,
+        );
+        if (result.error) {
+          return mapDialHttpStatus(
+            result.response.status,
+            context,
+            this.logger,
+          );
+        }
+        const raw = result.data ?? {};
 
-      const data: DeploymentConfigurationDto = {
-        type: typeof raw['type'] === 'string' ? raw['type'] : undefined,
-        title: typeof raw['title'] === 'string' ? raw['title'] : undefined,
-        properties: isRecord(raw['properties']) ? raw['properties'] : undefined,
-        additionalProperties: toAdditionalProperties(
-          raw['additionalProperties'],
-        ),
-        isChatMessageInputDisabled:
-          raw['dial:chatMessageInputDisabled'] === true || undefined,
-      };
-      await this.cacheManager.set(cacheKey, data, 60 * 1000);
-      return data;
-    } catch (err) {
-      return handleDialFetchError(
-        err,
-        `get deployment configuration "${name}"`,
-        this.logger,
-        0,
-      );
-    }
+        return {
+          type: typeof raw['type'] === 'string' ? raw['type'] : undefined,
+          title: typeof raw['title'] === 'string' ? raw['title'] : undefined,
+          properties: isRecord(raw['properties'])
+            ? raw['properties']
+            : undefined,
+          additionalProperties: toAdditionalProperties(
+            raw['additionalProperties'],
+          ),
+          isChatMessageInputDisabled:
+            raw['dial:chatMessageInputDisabled'] === true || undefined,
+        };
+      },
+    });
   }
 
   async getDeploymentDetails(
@@ -335,7 +379,7 @@ export class DeploymentsDetailsService {
     }
     const raw = result.data;
     this.logger.debug(
-      `DIAL Core application details for "${deployment}": ${JSON.stringify(raw)}`,
+      `DIAL Core application details for "${deployment}": ${JSON.stringify(redactApplicationFunctionEnv(raw))}`,
     );
     const rawRecord = raw as unknown as Record<string, unknown>;
 
@@ -531,11 +575,39 @@ export class DeploymentsDetailsService {
     }
   }
 
-  async getUserLimits(accessToken: string): Promise<UserLimitStatsResponseDto> {
+  /*
+   * The request's deployment kinds, or the configured default when it names
+   * none, as `getUserLimits`/`getUserUsage` query params. DIAL Core reads the
+   * parameter once and splits it on commas (`LimitController`'s
+   * `getParam("deploymentTypes").split(",")`), while the SDK serializes an
+   * array as repeated keys — of which Core would read only the first kind. So
+   * the kinds are sent pre-joined as one value, which the SDK's array typing
+   * cannot express without the cast.
+   */
+  private buildUserStatsParams(deploymentTypes: DeploymentType[] | undefined) {
+    const kinds = deploymentTypes?.length
+      ? deploymentTypes
+      : this.configService.get('USER_USAGE_DEPLOYMENT_TYPES', { infer: true });
+    if (!kinds?.length) return undefined;
+
+    return {
+      query: {
+        deploymentTypes: [...new Set(kinds)].join(',') as unknown as (
+          'model' | 'application'
+        )[],
+      },
+    };
+  }
+
+  async getUserLimits(
+    accessToken: string,
+    deploymentTypes?: DeploymentType[],
+  ): Promise<UserLimitStatsResponseDto> {
     this.logger.debug('Fetching user limits from DIAL Core');
     try {
       const result = await this.dialClient.client.getUserLimits({
         headers: getBearerAuthHeaders(accessToken),
+        params: this.buildUserStatsParams(deploymentTypes),
       });
       if (result.error) {
         this.logger.debug(
@@ -570,11 +642,15 @@ export class DeploymentsDetailsService {
     }
   }
 
-  async getUserUsage(accessToken: string): Promise<UserLimitStatsResponseDto> {
+  async getUserUsage(
+    accessToken: string,
+    deploymentTypes?: DeploymentType[],
+  ): Promise<UserLimitStatsResponseDto> {
     this.logger.debug('Fetching user usage from DIAL Core');
     try {
       const result = await this.dialClient.client.getUserUsage({
         headers: getBearerAuthHeaders(accessToken),
+        params: this.buildUserStatsParams(deploymentTypes),
       });
       if (result.error) {
         this.logger.debug(

@@ -149,6 +149,30 @@ describe('ResponsesAdapter', () => {
       expect(request.stream).toBe(true);
     });
 
+    it('sets store: true and background: true on the background path, with the same input', () => {
+      const { adapter } = makeAdapter();
+      const params = {
+        model: 'gpt-4o',
+        startConversation: { prompt: 'Be brief.' } as never,
+        messagesForCompletion: [
+          { role: ConversationMessageRole.User, content: 'Hi' } as never,
+        ],
+        temperatureSupported: false,
+      };
+
+      const stateless = adapter.buildRequest(params);
+      const background = adapter.buildRequest({
+        ...params,
+        isBackground: true,
+      });
+
+      expect(background.store).toBe(true);
+      expect(background.background).toBe(true);
+      expect(background.stream).toBe(true);
+      expect(background.input).toEqual(stateless.input);
+      expect(stateless).not.toHaveProperty('background');
+    });
+
     it('forwards temperature 0 exactly when the deployment supports it', () => {
       const { adapter } = makeAdapter();
       const request = adapter.buildRequest({
@@ -518,6 +542,60 @@ describe('ResponsesAdapter', () => {
     });
   });
 
+  describe('stream pass-through', () => {
+    it('relays normalized chunks without assembling the answer or publishing chunks', async () => {
+      const { adapter, mockDialClient } = makeAdapter();
+      vi.spyOn(mockDialClient.client, 'createResponse').mockResolvedValue({
+        response: new Response(
+          textToStream([
+            'data: {"type":"response.created","response":{"id":"dial_r1","status":"queued"}}\n\n',
+            'data: {"type":"response.output_text.delta","delta":"Hel"}\n\n',
+            'data: {"type":"response.output_text.delta","delta":"lo"}\n\n',
+            'data: {"type":"response.completed","response":{"id":"dial_r1","status":"completed"}}\n\n',
+          ]),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        ),
+      } as never);
+      const onChunkApplied = vi.fn();
+      const initial = {
+        role: ConversationMessageRole.Assistant,
+        content: '',
+      } as never;
+
+      const iterator = adapter.stream(
+        {
+          model: 'gpt-4o',
+          input: [],
+          stream: true,
+          store: true,
+          background: true,
+        },
+        'test-token',
+        new AbortController().signal,
+        initial,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        onChunkApplied,
+        undefined,
+        { isPassThrough: true },
+      );
+      const written: string[] = [];
+      let next = await iterator.next();
+      while (!next.done) {
+        written.push(next.value);
+        next = await iterator.next();
+      }
+
+      expect(written.join('')).toContain('"content":"Hel"');
+      expect(written.join('')).toContain('"responseId":"dial_r1"');
+      expect(next.value.outcome).toBe('completed');
+      expect(next.value.assembledMessage).toBe(initial);
+      expect(onChunkApplied).not.toHaveBeenCalled();
+    });
+  });
+
   describe('relay', () => {
     const relay = async (
       adapter: ResponsesAdapter,
@@ -655,10 +733,24 @@ describe('ResponsesAdapter', () => {
       expect(result.outcome).toBe('error');
       if (result.outcome === 'error') {
         expect((result.error as Error).message).toBe('Model overloaded');
+        expect(result.displayMessage).toBe('Model overloaded');
         expect(result.assembledMessage.content).toBe('');
       }
       expect(res.getWritten()).not.toContain('[DONE]');
       expect(mockDialClient.client.createResponse).toHaveBeenCalledOnce();
+    });
+
+    it('exposes no user-facing text when the stream ends without a terminal signal', async () => {
+      const { adapter, mockDialClient } = makeAdapter();
+      const { result } = await relay(adapter, mockDialClient, [
+        'data: {"type":"response.output_text.delta","delta":"Partial"}\n\n',
+      ]);
+
+      expect(result.outcome).toBe('error');
+      if (result.outcome === 'error') {
+        expect(result.displayMessage).toBeUndefined();
+        expect(result.assembledMessage.content).toBe('Partial');
+      }
     });
 
     it('preserves partial text when response.failed arrives after text deltas', async () => {
@@ -834,6 +926,50 @@ describe('ResponsesAdapter', () => {
         expect(result.errorMessage).toBe('Quota exceeded');
       }
     });
+
+    it.each([
+      [
+        'the SDK-parsed error',
+        () => ({
+          response: new Response(null, { status: 400 }),
+          error: { message: 'Invalid model\r\nFORGED log line' },
+        }),
+      ],
+      [
+        'the JSON raw body',
+        () => ({
+          response: new Response(
+            JSON.stringify({ message: 'Invalid model\r\nFORGED log line' }),
+            { status: 400 },
+          ),
+        }),
+      ],
+    ])(
+      'sanitizes the upstream message from %s before logging the rejection',
+      async (_label, makeDialResult) => {
+        const { adapter, mockDialClient } = makeAdapter();
+        vi.spyOn(mockDialClient.client, 'createResponse').mockResolvedValue(
+          makeDialResult() as never,
+        );
+        const errorSpy = vi
+          .spyOn(adapter['logger'], 'error')
+          .mockImplementation(() => undefined);
+
+        const result = await adapter.relay(
+          { model: 'gpt-4o', input: [], stream: true, store: false },
+          'test-token',
+          new AbortController().signal,
+          makeMockRes() as never,
+          { role: ConversationMessageRole.Assistant, content: '' } as never,
+        );
+
+        expect(result.outcome).toBe('rejected');
+        expect(errorSpy).toHaveBeenCalledWith(
+          'DIAL Core rejected Responses request — status: 400: Invalid modelFORGED log line',
+        );
+        expect(JSON.stringify(errorSpy.mock.calls)).not.toMatch(/\\[rn]/);
+      },
+    );
 
     it('preserves a non-empty plain-text non-2xx body when the SDK gave no usable message', async () => {
       const { adapter, mockDialClient } = makeAdapter();

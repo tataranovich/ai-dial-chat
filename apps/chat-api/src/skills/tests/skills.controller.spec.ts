@@ -421,6 +421,7 @@ describe('SkillsController (integration)', () => {
         'my-bucket',
         'team-a/docs-helper',
         TEST_USER.at,
+        TEST_USER.bucket,
       );
     });
 
@@ -470,6 +471,7 @@ describe('SkillsController (integration)', () => {
         'team-a/docs-helper',
         'SKILL.md',
         TEST_USER.at,
+        TEST_USER.bucket,
       );
     });
 
@@ -506,6 +508,25 @@ describe('SkillsController (integration)', () => {
         TEST_USER.at,
         expect.any(AbortSignal),
       );
+    });
+
+    it('passes a zero-byte empty-folder marker part through to the service', async () => {
+      service.createSkill.mockResolvedValue({ etag: '"abc123"' });
+
+      await request(app.getHttpServer())
+        .post('/api/v1/skills')
+        .field('bucket', 'my-bucket')
+        .field('path', 'team-a/docs-helper')
+        .field('skillManifest', 'manifest')
+        .field('filePaths', JSON.stringify(['docs/.dial_folder']))
+        .attach('files', Buffer.alloc(0), '.dial_folder')
+        .expect(201);
+
+      const files = service.createSkill.mock.calls[0][4] as {
+        buffer: Buffer;
+      }[];
+      expect(files).toHaveLength(1);
+      expect(files[0].buffer.length).toBe(0);
     });
 
     /*
@@ -1009,14 +1030,14 @@ describe('SkillsController (integration)', () => {
   });
 
   describe('POST /api/v1/skills/grouping-folders', () => {
-    it('returns 200 and delegates to the service', async () => {
+    it('returns 201 and delegates to the service', async () => {
       service.createSkillGroupingFolder.mockResolvedValue({
         etag: '"folder-etag"',
       });
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/skills/grouping-folders?bucket=my-bucket&path=team-a/')
-        .expect(200);
+        .expect(201);
 
       expect(res.body).toEqual({ etag: '"folder-etag"' });
       expect(service.createSkillGroupingFolder).toHaveBeenCalledWith(

@@ -651,6 +651,18 @@ export interface ApplicationVisualizerDto {
    * @memberof ApplicationVisualizerDto
    */
   passExplicitToken?: boolean;
+  /**
+   * When true, the inline frame renders without its border, rounded corners, background, and header divider. Carried over from legacy Chat 0.x.
+   * @type {boolean}
+   * @memberof ApplicationVisualizerDto
+   */
+  borderless?: boolean;
+  /**
+   * When true, the inline frame hides its header title text; the header actions stay visible. Carried over from legacy Chat 0.x.
+   * @type {boolean}
+   * @memberof ApplicationVisualizerDto
+   */
+  withoutTitle?: boolean;
 }
 /**
  *
@@ -684,7 +696,7 @@ export interface ArchiveItemDto {
    */
   path: string;
   /**
-   * Display name for archive entry
+   * Display name for archive entry; a single path segment (no "/", "\", "." or "..")
    * @type {string}
    * @memberof ArchiveItemDto
    */
@@ -794,6 +806,45 @@ export interface AttachmentResourceDto {
    */
   title?: string;
 }
+/**
+ *
+ * @export
+ * @interface BackgroundGenerationDto
+ */
+export interface BackgroundGenerationDto {
+  /**
+   * Client-supplied generation id of the request that started the background job; identifies this message across saves.
+   * @type {string}
+   * @memberof BackgroundGenerationDto
+   */
+  generationId: string;
+  /**
+   * pending while the job runs or its result is not saved yet; completed, stopped or failed once the final state is saved.
+   * @type {BackgroundGenerationStatus}
+   * @memberof BackgroundGenerationDto
+   */
+  status: BackgroundGenerationStatus;
+  /**
+   * Server time (epoch ms) at which the pending placeholder was saved.
+   * @type {number}
+   * @memberof BackgroundGenerationDto
+   */
+  startedAt: number;
+}
+
+/**
+ * pending while the job runs or its result is not saved yet; completed, stopped or failed once the final state is saved.
+ * @export
+ */
+export const BackgroundGenerationStatus = {
+  Pending: 'pending',
+  Completed: 'completed',
+  Stopped: 'stopped',
+  Failed: 'failed',
+} as const;
+export type BackgroundGenerationStatus =
+  (typeof BackgroundGenerationStatus)[keyof typeof BackgroundGenerationStatus];
+
 /**
  *
  * @export
@@ -926,13 +977,13 @@ export interface Check200Response {
    */
   timestamp?: string;
   /**
-   * Application version. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Matches the appVersion reported by the client config endpoint.
+   * Application version. Sourced from CHAT_VERSION; falls back to the workspace root package.json version — the one the release pipeline stamps — when that env var is unset or blank. Matches the appVersion reported by the client config endpoint.
    * @type {string}
    * @memberof Check200Response
    */
   version?: string;
   /**
-   * Stable identifier for the running deployment, derived from a hash of the served frontend build. Changes when a new deployment replaces the frontend static assets, letting long-lived clients detect that a reload will pick up a newer build.
+   * Stable identifier for the running deployment, derived from a hash of the served frontend build, or of the application version when no frontend is bundled (BFF-only image). Changes when a new deployment replaces the frontend static assets or the version, letting long-lived clients detect that a reload will pick up a newer build.
    * @type {string}
    * @memberof Check200Response
    */
@@ -945,7 +996,19 @@ export interface Check200Response {
  */
 export interface ClientConfigDto {
   /**
-   * Version string of the running chat application. Sourced from CHAT_VERSION; falls back to the application package.json version when that env var is unset or blank. Always a non-empty string.
+   * Whether a text refinement model is configured. Missing means unavailable.
+   * @type {boolean}
+   * @memberof ClientConfigDto
+   */
+  aiTextRefinementAvailable?: boolean;
+  /**
+   * Active start-page celebration module ID selected by UI_EVENT. Null when UI_EVENT is absent or none. Event IDs are open-ended; clients ignore IDs not present in their local registry.
+   * @type {string}
+   * @memberof ClientConfigDto
+   */
+  activeEventId: string | null;
+  /**
+   * Version string of the running chat application. Sourced from CHAT_VERSION; falls back to the workspace root package.json version — the one the release pipeline stamps — when that env var is unset or blank. Always a non-empty string.
    * @type {string}
    * @memberof ClientConfigDto
    */
@@ -987,7 +1050,7 @@ export interface ClientConfigDto {
    */
   mcpAppTheme?: ClientConfigDtoMcpAppThemeEnum | null;
   /**
-   * Host application identifier sent to MCP App Views in hostContext.userAgent. Null when MCP_APP_USER_AGENT is not configured — defaults to "ai-dial-chat" on the client.
+   * Host application identifier sent to MCP App Views in hostContext.userAgent. Null when MCP_APP_USER_AGENT is not configured — the client then falls back to the browser's navigator.userAgent.
    * @type {string}
    * @memberof ClientConfigDto
    */
@@ -999,7 +1062,7 @@ export interface ClientConfigDto {
    */
   mcpAppHostName?: string | null;
   /**
-   * Which File Manager tabs are shown to users. Defaults to all three currently-supported tabs.
+   * Which File Manager tabs are shown to users. Defaults to the All tab plus the three source tabs.
    * @type {Array<string>}
    * @memberof ClientConfigDto
    */
@@ -1016,6 +1079,12 @@ export interface ClientConfigDto {
    * @memberof ClientConfigDto
    */
   overlayAllowedOrigins: Array<string>;
+  /**
+   * Trusted HTTP(S) connection origins from ALLOWED_CONNECT_ORIGINS, including leading *. subdomain patterns. PDF previews use browser credentials for matching external origins and reject redirects. Empty by default; upstream credentialed CORS and browser cookie policy still apply.
+   * @type {Array<string>}
+   * @memberof ClientConfigDto
+   */
+  allowedConnectOrigins?: Array<string>;
   /**
    * When set, the complete list of OverlayFeature values that are enabled (replace semantics). Sourced from ENABLED_UI_FEATURES, filtered to recognized values. When null, the compiled-in DEFAULT_ENABLED_UI_FEATURES baseline is used. Does not affect an overlay host that supplies its own enabledFeatures.
    * @type {Array<string>}
@@ -1232,6 +1301,12 @@ export interface ConversationListItemDto {
    */
   title: string;
   /**
+   * Unix epoch milliseconds of the resource creation, as reported by DIAL Core metadata. Absent when DIAL Core does not report it, and always absent for conversations shared with the current user.
+   * @type {number}
+   * @memberof ConversationListItemDto
+   */
+  createdAt?: number;
+  /**
    * Unix epoch milliseconds of the last update.
    * @type {number}
    * @memberof ConversationListItemDto
@@ -1431,11 +1506,17 @@ export interface ConversationMessageDto {
    */
   streamErrorMessage?: string;
   /**
-   * DIAL Responses API id for this message, set only when the generation was routed through the Responses adapter. Diagnostic only — never used to resume a generation (previous_response_id/conversation are never sent).
+   * DIAL Responses API id for this message, set only when the generation was routed through the Responses adapter. On the stateless path it is diagnostic only; on the background path it is also the key used to recover, replay, stop and clean up the DIAL Core job. Never sent as previous_response_id/conversation.
    * @type {string}
    * @memberof ConversationMessageDto
    */
   responseId?: string;
+  /**
+   * Present only on an assistant message produced by a DIAL Core background Responses job. Server-owned: client saves cannot change it while its status is pending.
+   * @type {BackgroundGenerationDto}
+   * @memberof ConversationMessageDto
+   */
+  backgroundGeneration?: BackgroundGenerationDto;
   /**
    * Deployment that produced this message. Present on assistant and status messages.
    * @type {string}
@@ -1631,6 +1712,12 @@ export interface ConversationResponseDto {
    * @memberof ConversationResponseDto
    */
   llmNamingDone?: boolean;
+  /**
+   * Open, feature-keyed container for conversation-level view state. Currently defines exactly one key, `annotations`, holding the pool of html_tag citation annotations accumulated across the conversation. Any other key is opaque and preserved as-is.
+   * @type {{ [key: string]: unknown }}
+   * @memberof ConversationResponseDto
+   */
+  customViewState?: { [key: string]: unknown };
 }
 
 /**
@@ -2046,11 +2133,17 @@ export interface CreateScheduledTaskBodyDto {
    */
   model: string;
   /**
-   *
+   * Instructions; may be empty when the effective task has a skill.
    * @type {string}
    * @memberof CreateScheduledTaskBodyDto
    */
   prompt: string;
+  /**
+   * DIAL skill references with paths of at most 1024 decoded characters each. Omission preserves saved skills on update; an empty array removes them.
+   * @type {Array<string>}
+   * @memberof CreateScheduledTaskBodyDto
+   */
+  skillUrls?: Array<string>;
   /**
    *
    * @type {string}
@@ -2175,6 +2268,12 @@ export interface CreatedScheduledTaskDto {
    */
   isActive?: boolean;
   /**
+   * True when the schedule can no longer produce a future run: either a one-time (date-trigger) schedule whose newest run terminated with Success or Error, or a recurring schedule whose cron activity window has closed with no upcoming run. Undefined when the run-history check failed; computed by ScheduledTasksService, not by fromUpstreamSchedule (which cannot see runs).
+   * @type {boolean}
+   * @memberof CreatedScheduledTaskDto
+   */
+  isCompleted?: boolean;
+  /**
    *
    * @type {boolean}
    * @memberof CreatedScheduledTaskDto
@@ -2210,6 +2309,12 @@ export interface CreatedScheduledTaskDto {
    * @memberof CreatedScheduledTaskDto
    */
   prompt?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof CreatedScheduledTaskDto
+   */
+  skillUrls?: Array<string>;
 }
 
 /**
@@ -2222,6 +2327,19 @@ export const CreatedScheduledTaskDtoTriggerTypeEnum = {
 export type CreatedScheduledTaskDtoTriggerTypeEnum =
   (typeof CreatedScheduledTaskDtoTriggerTypeEnum)[keyof typeof CreatedScheduledTaskDtoTriggerTypeEnum];
 
+/**
+ *
+ * @export
+ * @interface CustomApiResponseDto
+ */
+export interface CustomApiResponseDto {
+  /**
+   * Opaque JSON value returned by the configured Core operation. Documented as a free-form object; the actual value may also be an array, string, number, boolean, or null — see the generated-typing note on this field.
+   * @type {{ [key: string]: unknown }}
+   * @memberof CustomApiResponseDto
+   */
+  data: { [key: string]: unknown };
+}
 /**
  *
  * @export
@@ -2705,6 +2823,12 @@ export interface DeploymentFeaturesDto {
    * @memberof DeploymentFeaturesDto
    */
   skillsSupported?: boolean;
+  /**
+   * Whether the deployment supports tools/functions in chat completion requests
+   * @type {boolean}
+   * @memberof DeploymentFeaturesDto
+   */
+  tools?: boolean;
 }
 /**
  *
@@ -5654,6 +5778,39 @@ export type RateMessageDtoRateEnum =
 /**
  *
  * @export
+ * @interface RefineTextRequestDto
+ */
+export interface RefineTextRequestDto {
+  /**
+   * Server-owned rewriting purpose
+   * @type {TextRefinementPurpose}
+   * @memberof RefineTextRequestDto
+   */
+  purpose: TextRefinementPurpose;
+  /**
+   * Exact nonblank draft. Unicode code point limits: skill Description 4000, task Description 500, application/toolset/prompt Description 2000, either Instructions 32000.
+   * @type {string}
+   * @memberof RefineTextRequestDto
+   */
+  text: string;
+}
+
+/**
+ *
+ * @export
+ * @interface RefineTextResponseDto
+ */
+export interface RefineTextResponseDto {
+  /**
+   * Complete refined draft, bounded by the same purpose-specific Unicode limits as the input.
+   * @type {string}
+   * @memberof RefineTextResponseDto
+   */
+  text: string;
+}
+/**
+ *
+ * @export
  * @interface RenameConversationBodyDto
  */
 export interface RenameConversationBodyDto {
@@ -6021,6 +6178,12 @@ export interface ScheduledTaskDto {
    */
   isActive?: boolean;
   /**
+   * True when the schedule can no longer produce a future run: either a one-time (date-trigger) schedule whose newest run terminated with Success or Error, or a recurring schedule whose cron activity window has closed with no upcoming run. Undefined when the run-history check failed; computed by ScheduledTasksService, not by fromUpstreamSchedule (which cannot see runs).
+   * @type {boolean}
+   * @memberof ScheduledTaskDto
+   */
+  isCompleted?: boolean;
+  /**
    *
    * @type {boolean}
    * @memberof ScheduledTaskDto
@@ -6056,6 +6219,12 @@ export interface ScheduledTaskDto {
    * @memberof ScheduledTaskDto
    */
   prompt?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof ScheduledTaskDto
+   */
+  skillUrls?: Array<string>;
 }
 
 /**
@@ -6067,6 +6236,20 @@ export const ScheduledTaskDtoTriggerTypeEnum = {
 } as const;
 export type ScheduledTaskDtoTriggerTypeEnum =
   (typeof ScheduledTaskDtoTriggerTypeEnum)[keyof typeof ScheduledTaskDtoTriggerTypeEnum];
+
+/**
+ *
+ * @export
+ */
+export const ScheduledTaskErrorCode = {
+  ScheduledTaskSkillUnsupported: 'scheduledTaskSkillUnsupported',
+  ScheduledTaskInstructionsOrSkillRequired:
+    'scheduledTaskInstructionsOrSkillRequired',
+  ScheduledTaskDeploymentUnavailable: 'scheduledTaskDeploymentUnavailable',
+  ScheduledTaskAdminConsentRequired: 'scheduledTaskAdminConsentRequired',
+} as const;
+export type ScheduledTaskErrorCode =
+  (typeof ScheduledTaskErrorCode)[keyof typeof ScheduledTaskErrorCode];
 
 /**
  *
@@ -6110,6 +6293,12 @@ export interface ScheduledTaskRunDto {
    * @memberof ScheduledTaskRunDto
    */
   conversationId?: string;
+  /**
+   * Failure stage reported by DIAL Scheduler. Only a string result.stage is exposed.
+   * @type {string}
+   * @memberof ScheduledTaskRunDto
+   */
+  resultStage?: string;
 }
 
 /**
@@ -6124,6 +6313,62 @@ export const ScheduledTaskRunDtoStatusEnum = {
 export type ScheduledTaskRunDtoStatusEnum =
   (typeof ScheduledTaskRunDtoStatusEnum)[keyof typeof ScheduledTaskRunDtoStatusEnum];
 
+/**
+ *
+ * @export
+ * @interface ScheduledTaskValidationErrorDto
+ */
+export interface ScheduledTaskValidationErrorDto {
+  /**
+   *
+   * @type {number}
+   * @memberof ScheduledTaskValidationErrorDto
+   */
+  statusCode: number;
+  /**
+   *
+   * @type {ScheduledTaskValidationErrorDtoMessage}
+   * @memberof ScheduledTaskValidationErrorDto
+   */
+  message: ScheduledTaskValidationErrorDtoMessage;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskValidationErrorDto
+   */
+  error: string;
+  /**
+   *
+   * @type {ScheduledTaskErrorCode}
+   * @memberof ScheduledTaskValidationErrorDto
+   */
+  code?: ScheduledTaskErrorCode;
+  /**
+   *
+   * @type {string}
+   * @memberof ScheduledTaskValidationErrorDto
+   */
+  field?: string;
+  /**
+   * DIAL Scheduler's own error reason, trimmed and capped at 1000 characters. Never present for 401/403/404.
+   * @type {string}
+   * @memberof ScheduledTaskValidationErrorDto
+   */
+  upstreamMessage?: string;
+  /**
+   * DIAL Scheduler's own error code (matches ^[A-Za-z0-9_.:-]{1,128}$). Never present for 401/403/404.
+   * @type {string}
+   * @memberof ScheduledTaskValidationErrorDto
+   */
+  upstreamCode?: string;
+}
+
+/**
+ * @type ScheduledTaskValidationErrorDtoMessage
+ *
+ * @export
+ */
+export type ScheduledTaskValidationErrorDtoMessage = Array<string> | string;
 /**
  *
  * @export
@@ -6205,11 +6450,11 @@ export interface ShareLinkResponseDto {
    */
   url: string;
   /**
-   * Number of days the link stays active before expiring.
+   * Days until the DIAL Core invitation expires, rounded up. Omitted when DIAL Core does not report a usable expiry.
    * @type {number}
    * @memberof ShareLinkResponseDto
    */
-  expiresInDays: number;
+  expiresInDays?: number;
   /**
    * Access levels granted to holders of the share link. Edit access implies view access, so this is `[View, Edit]` rather than `[Edit]` alone.
    * @type {Array<string>}
@@ -6618,6 +6863,12 @@ export interface StageDto {
    * @memberof StageDto
    */
   attachments?: Array<StageAttachmentDto>;
+  /**
+   * Index of the parent stage. In a streaming delta it is the parent's streaming `index` and is sent only on the chunk that opens the child; in a complete array without `index` values it is the parent's array position. Absent for a top-level stage
+   * @type {number}
+   * @memberof StageDto
+   */
+  parentStageIndex?: number;
 }
 
 /**
@@ -6648,7 +6899,30 @@ export interface StopCompletionDto {
    * @memberof StopCompletionDto
    */
   path: string;
+  /**
+   * Answer text the client has shown so far. Saved as the stopped answer of a background generation, whose text the backend never assembles; ignored for every other generation, whose answer the backend already holds.
+   * @type {string}
+   * @memberof StopCompletionDto
+   */
+  content?: string;
 }
+
+/**
+ * Server-owned rewriting purpose
+ * @export
+ */
+export const TextRefinementPurpose = {
+  SkillDescription: 'skill-description',
+  SkillInstructions: 'skill-instructions',
+  ScheduledTaskDescription: 'scheduled-task-description',
+  ScheduledTaskInstructions: 'scheduled-task-instructions',
+  ApplicationDescription: 'application-description',
+  ToolsetDescription: 'toolset-description',
+  PromptDescription: 'prompt-description',
+} as const;
+export type TextRefinementPurpose =
+  (typeof TextRefinementPurpose)[keyof typeof TextRefinementPurpose];
+
 /**
  *
  * @export
@@ -7602,11 +7876,17 @@ export interface UpdateScheduledTaskBodyDto {
    */
   model: string;
   /**
-   *
+   * Instructions; may be empty when the effective task has a skill.
    * @type {string}
    * @memberof UpdateScheduledTaskBodyDto
    */
   prompt: string;
+  /**
+   * DIAL skill references with paths of at most 1024 decoded characters each. Omission preserves saved skills on update; an empty array removes them.
+   * @type {Array<string>}
+   * @memberof UpdateScheduledTaskBodyDto
+   */
+  skillUrls?: Array<string>;
   /**
    *
    * @type {string}
@@ -7707,6 +7987,12 @@ export interface UpdatedScheduledTaskDto {
    */
   isActive?: boolean;
   /**
+   * True when the schedule can no longer produce a future run: either a one-time (date-trigger) schedule whose newest run terminated with Success or Error, or a recurring schedule whose cron activity window has closed with no upcoming run. Undefined when the run-history check failed; computed by ScheduledTasksService, not by fromUpstreamSchedule (which cannot see runs).
+   * @type {boolean}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  isCompleted?: boolean;
+  /**
    *
    * @type {boolean}
    * @memberof UpdatedScheduledTaskDto
@@ -7742,6 +8028,12 @@ export interface UpdatedScheduledTaskDto {
    * @memberof UpdatedScheduledTaskDto
    */
   prompt?: string;
+  /**
+   *
+   * @type {Array<string>}
+   * @memberof UpdatedScheduledTaskDto
+   */
+  skillUrls?: Array<string>;
 }
 
 /**
@@ -7842,7 +8134,7 @@ export interface UserConfigDto {
  */
 export interface UserLimitStatsResponseDto {
   /**
-   * Per-deployment rate-limit and calendar-period usage stats, keyed by deployment name. Models only — applications, toolsets, and routes never appear here. On GET /v1/user/limits every deployment visible to the caller is present, including ones never used (reported against zero usage). On GET /v1/user/usage only deployments the caller used within the currently reported calendar periods are present; absence means zero usage, not "unknown".
+   * Per-deployment rate-limit and calendar-period usage stats, keyed by deployment name. Contains only the deployment kinds selected by the request `deploymentTypes` (models and/or applications); when the request omits it, the server-configured default kinds are reported (models and applications unless USER_USAGE_DEPLOYMENT_TYPES narrows them). Toolsets and routes never appear here. On GET /v1/user/limits every deployment of those kinds visible to the caller is present, including ones never used (reported against zero usage). On GET /v1/user/usage only deployments the caller used within the currently reported calendar periods are present; absence means zero usage, not "unknown".
    * @type {{ [key: string]: DeploymentLimitsResponseDto; }}
    * @memberof UserLimitStatsResponseDto
    */

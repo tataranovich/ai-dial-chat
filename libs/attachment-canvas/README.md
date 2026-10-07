@@ -115,7 +115,7 @@ needed from the host.
 
 ### AttachmentCanvas
 
-Renders the active attachment content based on its type, inside a resizable side panel. `isOpen`, `onClose`, `content`, and `labels` are required. When `content.type` is `McpApp` and `content.onReload` is set, the header shows a reload action (labelled by `labels.mcpAppReloadLabel`, default `'Reload'`) that lets the host re-fetch the resource and re-resolve the tool result from scratch — the lib has no cache of its own, so this is purely a signal for the app layer to bypass whatever cache it keeps. For `McpApp` content, once the mounted app completes its `ui/initialize` handshake, its declared name and version (version smaller) are prepended before `fileName` in the panel title, separated by a vertical divider (not a text character), truncated with a tooltip by the panel's own header the same way `fileName` alone already is. The divider and version text colors default to `--text-secondary` and can be overridden via `styles.colors.mcpAppDividerColor`/`mcpAppVersionColor`; the version text's font class defaults to `'dial-caption-text'` and can be overridden via `styles.typography.mcpAppVersionClassName`. When content type is `MarkdownTable`, supply the table copy/download labels in `labels` (and optionally `tableDownloadFilename`) to show the table's own copy-as-CSV/TXT/Markdown and download-as-CSV actions in an inline header above the table — the same header a Markdown table renders inline in chat. The panel's own header only ever shows its close button for this content type.
+Renders the active attachment content based on its type, inside a resizable side panel. `isOpen`, `onClose`, `content`, and `labels` are required. When `content.type` is `McpApp` and `content.onReload` is set, the header shows a reload action (labelled by `labels.mcpAppReloadLabel`, default `'Reload'`) that lets the host re-fetch the resource and re-resolve the tool result from scratch — the lib has no cache of its own, so this is purely a signal for the app layer to bypass whatever cache it keeps. For `McpApp` content, once the mounted app completes its `ui/initialize` handshake, its declared name and version (version smaller) are prepended before `fileName` in the panel title, separated by a vertical divider (not a text character), truncated with a tooltip by the panel's own header the same way `fileName` alone already is. The divider and version text colors default to `--text-secondary` and can be overridden via `styles.colors.mcpAppDividerColor`/`mcpAppVersionColor`; the version text's font class defaults to `'dial-caption-text'` and can be overridden via `styles.typography.mcpAppVersionClassName`. When content type is `MarkdownTable`, supply the table copy/download labels in `labels` (and optionally `tableDownloadFilename`) to show the table's own copy-as-CSV/TXT/Markdown and download-as-CSV actions in an inline header above the table — the same header a Markdown table renders inline in chat. The panel's own header only ever shows its close button for this content type. For `Markdown` and `MarkdownTable` content, `labels.codeBlockCopyLabel`, `labels.codeBlockCopiedLabel` and `labels.codeBlockDownloadLabel` name the fenced code blocks' copy/download controls (defaults `'Copy code'`, `'Copied!'`, `'Download code'`), `labels.tableScrollRegionAriaLabel` names a wide table's scroll region (default `'Scrollable table'`), and `labels.mathScrollRegionAriaLabel` names a wide block formula's scroll region (default `'Scrollable formula'`). Pass `leftActions` to render host-supplied controls in the header before the title (e.g. a "back to list" button); the lib renders them as given and attaches no behavior of its own.
 
 ```tsx
 import {
@@ -139,7 +139,7 @@ import {
 
 ### AttachmentCanvasBody
 
-Content-only renderer shared by `AttachmentCanvas` — the same Markdown/JSON/code/HTML/PDF/OOXML/image/audio/visualizer/unsupported/error rendering, with no sidebar chrome (no panel, header, close/download/copy actions). Use it when a host wants to mount an attachment preview inline in its own layout instead of the resizable side panel `AttachmentCanvas`/`AttachmentCanvasContainer` render. For content type `MarkdownTable`, pass the table copy/download labels in `labels` (and optionally `tableDownloadFilename`) to show the table's own inline copy/download header, same as `AttachmentCanvas`. For content type `McpApp`, pass `onAppInfo` to be notified once the mounted app completes its `ui/initialize` handshake, with its declared name/version.
+Content-only renderer shared by `AttachmentCanvas` — the same Markdown/JSON/code/HTML/PDF/OOXML/image/audio/visualizer/unsupported/error rendering, with no sidebar chrome (no panel, header, close/download/copy actions). Use it when a host wants to mount an attachment preview inline in its own layout instead of the resizable side panel `AttachmentCanvas`/`AttachmentCanvasContainer` render. For content type `MarkdownTable`, pass the table copy/download labels in `labels` (and optionally `tableDownloadFilename`) to show the table's own inline copy/download header, same as `AttachmentCanvas`. The code-block, table and formula labels (`codeBlockCopyLabel`, `codeBlockCopiedLabel`, `codeBlockDownloadLabel`, `tableScrollRegionAriaLabel`, `mathScrollRegionAriaLabel`) are part of `AttachmentCanvasBodyLabels` too. For content type `McpApp`, pass `onAppInfo` to be notified once the mounted app completes its `ui/initialize` handshake, with its declared name/version.
 
 ```tsx
 import { AttachmentCanvasBody } from '@epam/ai-dial-attachment-canvas';
@@ -153,7 +153,12 @@ import { AttachmentCanvasBody } from '@epam/ai-dial-attachment-canvas';
 
 ### AttachmentCanvasContainer
 
-Context-connected container that reads state from `AttachmentCanvasProvider` and renders `AttachmentCanvas` with download support wired up. Every prop is optional — `labels` fields all have English defaults. Forwards the table copy/download labels and `tableDownloadFilename` to `AttachmentCanvas` for the `MarkdownTable` content type.
+Context-connected container that reads state from `AttachmentCanvasProvider` and renders `AttachmentCanvas` with download support wired up. Every prop is optional — `labels` fields all have English defaults. Forwards the table copy/download labels and `tableDownloadFilename` to `AttachmentCanvas` for the `MarkdownTable` content type, and the code-block and formula labels for `Markdown`/`MarkdownTable` content. `leftActions` is forwarded to `AttachmentCanvas` unchanged — use it for host navigation that the full-width mobile panel would otherwise cover.
+
+Pass `loadPdf?: (url: string) => Promise<Blob>` to provide a host-owned PDF
+loader. It is forwarded to the viewer, just as on `AttachmentCanvas` and
+`AttachmentCanvasBody`. Without it, PDF loading uses the browser's default
+fetch behavior. The host owns request credentials and external-service policy.
 
 ```tsx
 import {
@@ -163,6 +168,7 @@ import {
 
 <AttachmentCanvasProvider>
   <AttachmentCanvasContainer
+    leftActions={isMobile ? <OpenSourcesButton /> : undefined}
     isMobile={isMobile}
     maxWidth={1200}
     configurePdfWorker={configurePdfWorker}
@@ -171,6 +177,11 @@ import {
 ```
 
 ### CodeContent
+
+Content exceeding 50,000 UTF-16 code units overall or 2,000 on any line is
+shown in full as plain text without loading or invoking the syntax highlighter.
+The limits use the shared `isSyntaxHighlightingAllowed` guard from
+`@epam/ai-dial-chat-shared` and apply to every highlighting language.
 
 Standalone syntax-highlighted code view used by the canvas for `CodeCanvasContent`. Exported for hosts that need the same rendering outside the panel. `labels` customizes the loading/error/retry strings shown while the syntax-highlighter engine's dynamic import is pending or fails — see [Styling](#styling) above.
 
@@ -401,15 +412,51 @@ header carrying the entry title and an expand-to-canvas button, wrapping a
 `height`/`mobileHeight`, and passes the same content object to the canvas when
 `onExpand` fires, so expanding never rebuilds the payload.
 
+`isBorderless` drops the frame's border, rounded corners, background, and header
+divider; `isTitleHidden` omits the header title text while keeping the expand
+button. Both default to `false`; the host maps them from the registry entry's
+`borderless` and `withoutTitle`.
+
 ```tsx
 import { InlineGroupedVisualizer } from '@epam/ai-dial-attachment-canvas';
 
 <InlineGroupedVisualizer
   content={groupedContent}
   height={isMobile ? (entry.mobileHeight ?? 400) : (entry.height ?? 600)}
+  isBorderless={entry.borderless === true}
+  isTitleHidden={entry.withoutTitle === true}
   onExpand={() => openCanvas(groupedContent)}
   expandAriaLabel={t(AttachmentCanvasI18nKeys.ExpandAppLabel)}
   errorLabel={t(AttachmentCanvasI18nKeys.VisualizerLoadErrorLabel)}
+/>;
+```
+
+### Visualizer messages (`SEND_MESSAGE`)
+
+A visualizer iframe can ask the host to send a chat message. To do so, it posts
+`${visualizerName}/SEND_MESSAGE` with payload `{ message: string }`; this is
+what `ChatVisualizerConnector.sendMessage(content)` does. The lib subscribes on
+every visualizer it mounts and drops anything other than an object with an own,
+non-blank string `message`.
+
+To receive valid messages, pass `onVisualizerSendMessage?: (content: string) => void` to
+`AttachmentCanvasContainer`, `AttachmentCanvas`, `AttachmentCanvasBody` or
+`InlineGroupedVisualizer`. It is called with the untrimmed `message` text.
+
+- **When omitted:** messages are ignored.
+- **Adding, removing or replacing the callback:** never remounts the iframe.
+- **What the host decides:** whether to send the text, into which conversation,
+  and whether to drop it, for example while a response is streaming. The lib
+  never sends anything itself.
+- **No acknowledgement** is posted back to the iframe.
+
+```tsx
+import { AttachmentCanvasContainer } from '@epam/ai-dial-attachment-canvas';
+
+<AttachmentCanvasContainer
+  onVisualizerSendMessage={
+    isVisualizerSendEnabled ? (content) => sendUserMessage(content) : undefined
+  }
 />;
 ```
 
@@ -434,6 +481,65 @@ import { InlineGroupedVisualizer } from '@epam/ai-dial-attachment-canvas';
 | `AttachmentContentType.GroupedVisualizer` | `GroupedVisualizerCanvasContent` | Renders every attachment an application visualizer claims in one iframe                                                                 |
 | `AttachmentContentType.Unsupported`       | `UnsupportedCanvasContent`       | Fallback for unsupported MIME types                                                                                                     |
 | `AttachmentContentType.Error`             | `ErrorCanvasContent`             | Load failure or forbidden access                                                                                                        |
+
+### HTML preview: same-origin download vs. srcdoc vs. external URL
+
+`HtmlCanvasContent` renders three ways depending on which fields are set:
+
+- **`srcdoc` only** — a locally picked file or inline HTML with no backing
+  download URL. Rendered via `srcDoc` in a sandboxed iframe
+  (`sandbox="allow-scripts"`). A `srcdoc` document inherits the embedding
+  page's CSP, so under a strict policy its inline `<script>`/`<style>` are
+  refused.
+- **`srcdoc` + `srcdocHostUrl`** — the same content, rendered without
+  inheriting the embedding page's CSP. The iframe loads `srcdocHostUrl` via
+  `src` (still `sandbox="allow-scripts"`) and, once it loads, posts it
+  `{ type: HTML_PREVIEW_FRAME_RENDER_MESSAGE, html: srcdoc }` with target
+  `'*'` (the sandboxed frame has an opaque origin). The host serves that
+  document with its own preview-scoped CSP; it should accept the message only
+  from `window.parent` and replace itself with `html` (e.g. `document.write`).
+  The HTML is posted once per content; a new `content` remounts the frame.
+- **`url` + `isSameOriginUrl: true`** (with `resolveSourceText`, not
+  `srcdoc`) — an attachment backed by this app's own file-download endpoint.
+  Rendered via `src` with `sandbox="allow-scripts"` and no
+  `allow-same-origin`, so the previewed document still runs at an opaque
+  origin with no access to this app's cookies or session. The backend gives
+  this response its own relaxed CSP so inline `<script>`/`<style>` in the
+  previewed file are not blocked by the host document's stricter policy —
+  see `apps/chat-api/README.md`'s CSP section. The HTML text itself is not
+  fetched up front — `resolveSourceText` fetches it lazily, only when the
+  "View source" toggle is used, avoiding a duplicate fetch alongside the
+  iframe's own `src` load.
+- **`url` with `isSameOriginUrl` absent/false** — a genuinely external HTML
+  source (e.g. a web-search citation). Rendered via `src` with
+  `sandbox="allow-scripts allow-same-origin"`, safe because the URL is a
+  different origin from the host app.
+
+```tsx
+import {
+  AttachmentContentType,
+  type HtmlCanvasContent,
+} from '@epam/ai-dial-attachment-canvas';
+
+const sameOriginPreview: HtmlCanvasContent = {
+  type: AttachmentContentType.Html,
+  url: downloadUrl,
+  isSameOriginUrl: true,
+  resolveSourceText: () => fetchHtmlText(downloadUrl), // lazy, only for "View source"
+};
+
+const inlinePreview: HtmlCanvasContent = {
+  type: AttachmentContentType.Html,
+  srcdoc: inlineHtml,
+  srcdocHostUrl: '/my-app/html-preview-frame', // host-served, own CSP
+};
+```
+
+The message type is exported so a host's bootstrap document can match it:
+
+```ts
+import { HTML_PREVIEW_FRAME_RENDER_MESSAGE } from '@epam/ai-dial-attachment-canvas';
+```
 
 `AttachmentErrorType` distinguishes the two failure kinds carried by
 `ErrorCanvasContent`: `LoadFailed` (network error or a non-`403` non-OK

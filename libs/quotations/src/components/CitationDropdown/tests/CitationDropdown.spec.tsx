@@ -1,7 +1,7 @@
 import type { Annotation } from '@epam/ai-dial-chat-shared';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QUOTATIONS_CLASS } from '../../../constants/public-class-names';
 import {
   CitationCardProvider,
@@ -40,6 +40,8 @@ const cardLabels = {
   preview: 'Preview',
   openInBrowser: 'Open in browser',
   download: 'Download',
+  showMore: 'Show more',
+  showLess: 'Show less',
 };
 
 const markerLabels = {
@@ -53,6 +55,7 @@ const Wrapper = (props: {
   onPreview?: (annotation: Annotation) => void;
   isPreviewable?: (annotation: Annotation) => boolean;
   onOpenInBrowser: (annotation: Annotation) => void;
+  isPreviewOpen?: boolean;
 }) => {
   const citationCard = useCitationCard();
   return (
@@ -148,6 +151,36 @@ describe('CitationDropdown', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
     expect(onPreview).toHaveBeenCalledExactlyOnceWith(pdfAnnotation);
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('previews directly on marker click without showing the card when the preview panel is open', async () => {
+    const group = makeGroup();
+    const onPreview = vi.fn();
+    render(
+      <Wrapper
+        group={group}
+        onPreview={onPreview}
+        onOpenInBrowser={vi.fn()}
+        isPreviewOpen
+      />,
+    );
+    await userEvent.click(screen.getByRole('button'));
+    expect(onPreview).toHaveBeenCalledExactlyOnceWith(group.primaryAnnotation);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('still opens the card when the preview panel is open but the annotation is not previewable', async () => {
+    render(
+      <Wrapper
+        group={makeGroup()}
+        onPreview={vi.fn()}
+        isPreviewable={() => false}
+        onOpenInBrowser={vi.fn()}
+        isPreviewOpen
+      />,
+    );
+    await userEvent.click(screen.getByRole('button'));
+    expect(screen.getByRole('dialog')).toBeTruthy();
   });
 
   it('opens the popup with a Preview button when onPreview is provided', async () => {
@@ -252,19 +285,50 @@ const closestWithClass = (from: Element, className: string): Element | null =>
 describe('CitationDropdown — public class names', () => {
   /*
    * The panel is the only citation surface whose class travels as a prop into
-   * the kit's tooltip rather than onto an element this component renders, so a
-   * lost class here would not even show up as a changed stylesheet — only as a
-   * host's rule that silently stops applying.
+   * the kit's dropdown rather than onto an element this component renders, so
+   * a lost class here would not even show up as a changed stylesheet — only as
+   * a host's rule that silently stops applying.
    */
   it('stamps the floating panel it reveals', async () => {
     render(<Wrapper group={makeGroup()} onOpenInBrowser={vi.fn()} />);
     await userEvent.click(screen.getByRole('button'));
 
-    /* The revealed panel is the element with the tooltip role. */
-    const panel = screen.getByRole('tooltip');
+    const panel = screen.getByRole('dialog');
     expect(
-      panel.classList.contains(QUOTATIONS_CLASS.citationDropdown) ||
-        closestWithClass(panel, QUOTATIONS_CLASS.citationDropdown) != null,
-    ).toBe(true);
+      closestWithClass(panel, QUOTATIONS_CLASS.citationDropdown),
+    ).toBeTruthy();
+  });
+});
+
+describe('CitationDropdown — touch-only device', () => {
+  /* A touch-only device reports `hover: none`, the query the kit's tooltips
+     use to render nothing — the card must still open from a tap there. */
+  beforeEach(() => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query.includes('hover: none'),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the citation card when the marker is tapped', async () => {
+    render(<Wrapper group={makeGroup()} onOpenInBrowser={vi.fn()} />);
+    await userEvent.click(
+      screen.getByRole('button', { name: markerLabels.ariaLabel }),
+    );
+
+    expect(screen.getByRole('dialog')).toBeTruthy();
   });
 });

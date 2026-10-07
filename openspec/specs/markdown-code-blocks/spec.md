@@ -11,6 +11,8 @@ Fenced code blocks in rendered markdown: language detection, the copy action, th
 The system SHALL render fenced code blocks (produced by react-markdown from ` ```lang … ``` ` and ` ``` … ``` ` markdown) using `MarkdownCodeBlock`, a dedicated component that owns its full container. The container MUST include:
 - A visible frame (rounded border, background).
 - A compact sticky header with the language label (start) and action icon buttons (end). The header MUST share the same background as the code body. There MUST be no divider between the header and the code body.
+- Two header action buttons (when not streaming): a download `GhostIconButton` (`IconDownload`, `aria-label` = `downloadLabel`, default `'Download code'`, saving `code.{ext}` via `downloadTextFile` with the extension from `getFileExtensionForLanguage`, hidden when `hideDownload` is `true`) followed by the copy button.
+- Syntax highlighting through a lazily loaded `react-syntax-highlighter` `Prism` renderer (`restrainedSyntaxTheme`) when `language` is non-empty and `isSyntaxHighlightingAllowed(value)` is `true`; otherwise (and as the `Suspense` fallback) the code renders as plain `<pre><code class="whitespace-pre">`.
 - A scrollable body with `max-h-[60vh] overflow-auto`.
 - `dir="ltr"` on the scrollable body to preserve code direction on RTL pages.
 
@@ -97,7 +99,7 @@ The copy button MUST be keyboard-focusable (rendered via `GhostIconButton`) and 
 
 ### Requirement: Copied feedback
 
-After a successful copy the system SHALL:
+After a successful copy (`copyToClipboard` resolves `true`; a failed copy changes nothing) the system SHALL:
 1. Switch the copy button icon from `IconCopy` to `IconCheck`.
 2. Announce `copiedLabel` (default `'Copied!'`) through the block's own
    `role="status" aria-live="polite"` region, which is empty at rest.
@@ -190,6 +192,28 @@ No icon mirroring is required (`IconCopy` and `IconCheck` are symmetric).
 - The block MUST render exactly one such live region, empty at rest, so a copy announces once regardless of how many code blocks a message contains.
 - The code text MUST remain selectable by the user (no `user-select: none` override).
 - Focus MUST NOT be trapped inside the code block.
+- Both header buttons' accessible names MUST be host-translatable along the whole renderer chain: `MarkdownRenderer` and `MDMessageViewer` accept `codeBlockCopyLabel`, `codeBlockCopiedLabel` and `codeBlockDownloadLabel`, and `AssistantMessageBubble` reads the same three fields from `labels`, forwarding each to `MarkdownCodeBlock`'s `copyLabel`/`copiedLabel`/`downloadLabel`.
+
+#### Scenario: Host-supplied download label reaches the download button
+
+- **GIVEN** `AssistantMessageBubble` renders a fenced code block with `labels.codeBlockDownloadLabel` set
+- **WHEN** the message is not streaming
+- **THEN** the code block's download button's accessible name is that label, not `'Download code'`
+
+#### Scenario: Libraries that embed markdown forward host labels
+
+- **GIVEN** a library renders `MarkdownRenderer` internally — `@epam/ai-dial-attachment-canvas` (`AttachmentCanvasLabels` / `AttachmentCanvasBodyLabels`), `@epam/ai-dial-quotations` (`CitationCardLabels`), `@epam/ai-dial-source-panel` (`ConversationSourcesPanelLabels`) or `@epam/ai-dial-conversation-stages` (`StagesPanelLabels` / `CollapsedGroupLabels`) — and the host sets that library's optional `codeBlockCopyLabel`, `codeBlockCopiedLabel`, `codeBlockDownloadLabel`, `tableScrollRegionAriaLabel` and `mathScrollRegionAriaLabel` fields (stages: `copyAriaLabel`, `codeBlockCopiedLabel`, `tableScrollRegionAriaLabel`, `mathScrollRegionAriaLabel`; stage code has no download button), or `@epam/ai-dial-catalog`'s `ItemDetailsTexts` sets `copyCodeAriaLabel`, `copiedCodeStatusLabel`, `downloadCodeAriaLabel`, `tableScrollRegionAriaLabel` and `mathScrollRegionAriaLabel`
+- **WHEN** the embedded markdown contains a fenced code block, a table wider than its container, or a block formula
+- **THEN** the code block's buttons, its copied announcement, the table's scroll region and the formula's scroll region carry those labels instead of the English defaults
+- **AND** an unset field falls back to the renderer's English default
+
+#### Scenario: Scheduled-task built-in instructions viewer forwards host labels
+
+- **GIVEN** `@epam/ai-dial-scheduled-tasks` renders a task's instructions with its built-in `MDMessageViewer` because the host supplied no `renderInstructions`
+- **AND** the host sets the `ScheduledTaskInstructionsMarkdownLabels` fields (`codeBlockCopyLabel`, `codeBlockCopiedLabel`, `codeBlockDownloadLabel`, `tableScrollRegionAriaLabel`, `mathScrollRegionAriaLabel`) on `ScheduledTaskDetailView`'s `labels` or on `ScheduledTaskDetailsSummary`'s `markdownLabels`
+- **WHEN** the instructions contain a fenced code block, a wide table or a block formula
+- **THEN** those controls carry the host labels instead of the English defaults
+- **AND** a host-supplied `renderInstructions` ignores those fields and owns its own labels
 
 #### Scenario: Keyboard copy activation
 
@@ -216,7 +240,7 @@ Introducing `MarkdownCodeBlock` MUST NOT alter the rendering of GFM tables. `Mar
 
 ### Requirement: Hide copy button during streaming
 
-When `isStreaming` is `true` the copy button MUST NOT be rendered. The code content is still visible and updating. The copy button appears once `isStreaming` becomes `false`.
+When `isStreaming` is `true` the copy button (and the download button) MUST NOT be rendered. The code content is still visible and updating. The buttons appear once `isStreaming` becomes `false`.
 
 #### Scenario: Streaming message behavior
 
@@ -231,10 +255,11 @@ When `isStreaming` is `true` the copy button MUST NOT be rendered. The code cont
 
 | Key | Default value | Usage |
 |-----|---------------|-------|
-| `buttons.copy` (existing) | `"Copy"` | Passed as `codeBlockCopyLabel` from app to `MDMessageViewer` |
-| `buttons.copied` (existing) | `"Copied!"` | Passed as `codeBlockCopiedLabel` from app to `MDMessageViewer` |
+| `buttons.copy` (existing, `ButtonsI18nKeys.Copy`) | `"Copy"` | Passed as `labels.codeBlockCopyLabel` by `ConversationMessageItem`, forwarded through `AssistantMessageBubble` to `MDMessageViewer` |
+| `buttons.copied` (existing, `ButtonsI18nKeys.Copied`) | `"Copied!"` | Passed as `labels.codeBlockCopiedLabel` by `ConversationMessageItem`, forwarded through `AssistantMessageBubble` to `MDMessageViewer` |
+| `buttons.download` (existing, `ButtonsI18nKeys.Download`) | `"Download"` | Passed as `labels.codeBlockDownloadLabel` by `ConversationMessageItem`, forwarded through `AssistantMessageBubble` and `MDMessageViewer` (`codeBlockDownloadLabel`) to `MarkdownRenderer`, which hands it to `MarkdownCodeBlock` as `downloadLabel` |
 
-No new keys are introduced. The lib defaults to English strings (`'Copy code'` / `'Copied!'`).
+No new keys are introduced. The lib defaults to English strings (`'Copy code'` / `'Copied!'` / `'Download code'`). Every other app call site that renders markdown with code blocks (`AgentDescription`, the scheduled-task instructions in `ConversationSourcesPanel`) passes the same three keys plus `chat.scrollableTable` (`ChatI18nKeys.ScrollableTable`) as `tableScrollRegionAriaLabel` and `chat.scrollableFormula` (`ChatI18nKeys.ScrollableFormula`) as `mathScrollRegionAriaLabel`. The hosts of the embedding libraries pass the same five keys: `app.tsx` (`AttachmentCanvasContainer`), `SkillFilePreview` (`AttachmentCanvasBody`), `ConversationMessageItem` (citation `cardLabels`, and `stageLabels` with `buttons.copied` / `chat.scrollableTable` / `chat.scrollableFormula` beside the existing `conversation.stages.copyContent`), the app `ConversationSourcesPanel` (source-quote labels), `CatalogView` and `SkillDetailsPanelContainer` (`ItemDetailsTexts`), and `ScheduledTaskDetailPage` (`ScheduledTaskDetailView` `labels`, which relies on the built-in instructions viewer).
 
 ---
 

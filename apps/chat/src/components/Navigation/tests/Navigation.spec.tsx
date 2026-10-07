@@ -52,72 +52,113 @@ interface MockDropdownItem {
 
 /* The real Dropdown renders into a floating overlay; the mock renders items
    inline so the assertions stay about menu content, not positioning. */
-vi.mock('@epam/ai-dial-ui-kit', () => ({
-  DIAL_KIT_ICON_STROKE: 1.5,
-  BASE_ICON_SIZE: 20,
-  DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
-  ElementSize: { Standard: 'standard' },
-  DropdownItemType: { PlainText: 'plainText', Divider: 'divider' },
-  MenuItemMark: { Check: 'check', Highlight: 'highlight' },
-  mergeClasses: (...classes: (string | undefined)[]) =>
-    classes.filter(Boolean).join(' '),
-  Tooltip: ({ children }: { children: ReactNode }) => children,
-  EllipsisTooltip: ({ text }: { text: ReactNode }) => <span>{text}</span>,
-  IconButton: ({
-    'aria-label': ariaLabel,
-    'aria-current': ariaCurrent,
-  }: {
-    'aria-label': string;
-    'aria-current'?: AriaAttributes['aria-current'];
-  }) => (
-    <button type="button" aria-label={ariaLabel} aria-current={ariaCurrent} />
-  ),
-  GhostIconButton: ({
-    'aria-label': ariaLabel,
-    onClick,
-  }: {
-    'aria-label': string;
-    onClick?: () => void;
-  }) => <button type="button" aria-label={ariaLabel} onClick={onClick} />,
-  CloseButton: ({
-    ariaLabel,
-    onClose,
-  }: {
-    ariaLabel: string;
-    onClose: () => void;
-  }) => <button type="button" aria-label={ariaLabel} onClick={onClose} />,
-  Dropdown: ({
-    children,
-    items,
-  }: {
-    children: ReactNode;
-    items: MockDropdownItem[];
-  }) => (
-    <>
-      {children}
-      <ul>
-        {items.map(({ children: subItems, ...item }) => (
-          <li key={item.key}>
-            <button type="button" onClick={item.onClick}>
-              {item.label}
-            </button>
-            {subItems && (
-              <ul>
-                {subItems.map((child) => (
-                  <li key={child.key}>
-                    <button type="button" onClick={child.onClick}>
-                      {child.label}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </li>
-        ))}
-      </ul>
-    </>
-  ),
-}));
+/* The mobile sheet is the real kit `BottomSheet`; the rest stays stubbed. */
+vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
+  const { BottomSheet } =
+    await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
+  return {
+    BottomSheet,
+    DIAL_KIT_ICON_STROKE: 1.5,
+    BASE_ICON_SIZE: 20,
+    DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
+    ElementSize: { Standard: 'standard' },
+    DropdownItemType: { PlainText: 'plainText', Divider: 'divider' },
+    MenuItemMark: { Check: 'check', Highlight: 'highlight' },
+    mergeClasses: (...classes: (string | undefined)[]) =>
+      classes.filter(Boolean).join(' '),
+    Tooltip: ({ children }: { children: ReactNode }) => children,
+    EllipsisTooltip: ({ text }: { text: ReactNode }) => <span>{text}</span>,
+    /* Rendered by the navigation lib's UserAvatar / AvatarInitials. */
+    AvatarShape: { Circle: 'circle', Square: 'square' },
+    Avatar: () => <span aria-hidden="true" />,
+    MenuItem: ({
+      label,
+      icon,
+      trailing,
+      onClick,
+      'aria-current': ariaCurrent,
+    }: {
+      label: ReactNode;
+      icon?: ReactNode;
+      trailing?: ReactNode;
+      onClick?: () => void;
+      'aria-current'?: AriaAttributes['aria-current'];
+    }) => (
+      <button type="button" aria-current={ariaCurrent} onClick={onClick}>
+        {icon}
+        {label}
+        {trailing}
+      </button>
+    ),
+    Button: ({
+      'aria-label': ariaLabel,
+      iconBefore,
+      onClick,
+    }: {
+      'aria-label'?: string;
+      iconBefore?: ReactNode;
+      onClick?: () => void;
+    }) => (
+      <button type="button" aria-label={ariaLabel} onClick={onClick}>
+        {iconBefore}
+      </button>
+    ),
+    IconButton: ({
+      'aria-label': ariaLabel,
+      'aria-current': ariaCurrent,
+    }: {
+      'aria-label': string;
+      'aria-current'?: AriaAttributes['aria-current'];
+    }) => (
+      <button type="button" aria-label={ariaLabel} aria-current={ariaCurrent} />
+    ),
+    GhostIconButton: ({
+      'aria-label': ariaLabel,
+      onClick,
+    }: {
+      'aria-label': string;
+      onClick?: () => void;
+    }) => <button type="button" aria-label={ariaLabel} onClick={onClick} />,
+    CloseButton: ({
+      ariaLabel,
+      onClose,
+    }: {
+      ariaLabel: string;
+      onClose: () => void;
+    }) => <button type="button" aria-label={ariaLabel} onClick={onClose} />,
+    Dropdown: ({
+      children,
+      items,
+    }: {
+      children: ReactNode;
+      items: MockDropdownItem[];
+    }) => (
+      <>
+        {children}
+        <ul>
+          {items.map(({ children: subItems, ...item }) => (
+            <li key={item.key}>
+              <button type="button" onClick={item.onClick}>
+                {item.label}
+              </button>
+              {subItems && (
+                <ul>
+                  {subItems.map((child) => (
+                    <li key={child.key}>
+                      <button type="button" onClick={child.onClick}>
+                        {child.label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      </>
+    ),
+  };
+});
 
 vi.mock('../../../context/ThemeContext', () => ({
   useTheme: () => ({ currentThemeFavicon: undefined }),
@@ -182,7 +223,8 @@ const setDefaults = (
       feature !== OverlayFeature.HideUserMenu &&
       feature !== OverlayFeature.HideUserSettings &&
       feature !== OverlayFeature.HideKeyboardShortcuts &&
-      feature !== OverlayFeature.HideNavigationMenu,
+      feature !== OverlayFeature.HideNavigationMenu &&
+      feature !== OverlayFeature.HideSettingsPage,
   );
 };
 
@@ -381,10 +423,19 @@ describe('Navigation user menu', () => {
     expect(screen.queryByText(SettingsI18nKeys.Theme)).toBeNull();
   });
 
-  it('always shows the Settings entry — it is no longer behind a flag', () => {
+  it('shows the Settings entry by default', () => {
     renderNavigation();
 
     expect(screen.getByText(BasicI18nKeys.Settings)).toBeTruthy();
+  });
+
+  it('drops the Settings entry when hide-settings-page is enabled', () => {
+    mockUseUiFeature.mockImplementation(
+      (feature) => feature === OverlayFeature.HideSettingsPage,
+    );
+    renderNavigation();
+
+    expect(screen.queryByText(BasicI18nKeys.Settings)).toBeNull();
   });
 });
 
@@ -416,6 +467,37 @@ describe('Navigation mobile sheet', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(
       screen.queryByRole('button', { name: NavigationI18nKeys.Profile }),
+    ).toBeNull();
+  });
+
+  it('offers a Settings row on the profile page', async () => {
+    const user = userEvent.setup();
+    renderNavigation({ isOpen: true });
+    const sheet = within(screen.getByRole('dialog'));
+
+    await user.click(
+      sheet.getByRole('button', { name: NavigationI18nKeys.Profile }),
+    );
+    expect(
+      sheet.getByRole('button', { name: BasicI18nKeys.Settings }),
+    ).toBeTruthy();
+  });
+
+  it('omits the Settings row when hide-settings-page is enabled', async () => {
+    mockUseUiFeature.mockImplementation(
+      (feature) =>
+        feature !== OverlayFeature.HideNavigationMenu &&
+        feature !== OverlayFeature.HideUserSettings,
+    );
+    const user = userEvent.setup();
+    renderNavigation({ isOpen: true });
+    const sheet = within(screen.getByRole('dialog'));
+
+    await user.click(
+      sheet.getByRole('button', { name: NavigationI18nKeys.Profile }),
+    );
+    expect(
+      sheet.queryByRole('button', { name: BasicI18nKeys.Settings }),
     ).toBeNull();
   });
 

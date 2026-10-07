@@ -111,7 +111,26 @@ describe('usePublishFolders', () => {
     ]);
   });
 
-  it('does not re-report a destination that is already remembered', async () => {
+  it('moves a re-used destination to the front without duplicating it', async () => {
+    const onRememberedFolderKeysChange = vi.fn();
+    const { result } = render({
+      rememberedFolderKeys: ['Org/Archive', 'Org/Shared', 'Org/Drafts'],
+      onRememberedFolderKeysChange,
+    });
+    await waitFor(() => expect(result.current.folderItems).toHaveLength(1));
+
+    act(() => {
+      result.current.rememberPublishFolder(['Org', 'Shared']);
+    });
+
+    expect(onRememberedFolderKeysChange).toHaveBeenCalledWith([
+      'Org/Shared',
+      'Org/Archive',
+      'Org/Drafts',
+    ]);
+  });
+
+  it('does not re-report the destination that is already the most recent', async () => {
     const onRememberedFolderKeysChange = vi.fn();
     const { result } = render({
       rememberedFolderKeys: ['Org/Shared'],
@@ -163,7 +182,7 @@ describe('usePublishFolders', () => {
   });
 
   /*
-   * Issue #8568: "Add child" on a folder the user had not expanded yet also
+   * [#8568](https://github.com/epam/ai-dial-chat/issues/8568): "Add child" on a folder the user had not expanded yet also
    * expands it, which starts that folder's listing. The created folder used
    * to live in the same listing cache, so the listing landing afterwards
    * replaced it and the new folder vanished — while folders higher up in the

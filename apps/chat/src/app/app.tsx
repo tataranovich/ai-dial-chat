@@ -32,6 +32,7 @@ import ConversationPanelView from '../components/ConversationPanel/ConversationP
 import ConversationSourcesPanel from '../components/ConversationSourcesPanel/ConversationSourcesPanel';
 import { RouteErrorBoundary } from '../components/ErrorBoundary/ErrorBoundary';
 import Header from '../components/Header/Header';
+import SourcesSidebarToggle from '../components/Header/SourcesSidebarToggle';
 import Navigation from '../components/Navigation/Navigation';
 import NewVersionFallback from '../components/NewVersionFallback/NewVersionFallback';
 import RouteFallback from '../components/RouteFallback/RouteFallback';
@@ -43,28 +44,31 @@ import {
 import {
   AttachmentCanvasI18nKeys,
   ButtonsI18nKeys,
+  ChatI18nKeys,
 } from '../constants/translation-keys';
 import { ActiveScheduledTaskProvider } from '../context/ActiveScheduledTaskContext';
-import { useDeployments } from '../context/DeploymentsContext';
 import { useIsolatedModelView } from '../context/IsolatedModelViewContext';
-import { useOptionalOverlay } from '../context/overlay/OverlayContext';
 import { useSourcesSidebar } from '../context/SourcesSidebarContext';
 import { useTheme } from '../context/ThemeContext';
+import { useCanvasVisualizerMessageHandler } from '../hooks/attachment/useCanvasVisualizerMessageHandler';
+import { usePdfPreviewLoader } from '../hooks/attachment/usePdfPreviewLoader';
 import { useIsMobile } from '../hooks/breakpoint/useBreakpoint';
 import { useConversationListBridge } from '../hooks/conversation/useConversationListBridge';
 import { useConversationPanelRouteState } from '../hooks/conversation-panel/useConversationPanelRouteState';
+import { useOverlayPendingModel } from '../hooks/overlay/useOverlayPendingModel';
 import { useAppVersionCheck } from '../hooks/useAppVersionCheck/useAppVersionCheck';
 import { useUiFeature } from '../hooks/useUiFeature';
 import ConversationRoute from '../pages/ConversationRoute/ConversationRoute';
+import { ApplicationEditorKind } from '../types/application-editor';
 import { ROUTES } from '../types/routes';
 import { ThemeId } from '../types/theme-id';
 import { configurePdfWorker } from '../utils/pdf';
+import { renderSettingsRoutes } from './settings-routes';
 
 const CatalogView = lazy(() => import('../components/CatalogView/CatalogView'));
 const DialFileManagerPage = lazy(
   () => import('../pages/DialFileManagerPage/DialFileManagerPage'),
 );
-const SettingsPage = lazy(() => import('../pages/SettingsPage/SettingsPage'));
 const ScheduledTasksPage = lazy(
   () => import('../pages/ScheduledTasksPage/ScheduledTasksPage'),
 );
@@ -77,12 +81,8 @@ const ScheduledTaskDetailPage = lazy(
 const ScheduledTaskEditPage = lazy(
   () => import('../pages/ScheduledTaskEditPage/ScheduledTaskEditPage'),
 );
-const AppsEditorPage = lazy(() => import('../pages/AppsEditor/AppsEditor'));
-const ToolsetEditorPage = lazy(
-  () => import('../pages/ToolsetEditor/ToolsetEditor'),
-);
-const CustomAppEditorPage = lazy(
-  () => import('../pages/ToolsetEditor/CustomAppEditor'),
+const ApplicationEditorPage = lazy(
+  () => import('../pages/ApplicationEditor/ApplicationEditorPage'),
 );
 const PromptEditorPage = lazy(
   () => import('../pages/PromptEditor/PromptEditor'),
@@ -116,6 +116,7 @@ const App: FC = () => {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isMobile = useIsMobile();
+  const loadPdf = usePdfPreviewLoader();
   const canvasMaxWidth = usePanelMaxWidth(MIN_CONTENT_AREA_WIDTH);
   const canvasDefaultWidth = isMobile
     ? window.innerWidth
@@ -137,34 +138,8 @@ const App: FC = () => {
    */
   useConversationListBridge();
 
-  /*
-   * OverlayContext (an ancestor of DeploymentsProvider) cannot call
-   * useDeployments() itself, so it hands off a pending overlay-selected
-   * modelId here, where both contexts are reachable. Silently ignored if the
-   * id is not in the loaded deployments list — matches SET_OVERLAY_OPTIONS'
-   * "unknown modelId falls back to normal default-deployment resolution".
-   */
-  const overlay = useOptionalOverlay();
-  const {
-    items: deploymentItemsForOverlay,
-    isLoading: isDeploymentsLoading,
-    restoreSelectedItemId,
-  } = useDeployments();
-  useEffect(() => {
-    if (!overlay?.pendingModelId || isDeploymentsLoading) return;
-    const exists = deploymentItemsForOverlay.some(
-      (item) => item.id === overlay.pendingModelId,
-    );
-    if (exists) {
-      restoreSelectedItemId(overlay.pendingModelId);
-    }
-    overlay.clearPendingModelId();
-  }, [
-    overlay,
-    deploymentItemsForOverlay,
-    isDeploymentsLoading,
-    restoreSelectedItemId,
-  ]);
+  /* Applies an overlay host's modelId once deployments are loaded. */
+  useOverlayPendingModel();
 
   const [isNavOpen, setIsNavOpen] = useState(false);
   const closeNav = useCallback(() => setIsNavOpen(false), []);
@@ -177,8 +152,10 @@ const App: FC = () => {
     OverlayFeature.AttachmentsManager,
   );
   const isFileManagerEnabled = useUiFeature(OverlayFeature.FileManager);
+  const isSettingsPageHidden = useUiFeature(OverlayFeature.HideSettingsPage);
 
   const { closeCanvas, isOpen: isCanvasOpen } = useAttachmentCanvas();
+  const handleCanvasVisualizerSendMessage = useCanvasVisualizerMessageHandler();
   const { handleClose: closeSourcesPanel } = useSourcesSidebar();
 
   const { isPanelOpen, closePanel, togglePanel } =
@@ -221,6 +198,12 @@ const App: FC = () => {
   const handlePanelActiveFilterChange = useCallback((tab: FilterTab) => {
     activeFilterRef.current = tab;
   }, []);
+
+  /* Stable, so `memo(ConversationPanelView)` holds across App re-renders. */
+  const handlePanelRequestedFilterChange = useCallback(
+    () => setPanelRequestedFilter(undefined),
+    [],
+  );
 
   useEffect(() => {
     if (!switchToMyChatsOnNavRef.current) return;
@@ -282,7 +265,7 @@ const App: FC = () => {
           onSelectConversation={handleSelectConversation}
           onNewChat={handleNewChat}
           requestedFilter={panelRequestedFilter}
-          onRequestedFilterChange={() => setPanelRequestedFilter(undefined)}
+          onRequestedFilterChange={handlePanelRequestedFilterChange}
           onActiveFilterChange={handlePanelActiveFilterChange}
           onDuplicateReadonly={handleDuplicateReadonly}
         />
@@ -353,16 +336,7 @@ const App: FC = () => {
                   </RouteErrorBoundary>
                 }
               />
-              <Route
-                path={ROUTES.Settings}
-                element={
-                  <RouteErrorBoundary>
-                    <Suspense fallback={<RouteFallback />}>
-                      <SettingsPage />
-                    </Suspense>
-                  </RouteErrorBoundary>
-                }
-              />
+              {renderSettingsRoutes(isSettingsPageHidden)}
               <Route
                 path={ROUTES.FileManager}
                 element={
@@ -423,7 +397,9 @@ const App: FC = () => {
                 element={
                   <RouteErrorBoundary>
                     <Suspense fallback={<RouteFallback />}>
-                      <AppsEditorPage />
+                      <ApplicationEditorPage
+                        kind={ApplicationEditorKind.QuickApp}
+                      />
                     </Suspense>
                   </RouteErrorBoundary>
                 }
@@ -453,7 +429,9 @@ const App: FC = () => {
                 element={
                   <RouteErrorBoundary>
                     <Suspense fallback={<RouteFallback />}>
-                      <ToolsetEditorPage />
+                      <ApplicationEditorPage
+                        kind={ApplicationEditorKind.Toolset}
+                      />
                     </Suspense>
                   </RouteErrorBoundary>
                 }
@@ -463,7 +441,9 @@ const App: FC = () => {
                 element={
                   <RouteErrorBoundary>
                     <Suspense fallback={<RouteFallback />}>
-                      <CustomAppEditorPage />
+                      <ApplicationEditorPage
+                        kind={ApplicationEditorKind.CustomApp}
+                      />
                     </Suspense>
                   </RouteErrorBoundary>
                 }
@@ -504,6 +484,8 @@ const App: FC = () => {
         </ActiveScheduledTaskProvider>
         {isConversationRoute && isAttachmentsManagerEnabled && (
           <AttachmentCanvasContainer
+            loadPdf={loadPdf}
+            onVisualizerSendMessage={handleCanvasVisualizerSendMessage}
             labels={{
               ariaLabel: t(AttachmentCanvasI18nKeys.AriaLabel),
               closeLabel: t(AttachmentCanvasI18nKeys.CloseLabel),
@@ -560,6 +542,11 @@ const App: FC = () => {
               tableCopyLabel: t(ButtonsI18nKeys.Copy),
               tableCopiedLabel: t(ButtonsI18nKeys.Copied),
               tableDownloadCsvLabel: t(ButtonsI18nKeys.DownloadAsCsv),
+              codeBlockCopyLabel: t(ButtonsI18nKeys.Copy),
+              codeBlockCopiedLabel: t(ButtonsI18nKeys.Copied),
+              codeBlockDownloadLabel: t(ButtonsI18nKeys.Download),
+              tableScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableTable),
+              mathScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableFormula),
               ooxmlHighlightsLabel: t(
                 AttachmentCanvasI18nKeys.OoxmlHighlightsLabel,
               ),
@@ -567,6 +554,7 @@ const App: FC = () => {
                 AttachmentCanvasI18nKeys.OoxmlHighlightNavigatedLabel,
               ),
             }}
+            leftActions={isMobile ? <SourcesSidebarToggle /> : undefined}
             isMobile={isMobile}
             defaultWidth={canvasDefaultWidth}
             maxWidth={canvasMaxWidth}

@@ -157,6 +157,19 @@ export default defineConfig(() => ({
         import.meta.dirname,
         '../../libs/navigation-panel/src/index.ts',
       ),
+      /* Subpaths first: a bare alias would also swallow `/halloween`. */
+      '@epam/ai-dial-celebrations/halloween': path.resolve(
+        import.meta.dirname,
+        '../../libs/celebrations/src/halloween/index.ts',
+      ),
+      '@epam/ai-dial-celebrations/new-year': path.resolve(
+        import.meta.dirname,
+        '../../libs/celebrations/src/new-year/index.ts',
+      ),
+      '@epam/ai-dial-celebrations': path.resolve(
+        import.meta.dirname,
+        '../../libs/celebrations/src/index.ts',
+      ),
       '@epam/ai-dial-starter-buttons': path.resolve(
         import.meta.dirname,
         '../../libs/starter-buttons/src/index.ts',
@@ -164,6 +177,11 @@ export default defineConfig(() => ({
       '@epam/ai-dial-catalog': path.resolve(
         import.meta.dirname,
         '../../libs/catalog/src/index.ts',
+      ),
+      // Source components import their CSS Modules; do not prefix-match the public CSS subpath.
+      '@epam/ai-dial-publish-panel/styles.css': path.resolve(
+        import.meta.dirname,
+        '../../libs/publish-panel/src/styles.css',
       ),
       '@epam/ai-dial-publish-panel': path.resolve(
         import.meta.dirname,

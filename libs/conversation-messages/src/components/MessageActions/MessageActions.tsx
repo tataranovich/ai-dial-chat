@@ -9,7 +9,7 @@ import {
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   ElementSize,
-  ToggleIconButton,
+  GhostIconButton,
 } from '@epam/ai-dial-ui-kit';
 import {
   IconMarkdown,
@@ -27,7 +27,7 @@ import styles from './MessageActions.module.scss';
 
 const COPIED_RESET_MS = 2000;
 
-/** Context-sensitive action bar — shows edit/delete for user messages and regenerate/copy/like/dislike for assistant messages. */
+/** Context-sensitive action bar — shows copy/edit/delete for user messages and regenerate/copy/like/dislike for assistant messages. */
 export const MessageActions: FC<MessageActionsProps> = ({
   role = MessageRole.User,
   onEdit,
@@ -65,9 +65,13 @@ export const MessageActions: FC<MessageActionsProps> = ({
   const handleCopy = useCallback(() => {
     onCopy?.();
     setCopied('copy');
-    setCopyStatus(ariaLabels?.copiedStatus ?? 'Copied to clipboard');
+    setCopyStatus(
+      role === MessageRole.User
+        ? (ariaLabels?.copiedMessageStatus ?? 'Message copied to clipboard')
+        : (ariaLabels?.copiedStatus ?? 'Copied to clipboard'),
+    );
     setTimeout(() => setCopied(null), COPIED_RESET_MS);
-  }, [onCopy, ariaLabels?.copiedStatus]);
+  }, [onCopy, role, ariaLabels?.copiedStatus, ariaLabels?.copiedMessageStatus]);
 
   const handleCopyMarkdown = useCallback(() => {
     onCopyMarkdown?.();
@@ -102,8 +106,20 @@ export const MessageActions: FC<MessageActionsProps> = ({
       </span>
       {role === MessageRole.User ? (
         <>
+          {onCopy && (
+            <CopyIconButton
+              iconSize={DIAL_ICON_SIZE.SM}
+              onClick={handleCopy}
+              size={ElementSize.Small}
+              isCopied={copied === 'copy'}
+              copyLabel={tooltips?.copyMessage ?? 'Copy message'}
+              copiedLabel={tooltips?.copied ?? 'Copied!'}
+              ariaLabel={ariaLabels?.copyMessage ?? 'Copy message'}
+              isDisabled={isDisabled}
+            />
+          )}
           {onEdit && (
-            <ToggleIconButton
+            <GhostIconButton
               icon={
                 <IconPencilMinus
                   size={DIAL_ICON_SIZE.SM}
@@ -121,7 +137,7 @@ export const MessageActions: FC<MessageActionsProps> = ({
             />
           )}
           {onDelete && (
-            <ToggleIconButton
+            <GhostIconButton
               icon={
                 <IconTrashX
                   size={DIAL_ICON_SIZE.SM}
@@ -140,7 +156,7 @@ export const MessageActions: FC<MessageActionsProps> = ({
       ) : (
         <>
           {onRegenerate && (
-            <ToggleIconButton
+            <GhostIconButton
               icon={
                 <IconRefresh
                   size={DIAL_ICON_SIZE.SM}
@@ -190,7 +206,7 @@ export const MessageActions: FC<MessageActionsProps> = ({
           )}
 
           {onLike && (
-            <ToggleIconButton
+            <GhostIconButton
               icon={
                 activeRating === MessageRating.Like ? (
                   <IconThumbUpFilled
@@ -215,7 +231,7 @@ export const MessageActions: FC<MessageActionsProps> = ({
             />
           )}
           {onDislike && (
-            <ToggleIconButton
+            <GhostIconButton
               icon={
                 activeRating === MessageRating.Dislike ? (
                   <IconThumbDownFilled

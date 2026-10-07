@@ -62,6 +62,8 @@ const buildLabelsForGroup = (group: AnnotationGroup) => ({
     preview: 'Preview',
     openInBrowser: 'Open in browser',
     download: 'Download',
+    showMore: 'Show more',
+    showLess: 'Show less',
   },
   markerLabels: {
     ariaLabel: `Citation from ${group.sourceName}`,
@@ -85,6 +87,7 @@ interface HostProps {
   callbacks: UseCitationMarkdownComponentsCallbacks;
   isStreaming?: boolean;
   isCompactTypography?: boolean;
+  fallbackGroups?: AnnotationGroup[];
 }
 
 const Host = ({
@@ -93,6 +96,7 @@ const Host = ({
   callbacks,
   isStreaming,
   isCompactTypography,
+  fallbackGroups,
 }: HostProps) => {
   const citationCard = useCitationCard();
   const { processedContent, markdownComponents } =
@@ -102,6 +106,7 @@ const Host = ({
       callbacks,
       isStreaming,
       isCompactTypography,
+      fallbackGroups,
     );
   return (
     <CitationCardProvider value={citationCard}>
@@ -248,7 +253,15 @@ describe('useCitationMarkdownComponents', () => {
   });
 
   it('delegates the open-in-browser action to onOpenInBrowser directly', async () => {
-    const annotation = makeAnnotation();
+    const annotation: Annotation = {
+      body: {
+        title: 'Example',
+        source: {
+          type: 'attachment',
+          attachment: { type: 'text/html', url: 'https://example.com/a' },
+        },
+      },
+    };
     const group = makeGroup({
       primaryAnnotation: annotation,
       annotations: [annotation],
@@ -261,11 +274,33 @@ describe('useCitationMarkdownComponents', () => {
     await userEvent.click(
       screen.getByRole('button', { name: `Citation from ${group.sourceName}` }),
     );
-    /* The card's non-preview action is labelled "Download" for a non-HTML
-       source with a preview action available, but always triggers onOpenInBrowser. */
-    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Open in browser' }),
+    );
 
     expect(callbacks.onOpenInBrowser).toHaveBeenCalledWith(annotation);
+  });
+
+  it('previews directly on marker click without opening the card when isPreviewOpen is set', async () => {
+    const annotation = makeAnnotation();
+    const group = makeGroup({
+      primaryAnnotation: annotation,
+      annotations: [annotation],
+    });
+    const callbacks = makeCallbacks({ isPreviewOpen: true });
+    render(
+      <Host content="Hello world" groups={[group]} callbacks={callbacks} />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: `Citation from ${group.sourceName}` }),
+    );
+
+    expect(callbacks.onPreview).toHaveBeenCalledExactlyOnceWith(
+      annotation,
+      group,
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('calls buildLabels once per rendered marker with the correct group', () => {
@@ -540,6 +575,137 @@ describe('useCitationMarkdownComponents — cit element rendering', () => {
     expect(screen.queryByRole('button')).toBeFalsy();
     expect(
       screen.getByText('Patient meets criteria<cit data-id="e1">source</cit>.'),
+    ).toBeTruthy();
+  });
+
+  it('resolves an id absent from the message from the fallback pool', () => {
+    const poolGroup = makeCitGroup('e43864');
+    const callbacks = makeCallbacks();
+    render(
+      <Host
+        content='Patient meets criteria<cit data-id="e43864"></cit>.'
+        groups={[]}
+        fallbackGroups={[poolGroup]}
+        callbacks={callbacks}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', {
+        name: `Citation from ${poolGroup.sourceName}`,
+      }),
+    ).toBeTruthy();
+  });
+
+  it('resolves preview and open-in-browser against the pooled group for a fallback-only match', async () => {
+    const poolGroup = makeCitGroup('e43864');
+    const callbacks = makeCallbacks();
+    render(
+      <Host
+        content='Patient meets criteria<cit data-id="e43864"></cit>.'
+        groups={[]}
+        fallbackGroups={[poolGroup]}
+        callbacks={callbacks}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: `Citation from ${poolGroup.sourceName}`,
+      }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+
+    expect(callbacks.onPreview).toHaveBeenCalledWith(
+      poolGroup.primaryAnnotation,
+      poolGroup,
+    );
+  });
+
+  it("prefers the message's own group over a colliding id in the fallback pool", () => {
+    const messageGroup = makeCitGroup('e1', 'https://example.com/message.pdf');
+    const poolGroup = makeCitGroup('e1', 'https://example.com/pool.pdf');
+    const callbacks = makeCallbacks();
+    render(
+      <Host
+        content='Patient meets criteria<cit data-id="e1"></cit>.'
+        groups={[messageGroup]}
+        fallbackGroups={[poolGroup]}
+        callbacks={callbacks}
+      />,
+    );
+
+    expect(callbacks.buildLabels).toHaveBeenCalledWith(messageGroup);
+    expect(callbacks.buildLabels).not.toHaveBeenCalledWith(poolGroup);
+  });
+
+  it('leaves processedContent byte-identical whether the fallback pool is empty or has three foreign groups', () => {
+    const offsetGroup = makeGroup({
+      primaryAnnotation: makeAnnotation('https://example.com/a', 5),
+      annotations: [makeAnnotation('https://example.com/a', 5)],
+    });
+    const callbacks = makeCallbacks();
+    const content = 'Hello world';
+
+    const { result: resultWithoutPool } = renderHook(() =>
+      useCitationMarkdownComponents(
+        content,
+        [offsetGroup],
+        callbacks,
+        false,
+        false,
+        [],
+      ),
+    );
+    const { result: resultWithPool } = renderHook(() =>
+      useCitationMarkdownComponents(
+        content,
+        [offsetGroup],
+        callbacks,
+        false,
+        false,
+        [makeCitGroup('f1'), makeCitGroup('f2'), makeCitGroup('f3')],
+      ),
+    );
+
+    expect(resultWithPool.current.processedContent).toBe(
+      resultWithoutPool.current.processedContent,
+    );
+  });
+
+  it('gets a cit override for a pool-only match even when the message groups are empty', () => {
+    const poolGroup = makeCitGroup('e1');
+    const callbacks = makeCallbacks();
+    const { result } = renderHook(() =>
+      useCitationMarkdownComponents(
+        'Patient meets criteria<cit data-id="e1"></cit>.',
+        [],
+        callbacks,
+        false,
+        false,
+        [poolGroup],
+      ),
+    );
+
+    expect(
+      (result.current.markdownComponents as Record<string, unknown>).cit,
+    ).toBeDefined();
+  });
+
+  it('degrades to literal text when an id is present in neither groups nor the fallback pool', () => {
+    const callbacks = makeCallbacks();
+    render(
+      <Host
+        content='Patient meets criteria<cit data-id="zz"></cit>.'
+        groups={[]}
+        fallbackGroups={[makeCitGroup('e1')]}
+        callbacks={callbacks}
+      />,
+    );
+
+    expect(screen.queryByRole('button')).toBeFalsy();
+    expect(
+      screen.getByText('Patient meets criteria<cit data-id="zz"></cit>.'),
     ).toBeTruthy();
   });
 });

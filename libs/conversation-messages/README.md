@@ -4,7 +4,7 @@ Message display components for rendering conversation history — user, assistan
 
 ## Overview
 
-`@epam/ai-dial-conversation-messages` provides the visual building blocks for rendering a chat transcript. It solves the problem of consistently displaying messages from different roles — users, assistant, and system — without duplicating bubble layout, markdown rendering, or action toolbar logic across every view that needs a conversation thread. Each role has a dedicated bubble component: `UserMessageBubble` renders plain text with collapse-on-overflow and optional attachments, `AssistantMessageBubble` renders streaming markdown with code blocks, quick-reply starters, a deployment icon, and a slot for extra content such as a stages panel, and `StatusMessageBubble` renders a full-width info banner for in-timeline notices like a model switch. The `MessageActions` toolbar provides role-appropriate actions in a consistent position relative to any bubble — edit and delete for user messages, regenerate, copy, and like/dislike for assistant messages. All components accept `styles` overrides so host applications can theme the transcript area without forking the components.
+`@epam/ai-dial-conversation-messages` provides the visual building blocks for rendering a chat transcript. It solves the problem of consistently displaying messages from different roles — users, assistant, and system — without duplicating bubble layout, markdown rendering, or action toolbar logic across every view that needs a conversation thread. Each role has a dedicated bubble component: `UserMessageBubble` renders plain text with collapse-on-overflow and optional attachments, `AssistantMessageBubble` renders streaming markdown with code blocks, quick-reply starters, a deployment icon, and a slot for extra content such as a stages panel, and `StatusMessageBubble` renders a full-width info banner for in-timeline notices like a model switch. The `MessageActions` toolbar provides role-appropriate actions in a consistent position relative to any bubble — copy, edit, and delete for user messages, regenerate, copy, and like/dislike for assistant messages. All components accept `styles` overrides so host applications can theme the transcript area without forking the components.
 
 ## Installation
 
@@ -25,14 +25,63 @@ import '@epam/ai-dial-conversation-messages/styles.css';
 ## Peer Dependencies
 
 - `react`
+- `react-dom`
 - `@epam/ai-dial-chat-shared`
 - `@epam/ai-dial-ui-kit`
 
 ## Components
 
+`MessageBubble`, `UserMessageBubble` and `AssistantMessageBubble` accept an optional
+`contentRef?: React.Ref<HTMLDivElement>`. It points to the rendered text wrapper,
+excluding attachment trays, actions and host `beforeContent`/`afterContent` slots.
+Hosts can use it to scope native text-selection interactions; selection policy and
+file upload remain host responsibilities. Embedded Markdown controls can still be
+descendants, so hosts must exclude interactive controls from eligible selections.
+
+### MessageSelectionReply
+
+Renders a viewport-clamped Reply action beside a native text selection. The host owns
+selection eligibility, file creation, upload and localization; pass translated labels
+through `labels` and unmount the action by omitting `rect`.
+
+Pass `portalContainer` when the chat lives in a modal dialog or a container with
+its own theme. The destination must belong to the same document as the message
+bodies and retain viewport coordinates for fixed-position children (avoid a
+transformed ancestor). It defaults to `document.body`; `null` defers rendering
+until the host container is mounted. Both the action and its live status region
+are portaled into this destination.
+
+`styles` accepts `colors` (`background`, `hoverBackground`, `text`),
+`typography.fontClassName` (defaults to `dial-small-text`), `className` for the
+floating root and `buttonClassName` for the button. Colors use the host's
+`--bg-layer-raised`, `--bg-layer-base` and `--text-primary` tokens when omitted,
+with opaque light-theme fallbacks. The exported types are
+`MessageSelectionReplyProps`, `MessageSelectionReplyLabels`,
+`MessageSelectionReplyStyles`, `MessageSelectionReplyColors` and
+`MessageSelectionReplyTypography`.
+
+```tsx
+import { MessageSelectionReply } from '@epam/ai-dial-conversation-messages';
+
+<MessageSelectionReply
+  rect={selection?.rect}
+  actionRef={actionRef}
+  onReply={onReply}
+  addedRevision={addedRevision}
+  labels={{
+    reply: t('chat.reply'),
+    selectionAvailable: t('chat.replySelectionAvailable'),
+    attachmentAdded: t('chat.replyAttachmentAdded'),
+  }}
+/>;
+```
+
+For a complete hook, message body, action and upload composition, see
+[useMessageSelectionReply](../chat-hooks/README.md#usemessageselectionreply).
+
 ### UserMessageBubble
 
-Renders a user message with text content and optional attachments. Long messages collapse to `collapsedLineCount` lines (default `10`) behind a toggle. Pass `beforeContent` to render host-supplied content inline at the start of the first text line, which word-flows after it on the same line (e.g. a used-skill chip; pass inline-level content no taller than a text line — the slot participates in the bubble's content-sized width and the collapse line measurement); the bubble renders for the slot alone even when `text` is empty, and with no slot the rendering is unchanged.
+Renders a user message with text content and optional attachments. Long messages collapse to `collapsedLineCount` lines (default `10`) behind a toggle. Pass `textSegments` to render an ordered array of content in place of `text` inside the same paragraph — interleaved plain-text runs and inline elements (e.g. skill-mention chips at their text position). `text` is still required alongside `textSegments`: it stays the identity/measurement input for the collapse-height calculation even when `textSegments` is what actually renders. With no `textSegments`, `text` renders unchanged.
 
 ```tsx
 import {
@@ -44,21 +93,39 @@ import {
   text={message.content}
   position={BubblePosition.Bottom}
   attachments={message.attachments}
-  beforeContent={usedSkillChip}
+  textSegments={messageTextSegments}
   onAttachmentClick={handleAttachmentClick}
+  onDownloadAll={handleDownloadAll}
+  labels={{
+    attachmentClickLabel: 'Open in canvas',
+    attachmentDownloadLabel: 'Download file',
+  }}
   actions={{ onEdit: handleEdit, onDelete: handleDelete }}
 />;
 ```
 
+Both bubbles forward their attachment labels to `AttachmentGroup`: `labels.attachmentClickLabel` names an interactive tile (rendered when `onAttachmentClick` is given) and `labels.attachmentDownloadLabel` names each file tile's own download button (rendered when `onDownloadAll` is given; default `'Download attachment'`). Pass two distinct, translated strings when the tile does something other than download, so the two buttons stay distinguishable to assistive technology.
+
 ### AssistantMessageBubble
 
-Renders an assistant message as markdown. Set `isStreaming` while the response is still arriving so newly appended text reveals smoothly. Use `markdownComponents` to inject custom renderers (for example citation markers from `@epam/ai-dial-quotations`), `markdownClassNames` to pick the markdown type scale (`COMPACT_MARKDOWN_CLASS_NAMES` from `@epam/ai-dial-chat-shared` drops the body copy one step for narrow viewports), `markdownUrlTransform` to rewrite markdown `href`/`src` values (for example mapping DIAL `files/{bucket}/{path}` ids to host download URLs), `afterContent` to place a stages panel between the text and the actions bar, and `beforeContent` to render host-supplied content overlaid at the inline-start of the first markdown block's first line, which indents past the measured slot width so the text word-flows after it (e.g. a used-skill chip); while there is no text — the streaming placeholder case — the slot renders in flow above it, and an assistant message with no text at all renders the slot on its own line.
+Renders an assistant message as markdown. Set `isStreaming` while the response is still arriving so newly appended text reveals smoothly. Use `markdownComponents` to inject custom renderers (for example citation markers from `@epam/ai-dial-quotations`), `markdownClassNames` to pick the markdown type scale (`COMPACT_MARKDOWN_CLASS_NAMES` from `@epam/ai-dial-chat-shared` drops the body copy one step for narrow viewports), `markdownUrlTransform` to rewrite markdown `href`/`src` values (for example mapping DIAL `files/{bucket}/{path}` ids to host download URLs), `afterContent` to place a stages panel between the text and the actions bar, and `beforeContent` to render host-supplied content overlaid at the inline-start of the first markdown block's first line, which indents past the measured slot width so the text word-flows after it (e.g. one or more used-skill chips — `beforeContent` may itself be an array of elements); while there is no text — the streaming placeholder case — the slot renders in flow above it, and an assistant message with no text at all renders the slot on its own line.
+
+Pass `responseFormat` to follow the conversation's response-format setting.
+`ResponseFormat.PlainText` (from `@epam/ai-dial-chat-shared`) renders the body
+verbatim — no Markdown pipeline, so a table, a heading, or `**bold**` reaches
+the reader as the model wrote it and can be pasted into an e-mail or a ticket
+unchanged. The markdown-only props (`markdownComponents`,
+`markdownUrlTransform`, the table action labels) stop applying in that mode;
+only `markdownClassNames`' `p` entry is still read, so both formats stay on
+one type scale. It defaults to `ResponseFormat.Markdown`.
 
 Assistant tables receive copy/download controls when their table action labels
 (`tableCopyLabel`, `tableCopiedLabel`, and `tableDownloadCsvLabel`) are
 supplied; each control has a UI-kit tooltip with its localized label. The bubble forwards
-`labels.tableDownloadFilename` and `labels.tableScrollRegionAriaLabel` to the
-markdown viewer, and hides the table actions while `isStreaming` is true.
+`labels.tableDownloadFilename`, `labels.tableScrollRegionAriaLabel` and
+`labels.mathScrollRegionAriaLabel` to the markdown viewer, along with the
+code-block labels (`codeBlockCopyLabel`, `codeBlockCopiedLabel`,
+`codeBlockDownloadLabel`), and hides the table actions while `isStreaming` is true.
 Set `tableOnOpenInCanvas` together with `labels.tableOpenInCanvasLabel` to add
 an "Open in Canvas" action that receives the table serialized as Markdown
 when activated — omitting either one hides the action.
@@ -74,6 +141,8 @@ import { AssistantMessageBubble } from '@epam/ai-dial-conversation-messages';
   markdownClassNames={COMPACT_MARKDOWN_CLASS_NAMES}
   markdownUrlTransform={resolveMarkdownUrl}
   afterContent={<StagesPanel stages={stages} isStreaming={isStreaming} />}
+  // The stages already show progress, so skip the "Thinking" line above them.
+  hasThinkingPlaceholder={stages.length === 0}
   starters={starters}
   onSelectStarter={handleSelectStarter}
   deploymentIconUrl={deployment.iconUrl}
@@ -81,12 +150,14 @@ import { AssistantMessageBubble } from '@epam/ai-dial-conversation-messages';
   labels={{
     codeBlockCopyLabel: 'Copy code',
     codeBlockCopiedLabel: 'Copied!',
+    codeBlockDownloadLabel: 'Download code',
     tableCopyLabel: 'Copy',
     tableCopiedLabel: 'Copied!',
     tableDownloadCsvLabel: 'Download as CSV',
     tableOpenInCanvasLabel: 'Open in canvas',
     tableDownloadFilename: 'table.csv',
     tableScrollRegionAriaLabel: 'Scrollable table',
+    mathScrollRegionAriaLabel: 'Scrollable formula',
   }}
   tableOnOpenInCanvas={handleTableOpenInCanvas}
   actions={{
@@ -114,7 +185,7 @@ import { StatusMessageBubble } from '@epam/ai-dial-conversation-messages';
 
 ### MessageBubble
 
-Role-dispatching wrapper — `AssistantMessageBubbleProps` plus the user-only fields (`position`, `collapsedLineCount`) and a required `role`. Use it when the caller iterates a mixed transcript and does not want to branch itself; reach for the specialised bubbles when the role is already known. `beforeContent` is consumed for both `MessageRole.User` and `MessageRole.Assistant` messages (status messages ignore it).
+Role-dispatching wrapper — `AssistantMessageBubbleProps` plus the user-only fields (`position`, `collapsedLineCount`, `textSegments`) and a required `role`. Use it when the caller iterates a mixed transcript and does not want to branch itself; reach for the specialised bubbles when the role is already known. `beforeContent` is forwarded only to the assistant bubble; `textSegments` is forwarded only to the user bubble (status messages ignore both).
 
 ```tsx
 import { MessageBubble } from '@epam/ai-dial-conversation-messages';
@@ -124,7 +195,28 @@ import { MessageBubble } from '@epam/ai-dial-conversation-messages';
 
 ### MessageActions
 
-Toolbar with per-message actions. `role` selects the action set: `MessageRole.User` (the default) shows Edit/Delete, any other role shows Regenerate/Copy/Like/Dislike. Usually passed to a bubble through its `actions` prop rather than rendered directly.
+Toolbar with per-message actions. `role` selects the action set: `MessageRole.User` (the default) shows Copy/Edit/Delete, any other role shows Regenerate/Copy/Like/Dislike. Usually passed to a bubble through its `actions` prop rather than rendered directly.
+
+`onCopy` applies to both roles; each button renders only when its handler is passed. The user-role Copy button takes its tooltip from `labels.tooltips.copyMessage`, its accessible name from `labels.ariaLabels.copyMessage` (both default to "Copy message"), and announces `labels.ariaLabels.copiedMessageStatus` (default "Message copied to clipboard") after a click. The library never touches the clipboard — the host performs the copy inside `onCopy`.
+
+```tsx
+import { MessageRole } from '@epam/ai-dial-chat-shared';
+import { MessageActions } from '@epam/ai-dial-conversation-messages';
+
+<MessageActions
+  role={MessageRole.User}
+  onCopy={() => void navigator.clipboard.writeText(message.content)}
+  onEdit={handleEdit}
+  onDelete={handleDelete}
+  labels={{
+    tooltips: { copyMessage: 'Copy message', copied: 'Copied!' },
+    ariaLabels: {
+      copyMessage: 'Copy message',
+      copiedMessageStatus: 'Message copied to clipboard',
+    },
+  }}
+/>;
+```
 
 `isDisabled` disables every button in the toolbar — pass it while a response is generating so the actions cannot be triggered mid-stream.
 
@@ -162,8 +254,9 @@ CONVERSATION_MESSAGES_CLASS.userBubble; // 'dial-cm-user-bubble'
 | `dial-cm-assistant-content` | The assistant message's streamed content region |
 
 `dial-cm-user-bubble` is emitted only when the bubble renders — a message with
-neither text nor `beforeContent` has no bubble at all. It is additive to
-`styles.bubbleClassName`, which keeps working exactly as before.
+no `text` has no bubble at all (this holds even when `textSegments` is passed,
+since a `textSegments`-carrying message always has non-empty `text`). It is
+additive to `styles.bubbleClassName`, which keeps working exactly as before.
 
 These classes carry no declarations of their own, so they change nothing until
 you style them.

@@ -50,15 +50,55 @@ import { SharePopover, ShareLinkAccess } from '@epam/ai-dial-share';
 />;
 ```
 
+#### QR view actions
+
+The QR body shows **Copy** and **Download** buttons under the code:
+
+- **Copy** writes the QR code to the clipboard as a PNG image. When the browser
+  cannot put an image on the clipboard (no `ClipboardItem`, or the write is
+  refused), it copies the share URL as text instead. Either way the button
+  briefly reads "Copied" and a polite live region announces it.
+- **Download** saves the QR code as a PNG file.
+
+Both images are dark on white with a quiet-zone margin, whatever the active
+theme, so they stay scannable. They are rasterized from the rendered SVG
+through a `data:` image, so the host's Content Security Policy must allow
+`data:` in `img-src`; otherwise Copy falls back to the URL text and Download
+does nothing.
+
+Override the strings through `labels` — all four are optional:
+
+```tsx
+<SharePopover
+  {...props}
+  labels={{
+    qrCopyButtonLabel: 'Copy', // default
+    qrCopiedButtonLabel: 'Copied', // default
+    qrDownloadButtonLabel: 'Download', // default
+    qrDownloadFileName: 'share-qr-code.png', // default
+  }}
+/>
+```
+
 ### QrCode
 
 QR rendering of the share link, scannable to open it on another device. Used by
-`SharePopover`'s QR body, and exported for hosts that need it standalone.
+`SharePopover`'s QR body, and exported for hosts that need it standalone. The
+standalone component renders the code only — the Copy and Download actions
+belong to `SharePopover`. Pass the optional `svgRef` to receive the rendered
+`<svg>` element.
 
 ```tsx
 import { QrCode } from '@epam/ai-dial-share';
+import { useRef } from 'react';
 
-<QrCode value={shareLink.url} labels={{ ariaLabel: 'Share link QR code' }} />;
+const svgRef = useRef<SVGSVGElement>(null);
+
+<QrCode
+  value={shareLink.url}
+  labels={{ ariaLabel: 'Share link QR code' }}
+  svgRef={svgRef}
+/>;
 ```
 
 ## Enums
@@ -90,9 +130,11 @@ import type {
 } from '@epam/ai-dial-share';
 ```
 
-`ShareLinkData` — `{ url: string; expiresInDays: number; access: ShareLinkAccess[] }` —
+`ShareLinkData` — `{ url: string; expiresInDays?: number; access: ShareLinkAccess[] }` —
 is the shape the host's share-link seam returns; the popover takes its fields as
-individual props rather than the object.
+individual props rather than the object. `expiresInDays` is absent when the host
+cannot determine the link's expiry — leave `expiryNote` `undefined` in that case
+and the popover renders no note.
 
 ## Public class names
 

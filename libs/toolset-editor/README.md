@@ -1,9 +1,10 @@
 # @epam/ai-dial-toolset-editor
 
 Host-agnostic form for authoring and editing a DIAL MCP toolset: the composed
-`ToolsetEditor` (Metadata + Setup two-column layout, validation, save/persist
-orchestration, and the API-key login flow) plus the shared `GeneralForm`
-metadata field set that the Custom App editor also consumes.
+`ToolsetEditor` (the shared `EntityEditor` Metadata + Setup layout from
+`@epam/ai-dial-builder-form`, validation, save/persist orchestration, and the
+API-key login flow) plus a deprecated `GeneralForm` wrapper kept for existing
+callers.
 
 The lib is deliberately passive about everything a host owns. It holds the form
 state, the dirty-field/error state, and the draft toolset id created by the
@@ -51,7 +52,7 @@ import '@epam/ai-dial-toolset-editor/styles.css';
 ## Peer Dependencies
 
 - `react` `^19.2.8`
-- `@epam/ai-dial-ui-kit` `^0.15.0-dev.12`
+- `@epam/ai-dial-ui-kit` `^0.15.0-dev.39`
 - `@epam/ai-dial-chat-shared` `*`
 - `@epam/ai-dial-chat-hooks` `*`
 
@@ -146,15 +147,24 @@ is omitted, the "Allowed tools" field falls back from the Select to a
 free-text tag input.
 
 `labels` is a nested `ToolsetEditorLabels` object whose `layout`, `general`,
-`settings`, and `validation` groups are each optional and replaced as a
-whole; an omitted group falls back to the library's English defaults.
+`settings`, `validation`, and `refinement` groups are each optional and
+replaced as a whole; an omitted group falls back to the library's English
+defaults.
+
+The optional `onRefineDescription` callback,
+`(value: string, signal: AbortSignal) => Promise<string>`, adds a Refine with
+AI action (and Undo) beside the Description label; omit it to hide the action.
+The host owns transport, availability, and translations, passing the copy
+through `labels.refinement` (`TextRefinementLabels` from
+`@epam/ai-dial-chat-shared`). Save is disabled while a request is pending.
 
 ### `GeneralForm`
 
-The Metadata field set on its own, for editors that need it without the
-toolset Setup section (the Custom App editor's General step is the in-repo
-consumer). It wraps `DeploymentCreationForm` and the `AvatarPickerModal` from
-`@epam/ai-dial-builder-form`.
+**Deprecated** — render `MetadataForm` from `@epam/ai-dial-builder-form`
+instead. `GeneralForm` keeps its props for existing callers (nothing in this
+repository renders it any more) and is now a thin wrapper over `MetadataForm`: it adds
+the toolset-flavoured default labels and resolves the picked avatar through
+`dialFileToAttachment` from `@epam/ai-dial-chat-hooks`.
 
 ```tsx
 import { GeneralForm } from '@epam/ai-dial-toolset-editor';
@@ -203,7 +213,7 @@ surface errors at blur time. `GeneralFormLabels.form` and
 import { getDefaultToolsetForm } from '@epam/ai-dial-toolset-editor';
 
 const form = getDefaultToolsetForm(existingToolsetNames);
-// → name 'New toolset' (suffixed when it collides), version '0.0.1',
+// → name 'New toolset' (suffixed when it collides), version '1.0.0',
 //   protocol HTTP, auth: None / WithoutLogin / not logged in
 ```
 
@@ -271,13 +281,15 @@ isToolsetFormValid(form, isEditMode);
 ```
 
 Returns whether the whole editor form can be saved (name/version via
-`builder-form`'s shared validation, endpoint URL, and auth block).
+`builder-form`'s shared validation — the version must be SemVer 2.0.0
+(`SEMVER_VERSION_PATTERN`), as DIAL Admin requires — endpoint URL, and auth
+block).
 
 ## Constants
 
 - `DEFAULT_TOOLSET_NAME` — `'New toolset'`, the display name seeded into a
   new form.
-- `DEFAULT_TOOLSET_VERSION` — `'0.0.1'`, the display version seeded into a
+- `DEFAULT_TOOLSET_VERSION` — `'1.0.0'`, the display version seeded into a
   new form.
 - `AUTH_TYPE_ICONS` — icon per `ToolsetAuthTypes` segment; segment labels
   arrive through the auth labels, not this map.

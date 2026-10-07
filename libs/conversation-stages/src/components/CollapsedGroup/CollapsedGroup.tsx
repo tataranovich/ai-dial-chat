@@ -4,27 +4,20 @@ import {
   StageStatus,
 } from '@epam/ai-dial-chat-shared';
 import {
+  Accordion,
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   EllipsisTooltip,
-  LinkButton,
   Spinner,
 } from '@epam/ai-dial-ui-kit';
-import {
-  IconCheck,
-  IconChevronDown,
-  IconChevronRight,
-} from '@tabler/icons-react';
+import { IconCheck } from '@tabler/icons-react';
 import { FC, useEffect, useRef, useState } from 'react';
 import { CONVERSATION_STAGES_CLASS } from '../../constants/public-class-names';
+import { useStageExpansion } from '../../hooks/useStageExpansion/useStageExpansion';
 import type { CollapsedGroupProps } from '../../models/collapsed-group';
-import {
-  calculateStagesDurationSeconds,
-  cleanStageName,
-  formatTotalDuration,
-} from '../../utils/stage-name';
-import { findLiveStage, stagePosition } from '../../utils/stage-progress';
-import { StagesPanel } from '../StagesPanel/StagesPanel';
+import { cleanStageName } from '../../utils/stage-name';
+import { findLiveStage } from '../../utils/stage-progress';
+import { StagesPanelView } from '../StagesPanel/StagesPanel';
 import styles from './CollapsedGroup.module.scss';
 
 /** Wraps `StagesPanel` with a collapsible summary line that tracks run state: live progress while streaming, one-line summary once finished. */
@@ -34,20 +27,32 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
   labels,
   className,
   styles: groupStyles,
+  onAttachmentClick,
 }) => {
   const {
     executedLabel = 'Executed',
     stepsLabel = () => 'steps',
     failedCountLabel = (n: number) => `${n} failed`,
-    runningStepLabel = (current: number, total: number) =>
-      `Step ${current} of ${total}`,
     runningAriaLabel = 'Running',
     copyAriaLabel,
+    codeBlockCopiedLabel,
+    tableScrollRegionAriaLabel,
+    mathScrollRegionAriaLabel,
     failedAriaLabel,
     attemptLabel,
+    attachmentClickLabel,
   } = labels ?? {};
 
   const [isOpen, setIsOpen] = useState(isStreaming);
+  /* Owned here, not by the panel, so choices survive the one-stage → group switch. */
+  const expansion = useStageExpansion();
+  const { reset: resetExpansion } = expansion;
+  const isGrouped = stages.length > 1;
+  useEffect(() => {
+    /* The summary unmounts the panel while closed; its disclosures restart
+       collapsed. A single stage has no summary, so its choice survives. */
+    if (isGrouped && !isOpen) resetExpansion();
+  }, [isGrouped, isOpen, resetExpansion]);
   const wasStreamingRef = useRef(isStreaming);
   useEffect(() => {
     if (wasStreamingRef.current && !isStreaming) {
@@ -65,7 +70,6 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
   const cssVars = buildCssVars({
     '--cs-cg-label': colors?.labelColor,
     '--cs-cg-label-hover': colors?.labelHoverColor,
-    '--cs-cg-steps-count': colors?.stepsCountColor,
     '--cs-cg-done': colors?.doneColor,
     '--cs-cg-failed': colors?.failedColor,
     '--cs-text': panelColors?.text,
@@ -89,38 +93,39 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
 
   const panelLabels = {
     copyAriaLabel,
+    codeBlockCopiedLabel,
+    tableScrollRegionAriaLabel,
+    mathScrollRegionAriaLabel,
     runningAriaLabel,
     failedAriaLabel,
     attemptLabel,
+    attachmentClickLabel,
   };
 
   if (stages.length === 1) {
     return (
-      <StagesPanel
+      <StagesPanelView
         stages={stages}
         isStreaming={isStreaming}
+        expansion={expansion}
         className={className}
         styles={{ colors: panelColors, typography: groupStyles?.typography }}
         labels={panelLabels}
+        onAttachmentClick={onAttachmentClick}
       />
     );
   }
 
   const hasFailed = stages.some((s) => s.status === StageStatus.Failed);
-  const totalSeconds = calculateStagesDurationSeconds(
-    stages.map((stage) => stage.name),
-  );
-  const totalDurationLabel =
-    totalSeconds > 0 ? formatTotalDuration(totalSeconds) : undefined;
-
-  const liveStage = isStreaming ? findLiveStage(stages) : undefined;
 
   let summary;
   if (isStreaming) {
-    const position = liveStage
-      ? stagePosition(stages, liveStage)
-      : stages.length;
-    const liveName = liveStage ? cleanStageName(liveStage.name).name : '';
+    /* No "Step X of Y" counter: agents add stages mid-run, so the total keeps
+       growing and misleads users about how close the run is to finishing
+       ([#9025](https://github.com/epam/ai-dial-chat/issues/9025)). Between one stage settling and the next starting, keep
+       the last stage's name on screen. */
+    const liveStage = findLiveStage(stages) ?? stages[stages.length - 1];
+    const liveName = cleanStageName(liveStage.name).name;
     summary = (
       <span
         role="status"
@@ -130,21 +135,12 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
         <span className="flex flex-none items-center">
           <Spinner size={14} ariaLabel={runningAriaLabel} />
         </span>
-        <span
-          className={mergeClasses(
-            'flex-none whitespace-nowrap',
-            summaryTypography.fontClassName,
-            styles.liveName,
-          )}
-        >
-          {runningStepLabel(position, stages.length)}
-        </span>
         {liveName && (
           <span
             className={mergeClasses(
               'min-w-0 max-w-[22rem] truncate',
               summaryTypography.fontClassName,
-              styles.executedLabel,
+              styles.liveName,
             )}
           >
             <EllipsisTooltip text={liveName} />
@@ -174,16 +170,6 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
         >
           {failedCountLabel(failedCount)}
         </span>
-        {totalDurationLabel && (
-          <span
-            className={mergeClasses(
-              summaryTypography.fontClassName,
-              styles.stepsCount,
-            )}
-          >
-            {totalDurationLabel}
-          </span>
-        )}
       </span>
     );
   } else {
@@ -203,16 +189,6 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
         >
           {executedLabel} {stages.length} {stepsLabel(stages.length)}
         </span>
-        {totalDurationLabel && (
-          <span
-            className={mergeClasses(
-              summaryTypography.fontClassName,
-              styles.stepsCount,
-            )}
-          >
-            {totalDurationLabel}
-          </span>
-        )}
       </span>
     );
   }
@@ -226,51 +202,35 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
         CONVERSATION_STAGES_CLASS.group,
       )}
     >
-      <LinkButton
-        className={mergeClasses(
+      {/* `-mt-2` turns the kit's 12px spacer, plus the panel's `pt-1`, into
+          the 8px the stages have always sat below the summary line. */}
+      <Accordion
+        title={summary}
+        expanded={isOpen}
+        onToggle={setIsOpen}
+        className="overflow-visible py-0"
+        headerClassName={mergeClasses(
+          'justify-start gap-1 rounded-none px-0',
           styles.toggleButton,
           CONVERSATION_STAGES_CLASS.groupToggle,
         )}
-        textClassName="min-w-0"
-        onClick={() => setIsOpen((prev) => !prev)}
-        aria-expanded={isOpen}
-        iconAfter={
-          isOpen ? (
-            <IconChevronDown
-              size={12}
-              aria-hidden
-              stroke={DIAL_KIT_ICON_STROKE}
-            />
-          ) : (
-            <IconChevronRight
-              size={12}
-              className="rtl:scale-x-[-1]"
-              aria-hidden
-              stroke={DIAL_KIT_ICON_STROKE}
-            />
-          )
-        }
-        label={summary}
-      />
-      <div
-        className={mergeClasses(
-          'grid transition-[grid-template-rows] duration-300 ease-in-out',
-          isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
-        )}
+        contentClassName={mergeClasses('-mt-2 px-0', styles.groupRegion)}
       >
-        <div className="overflow-hidden">
-          <StagesPanel
+        {isOpen && (
+          <StagesPanelView
             stages={stages}
             isStreaming={isStreaming}
+            expansion={expansion}
             styles={{
               colors: panelColors,
               typography: groupStyles?.typography,
             }}
             labels={panelLabels}
             className="pt-1"
+            onAttachmentClick={onAttachmentClick}
           />
-        </div>
-      </div>
+        )}
+      </Accordion>
     </div>
   );
 };

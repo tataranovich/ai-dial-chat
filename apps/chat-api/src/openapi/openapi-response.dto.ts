@@ -536,9 +536,12 @@ export class UserLimitStatsResponseDto {
     type: 'object',
     additionalProperties: { $ref: getSchemaPath(DeploymentLimitsResponseDto) },
     description:
-      'Per-deployment rate-limit and calendar-period usage stats, keyed by deployment name. Models ' +
-      'only — applications, toolsets, and routes never appear here. On GET /v1/user/limits every ' +
-      'deployment visible to the caller is present, including ones never used (reported against zero ' +
+      'Per-deployment rate-limit and calendar-period usage stats, keyed by deployment name. Contains ' +
+      'only the deployment kinds selected by the request `deploymentTypes` (models and/or ' +
+      'applications); when the request omits it, the server-configured default kinds are reported ' +
+      '(models and applications unless USER_USAGE_DEPLOYMENT_TYPES narrows them). Toolsets and routes ' +
+      'never appear here. On GET /v1/user/limits every ' +
+      'deployment of those kinds visible to the caller is present, including ones never used (reported against zero ' +
       'usage). On GET /v1/user/usage only deployments the caller used within the currently reported ' +
       'calendar periods are present; absence means zero usage, not "unknown".',
   })
@@ -752,4 +755,16 @@ export class ConversationResponseDto {
       'When true, automatic LLM conversation naming has already run for this conversation.',
   })
   llmNamingDone?: boolean;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    example: { annotations: [] },
+    description:
+      'Open, feature-keyed container for conversation-level view state. ' +
+      'Currently defines exactly one key, `annotations`, holding the pool ' +
+      'of html_tag citation annotations accumulated across the ' +
+      'conversation. Any other key is opaque and preserved as-is.',
+  })
+  customViewState?: Record<string, unknown>;
 }

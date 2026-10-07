@@ -3,6 +3,7 @@ import {
   FileDndOverlay,
   isMimeTypeAllowed,
 } from '@epam/ai-dial-attachment-input';
+import { CelebrationDecor, useCelebration } from '@epam/ai-dial-celebrations';
 import type { DeploymentItemDto } from '@epam/ai-dial-chat-api-client';
 import {
   AttachmentValidationErrorReason,
@@ -17,6 +18,7 @@ import { usePageFileDrag } from '@epam/ai-dial-chat-hooks/viewport-layout';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
   formatFileSize,
+  mergeClasses,
   ResponseFormat,
   type Attachment,
   type DeploymentItem,
@@ -26,6 +28,7 @@ import {
 import type {
   CommandMenuConfig,
   ConversationInputStyles,
+  HighlightedTextRange,
   MenuOverlayConfig,
   TextInsertion,
   ToolsChipLabels,
@@ -39,7 +42,6 @@ import {
   ButtonsI18nKeys,
   ChatI18nKeys,
   ConversationI18nKeys,
-  ConversationInputI18nKeys,
   DialFileManagerI18nKeys,
   FileDndI18nKeys,
   VoiceRecordingI18nKeys,
@@ -59,8 +61,10 @@ import { useLanguage } from '../../hooks/language/useLanguage';
 import { useUserProfile } from '../../hooks/user-profile/useUserProfile';
 import { useUiFeature } from '../../hooks/useUiFeature';
 import { filesApi } from '../../server-api/api-client';
+import { ComposerLayout } from '../../types/conversation-composer';
 import { buildNetworkUploadErrorNotification } from '../../utils/attachment-network-error-notification';
 import { resolveLocalizedText } from '../../utils/locale';
+import FileDeleteConfirmContent from '../FileDeleteConfirmContent/FileDeleteConfirmContent';
 import FooterMessage from '../FooterMessage/FooterMessage';
 import UsageLimitsControl from '../UsageLimitsControl/UsageLimitsControl';
 
@@ -115,26 +119,38 @@ interface Props {
    */
   inputInsertion?: TextInsertion;
   /**
+   * Called with the textarea's current value on every change (typing,
+   * deleting, pasting, undo/redo), passed through to `ConversationInput` —
+   * e.g. the host's skill-mention tracking reconciling live edits.
+   */
+  onChange?: (message: string) => void;
+  /**
    * Host-injected overlay entries for the `+` menu (e.g. the Prompts
    * selector), passed through to `ConversationInput`.
    */
   menuOverlays?: MenuOverlayConfig[];
   /**
-   * Host-supplied content rendered inside the text area at its inline-start
-   * (e.g. the selected skill's `ChatSkill` element), passed through to
-   * `ConversationInput`.
+   * Ranges of `message` rendered as highlighted runs (e.g. tracked skill
+   * mentions), passed through to `ConversationInput`.
    */
-  inlineStartSlot?: ReactNode;
+  activeMentions?: HighlightedTextRange[];
   /**
-   * Called when Backspace is pressed with the caret collapsed at position 0
-   * while `inlineStartSlot` is present (the skill element's remove gesture),
+   * Looks up a highlighted range whose run ends exactly at the given caret
+   * position, without mutating state — the whole-mention Backspace gesture,
    * passed through to `ConversationInput`.
    */
-  onInlineStartRemove?: () => void;
+  onBackspaceAtCaret?: (
+    caretPosition: number,
+  ) => HighlightedTextRange | undefined;
   /**
-   * Whether the selected skill (rendered via `inlineStartSlot`) is
-   * unsupported by the current deployment — folded into the input's
-   * send-disabled state, matching `ConversationView`'s own fold.
+   * Caret offset to place the cursor at once `messageRevision` next bumps and
+   * `message` takes effect, passed through to `ConversationInput`.
+   */
+  caretPositionOverride?: number;
+  /**
+   * Whether the currently-mentioned skill(s) are unsupported by the current
+   * deployment — folded into the input's send-disabled state, matching
+   * `ConversationView`'s own fold.
    */
   isSkillUnsupported?: boolean;
   /**
@@ -155,6 +171,8 @@ interface Props {
   toolsChipLabels?: ToolsChipLabels;
   /** Rendered below the composer input (e.g. starter buttons). */
   children?: ReactNode;
+  /** `Inline` drops the greeting and pins the input to the bottom. Defaults to `Welcome`. */
+  layout?: ComposerLayout;
 }
 
 const NewConversationComposer: FC<Props> = ({
@@ -172,9 +190,11 @@ const NewConversationComposer: FC<Props> = ({
   message,
   messageRevision,
   inputInsertion,
+  onChange,
   menuOverlays,
-  inlineStartSlot,
-  onInlineStartRemove,
+  activeMentions,
+  onBackspaceAtCaret,
+  caretPositionOverride,
   isSkillUnsupported = false,
   commandMenu,
   inputStyles,
@@ -184,6 +204,7 @@ const NewConversationComposer: FC<Props> = ({
   toolsMenuTitle,
   toolsChipLabels,
   children,
+  layout = ComposerLayout.Welcome,
 }) => {
   const { t } = useTranslation();
   const { language } = useLanguage();
@@ -191,6 +212,8 @@ const NewConversationComposer: FC<Props> = ({
     config: { welcomeScreenDescription, maxAttachmentFileSizeBytes },
   } = useAppConfig();
   const { showErrorNotification, showSuccessNotification } = useNotification();
+  const { isEnabled: isCelebrationEnabled, consumeSecretPhrase } =
+    useCelebration();
   const { user } = useUser();
   const bucket = user?.bucket ?? '';
 
@@ -322,8 +345,15 @@ const NewConversationComposer: FC<Props> = ({
     debounceMs: NETWORK_ERROR_DEBOUNCE_MS,
   });
 
+  /*
+   * A disabled input rejects page drops with the denied overlay (the drop is
+   * still cancelled so the browser does not open the file) instead of adding
+   * them to the attachment tray.
+   */
+  const isPageDropAllowed = isAttachmentsAllowed && !isInputDisabled;
+
   const { isDragging, pendingFiles, onFilesConsumed } = usePageFileDrag(
-    isAttachmentsAllowed,
+    isPageDropAllowed,
     !isDialFileManagerOpen,
   );
 
@@ -376,30 +406,22 @@ const NewConversationComposer: FC<Props> = ({
   );
   const isInputFilesEnabled = useUiFeature(OverlayFeature.InputFiles);
   const isRemovableToolsEnabled = useUiFeature(OverlayFeature.RemovableTools);
+  const isStartersBelowGreeting = useUiFeature(
+    OverlayFeature.StartersBelowGreeting,
+  );
+  const isGreetingHidden = useUiFeature(OverlayFeature.HideGreeting);
   const isAgentDescriptionEnabled = useUiFeature(
     OverlayFeature.ShowAgentDescription,
   );
-  const agentDescription = isAgentDescriptionEnabled
-    ? resolvedSelectedDeployment?.description?.trim()
-    : undefined;
+  const isInlineLayout = layout === ComposerLayout.Inline;
+  const agentDescription =
+    isAgentDescriptionEnabled && !isInlineLayout
+      ? resolvedSelectedDeployment?.description?.trim()
+      : undefined;
   const { displayName } = useUserProfile();
   const firstName = displayName.split(' ')[0];
   const { resolvers, options } = useAttachmentCanvasResolvers();
   const { openAttachmentCanvas } = useOpenAttachmentCanvas(resolvers, options);
-
-  const usageLimitsLabels = useMemo(
-    () => ({
-      triggerAriaLabel: ({ value }: { value: string }) =>
-        t(ConversationInputI18nKeys.TriggerAriaLabel, { value }),
-      popoverTitle: t(ConversationInputI18nKeys.PopoverTitle),
-      error: t(ConversationInputI18nKeys.Error),
-      tokensRemaining: ({ count }: { count: string }) =>
-        t(ConversationInputI18nKeys.TokensRemaining, { count }),
-      progressAriaLabel: ({ used, total }: { used: string; total: string }) =>
-        t(ConversationInputI18nKeys.ProgressAriaLabel, { used, total }),
-    }),
-    [t],
-  );
 
   const handleAttachmentClick = useCallback(
     (attachment: DisplayAttachment) => {
@@ -437,6 +459,10 @@ const NewConversationComposer: FC<Props> = ({
   const handleSend = useCallback(
     async (text: string, attachments: Attachment[]) => {
       if (isSending || !selectedDeploymentId) return;
+      /* The active event's secret phrase celebrates instead of
+         starting a conversation. A no-op unless an event is ready, so the phrase
+         otherwise sends as an ordinary message. */
+      if (consumeSecretPhrase(text)) return;
       setIsSending(true);
       try {
         await onCreateConversation(text, attachments, chatSettingsValues);
@@ -455,6 +481,7 @@ const NewConversationComposer: FC<Props> = ({
     [
       isSending,
       selectedDeploymentId,
+      consumeSecretPhrase,
       onCreateConversation,
       chatSettingsValues,
       showErrorNotification,
@@ -462,29 +489,63 @@ const NewConversationComposer: FC<Props> = ({
     ],
   );
 
+  /* The intro text and the starters move together: with
+     `starters-below-greeting` on they sit between the greeting and the input,
+     otherwise below the input. */
+  const startersBlock =
+    introText || children != null ? (
+      <>
+        {introText && (
+          <p className="dial-small-text mb-4 mt-4 max-w-3xl text-center text-secondary">
+            {introText}
+          </p>
+        )}
+        {children}
+      </>
+    ) : null;
+
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <FileDndOverlay
         isVisible={isDragging}
-        isAttachmentsAllowed={isAttachmentsAllowed}
+        isAttachmentsAllowed={isPageDropAllowed}
         labels={{
           title: t(
-            isAttachmentsAllowed
+            isPageDropAllowed
               ? BasicI18nKeys.AttachFiles
               : FileDndI18nKeys.OverlayDeniedTitle,
           ),
           subtitle: t(
-            isAttachmentsAllowed
+            isPageDropAllowed
               ? FileDndI18nKeys.OverlaySubtitle
               : FileDndI18nKeys.OverlayDeniedSubtitle,
           ),
         }}
       />
+      {/* `flex-auto shrink-0` (1 0 auto) lets the region grow past the
+          viewport when the welcome content is tall, so the wrapper above
+          scrolls instead of `justify-center` clipping both ends. The
+          symmetric `py-14` / `desktop:py-16` keeps overflowing content clear
+          of the absolutely positioned header (48px on mobile and in the
+          overlay, 64px on desktop) without shifting the centered layout —
+          otherwise a long agent description scrolls under the logo
+          ([#9036](https://github.com/epam/ai-dial-chat/issues/9036)). */}
       <div
-        className="relative flex flex-1 flex-col items-center justify-center overflow-hidden p-4 [container-type:inline-size] desktop:p-8"
+        className={mergeClasses(
+          'relative flex flex-auto shrink-0 flex-col items-center overflow-hidden [container-type:inline-size]',
+          isInlineLayout
+            ? 'justify-end px-6'
+            : 'justify-center px-4 py-14 desktop:px-8 desktop:py-16',
+        )}
         role="region"
         aria-label={t(ChatI18nKeys.WelcomeScreen)}
       >
+        {isCelebrationEnabled && !isInlineLayout && <CelebrationDecor />}
+        {agentDescription && (
+          <Suspense fallback={null}>
+            <AgentDescription content={agentDescription} />
+          </Suspense>
+        )}
         <ConversationInput
           onSend={handleSend}
           onUploadAttachment={handleUploadAttachment}
@@ -492,33 +553,44 @@ const NewConversationComposer: FC<Props> = ({
           message={message}
           messageRevision={messageRevision}
           textInsertion={inputInsertion}
-          welcomeText={getTimeOfDayGreeting(
-            new Date().getHours(),
-            {
-              morningWithName: t(ChatI18nKeys.GreetingMorning, {
-                name: firstName,
-              }),
-              morningNoName: t(ChatI18nKeys.GreetingMorningNoName),
-              afternoonWithName: t(ChatI18nKeys.GreetingAfternoon, {
-                name: firstName,
-              }),
-              afternoonNoName: t(ChatI18nKeys.GreetingAfternoonNoName),
-              eveningWithName: t(ChatI18nKeys.GreetingEvening, {
-                name: firstName,
-              }),
-              eveningNoName: t(ChatI18nKeys.GreetingEveningNoName),
-              nightWithName: t(ChatI18nKeys.GreetingNight, {
-                name: firstName,
-              }),
-              nightNoName: t(ChatI18nKeys.GreetingNightNoName),
-            },
-            firstName || undefined,
-          )}
-          descriptionText={welcomeScreenDescription ?? undefined}
+          /* `ConversationInput` renders the description only under a
+             greeting, so `hide-greeting` removes both. */
+          welcomeText={
+            isGreetingHidden || isInlineLayout
+              ? undefined
+              : getTimeOfDayGreeting(
+                  new Date().getHours(),
+                  {
+                    morningWithName: t(ChatI18nKeys.GreetingMorning, {
+                      name: firstName,
+                    }),
+                    morningNoName: t(ChatI18nKeys.GreetingMorningNoName),
+                    afternoonWithName: t(ChatI18nKeys.GreetingAfternoon, {
+                      name: firstName,
+                    }),
+                    afternoonNoName: t(ChatI18nKeys.GreetingAfternoonNoName),
+                    eveningWithName: t(ChatI18nKeys.GreetingEvening, {
+                      name: firstName,
+                    }),
+                    eveningNoName: t(ChatI18nKeys.GreetingEveningNoName),
+                    nightWithName: t(ChatI18nKeys.GreetingNight, {
+                      name: firstName,
+                    }),
+                    nightNoName: t(ChatI18nKeys.GreetingNightNoName),
+                  },
+                  firstName || undefined,
+                )
+          }
+          descriptionText={
+            isInlineLayout ? undefined : (welcomeScreenDescription ?? undefined)
+          }
+          belowWelcomeSlot={isStartersBelowGreeting ? startersBlock : undefined}
           placeholder={placeholder}
           removeLabel={t(AttachmentsI18nKeys.RemoveLabel)}
           retryLabel={t(AttachmentsI18nKeys.RetryLabel)}
           uploadingLabel={t(AttachmentsI18nKeys.UploadingLabel)}
+          expandLabel={t(AttachmentsI18nKeys.ExpandPastedText)}
+          clickLabel={t(ButtonsI18nKeys.OpenInCanvas)}
           styles={composerStyles}
           deployments={
             isHideEmptyChatChangeAgentEnabled ? undefined : deployments
@@ -573,9 +645,11 @@ const NewConversationComposer: FC<Props> = ({
           onAttachmentClick={handleAttachmentClick}
           onMessageTooLong={handleMessageTooLong}
           modelPickerOverlay={modelPickerOverlay}
+          onChange={onChange}
           menuOverlays={menuOverlays}
-          inlineStartSlot={inlineStartSlot}
-          onInlineStartRemove={onInlineStartRemove}
+          activeMentions={activeMentions}
+          onBackspaceAtCaret={onBackspaceAtCaret}
+          caretPositionOverride={caretPositionOverride}
           commandMenu={commandMenu}
           toolsMenuItems={toolsMenuItems}
           onToolToggle={onToolToggle}
@@ -587,21 +661,10 @@ const NewConversationComposer: FC<Props> = ({
               deploymentId={
                 selectedDeployment?.id ?? selectedDeploymentId ?? undefined
               }
-              labels={usageLimitsLabels}
             />
           }
         />
-        {introText && (
-          <p className="dial-small-text mb-4 mt-4 max-w-3xl text-center text-secondary">
-            {introText}
-          </p>
-        )}
-        {children}
-        {agentDescription && (
-          <Suspense fallback={null}>
-            <AgentDescription content={agentDescription} />
-          </Suspense>
-        )}
+        {!isStartersBelowGreeting && startersBlock}
       </div>
       <FooterMessage />
       {isDialFileManagerOpen && (
@@ -632,38 +695,12 @@ const NewConversationComposer: FC<Props> = ({
           downloadLabel={t(ButtonsI18nKeys.Download)}
           downloadingLabel={t(DialFileManagerI18nKeys.Downloading)}
           deleteLabel={t(ButtonsI18nKeys.Delete)}
-          deletingLabel={t(DialFileManagerI18nKeys.DeletingLabel)}
-          deleteConfirmTitle={(names) =>
-            names.length === 1
-              ? t(DialFileManagerI18nKeys.DeleteConfirmTitleSingle)
-              : t(DialFileManagerI18nKeys.DeleteConfirmTitleMultiple)
-          }
+          deletingLabel={t(BasicI18nKeys.DeletingStatus)}
           deleteConfirmBody={(names) => (
-            <div className="dial-small-text px-6 py-3">
-              <p className="mb-3 text-secondary">
-                {names.length === 1 ? (
-                  <>
-                    {t(BasicI18nKeys.DeleteConfirmDescription)}{' '}
-                    <span className="break-words text-primary">
-                      &quot;{names[0].split('/').pop()}&quot;?
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    {t(DialFileManagerI18nKeys.DeleteConfirmBodyMultiple)}{' '}
-                    <span className="text-primary">
-                      {names.length}{' '}
-                      {t(DialFileManagerI18nKeys.DeleteConfirmBodyItems)}
-                    </span>
-                  </>
-                )}
-              </p>
-            </div>
+            <FileDeleteConfirmContent names={names} />
           )}
           deleteConfirmLabel={t(ButtonsI18nKeys.Delete)}
           deleteCancelLabel={t(ButtonsI18nKeys.Cancel)}
-          uploadProgressTitle={t(DialFileManagerI18nKeys.UploadProgressTitle)}
-          cancelLabel={t(ButtonsI18nKeys.Cancel)}
         />
       )}
     </div>

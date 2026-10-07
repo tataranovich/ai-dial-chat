@@ -11,9 +11,18 @@ import {
   NOT_ALLOWED_SYMBOLS_REGEXP,
   PrimaryButton,
   Spinner,
+  TransferQueue,
 } from '@epam/ai-dial-ui-kit';
-import { memo, useEffect, useMemo, useState, type FC } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FC,
+} from 'react';
 import type { FileManagerSelectableNode } from '../../types/file-manager-node';
+import { mergeClasses } from '../../utils/merge-class';
 import type { FileManagerController } from '../file-manager-controller';
 import {
   DialFileManagerActionProfile,
@@ -26,8 +35,7 @@ import type {
 } from '../labels';
 import { OperationLoaderModal } from '../OperationLoaderModal/OperationLoaderModal';
 import { getParentFolderPath } from '../path';
-import { FileUploadStatus } from '../upload-batch';
-import { UploadProgressModal } from '../UploadProgressModal/UploadProgressModal';
+import { toUploadQueueItems } from '../upload-queue';
 import { useGridEditingScroll } from '../useGridEditingScroll/useGridEditingScroll';
 
 type DestinationFolderPopupOptions =
@@ -156,6 +164,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     onValidateUpload,
     uploadBatchState,
     cancelUpload,
+    cancelUploadFile,
     clearUploadBatch,
     onCreateFolder,
     onCreateFolderValidate,
@@ -187,7 +196,11 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     isFileMetadataLoading,
     onGetInfo,
     clearMetadata,
+    sectionTab,
   } = controller;
+
+  /* Per-tab rules follow the browsed folder's source tab; the strip keeps `activeTab`. */
+  const gateTab = sectionTab ?? activeTab;
 
   const [destinationFolderPath, setDestinationFolderPath] = useState<
     string | undefined
@@ -198,7 +211,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
 
   useEffect(() => {
     resetGridEditingScroll();
-  }, [activeTab, resetGridEditingScroll]);
+  }, [gateTab, resetGridEditingScroll]);
 
   const actionLabels = useMemo(() => {
     const result: Partial<Record<DialFileManagerActions, string>> = {};
@@ -289,7 +302,15 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
 
   const treeOptions = useMemo(
     () => ({
-      header: labels.treeHeaderByTab[activeTab],
+      header:
+        variant === DialFileManagerVariant.Attach
+          ? null
+          : labels.treeHeaderByTab[activeTab],
+      containerClassName:
+        variant === DialFileManagerVariant.Attach
+          ? 'min-h-0 h-full w-[360px] shrink-0 rounded-xl bg-layer-raised shadow-sm'
+          : undefined,
+      tabsAriaLabel: labels.treeHeaderByTab[activeTab],
       tabs,
       activeTab,
       onTabChange,
@@ -301,6 +322,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     }),
     [
       labels.treeHeaderByTab,
+      variant,
       tabs,
       activeTab,
       onTabChange,
@@ -315,7 +337,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
   const showUploadArchiveAction =
     variant === DialFileManagerVariant.Standalone &&
     actionProfile === DialFileManagerActionProfile.Full &&
-    activeTab === DialFileManagerTabs.MyFiles &&
+    gateTab === DialFileManagerTabs.MyFiles &&
     uploadEnabled;
 
   const toolbarOptions = useMemo(
@@ -327,10 +349,10 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
       isNewButtonDisabled,
       disabledNewButtonTooltip,
       newActions: {
-        uploadFiles: { label: labels.uploadFilesLabel },
-        newFolder: { label: labels.newFolderLabel },
+        uploadFiles: { label: labels.uploadFilesLabel, icon: null },
+        newFolder: { label: labels.newFolderLabel, icon: null },
         ...(showUploadArchiveAction
-          ? { uploadArchive: { label: labels.uploadArchiveAction } }
+          ? { uploadArchive: { label: labels.uploadArchiveAction, icon: null } }
           : {}),
       },
     }),
@@ -359,12 +381,14 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     () => ({
       cancelLabel: labels.deleteCancelLabel,
       confirmLabel: labels.deleteConfirmLabel,
+      closeLabel: labels.deleteCloseLabel,
       titleRenderer: labels.deleteConfirmTitle,
       contentRenderer: labels.deleteConfirmBody,
     }),
     [
       labels.deleteCancelLabel,
       labels.deleteConfirmLabel,
+      labels.deleteCloseLabel,
       labels.deleteConfirmTitle,
       labels.deleteConfirmBody,
     ],
@@ -426,10 +450,16 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     ],
   );
 
-  const handleUploadCancel = (): void => {
+  /* The queue confirms first when work is still running, so closing it aborts whatever is left. */
+  const handleUploadQueueClose = useCallback((): void => {
     cancelUpload();
     clearUploadBatch();
-  };
+  }, [cancelUpload, clearUploadBatch]);
+
+  const uploadQueueItems = useMemo(
+    () => toUploadQueueItems(uploadBatchState?.files ?? []),
+    [uploadBatchState],
+  );
 
   const fileMetadataPopupOptions = useMemo(
     () => ({
@@ -468,15 +498,12 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     labels,
   );
 
-  const uploadProgressText = useMemo(() => {
-    if (uploadBatchState == null) {
-      return '';
-    }
-    const done = uploadBatchState.files.filter(
-      (file) => file.status !== FileUploadStatus.Uploading,
-    ).length;
-    return labels.getUploadProgressText(done, uploadBatchState.files.length);
-  }, [uploadBatchState, labels]);
+  /* The standalone File storage page sits on the base layer; the attach
+     modal keeps the sunken surface behind its raised tree panel. */
+  const surfaceClassName =
+    variant === DialFileManagerVariant.Standalone
+      ? 'bg-layer-base'
+      : 'bg-layer-sunken';
 
   const emptyStateCopy = useMemo((): EmptyStateCopy => {
     if (searchResults != null && !isSearching) {
@@ -486,7 +513,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     if (isInSubfolder) {
       return { title: labels.folderEmptyStateTitle, description: '' };
     }
-    return labels.emptyStateByTab[activeTab];
+    return labels.emptyStateByTab[gateTab];
   }, [
     searchResults,
     isSearching,
@@ -494,7 +521,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     labels.searchEmptyStateTitle,
     labels.folderEmptyStateTitle,
     labels.emptyStateByTab,
-    activeTab,
+    gateTab,
   ]);
 
   return (
@@ -505,10 +532,24 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
           <PrimaryButton label={labels.retryLabel} onClick={retry} />
         </div>
       ) : (
-        <div className="relative flex min-h-0 w-full grow overflow-auto bg-layer-sunken">
+        <div
+          className={mergeClasses(
+            'relative flex min-h-0 w-full grow overflow-auto',
+            surfaceClassName,
+          )}
+        >
           <DialFileManager
-            className="min-h-0 w-full grow bg-layer-sunken"
-            gridClassName="size-full"
+            className={mergeClasses('min-h-0 w-full grow', surfaceClassName)}
+            contentClassName={
+              variant === DialFileManagerVariant.Attach
+                ? 'px-0 pb-0'
+                : undefined
+            }
+            gridClassName={
+              variant === DialFileManagerVariant.Attach
+                ? 'size-full gap-6 px-6 py-4'
+                : 'size-full'
+            }
             items={items}
             path={path}
             onPathChange={onPathChange}
@@ -526,6 +567,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
             onSelectedPathsChange={onSelectedPathsChange}
             navigationPanelOptions={{
               searchable: true,
+              placeholder: labels.searchPlaceholderByTab?.[gateTab],
             }}
             hideSearchPathItemName={true}
             onSearchFiles={onSearchFiles}
@@ -580,15 +622,15 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
         </div>
       )}
 
-      {uploadBatchState != null && (
-        <UploadProgressModal
-          batchState={uploadBatchState}
-          uploadProgressTitle={labels.uploadProgressTitle}
-          uploadProgressText={uploadProgressText}
-          cancelLabel={labels.cancelLabel}
-          onCancel={handleUploadCancel}
+      <div className="fixed bottom-4 end-4 z-[70]">
+        <TransferQueue
+          title={labels.getUploadQueueTitle(uploadQueueItems.length)}
+          items={uploadQueueItems}
+          onClose={handleUploadQueueClose}
+          onCancelItem={cancelUploadFile}
+          labels={labels.uploadQueueLabels}
         />
-      )}
+      </div>
 
       {(isCopying || isMoving) && (
         <OperationLoaderModal

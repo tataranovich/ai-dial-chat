@@ -44,3 +44,13 @@
     var(--bg-control-error-active, #cc4545)
   ) !important;
 }
+
+/* Reset line under a limit row — same token chain as `.label`. */
+.resetLabel {
+  color: var(--lt-label, var(--text-secondary, #57647a));
+}
+
+/* Value of a row that has reached its limit, in the stacked layout. */
+.valueDanger {
+  color: var(--lt-value-danger, var(--text-error, #ae2f2f));
+}

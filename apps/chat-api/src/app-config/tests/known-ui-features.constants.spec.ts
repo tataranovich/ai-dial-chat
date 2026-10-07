@@ -13,8 +13,8 @@ import {
  * them in the same change as any `OverlayFeature` addition, removal, or rename.
  */
 describe('KNOWN_UI_FEATURES', () => {
-  it('has exactly 45 members, one per OverlayFeature key', () => {
-    expect(KNOWN_UI_FEATURES.size).toBe(45);
+  it('has exactly 51 members, one per OverlayFeature key', () => {
+    expect(KNOWN_UI_FEATURES.size).toBe(51);
   });
 
   it('includes representative transferable keys', () => {
@@ -44,6 +44,8 @@ describe('KNOWN_UI_FEATURES', () => {
 
   it('includes the starter-layout key', () => {
     expect(KNOWN_UI_FEATURES.has('show-all-starters')).toBe(true);
+    expect(KNOWN_UI_FEATURES.has('starters-below-greeting')).toBe(true);
+    expect(KNOWN_UI_FEATURES.has('hide-greeting')).toBe(true);
   });
 
   it('includes the footer-version key', () => {
@@ -52,6 +54,24 @@ describe('KNOWN_UI_FEATURES', () => {
 
   it('includes the agent-description key', () => {
     expect(KNOWN_UI_FEATURES.has('show-agent-description')).toBe(true);
+  });
+
+  it('includes the input-history-navigation key', () => {
+    expect(KNOWN_UI_FEATURES.has('disable-input-history-navigation')).toBe(
+      true,
+    );
+  });
+
+  it('includes the conversation-export key', () => {
+    expect(KNOWN_UI_FEATURES.has('hide-conversation-export')).toBe(true);
+  });
+
+  it('includes the settings-page key', () => {
+    expect(KNOWN_UI_FEATURES.has('hide-settings-page')).toBe(true);
+  });
+
+  it('includes the header-logo key', () => {
+    expect(KNOWN_UI_FEATURES.has('show-header-logo')).toBe(true);
   });
 
   it('includes both agent-selector keys', () => {

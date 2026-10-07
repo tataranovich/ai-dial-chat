@@ -1,7 +1,8 @@
 import type { UseConversationHandlersParams } from '@epam/ai-dial-chat-hooks';
 import * as chatHooksModule from '@epam/ai-dial-chat-hooks';
-import type { Conversation } from '@epam/ai-dial-chat-shared';
-import { render, waitFor } from '@testing-library/react';
+import type { Conversation, ToolMenuItem } from '@epam/ai-dial-chat-shared';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as ClientChannelContextModule from '../../../context/ClientChannelContext';
 import * as ConversationsContextModule from '../../../context/ConversationsContext';
@@ -31,8 +32,17 @@ const handlersMocks = vi.hoisted(() => ({
   lastParams: undefined as undefined | Record<string, unknown>,
 }));
 
-/* Stable across renders so the sidebar-bump wiring can assert it forwards. */
-const streamMocks = vi.hoisted(() => ({ startStream: vi.fn() }));
+/*
+ * Stable across renders so the sidebar-bump wiring can assert it forwards.
+ * `setConversation` is captured so a test can play a streamed chunk.
+ */
+const streamMocks = vi.hoisted(() => ({
+  startStream: vi.fn(),
+  batchChunksPerFrame: undefined as boolean | undefined,
+  setConversation: undefined as
+    | undefined
+    | ((update: (prev: Conversation | null) => Conversation | null) => void),
+}));
 
 vi.mock('react-router', () => ({
   useNavigate: () => routerMocks.navigate,
@@ -44,8 +54,29 @@ vi.mock('react-router', () => ({
   }),
 }));
 
+/* Renders the tool chips so the toggle state is observable by role. */
 vi.mock('../../../components/ConversationView/ConversationView', () => ({
-  default: () => <div>conversation-view</div>,
+  default: ({
+    toolsMenuItems = [],
+    onToolToggle,
+  }: {
+    toolsMenuItems?: ToolMenuItem[];
+    onToolToggle?: (id: string) => void;
+  }) => (
+    <div>
+      conversation-view
+      {toolsMenuItems.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          aria-pressed={item.isSelected}
+          onClick={() => onToolToggle?.(item.id)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 vi.mock(
   '../../../components/ConversationView/Rate/NegativeFeedbackModal',
@@ -90,12 +121,23 @@ vi.mock('../../../context/NotificationContext');
 vi.mock('../../../context/overlay/OverlayContext', () => ({
   useOptionalOverlay: () => undefined,
 }));
+const sourcesSidebarMocks = vi.hoisted(() => ({
+  handleClose: vi.fn(),
+}));
+
 vi.mock('../../../context/SourcesSidebarContext', () => ({
-  useSourcesSidebar: () => ({ handleClose: vi.fn(), setMessages: vi.fn() }),
+  useSourcesSidebar: () => ({
+    handleClose: sourcesSidebarMocks.handleClose,
+    setMessages: vi.fn(),
+    setConversationModelId: vi.fn(),
+  }),
 }));
 
 vi.mock('../../../hooks/conversation/useActiveConversationBridge', () => ({
   useActiveConversationBridge: () => undefined,
+}));
+vi.mock('../../../hooks/conversation/useVisualizerMessageSendHandler', () => ({
+  useVisualizerMessageSendHandler: () => undefined,
 }));
 vi.mock('../../../hooks/conversation/useAudioTranscription', () => ({
   useAudioTranscription: () => ({ isAudioMessageSupported: false }),
@@ -116,22 +158,26 @@ vi.mock('@epam/ai-dial-chat-hooks', async (importOriginal) => {
     await importOriginal<typeof import('@epam/ai-dial-chat-hooks')>();
   return {
     ...actual,
-    useToolsMenu: () => ({
-      toolsMenuItems: [],
-      onToolToggle: vi.fn(),
-      toolConfigurationValue: {},
-      restoreToolConfiguration: vi.fn(),
-    }),
-    useConversationStream: () => ({
-      startStream: streamMocks.startStream,
-      handleStop: vi.fn(),
-      resumeIfAwaitingGeneration: vi.fn(),
-      restoreBufferedGeneration: (_id: string, conversation: Conversation) => ({
-        ...conversation,
-      }),
-      isStreaming: false,
-      canStopStreaming: false,
-    }),
+    useConversationStream: (params: {
+      state: { setConversation: typeof streamMocks.setConversation };
+      batchChunksPerFrame?: boolean;
+    }) => {
+      streamMocks.setConversation = params.state.setConversation;
+      streamMocks.batchChunksPerFrame = params.batchChunksPerFrame;
+      return {
+        startStream: streamMocks.startStream,
+        handleStop: vi.fn(),
+        resumeIfAwaitingGeneration: vi.fn(),
+        restoreBufferedGeneration: (
+          _id: string,
+          conversation: Conversation,
+        ) => ({
+          ...conversation,
+        }),
+        isStreaming: false,
+        canStopStreaming: false,
+      };
+    },
     useConversationHandlers: vi.fn(),
   };
 });
@@ -265,6 +311,43 @@ describe('ConversationPage — a conversation the backend no longer has', () => 
     expect(removeConversationFromList).not.toHaveBeenCalled();
     expect(routerMocks.navigate).not.toHaveBeenCalledWith(ROUTES.Root);
   });
+
+  it('passes the loaded name to updateConversationTitle once', async () => {
+    const updateConversationTitle = vi.fn();
+    mockUseConversations.mockReturnValue({
+      ...mockUseConversations(),
+      updateConversationTitle,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    mockGetConversation.mockResolvedValueOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeConversation() as any,
+    );
+
+    render(<ConversationPage />);
+
+    await waitFor(() =>
+      expect(updateConversationTitle).toHaveBeenCalledWith(
+        CONVERSATION_ID,
+        'Hello',
+      ),
+    );
+    expect(updateConversationTitle).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ConversationPage — stream chunk batching', () => {
+  it('asks the stream hook to publish chunks once per frame', async () => {
+    mockGetConversation.mockResolvedValueOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeConversation() as any,
+    );
+
+    render(<ConversationPage />);
+
+    await waitFor(() => expect(mockGetConversation).toHaveBeenCalled());
+    expect(streamMocks.batchChunksPerFrame).toBe(true);
+  });
 });
 
 describe('ConversationPage — onConversationDeleted', () => {
@@ -303,6 +386,17 @@ describe('ConversationPage — sidebar ordering on new activity', () => {
       1,
       'gpt-4o',
     );
+  });
+});
+
+describe('ConversationPage — leaving the conversations routes', () => {
+  it('closes the sources sidebar when the page unmounts', () => {
+    const { unmount } = render(<ConversationPage />);
+
+    sourcesSidebarMocks.handleClose.mockClear();
+    unmount();
+
+    expect(sourcesSidebarMocks.handleClose).toHaveBeenCalledOnce();
   });
 });
 
@@ -347,6 +441,28 @@ describe('ConversationPage — client-channel demand', () => {
     expect(mode).toBe(CompletionMode.ContinueLastUser);
   });
 
+  it('lets the automatic first-message start join a generation that is already running', async () => {
+    mockGetConversation.mockResolvedValueOnce({
+      ...makeConversation(),
+      messages: [{ role: 'user', content: 'hi', timestamp: 't' }],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    render(<ConversationPage />);
+
+    await waitFor(() => expect(streamMocks.startStream).toHaveBeenCalledOnce());
+    expect(streamMocks.startStream).toHaveBeenCalledWith(
+      CONVERSATION_ID,
+      'hi',
+      1,
+      expect.any(String),
+      undefined,
+      expect.any(String),
+      CompletionMode.ContinueLastUser,
+      { resumeOnConflict: true },
+    );
+  });
+
   it('a channelId transition does not re-fetch the conversation or re-enter the loading state', async () => {
     mockGetConversation.mockResolvedValueOnce(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -377,5 +493,148 @@ describe('ConversationPage — client-channel demand', () => {
     rerender(<ConversationPage />);
 
     expect(mockGetConversation).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ConversationPage — tool toggle driven by an assistant form_schema', () => {
+  type Messages = Conversation['messages'];
+
+  const toolSchema = (value: boolean) => ({
+    type: 'object',
+    properties: { deep_research: { type: 'boolean', default: value } },
+  });
+
+  const userTurn = (configValue?: Record<string, unknown>) => ({
+    role: 'user',
+    content: 'question',
+    timestamp: 't',
+    ...(configValue && {
+      custom_content: { configuration_value: configValue },
+    }),
+  });
+
+  const assistantTurn = (content: string, schemaValue?: boolean) => ({
+    role: 'assistant',
+    content,
+    timestamp: 't',
+    ...(schemaValue !== undefined && {
+      custom_content: { form_schema: toolSchema(schemaValue) },
+    }),
+  });
+
+  const loadWith = (messages: unknown[]) =>
+    mockGetConversation.mockResolvedValueOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { ...makeConversation(), messages: messages as Messages } as any,
+    );
+
+  /* Replaces the last message, as a streamed chunk does. */
+  const streamLastMessage = (message: unknown) =>
+    act(() => {
+      streamMocks.setConversation?.((prev) =>
+        prev
+          ? {
+              ...prev,
+              messages: [...prev.messages.slice(0, -1), message] as Messages,
+            }
+          : prev,
+      );
+    });
+
+  const chip = () => screen.getByRole('button', { name: 'Deep research' });
+
+  beforeEach(() => {
+    vi.mocked(DeploymentsContextModule.useDeployments).mockReturnValue(
+      createDeploymentsContextValue({
+        selectedItemId: 'gpt-4o',
+        selectedDeploymentConfiguration: toolSchema(false),
+      }),
+    );
+  });
+
+  it('shows the toggle off on load when the answer after the last question turned it off', async () => {
+    loadWith([
+      userTurn({ deep_research: true }),
+      assistantTurn('report', false),
+    ]);
+
+    render(<ConversationPage />);
+
+    await waitFor(() => expect(mockGetConversation).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(chip().getAttribute('aria-pressed')).toBe('false'),
+    );
+  });
+
+  it("keeps the question's toggle on load when no answer sets it", async () => {
+    loadWith([userTurn({ deep_research: true }), assistantTurn('report')]);
+
+    render(<ConversationPage />);
+
+    await waitFor(() =>
+      expect(chip().getAttribute('aria-pressed')).toBe('true'),
+    );
+  });
+
+  it('follows the values an answer streams and sends the last one with the next message', async () => {
+    loadWith([userTurn({ deep_research: false }), assistantTurn('')]);
+    render(<ConversationPage />);
+    await waitFor(() =>
+      expect(chip().getAttribute('aria-pressed')).toBe('false'),
+    );
+
+    streamLastMessage(assistantTurn('working', true));
+    await waitFor(() =>
+      expect(chip().getAttribute('aria-pressed')).toBe('true'),
+    );
+
+    streamLastMessage(assistantTurn('report', false));
+    await waitFor(() =>
+      expect(chip().getAttribute('aria-pressed')).toBe('false'),
+    );
+    expect(getHandlerParams().toolConfigurationValue).toEqual({
+      deep_research: false,
+    });
+  });
+
+  it("keeps the user's re-armed toggle when the same value streams again", async () => {
+    loadWith([
+      userTurn({ deep_research: true }),
+      assistantTurn('report', false),
+    ]);
+    render(<ConversationPage />);
+    await waitFor(() =>
+      expect(chip().getAttribute('aria-pressed')).toBe('false'),
+    );
+
+    await userEvent.click(chip());
+    expect(chip().getAttribute('aria-pressed')).toBe('true');
+
+    streamLastMessage(assistantTurn('report.', false));
+    expect(chip().getAttribute('aria-pressed')).toBe('true');
+    expect(getHandlerParams().toolConfigurationValue).toEqual({
+      deep_research: true,
+    });
+  });
+
+  it("applies the answer's value once the deployment tools arrive after the load", async () => {
+    vi.mocked(DeploymentsContextModule.useDeployments).mockReturnValue(
+      createDeploymentsContextValue({ selectedItemId: 'gpt-4o' }),
+    );
+    loadWith([userTurn(), assistantTurn('working', true)]);
+    const { rerender } = render(<ConversationPage />);
+    await waitFor(() => expect(mockGetConversation).toHaveBeenCalled());
+
+    vi.mocked(DeploymentsContextModule.useDeployments).mockReturnValue(
+      createDeploymentsContextValue({
+        selectedItemId: 'gpt-4o',
+        selectedDeploymentConfiguration: toolSchema(false),
+      }),
+    );
+    rerender(<ConversationPage />);
+
+    await waitFor(() =>
+      expect(chip().getAttribute('aria-pressed')).toBe('true'),
+    );
   });
 });

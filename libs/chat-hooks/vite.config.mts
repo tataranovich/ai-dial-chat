@@ -109,13 +109,10 @@ export default defineConfig(({ command }) => ({
         import.meta.dirname,
         '../attachment-input/src/index.ts',
       ),
-      '@epam/ai-dial-builder-form/styles.css': path.resolve(
+      // The catalog source imports its publish-panel dependency's stylesheet; do not prefix-match it.
+      '@epam/ai-dial-publish-panel/styles.css': path.resolve(
         import.meta.dirname,
-        '../builder-form/src/styles.css',
-      ),
-      '@epam/ai-dial-builder-form': path.resolve(
-        import.meta.dirname,
-        '../builder-form/src/index.ts',
+        '../publish-panel/src/styles.css',
       ),
       '@epam/ai-dial-catalog': path.resolve(
         import.meta.dirname,

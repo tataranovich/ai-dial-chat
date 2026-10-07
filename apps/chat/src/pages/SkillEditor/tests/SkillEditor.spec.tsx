@@ -9,7 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { strToU8, zipSync } from 'fflate';
 import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SkillEditorI18nKeys } from '../../../constants/translation-keys';
+import { EntityNotificationsI18nKeys } from '../../../constants/translation-keys';
 import { useUser } from '../../../context/auth/UserContext';
 import { useNotification } from '../../../context/NotificationContext';
 import { useSkills } from '../../../context/SkillsContext';
@@ -58,6 +58,10 @@ vi.mock('../../../context/auth/UserContext', () => ({
 
 vi.mock('../../../context/ThemeContext', () => ({
   useTheme: () => ({ currentTheme: 'light' }),
+}));
+
+vi.mock('../../../context/AppConfigContext', () => ({
+  useAppConfig: () => ({ config: { allowedConnectOrigins: [] } }),
 }));
 
 vi.mock('../../../context/NotificationContext', () => ({
@@ -137,8 +141,11 @@ const showNotification = vi.fn();
 const refetchSkills = vi.fn<() => Promise<void>>();
 
 const openUploadDialog = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.click(screen.getAllByRole('button', { name: 'buttons.add' })[0]);
   await user.click(
-    screen.getAllByRole('button', { name: 'skillEditor.addUploadLabel' })[0],
+    await screen.findByRole('menuitem', {
+      name: 'skillEditor.uploadDialogTitle',
+    }),
   );
 };
 
@@ -151,7 +158,7 @@ const stageFile = (file: File) => {
 
 const confirmUpload = async (user: ReturnType<typeof userEvent.setup>) => {
   const button = () =>
-    screen.getByRole('button', {
+    within(screen.getByRole('dialog')).getByRole('button', {
       name: 'buttons.add',
     }) as HTMLButtonElement;
   await waitFor(() => expect(button().disabled).toBe(false));
@@ -200,7 +207,9 @@ const fillRequiredFields = async (
   }
 };
 
-describe('SkillEditor page', () => {
+/* Per-keystroke typing into the full editor form runs close to the 5s default
+   when the whole suite shares the CPU, so this file gets extra headroom. */
+describe('SkillEditor page', { timeout: 15000 }, () => {
   const user = userEvent.setup({ delay: null });
 
   beforeEach(() => {
@@ -239,7 +248,7 @@ describe('SkillEditor page', () => {
     expect(createSkill).not.toHaveBeenCalled();
   });
 
-  it('falls back to the Catalog route when returnUrl is absent', async () => {
+  it('navigates to the Catalog route on cancel', async () => {
     render(<SkillEditor />);
 
     await user.click(getCancelButton());
@@ -247,15 +256,22 @@ describe('SkillEditor page', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/catalog');
   });
 
-  it('rejects an external returnUrl and falls back to Catalog', async () => {
-    mockSearchParams = new URLSearchParams({
-      returnUrl: 'https://evil.example/',
-    });
-
+  it('offers every add action in the Files pane Add menu', async () => {
     render(<SkillEditor />);
-    await user.click(getCancelButton());
 
-    expect(mockNavigate).toHaveBeenCalledWith('/catalog');
+    await user.click(screen.getAllByRole('button', { name: 'buttons.add' })[0]);
+    const menu = await screen.findByRole('menu');
+
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual([
+      'skillEditor.createFolder',
+      'skillEditor.uploadDialogTitle',
+      'skillEditor.uploadArchive',
+      'skillEditor.openFileSystem',
+    ]);
   });
 
   it('cancels immediately with no API call', async () => {
@@ -292,11 +308,13 @@ describe('SkillEditor page', () => {
       expect(showNotification).toHaveBeenCalledWith(
         expect.objectContaining({
           variant: 'success',
-          title: SkillEditorI18nKeys.SaveSuccessTitle,
+          title: EntityNotificationsI18nKeys.SkillCreatedTitle,
         }),
       ),
     );
-    expect(mockNavigate).toHaveBeenCalledWith('/catalog');
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/catalog?itemId=skills%2Fmy-bucket%2Fgood-morning-breakfast',
+    );
   });
 
   it('refreshes the skill catalog before navigating after create', async () => {
@@ -314,7 +332,11 @@ describe('SkillEditor page', () => {
     await user.click(getCreateButton());
 
     await waitFor(() => expect(refetchSkills).toHaveBeenCalledOnce());
-    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/catalog'));
+    await waitFor(() =>
+      expect(mockNavigate).toHaveBeenCalledWith(
+        '/catalog?itemId=skills%2Fmy-bucket%2Fnew-catalog-skill',
+      ),
+    );
   });
 
   it('blocks submission with a required-field error when Instructions is empty', async () => {
@@ -553,7 +575,7 @@ describe('SkillEditor page', () => {
     ).toBeTruthy();
     expect(
       (
-        screen.getByRole('button', {
+        within(screen.getByRole('dialog')).getByRole('button', {
           name: 'buttons.add',
         }) as HTMLButtonElement
       ).disabled,
@@ -982,7 +1004,7 @@ describe('SkillEditor page — edit mode', () => {
 
     await waitFor(() =>
       expect(
-        (screen.getByDisplayValue('docs-helper') as HTMLInputElement).disabled,
+        (screen.getByDisplayValue('docs-helper') as HTMLInputElement).readOnly,
       ).toBe(true),
     );
   });
@@ -1012,7 +1034,7 @@ describe('SkillEditor page — edit mode', () => {
       expect(showNotification).toHaveBeenCalledWith(
         expect.objectContaining({
           variant: 'success',
-          title: SkillEditorI18nKeys.UpdateSuccessTitle,
+          title: EntityNotificationsI18nKeys.SkillEditedTitle,
         }),
       ),
     );
@@ -1285,8 +1307,9 @@ describe('SkillEditor page — Back control and preview round trip', () => {
   };
 
   /* The manifest view is the only one that renders the Name field. */
+  /* Name and Description stay in Metadata for every file, so the Setup heading tells the views apart. */
   const isManifestViewShown = () =>
-    screen.queryByPlaceholderText('skillEditor.namePlaceholder') != null;
+    screen.queryByRole('heading', { name: 'SKILL.md' }) != null;
 
   const renderEditorWithSupportingFile = async () => {
     vi.mocked(downloadSkill).mockResolvedValue(

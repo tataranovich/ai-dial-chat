@@ -1,3 +1,4 @@
+import type { TextRefinementLabels } from '@epam/ai-dial-chat-shared';
 import type { EditorThemes } from '@epam/ai-dial-ui-kit';
 import type { ReactNode } from 'react';
 import type { SkillFileNodeKind } from '../types/skill-file-node-kind';
@@ -116,24 +117,87 @@ export interface SkillEditorFileActions {
   ) => Promise<SkillFileCommitResult>;
   /** Called after the user confirms removing a non-protected node already present in the tree. */
   onRemoveNode: (path: string) => void;
+  /**
+   * Called with the full relative path of a folder the user named inline via
+   * "Create folder". Omit to hide every "Create folder" entry. The host adds
+   * the folder node to `files`; the library never mutates `files` itself.
+   */
+  onCreateFolder?: (path: string) => void;
+  /**
+   * Host path rule for a folder being named inline, run after the library's
+   * own empty/separator/duplicate checks. Returns an error message to block
+   * the name, or `undefined` to accept it.
+   */
+  validateFolderPath?: (path: string) => string | undefined;
+  /**
+   * Expands a picked `.zip` into its files, with paths relative to the
+   * archive root. Rejects for an unreadable archive. Omit to hide every
+   * "Upload archive from device" entry. The returned entries are staged in
+   * the upload dialog and go through `validateBatch`/`commitBatch` like any
+   * device file.
+   */
+  extractArchive?: (archive: File) => Promise<SkillFileSourceEntry[]>;
+  /**
+   * Opens the host's file-system picker and resolves with the picked files,
+   * or `undefined` when the user cancels. Omit to hide every "Open DIAL file
+   * system" entry. The returned entries are staged in the upload dialog.
+   */
+  pickFromFileSystem?: () => Promise<SkillFileSourceEntry[] | undefined>;
+}
+
+/** A file supplied by a host source (an archive entry or a file-system pick), with its path relative to the add target. */
+export interface SkillFileSourceEntry {
+  /** Relative path, using `/` separators, below the folder the user is adding to. */
+  path: string;
+  /** The file's content. */
+  file: File;
 }
 
 /** Text overrides for `SkillEditor`. Every field has an English default. */
-export interface SkillEditorLabels {
+export interface SkillEditorLabels extends TextRefinementLabels {
   /** Files pane heading. Defaults to `'Files'`. */
   filesHeading?: string;
   /** Accessible name of the file tree region. Defaults to `'Skill files'`. */
   filesTreeAriaLabel?: string;
-  /**
-   * Label of the control that opens the device file picker to add a
-   * supporting file. Defaults to `'Upload from device'`.
-   */
-  addUploadLabel?: string;
-  /** Accessible label of a node's remove action. Defaults to `'Remove'`. */
-  removeLabel?: string;
+  /** Label of the Files pane's Add dropdown trigger. Defaults to `'Add'`. */
+  addLabel?: string;
+  /** Add-menu entry that creates a folder inline. Defaults to `'Create folder'`. */
+  createFolderLabel?: string;
+  /** Add-menu entry that opens the upload dialog for device files. Defaults to `'Upload files from device'`. */
+  uploadFilesLabel?: string;
+  /** Add-menu entry that opens the upload dialog for a `.zip` archive. Defaults to `'Upload archive from device'`. */
+  uploadArchiveLabel?: string;
+  /** Add-menu entry that opens the host's file-system picker. Defaults to `'Open DIAL file system'`. */
+  openFileSystemLabel?: string;
+  /** Folder context-menu submenu that adds inside the folder. Defaults to `'Add child'`. */
+  addChildLabel?: string;
+  /** Node context-menu submenu that adds next to the node. Defaults to `'Add sibling'`. */
+  addSiblingLabel?: string;
+  /** Node context-menu action that removes the node. Defaults to `'Delete'`. */
+  deleteLabel?: string;
+  /** Name prefilled in a folder being created inline. Defaults to `'New folder'`. */
+  newFolderDefaultName?: string;
+  /** Inline error for an empty folder name. Defaults to `'Enter a folder name'`. */
+  folderNameRequiredError?: string;
+  /** Inline error for a folder name containing a separator or equal to `.`/`..`. Defaults to `"Folder name can't contain / or \, or be . or .."`. */
+  folderNameInvalidError?: string;
+  /** Inline error for a folder name that matches a sibling. Defaults to `'An item with this name already exists here'`. */
+  folderNameDuplicateError?: string;
+  /** Upload dialog title in archive mode. Defaults to `'Upload archive from device'`. */
+  uploadArchiveDialogTitle?: string;
+  /** Archive-mode drop-zone copy at the `desktop` breakpoint. Defaults to `'Drag and drop a .zip archive or click here to upload'`. */
+  uploadArchiveDropZoneLabel?: string;
+  /** Archive-mode drop-zone copy at the `mobile` breakpoint. Defaults to `'Click here to upload a .zip archive'`. */
+  uploadArchiveDropZoneMobileLabel?: string;
+  /** Error shown when an archive can't be read. Defaults to `"Couldn't read this archive"`. */
+  uploadArchiveErrorMessage?: string;
+  /** Error shown when an archive contains no files. Defaults to `'This archive has no files'`. */
+  uploadArchiveEmptyMessage?: string;
+  /** Accessible label of the spinner shown while an archive is expanded. Defaults to `'Reading archive'`. */
+  uploadArchiveExtractingAriaLabel?: string;
   /** Collapsed mobile summary label. Defaults to `'Editing file'`. */
   editingFileLabel?: string;
-  /** Main-pane heading, given the selected node's name. Defaults to the name itself. */
+  /** Setup-section heading for a selected supporting file or folder, given its name. Defaults to the name itself; `SKILL.md` is always headed by its path. */
   selectedFileHeading?: (name: string) => string;
   /** Name field label. Defaults to `'Name'`. */
   nameLabel?: string;
@@ -206,7 +270,11 @@ export interface SkillEditorConflict {
 
 /** CSS custom-property color overrides for `SkillEditor`. */
 export interface SkillEditorColors {
-  /** Color of the "Files" and selected-file section headings. Defaults to `--text-primary`. */
+  /** Refinement status text color. Defaults to the kit `CaptionText` color (`--text-secondary`). */
+  refineActionText?: string;
+  /** Refinement error color. Defaults to --text-error. */
+  refineErrorText?: string;
+  /** Color of the "Files" heading and of the Metadata and Setup section headings. Defaults to `--text-primary`. */
   title?: string;
   /** Color of the hand-rendered Instructions field label. Defaults to `--text-secondary`. */
   helperText?: string;
@@ -216,12 +284,16 @@ export interface SkillEditorColors {
 
 /** Typography class overrides for `SkillEditor`. */
 export interface SkillEditorTypography {
-  /** Typography class applied to the "Files" and selected-file section headings. Defaults to `'dial-body-semi-text'`. */
+  /** Refinement feedback typography. Defaults to the kit `CaptionText` class (`'dial-tiny-text'`). */
+  refineFeedbackClassName?: string;
+  /** Typography class applied to the "Files" heading. Defaults to `'dial-body-semi-text'`. */
   titleClassName?: string;
   /** Typography class applied to the hand-rendered Instructions field label. Defaults to `'dial-tiny-semi-text'`. */
   helperTextClassName?: string;
-  /** Color class applied to the file tree "Remove" context-menu icon. Defaults to `'text-secondary'`. */
+  /** Color class applied to the file tree "Delete" context-menu icon. Unset by default, so the icon takes the item's danger color. */
   removeIconClassName?: string;
+  /** Color class applied to the file tree Add-menu entry icons. Defaults to `'text-secondary'`. */
+  menuIconClassName?: string;
 }
 
 /** Grouped style overrides for `SkillEditor`. */
@@ -234,6 +306,13 @@ export interface SkillEditorStyles {
 
 /** Props for `SkillEditor`. */
 export interface SkillEditorProps {
+  /** Optional Description rewrite callback; omission hides its action. */
+  onRefineDescription?: (value: string, signal: AbortSignal) => Promise<string>;
+  /** Optional Instructions rewrite callback; omission hides its action. */
+  onRefineInstructions?: (
+    value: string,
+    signal: AbortSignal,
+  ) => Promise<string>;
   /**
    * Values to seed the fields with. Changing this object's identity re-seeds
    * the form, so hosts that load asynchronously should memoise it and only
@@ -254,11 +333,11 @@ export interface SkillEditorProps {
   isLoading?: boolean;
   /** Whether loading the skill failed; renders an error state with a retry instead of the form. Defaults to `false`. */
   hasLoadError?: boolean;
-  /** Whether a save is in flight; disables submission. Defaults to `false`. */
+  /** Whether a save is in flight; disables submission and Cancel. Defaults to `false`. */
   isSubmitting?: boolean;
   /** Inline validation messages to render under the fields. */
   errors?: SkillEditorErrors;
-  /** General submit-time error (e.g. a naming conflict or a server error) rendered in a `role="alert"` region. */
+  /** General submit-time error (e.g. a naming conflict or a server error) rendered in the `role="alert"` region above the Setup section. */
   submitError?: string;
   /**
    * A save-time conflict (e.g. a stale ETag), distinct from `submitError`.
@@ -273,7 +352,7 @@ export interface SkillEditorProps {
    * included in submitted values unchanged. The host sets this in edit mode,
    * since DIAL Core has no rename/move operation for a skill; the library
    * itself has no notion of "edit mode" and infers no policy from this flag
-   * beyond disabling the field.
+   * beyond rendering the field read-only.
    */
   isNameReadOnly?: boolean;
   /**
@@ -314,6 +393,12 @@ export interface SkillEditorProps {
   onCancel: () => void;
   /** Called when the retry button in the load-error state is activated. */
   onRetry?: () => void;
+  /**
+   * Called when the retry action beside `submitError` is activated. Supply it
+   * only for a failure a plain re-send can clear, such as an unavailable
+   * service; when omitted, the error renders as text with no action.
+   */
+  onRetrySubmit?: () => void;
   /** Text overrides. */
   labels?: SkillEditorLabels;
   /** Style overrides. */

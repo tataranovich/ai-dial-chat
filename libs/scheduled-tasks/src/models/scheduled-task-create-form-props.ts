@@ -1,3 +1,4 @@
+import type { TextRefinementLabels } from '@epam/ai-dial-chat-shared';
 import type { EditorThemes } from '@epam/ai-dial-ui-kit';
 import type { ReactNode } from 'react';
 import type { ScheduledTaskRepeat } from '../types/scheduled-task-schedule';
@@ -34,8 +35,10 @@ export interface ScheduledTaskCreateFormValues {
   modelId: string;
   /** Optional human-readable summary sent to the BFF as `description` (max 500 characters). */
   description?: string;
-  /** Prompt text sent to the BFF as `prompt` (required). */
+  /** Prompt text; may be empty when a skill is selected. */
   prompt: string;
+  /** Optional selected skill references, independent of its display metadata. */
+  skillUrls?: string[];
 }
 
 /** Validation error messages keyed by {@link ScheduledTaskCreateFormValues} field. */
@@ -62,10 +65,12 @@ export interface ScheduledTaskCreateFormErrors {
   description?: string;
   /** Error shown under the prompt field. */
   prompt?: string;
+  /** Error shown under the skill field, or at form level when the slot is hidden. */
+  skillUrls?: string;
 }
 
 /** Localized labels used by the {@link ScheduledTaskCreateForm} component. */
-export interface ScheduledTaskCreateFormLabels {
+export interface ScheduledTaskCreateFormLabels extends TextRefinementLabels {
   /** Page/header title, e.g. "New task". */
   pageTitle: string;
   /** Accessible label for the header's back control. */
@@ -112,6 +117,8 @@ export interface ScheduledTaskCreateFormLabels {
   descriptionLabel: string;
   /** Accessible label for the Instructions markdown editor. */
   instructionsLabel: string;
+  /** Optional label above the host-composed skill selector. */
+  skillLabel?: string;
   /** Optional placeholder forwarded to the Instructions editor. */
   instructionsPlaceholder?: string;
   /** Label for the Cancel action. */
@@ -120,6 +127,14 @@ export interface ScheduledTaskCreateFormLabels {
   createButtonLabel: string;
   /** Accessible name for the Save action's busy indicator, announced while `isSubmitting` is `true`. Defaults to `'Saving'`. */
   submittingLabel?: string;
+  /** Title of the discard confirmation. Defaults to `'Discard unsaved changes?'`. */
+  discardTitle?: string;
+  /** Body of the discard confirmation. Defaults to `'You have unsaved changes. Leaving now will discard them.'`. */
+  discardMessage?: string;
+  /** Label of the discard confirmation's confirming action. Defaults to `'Discard changes'`. */
+  discardConfirmLabel?: string;
+  /** Label of the discard confirmation's cancel action. Defaults to `'Keep editing'`. */
+  discardCancelLabel?: string;
 }
 
 /**
@@ -127,6 +142,10 @@ export interface ScheduledTaskCreateFormLabels {
  * as CSS custom properties with app theme fallbacks.
  */
 export interface ScheduledTaskCreateFormColors {
+  /** Refinement status text color. Defaults to the kit `CaptionText` color (`--text-secondary`). */
+  refineActionText?: string;
+  /** Refinement error color. Defaults to --text-error. */
+  refineErrorText?: string;
   /** Root container background. Fallback: `--bg-layer-base`. */
   background?: string;
   /** Header row's bottom border color. Fallback: `--stroke-tertiary`. */
@@ -141,6 +160,8 @@ export interface ScheduledTaskCreateFormColors {
 
 /** Typography overrides for the {@link ScheduledTaskCreateForm} component. */
 export interface ScheduledTaskCreateFormTypography {
+  /** Refinement feedback typography. Defaults to the kit `CaptionText` class (`'dial-tiny-text'`). */
+  refineFeedbackClassName?: string;
   /** CSS class applied to the title. Defaults to `'dial-h1-text'`. */
   titleClassName?: string;
   /** CSS class applied to a section heading. Defaults to `'dial-body-semi-text'`. */
@@ -165,10 +186,24 @@ export interface ScheduledTaskCreateFormStyles {
 
 /** Props for the {@link ScheduledTaskCreateForm} component. */
 export interface ScheduledTaskCreateFormProps {
+  /** Optional Description rewrite callback; omission hides its action. */
+  onRefineDescription?: (value: string, signal: AbortSignal) => Promise<string>;
+  /** Optional Instructions rewrite callback; omission hides its action. */
+  onRefineInstructions?: (
+    value: string,
+    signal: AbortSignal,
+  ) => Promise<string>;
   /** Localized labels. */
   labels: ScheduledTaskCreateFormLabels;
   /** Current field values. */
   values: ScheduledTaskCreateFormValues;
+  /**
+   * Values the form was opened with. When set, Back and Cancel ask for
+   * confirmation while `values` differs from it (see
+   * `hasScheduledTaskFormChanges`), and the browser warns before the page
+   * unloads. Omit it to leave unsaved-change handling to the host.
+   */
+  initialValues?: ScheduledTaskCreateFormValues;
   /** Current per-field validation errors. */
   errors: ScheduledTaskCreateFormErrors;
   /**
@@ -184,6 +219,8 @@ export interface ScheduledTaskCreateFormProps {
    * linked without a literal id that could collide across form instances.
    */
   modelLabelId: string;
+  /** Optional host-composed skill control, rendered above Instructions. */
+  skillSelector?: ReactNode;
   /** Called with the changed field key and its new value whenever any field is edited. */
   onFieldChange: <K extends keyof ScheduledTaskCreateFormValues>(
     field: K,

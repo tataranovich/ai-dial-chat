@@ -3,6 +3,7 @@ import type {
   ListFilesItemDto,
 } from '@epam/ai-dial-chat-api-client';
 import { ListFilesItemDtoNodeTypeEnum } from '@epam/ai-dial-chat-api-client';
+import { getParentFolderPath } from '@epam/ai-dial-chat-shared';
 import type { DialFile } from '@epam/ai-dial-react-file-manager';
 import {
   DialFileManagerTabs,
@@ -31,10 +32,7 @@ import {
   type FileManagerNotification,
 } from '../dial-file-manager.types';
 import type { DialFilesApi } from '../dial-files-api';
-import {
-  getParentFolderPath,
-  virtualPathToApiPath,
-} from '../resolve-dial-file-api-path';
+import { virtualPathToApiPath } from '../resolve-dial-file-api-path';
 
 /** Options accepted by `useDialFileListing`. */
 export interface UseDialFileListingOptions {
@@ -48,6 +46,10 @@ export interface UseDialFileListingOptions {
   activeTab: DialFileManagerTabs;
   /** Called with a structured event when a folder-load operation fails. */
   onNotification?: (notification: FileManagerNotification) => void;
+  /** When false, the hook issues no `DialFilesApi` call and reports `isLoading: false`. Defaults to `true`. */
+  isActive?: boolean;
+  /** Changing this value resets cache and navigation exactly like an `activeTab` change. Defaults to `undefined`. */
+  sessionKey?: string;
 }
 
 /** Values returned by `useDialFileListing`. */
@@ -83,7 +85,7 @@ export interface UseDialFileListingResult {
   /**
    * Deletes the given API-path cache keys so the next listing fetch/expand for
    * that folder re-fetches from the server. The only way sibling sub-hooks may
-   * invalidate the shared cache (design.md D1).
+   * invalidate the shared cache (`openspec/changes/archive/2026-07-21-split-use-dial-file-manager/design.md` D1).
    */
   invalidateFolders: (apiPaths: string[]) => void;
   /** Merges a just-created folder into its parent's cache entry (optimistic display for create-folder). */
@@ -101,7 +103,7 @@ export interface UseDialFileListingResult {
  * tree's expand/collapse state, search, and the shared per-folder cache that
  * `useDialFileUploadBatch`/`useDialFileMutations`/`useDialFileSharing` invalidate
  * through `invalidateFolders`/`bumpRetry` after their own mutations settle
- * (design.md D1) — this hook is the sole owner/writer of that cache.
+ * (`openspec/changes/archive/2026-07-21-split-use-dial-file-manager/design.md` D1) — this hook is the sole owner/writer of that cache.
  *
  * Supports three listing sources via `activeTab`:
  * - my_files: user's own bucket via `DialFilesApi.listFiles`
@@ -114,6 +116,8 @@ export const useDialFileListing = ({
   rootLabel,
   activeTab,
   onNotification,
+  isActive = true,
+  sessionKey,
 }: UseDialFileListingOptions): UseDialFileListingResult => {
   const [folderPath, setFolderPath] = useState('');
   const [cache, setCache] = useState<Map<string, ListFilesItemDto[]>>(
@@ -126,7 +130,13 @@ export const useDialFileListing = ({
   const [listingPermissionsCache, setListingPermissionsCache] = useState<
     Map<string, string[] | undefined>
   >(() => new Map());
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(isActive);
+  /* Mirror an `isActive` flip during render, so an activated section never paints as loaded-but-empty before the listing effect runs. */
+  const [wasActive, setWasActive] = useState(isActive);
+  if (wasActive !== isActive) {
+    setWasActive(isActive);
+    setIsLoading(isActive);
+  }
   const [error, setError] = useState<string | null>(null);
   const [retryCounter, setRetryCounter] = useState(0);
   const [sharedRootIds, setSharedRootIds] = useState<string[] | undefined>(
@@ -160,11 +170,12 @@ export const useDialFileListing = ({
     () => new Set(),
   );
 
-  // Clear cache and reset path on tab switch
-  const prevTabRef = useRef(activeTab);
+  // Clear cache and reset path on tab switch or session change
+  const sessionId = `${activeTab}|${sessionKey ?? ''}`;
+  const prevSessionRef = useRef(sessionId);
   useEffect(() => {
-    if (prevTabRef.current === activeTab) return;
-    prevTabRef.current = activeTab;
+    if (prevSessionRef.current === sessionId) return;
+    prevSessionRef.current = sessionId;
     setCache(new Map());
     setListingPermissionsCache(new Map());
     setFolderPath('');
@@ -183,7 +194,13 @@ export const useDialFileListing = ({
     setSearchResults(null);
     setIsSearching(false);
     setExpandedPaths(new Set());
-  }, [activeTab]);
+    /*
+     * The cache was just emptied, but a session change that keeps `activeTab`,
+     * `folderPath` and `isActive` (All ↔ My files keeps the My files section
+     * active at its root) re-triggers no listing dependency — refetch explicitly.
+     */
+    setRetryCounter((c) => c + 1);
+  }, [sessionId]);
 
   useEffect(() => {
     return () => {
@@ -199,6 +216,10 @@ export const useDialFileListing = ({
    * needed to satisfy the standalone page's "load root listing on open"
    * requirement; it falls out of this effect's existing dependency array. */
   useEffect(() => {
+    if (!isActive) {
+      setIsLoading(false);
+      return;
+    }
     let cancelled = false;
     setIsLoading(true);
     setError(null);
@@ -262,12 +283,20 @@ export const useDialFileListing = ({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, bucket, filesApi, folderPath, retryCounter, rootLabel]);
+  }, [
+    activeTab,
+    bucket,
+    filesApi,
+    folderPath,
+    isActive,
+    retryCounter,
+    rootLabel,
+  ]);
 
   /* sharedByMePaths is bucket-scoped (not folder-scoped) — fetched once per
    * my_files tab activation/retry, independent of the folder-listing effect above. */
   useEffect(() => {
-    if (activeTab !== DialFileManagerTabs.MyFiles) {
+    if (!isActive || activeTab !== DialFileManagerTabs.MyFiles) {
       setSharedByMePaths(new Set());
       return;
     }
@@ -297,7 +326,7 @@ export const useDialFileListing = ({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, bucket, filesApi, retryCounter, rootLabel]);
+  }, [activeTab, bucket, filesApi, isActive, retryCounter, rootLabel]);
 
   const items = useMemo(
     (): DialFile[] => [
@@ -470,6 +499,7 @@ export const useDialFileListing = ({
 
   const onFolderPopupPathChange = useCallback(
     (nextPath?: string) => {
+      if (!isActive) return;
       const apiPath =
         nextPath == null ? '' : virtualPathToApiPath(nextPath, rootLabel);
       const virtualPath = nextPath == null ? `/${rootLabel}` : nextPath;
@@ -534,7 +564,7 @@ export const useDialFileListing = ({
 
       void loadFolder();
     },
-    [activeTab, bucket, filesApi, onNotification, rootLabel],
+    [activeTab, bucket, filesApi, isActive, onNotification, rootLabel],
   );
 
   const loadedPaths = useMemo(() => {
@@ -551,6 +581,7 @@ export const useDialFileListing = ({
 
   const onExpandedPathsChange = useCallback(
     (paths: Set<string>) => {
+      if (!isActive) return;
       /*
        * Collapsed folders drop out of `paths` — clear their errored state so
        * re-expanding the same folder later retries instead of staying blocked.
@@ -606,7 +637,15 @@ export const useDialFileListing = ({
         void loadFolder();
       });
     },
-    [activeTab, bucket, filesApi, expandedPaths, onNotification, rootLabel],
+    [
+      activeTab,
+      bucket,
+      filesApi,
+      expandedPaths,
+      isActive,
+      onNotification,
+      rootLabel,
+    ],
   );
 
   const clearSearchResults = useCallback(() => {
@@ -622,6 +661,7 @@ export const useDialFileListing = ({
 
   const onSearchFiles = useCallback(
     (_folder: string, query: string) => {
+      if (!isActive) return;
       if (searchDebounceRef.current != null) {
         clearTimeout(searchDebounceRef.current);
         searchDebounceRef.current = null;
@@ -638,21 +678,23 @@ export const useDialFileListing = ({
         setIsSearching(false);
         return;
       }
+      /*
+       * Results are the unfiltered recursive listing: `DialFileManager` calls
+       * `onSearchFiles` once per search session and applies the name filter
+       * for every later query itself. Pre-filtering here by the first query
+       * would leave nothing for a replacement query to match ([#9125](https://github.com/epam/ai-dial-chat/issues/9125)).
+       */
       searchDebounceRef.current = setTimeout(() => {
         searchDebounceRef.current = null;
-        const lowerQuery = query.toLowerCase();
 
-        // Shared root: filter already-loaded root items from the cache (no BFF call).
+        // Shared root: reuse already-loaded root items from the cache (no BFF call).
         if (activeTab === DialFileManagerTabs.Shared && folderPath === '') {
           searchCancelRef.current?.();
           searchCancelRef.current = null;
           setIsSearching(true);
           const rootItems = cache.get('') ?? [];
-          const matched = rootItems.filter((item) =>
-            item.name.toLowerCase().includes(lowerQuery),
-          );
           setSearchResults(
-            matched.map((item) =>
+            rootItems.map((item) =>
               mapSearchItem(item, item.bucket ?? bucket, rootLabel),
             ),
           );
@@ -675,11 +717,8 @@ export const useDialFileListing = ({
               sharedRootMetaRef.current,
             );
             if (cancelled) return;
-            const matched = searchItems.filter((item) =>
-              item.name.toLowerCase().includes(lowerQuery),
-            );
             setSearchResults(
-              matched.map((item) =>
+              searchItems.map((item) =>
                 mapSearchItem(item, item.bucket ?? bucket, rootLabel),
               ),
             );
@@ -692,7 +731,7 @@ export const useDialFileListing = ({
         void runSearch();
       }, 300);
     },
-    [activeTab, bucket, cache, filesApi, folderPath, rootLabel],
+    [activeTab, bucket, cache, filesApi, folderPath, isActive, rootLabel],
   );
 
   const path = folderPath ? `/${rootLabel}/${folderPath}` : `/${rootLabel}`;

@@ -1,5 +1,92 @@
 # Chat Application
 
+## Custom Core API operations adapter
+
+`apps/chat/src/server-api/custom-api.api.ts` exports `callCustomApiOperation(id, signal?)`,
+a thin adapter over the generated `customApiApi.getCustomApiOperationRaw` (see
+`libs/chat-api-client/README.md#custom-core-api-operations`) for the
+deployment-configured, disabled-by-default BFF bridge documented in
+`apps/chat-api/README.md#custom-core-api-operations`. It decodes the response
+envelope's `data` field as `unknown` by reading `.raw.json()` directly, rather
+than trusting the generated client's `{ [key: string]: unknown }` typing,
+because the real value may be any JSON value — array, object, string, number,
+boolean, or null.
+
+This parent change ships no UI, no React state, and no startup request for
+this adapter — it exists so a future client-specific change can call
+`callCustomApiOperation` and add its own domain validation, presentation,
+loading/error handling, and tests. `signal` supports cancellation the same way
+other adapters in this folder do; there is no retry and no cache (every call
+reaches the BFF, which itself applies no cache). The BFF accepts no query or
+request body for this operation in v1 — parameterized calls and writes are a
+separate, not-yet-built contract extension. Local BFF concurrency bounds
+(32 total / 4 per caller in-flight) are independent of whatever business rate
+limit Core's own configured Route enforces; see the BFF README for both.
+
+## Manual scheduled-task runs
+
+The feature-gated task detail page can start the saved task definition with
+**Start now**. It sends one bodyless request and immediately prepends the
+server-accepted run to History; it does not edit, resume, or otherwise change
+the saved schedule. A completed one-time trigger or an expired recurring
+window only ends automatic scheduling: a non-deleted task can still be run
+manually.
+
+While the returned run is in progress, the page checks its status every two
+seconds for at most 70 seconds. The ordinary History refresh and its pagination
+remain intact. A delayed or unavailable status keeps the last confirmed row and
+offers a GET-only status refresh; the app never retries the non-idempotent start
+request automatically. A credential-stage failure displays the existing
+offline-credentials sign-in flow. Completing that sign-in leaves the failed row
+in History and requires a new explicit Start now activation.
+
+The 70-second observation deadline also cancels a pending status read. Returning
+to a visible tab respects a Scheduler retry delay. A newly observed credentials
+failure rechecks the route's credentials state, and a failed initial History
+load retains its retry action alongside any accepted manual run.
+
+Run history refreshes the shared conversation list to discover each chat's unread
+state. Start now also refreshes it when a conversation first appears or its run
+status changes, so a new manual run shows as unread without reloading the page.
+Opening the chat from task History, sources History, the conversation panel, or a
+direct URL marks it viewed, including when the panel is closed. Pending and
+successful viewed writes survive stale list responses for the current user;
+failed writes restore unread state and can be retried by leaving and reopening
+the chat.
+Rapidly opening several run chats queues their viewed writes within the current
+app instance; older list responses cannot replace a newer successfully loaded
+conversation snapshot. A newer failed request does not discard an older success.
+
+History and Start now pass expected chat ids to
+`ConversationsContext.refreshConversations(expectedIds?)`. Missing chats get up to
+five additional list requests, two seconds apart after each request settles.
+These requests share a retry queue in the provider and continue after a run
+finishes or the user navigates to its chat. Discovery stops when metadata arrives,
+the retry budget is exhausted, the user changes, or the provider unmounts.
+An ordinary refresh without expected ids does not start retries.
+
+## Scheduled task skills
+
+Create/edit compose the reusable skills field into the scheduled-task form.
+The field matches the model/agent input: search and favorites open in a desktop
+dropdown or mobile bottom sheet, Browse opens the skill catalog, and the trailing
+clear button removes the selected skill. Favorites come from the existing
+personal, shared, and public skills collections and favorites context.
+Task-form favorite rows omit the hover tooltip and View details action.
+Skill selection is always available. Support comes from the draft model's
+deployment entry, independent of chat's active model. Missing/false support
+blocks saving a skill and immediately shows the shared chat message. Typed
+BFF validation errors preserve the form; deployment-not-found errors do not
+replace it with the missing-task page. A change in deployment skill support
+clears a stale server capability error and revalidates the current draft,
+allowing retry when support recovers without requiring the user to reselect
+the model or skill.
+
+Detail and conversation task summaries show a resolved skill name, falling
+back to its full reference while metadata loads or cannot be read. These
+lookups belong to app adapters; the libraries receive resolved values and
+callbacks.
+
 The AI DIAL Chat frontend — a React 19 single-page application served by
 `apps/chat-api`. It is the user-facing surface for conversations, the entity
 catalog, prompts, skills, scheduled tasks, publishing, sharing, and file
@@ -10,11 +97,55 @@ inventory, backend domains, SSE streaming, theming token flow — see
 [`docs/architecture.md`](../../docs/architecture.md). This file covers what is
 specific to running and developing `apps/chat`.
 
+## Conversation reload recovery
+
+After a reply finishes, the conversation page and application preview reload
+the server's conversation. If that read fails, the received answer stays on
+screen with a separate "Couldn't refresh this conversation" notification.
+"Retry loading" repeats the read; it does not regenerate or save the answer.
+The action is disabled while reading or generating, and successful
+reconciliation clears the notification. Explicit backend save failures and
+reads returning an unresolved empty placeholder still use the unsaved-answer
+warning. A failed read alone establishes neither success nor failure of saving.
+
 ## Feature loading
 
 The app uses automatic chunk splitting, UI Kit `/grid` and `/editors` imports,
 the shared `/file-manager` entry and a lazy conversation publishing panel.
 Heavy feature engines load when their features are activated.
+
+## Celebration events
+
+Set `UI_EVENT=halloween` or `UI_EVENT=new-year` on chat-api to select an event.
+`none` or an omitted value disables events. The former `HALLOWEEN_ENABLED`
+setting and `features.halloweenEnabled` flag are removed. Deploy the frontend
+and backend together when migrating that setting. Event selection uses the
+existing client-config refresh lifecycle; it is not a calendar scheduler.
+
+Only `/` renders event decoration and intercepts its optional secret phrase.
+Existing conversations send text normally. The current modules are:
+
+| Event       | Click scenes                                                                                                                | Secret phrase                                                                           |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `halloween` | Ghosts, connected web, bats, cat, witches, ghost train, portal, ravens, candy rain, invisible paw prints, dancing skeletons | `trick or treat` → random descending spiders, cauldron, mimic, pumpkin bowling or mummy |
+| `new-year`  | Snow, confetti, flying sleighs                                                                                              | `happy new year` → confetti                                                             |
+
+The celebrations themselves live in
+[`@epam/ai-dial-celebrations`](../../libs/celebrations/README.md), which documents
+every scene, decoration behavior and the runtime. The app only adapts itself to
+the library in [`CelebrationHost`](src/context/CelebrationHost.tsx): it passes the
+configured event on `/` once the user config is ready, the navigation key as the
+reset key, labels translated from the existing `halloween.*` and `newYear.*` keys,
+the success toast as the notification sink, `useIsMobile`, and the composer,
+starter-list and history-panel anchors. The app keeps every scene enabled.
+
+### Adding an event
+
+1. Add the event to the library as a new entry point; see the library README.
+2. Register its loader in `EVENTS` and its translated labels in
+   [`CelebrationHost`](src/context/CelebrationHost.tsx), adding the keys to
+   `translation-keys.ts` and `en.json`.
+3. New IDs require no backend enum, provider, header or composer changes.
 
 ## Content Security Policy
 
@@ -316,6 +447,28 @@ English defaults, and this app passes `t(...)` values in.
 
 ## Testing
 
+### Reply to selected message text
+
+Reply stays hidden while selection is in progress and appears after pointer release
+or completion of keyboard selection, including repeated selections.
+
+Select text inside one completed user or assistant message and activate **Reply**
+to add it to the current composer as `reply-<uuid>.txt`. The UTF-8 file contains
+the selected visible text, including whitespace and Unicode. The typed draft is
+preserved; Reply focuses the composer without sending. The file uses normal
+attachment upload, size/count validation, preview, retry, removal and URL-based
+send behavior. A loading or failed upload blocks sending; removing its draft tile
+does not delete the uploaded file.
+
+Reply is available only in an editable conversation whose selected model permits
+text attachments. It is unavailable during streaming or message editing, with
+disabled input/files, and in read-only views. Cross-message selections, attachment
+viewers, control-only selections and tool output are excluded. Inline citations,
+annotations and links within selected message text do not hide Reply; the file
+preserves the browser-selected text, including selected marker labels. Tab reaches Reply after
+selection; Enter/Space activates it and Escape dismisses it. Touch and RTL use the
+same flow.
+
 ```bash
 # Run all tests
 npm exec nx test chat
@@ -404,3 +557,9 @@ The Quick Apps iframe receives
 `{ type: 'REQUEST_APPLICATION_CREDENTIALS', appId: 'applications/public/my-agent' }`
 from that iframe opens the same host dialog; no credentials are sent through
 `postMessage`. See [the authentication flow](../../docs/auth/auth-bff-encrypted-cookie.md#proactive-application-credential-forms).
+
+## AI text refinement
+
+Skill and scheduled-task forms opt into Description and Instructions refinement only when the backend returns `config.aiTextRefinementAvailable: true`. The host selects one of four purposes and passes a stable callback, cancellation signal, and translated labels to the libraries. Fields remain editable during requests; editing the active field cancels it. Save waits for refinement, and Undo is local to the current draft.
+
+Run `npm exec -- nx run @epam/chat:test-refinement-browser` for Chromium checks of both forms at 360/900/1280/1920px, in LTR and Arabic RTL, using deterministic callbacks without a live model. Geometry evidence is written to `tmp/text-refinement-browser/geometry.json`.

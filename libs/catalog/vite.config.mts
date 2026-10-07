@@ -7,8 +7,7 @@ import * as path from 'path';
 import { createIsExternalPeerImport } from '../../tools/vite-external-matcher.mjs';
 import { createVerifyPublishedStyles } from '../../tools/vite-verify-published-styles.mjs';
 const REQUIRED_PUBLISHED_STYLE_MARKERS = [
-  '.desktop\\:w-\\[540px\\]',
-  '.rtl\\:flex-row-reverse',
+  '.rtl\\:scale-x-\\[-1\\]',
   '.text-start',
 ] as const;
 const EXTERNAL_PEER_NAMES = [
@@ -75,6 +74,11 @@ export default defineConfig(({ command }) => ({
      * affects this lib's own production build.
      */
     alias: {
+      // Source components import their CSS Modules; do not prefix-match the public CSS subpath.
+      '@epam/ai-dial-publish-panel/styles.css': path.resolve(
+        import.meta.dirname,
+        '../publish-panel/src/styles.css',
+      ),
       '@epam/ai-dial-chat-shared': path.resolve(
         import.meta.dirname,
         '../chat-shared/src/index.ts',

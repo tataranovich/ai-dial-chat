@@ -3,9 +3,7 @@
 ## Purpose
 
 Per-provider environment-variable configuration of the fixed set of auth providers, including fail-fast boot validation and header-token authentication.
-
 ## Requirements
-
 ### Requirement: Fixed, hardcoded provider ids
 
 The system SHALL support exactly nine OIDC providers — Auth0, Azure AD, Azure B2C, GitLab, Google, Keycloak, PingID, Cognito, Okta — each identified by a hardcoded id constant (`auth0`, `azure-ad`, `azure-b2c`, `gitlab`, `google`, `keycloak`, `ping-id`, `cognito`, `okta`). No environment variable SHALL determine or override a provider's id.
@@ -49,17 +47,17 @@ For each of the nine providers, the system SHALL treat the provider's `CLIENT_ID
 
 ### Requirement: Partial provider configuration fails application boot
 
-When a provider's `CLIENT_ID` variable is set but another field required for that provider (its client secret field, and its host/tenant/issuer field) is missing, the system SHALL throw a descriptive error during application boot identifying the provider and the missing variable, and SHALL NOT start serving requests.
+When a provider's `CLIENT_ID` variable is set but another field required for that provider (its client secret field, and its host/tenant/issuer field) is missing, the system SHALL throw a descriptive error during application boot identifying the provider by its default label and naming the missing variable (`<Label> is configured but <VAR> is missing`, from `requireField` in `apps/chat-api/src/auth/providers/provider-builders.ts`), and SHALL NOT start serving requests. Azure B2C's secret variable is `AUTH_AZURE_B2C_CLIENT_SECRET` and Okta's is `AUTH_OKTA_CLIENT_SECRET`; every other provider uses `AUTH_{PROVIDER_TYPE}_SECRET`.
 
 #### Scenario: Missing secret fails boot
 
 - **WHEN** `AUTH_AUTH0_CLIENT_ID` and `AUTH_AUTH0_HOST` are set but `AUTH_AUTH0_SECRET` is not set
-- **THEN** application boot fails with an error message naming `auth0` and `AUTH_AUTH0_SECRET`
+- **THEN** application boot fails with the error `Auth0 is configured but AUTH_AUTH0_SECRET is missing`
 
 #### Scenario: Missing host/tenant/issuer fails boot
 
 - **WHEN** `AUTH_AZURE_AD_CLIENT_ID` and `AUTH_AZURE_AD_SECRET` are set but `AUTH_AZURE_AD_TENANT_ID` is not set
-- **THEN** application boot fails with an error message naming `azure-ad` and `AUTH_AZURE_AD_TENANT_ID`
+- **THEN** application boot fails with the error `Azure AD is configured but AUTH_AZURE_AD_TENANT_ID is missing`
 
 ### Requirement: Provider-specific issuer derivation
 
@@ -128,7 +126,7 @@ When `AUTH_{PROVIDER_TYPE}_SCOPE` is not set, the system SHALL use a hardcoded d
 
 ### Requirement: Fallback chain for admin roles and roles claim path
 
-For each provider, `adminRoles` SHALL resolve from `AUTH_{PROVIDER_TYPE}_ADMIN_ROLE_NAMES` (comma-separated) if set, else the app-wide `ADMIN_ROLE_NAMES` (comma-separated, default `admin`) if set, else `undefined`. `rolesClaim` SHALL resolve from `AUTH_{PROVIDER_TYPE}_DIAL_ROLES_FIELD` if set, else the app-wide `DIAL_ROLES_FIELD` (default `dial_roles`).
+For each provider except Google, `adminRoles` SHALL resolve from `AUTH_{PROVIDER_TYPE}_ADMIN_ROLE_NAMES` (comma-separated) if set, else the app-wide `ADMIN_ROLE_NAMES` (comma-separated, default `admin`) if set, else `undefined`. `rolesClaim` SHALL resolve from `AUTH_{PROVIDER_TYPE}_DIAL_ROLES_FIELD` if set, else the app-wide `DIAL_ROLES_FIELD` (default `dial_roles`). Google has no `AUTH_GOOGLE_ADMIN_ROLE_NAMES` / `AUTH_GOOGLE_DIAL_ROLES_FIELD` variables: its `adminRoles` and `rolesClaim` always come from the app-wide `ADMIN_ROLE_NAMES` and `DIAL_ROLES_FIELD`.
 
 #### Scenario: Provider-specific admin roles override the app-wide default
 
@@ -147,17 +145,22 @@ For each provider, `adminRoles` SHALL resolve from `AUTH_{PROVIDER_TYPE}_ADMIN_R
 
 ### Requirement: Single app-wide post-logout redirect URI
 
-The system SHALL read a new required-if-any-provider-is-configured environment variable, `AUTH_POST_LOGOUT_REDIRECT_URI`, and SHALL use its value as the `postLogoutRedirectUri` for every assembled provider, replacing the previous per-entry JSON `postLogoutRedirectUri` field.
+The system SHALL read an app-wide environment variable, `AUTH_POST_LOGOUT_REDIRECT_URI`, and SHALL use its value as the `postLogoutRedirectUri` for every assembled provider, replacing the previous per-entry JSON `postLogoutRedirectUri` field. When `AUTH_POST_LOGOUT_REDIRECT_URI` is not set, the system SHALL default its value to `AUTH_CALLBACK_BASE_URL`. The variable remains explicitly overridable to any other value, including when one or more providers are configured.
 
 #### Scenario: Post-logout redirect applied to every provider
 
 - **WHEN** `AUTH_POST_LOGOUT_REDIRECT_URI=https://chat.example.com` is set, and both Auth0 and Google are configured
 - **THEN** both the Auth0 and Google `ProviderConfig` entries have `postLogoutRedirectUri` equal to `https://chat.example.com`
 
-#### Scenario: Missing redirect URI fails boot when a provider is configured
+#### Scenario: Missing redirect URI defaults to AUTH_CALLBACK_BASE_URL
 
-- **WHEN** at least one provider (e.g. Auth0) is fully configured and `AUTH_POST_LOGOUT_REDIRECT_URI` is not set
-- **THEN** application boot fails with an error naming `AUTH_POST_LOGOUT_REDIRECT_URI`
+- **WHEN** `AUTH_CALLBACK_BASE_URL=https://chat.example.com` is set, `AUTH_POST_LOGOUT_REDIRECT_URI` is not set, and at least one provider (e.g. Auth0) is fully configured
+- **THEN** application boot succeeds and the Auth0 `ProviderConfig`'s `postLogoutRedirectUri` is `https://chat.example.com`
+
+#### Scenario: Explicit redirect URI overrides the default
+
+- **WHEN** `AUTH_CALLBACK_BASE_URL=https://chat.example.com` and `AUTH_POST_LOGOUT_REDIRECT_URI=https://accounts.chat.example.com/signed-out` are both set, and Auth0 is configured
+- **THEN** the Auth0 `ProviderConfig`'s `postLogoutRedirectUri` is `https://accounts.chat.example.com/signed-out`, not `AUTH_CALLBACK_BASE_URL`
 
 ### Requirement: Provider listing response shape is unchanged
 
@@ -201,3 +204,23 @@ When `AUTH_HEADER_TOKEN_ENABLED` is `true`, the system SHALL require `AUTH_HEADE
 
 - **WHEN** `AUTH_HEADER_TOKEN_ENABLED` is `false` (or unset) and `AUTH_HEADER_TOKEN_ALLOWED_ISSUERS` is unset
 - **THEN** application boot succeeds
+
+### Requirement: CORS origin defaults to the auth callback base URL
+
+The system SHALL read an app-wide environment variable, `CORS_ORIGIN`, used as the allowed CORS origin for `app.enableCors(...)` and as an allowed origin in `AuthController`'s origin checks and `CsrfGuard`'s Origin/Referer validation. When `CORS_ORIGIN` is not set, the system SHALL default its value to `AUTH_CALLBACK_BASE_URL`. The variable remains explicitly overridable to any other value.
+
+#### Scenario: Unset CORS_ORIGIN defaults to AUTH_CALLBACK_BASE_URL
+
+- **WHEN** `AUTH_CALLBACK_BASE_URL=https://chat.example.com` is set and `CORS_ORIGIN` is not set
+- **THEN** the application allows CORS requests from `https://chat.example.com` and rejects requests from other origins
+
+#### Scenario: Explicit CORS_ORIGIN overrides the default
+
+- **WHEN** `AUTH_CALLBACK_BASE_URL=https://api.chat.example.com` and `CORS_ORIGIN=https://chat.example.com` are both set
+- **THEN** the application allows CORS requests from `https://chat.example.com`, not from `https://api.chat.example.com`
+
+#### Scenario: CORS setup reads the same validated value as the rest of the application
+
+- **WHEN** the application boots with `CORS_ORIGIN` set to any valid value
+- **THEN** `app.enableCors(...)`, `AuthController`'s origin checks, and `CsrfGuard` all observe that same value, with no separate raw-`process.env` read producing a different effective origin
+

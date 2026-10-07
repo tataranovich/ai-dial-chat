@@ -14,7 +14,7 @@ How user-sent and assistant-generated attachments are mapped to display models a
 - `MessageAttachment` interface with `title: string` and optional `index?: number`, `type?: string` (absent in some streamed runtime payloads), `data?: string`, `url?: string`, `reference_type?: string`, `reference_url?: string`
 - `DisplayAttachment` interface with `id: string`, `name: string`, `contentType: string`, `type: AttachmentType`, `status: RequestStatus`, and optional `errorReason?: AttachmentErrorReason`, `previewUrl?: string`, `playUrl?: string`, `url?: string`, `referenceUrl?: string`, `data?: string`
 - `Attachment` interface extending `DisplayAttachment` with `file: File` for browser-selected files that can be encoded and sent
-- `Message` interface with optional `custom_content?: { attachments?: MessageAttachment[] }`
+- `Message` interface with optional `custom_content?: MessageCustomContent`, where `MessageCustomContent` carries optional `attachments?: MessageAttachment[]`
 
 `libs/chat-shared/src/types/attachment.ts` SHALL define `AttachmentType` with at minimum: `File`, `Image`, `Audio`, `Prompt`, `Pasted`.
 
@@ -37,9 +37,9 @@ How user-sent and assistant-generated attachments are mapped to display models a
 - Sets `name` to `dto.title`
 - Sets `contentType` to `dto.type`, except for a reference-only DTO, where it is inferred as described in the `attachment-display-mapping` capability
 - Does not create or require a browser `File` object for display-only response attachments
-- Sets `type` to `AttachmentType.Image` when `contentType` starts with `image/`, `AttachmentType.Audio` when it starts with `audio/`, otherwise `AttachmentType.File`
+- Sets `type` via `getAttachmentTypeFromMime(dto.type)`: `AttachmentType.Image` when `dto.type` starts with `image/`, `AttachmentType.Audio` when it starts with `audio/`, otherwise `AttachmentType.File` — except that a DTO carrying both `url` and `reference_url` with no `reference_type` maps to `AttachmentType.Link`
 - Sets `status` to `RequestStatus.Idle`
-- Preserves `dto.url` as `url` when present
+- Preserves `dto.url` as `url` and `dto.reference_url` as `referenceUrl` when present, and keeps inline `dto.data` as `data` for non-image, non-audio attachments
 - Sets `previewUrl` for image attachments from the injected `resolvers.resolvePreviewUrl` when `dto.url` is present, falling back to `dto.url` itself, or to a `data:${type};base64,${data}` URL when only inline image `data` is present
 - Sets `playUrl` for audio attachments from the injected `resolvers.resolvePlayUrl` when `dto.url` is present, falling back to `dto.url` itself, or to a `data:` URL built from inline audio `data`
 
@@ -84,7 +84,7 @@ The URL resolution is injected rather than imported — `apps/chat` supplies `re
 
 ### Requirement: `UserMessageBubble` renders user-sent attachments above text
 
-`libs/conversation-messages/src/components/MessageBubble/UserMessageBubble.tsx` SHALL accept an optional `attachments?: DisplayAttachment[]` display prop. When non-empty, it SHALL render an `AttachmentGroup` above the message text. The group SHALL be read-only: no remove button, no retry button. API attachment DTOs SHALL be mapped to `DisplayAttachment[]` before reaching this component.
+`libs/conversation-messages/src/components/MessageBubble/UserMessageBubble.tsx` SHALL accept an optional `attachments?: DisplayAttachment[]` display prop. When non-empty, it SHALL render an `AttachmentGroup` above the message text. The group SHALL be read-only: no remove button, and no retry button unless the optional `onAttachmentRetry` prop is supplied (`apps/chat` does not supply it). API attachment DTOs SHALL be mapped to `DisplayAttachment[]` before reaching this component.
 
 The group SHALL be end-aligned (cards packed to the trailing edge via a logical `ms-auto` / `items-end` column) and capped at `max-w-[640px]`, so it wraps to further rows instead of scrolling horizontally.
 
@@ -117,7 +117,7 @@ The group SHALL be end-aligned (cards packed to the trailing edge via a logical 
 
 ### Requirement: `AssistantMessageBubble` renders assistant-generated attachments below text
 
-`libs/conversation-messages/src/components/MessageBubble/AssistantMessageBubble.tsx` SHALL accept the same optional `attachments?: DisplayAttachment[]` display prop. When non-empty, it SHALL render an `AttachmentGroup` below the message text. The group SHALL be read-only (no `onRemove`, no `onRetry`).
+`libs/conversation-messages/src/components/MessageBubble/AssistantMessageBubble.tsx` SHALL accept the same optional `attachments?: DisplayAttachment[]` display prop. When non-empty, it SHALL render an `AttachmentGroup` below the message text. The group SHALL be read-only (no `onRemove`; `onRetry` is only wired from the optional `onAttachmentRetry` prop, which `apps/chat` does not supply).
 
 The component SHALL also accept an optional `onAttachmentClick?: (attachment: DisplayAttachment) => void` callback prop. When provided, clicking an `AttachmentCard` in the tray SHALL call this callback. This callback is the shared entry point for both the tray's direct click and the citation popup's "Preview" button — the app passes the same handler to both.
 
@@ -171,7 +171,7 @@ Attachments that carry a `url` (with or without a `reference_url`) SHALL continu
 
 ### Requirement: `Conversation` page passes attachments to message bubbles
 
-`apps/chat/src/components/ConversationView/ConversationView.tsx` SHALL map each message's API attachment DTOs to `DisplayAttachment[]` before passing them as the `attachments` prop to the corresponding `UserMessageBubble` or `AssistantMessageBubble`.
+`apps/chat/src/components/ConversationView/ConversationMessageItem.tsx` (rendered per message by `ConversationView`) SHALL map each message's API attachment DTOs to `DisplayAttachment[]` with `attachmentDtosToDisplayAttachments(..., attachmentDisplayResolvers)` (resolvers from `apps/chat/src/utils/attachment-display-resolvers.ts`) before passing them as the `attachments` prop to `MessageBubble`, which renders `UserMessageBubble` or `AssistantMessageBubble` by role. The normal (non-editing) render passes the filtered list described by the two exclusion requirements in this spec (`nonReferenceDisplayAttachments`, minus any visualizer-claimed attachments) for both roles; only the edit-mode `Suspense` fallback bubble and the message editor's `initialAttachments` receive the unfiltered `allDisplayAttachments`.
 
 #### Scenario: Persisted user message with attachments renders cards
 
@@ -184,3 +184,45 @@ Attachments that carry a `url` (with or without a `reference_url`) SHALL continu
 - **WHEN** the conversation history contains an assistant `Message` with `custom_content.attachments`
 - **THEN** the `AssistantMessageBubble` for that message renders one `AttachmentCard` per attachment
 - **AND** image attachment cards use the lazy image preview behavior defined by `conversation-input-attachments`
+
+### Requirement: Attachments claimed by an application visualizer are excluded from the plain attachment tray
+
+`apps/chat/src/components/ConversationView/ConversationMessageItem.tsx` SHALL exclude
+every `DisplayAttachment` claimed by a matched `ApplicationVisualizer` (see the
+`application-visualizers` capability) from the array passed to
+`AssistantMessageBubble`'s `attachments` prop, so a claimed attachment never renders as
+a tray tile alongside the inline visualizer that already displays it.
+
+The exclusion applies **after** the existing reference-only exclusion and uses the same
+`nonReferenceDisplayAttachments` value as its input, so both filters compose rather than
+competing.
+
+Attachments the visualizer does not claim SHALL continue to be included in the tray
+unchanged, in their original order. A claimed attachment for which the host could not
+resolve a URL (absent from `resolveGroupedVisualizerCanvasContent`'s `resolved` list)
+falls back to an ordinary tray tile rather than disappearing.
+
+When no registry entry matches the message's effective deployment id, the array passed
+to the bubble SHALL be byte-for-byte what it is today.
+
+#### Scenario: Claimed attachment does not render a tray tile
+
+- **WHEN** an assistant message's effective deployment id matches a registry entry that claims one of its attachments
+- **THEN** the `DisplayAttachment[]` passed to `AttachmentGroup` does not include an entry for it
+- **AND** the inline grouped visualizer renders it instead
+
+#### Scenario: Unclaimed attachments keep their tiles and order
+
+- **WHEN** the matched entry declares `contentType` and the message also carries attachments of other types
+- **THEN** those attachments appear in the tray in their original relative order
+
+#### Scenario: No matched entry leaves the tray untouched
+
+- **WHEN** the message's effective deployment id is absent from the registry
+- **THEN** the `DisplayAttachment[]` passed to `AttachmentGroup` is unchanged from current behavior
+
+#### Scenario: Reference-only exclusion still applies
+
+- **WHEN** a message carries a reference-only attachment and its deployment matches an entry that omits `contentType`
+- **THEN** the reference-only attachment is excluded from the tray as it is today
+- **AND** it is not claimed by the visualizer, because it has no resolvable `url`

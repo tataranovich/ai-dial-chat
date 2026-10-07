@@ -69,7 +69,7 @@ const splitEntityNameAndVersion = (
  * folder and reads their publish history by proxying DIAL Core's
  * Publication API (`createPublication`/`getPublications`) — this service
  * holds no persistence of its own. `apps/chat-api` has no database, and Core
- * is the sole source of truth (see design.md D3 for why chat-api-side
+ * is the sole source of truth (see `openspec/changes/archive/2026-07-14-add-catalog-publish-to-folder/design.md` D3 for why chat-api-side
  * `PublishHistoryEntry` storage was rejected).
  *
  * Core's `Publication`/`PublicationResource` schema has no version field.
@@ -99,8 +99,7 @@ export class PublishService {
    *
    * @throws {NotFoundException} When Core reports the entity or folder as unknown
    * @throws {ForbiddenException} When the caller lacks write access to `folderPath`
-   * @throws {BadGatewayException} When Core returns an unexpected error
-   * @throws {ServiceUnavailableException} When Core is unreachable or times out
+   * @throws {BadGatewayException} When Core returns an unexpected error, a 5xx, or is unreachable
    */
   async publish(
     accessToken: string,
@@ -222,8 +221,7 @@ export class PublishService {
    *
    * @throws {NotFoundException} When Core reports the entity or target as unknown
    * @throws {ForbiddenException} When the caller lacks write access to `folderPath`
-   * @throws {BadGatewayException} When Core returns an unexpected error
-   * @throws {ServiceUnavailableException} When Core is unreachable or times out
+   * @throws {BadGatewayException} When Core returns an unexpected error, a 5xx, or is unreachable
    */
   async unpublish(
     accessToken: string,

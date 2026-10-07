@@ -5,6 +5,14 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MessageActionsProps } from '../../../models/message-actions';
 import { MessageActions } from '../MessageActions';
 
+/*
+ * The 2.0 kit buttons swap native `disabled` for `aria-disabled="true"` when a
+ * tooltip is set, so the button stays focusable and the tooltip reachable.
+ */
+const isButtonDisabled = (button: HTMLElement) =>
+  button.hasAttribute('disabled') ||
+  button.getAttribute('aria-disabled') === 'true';
+
 describe('MessageActions', () => {
   describe('role=User (default)', () => {
     it('renders Edit and Delete buttons', () => {
@@ -48,6 +56,60 @@ describe('MessageActions', () => {
       render(<MessageActions onDelete={onDelete} />);
       await user.click(screen.getByRole('button', { name: 'Delete message' }));
       expect(onDelete).toHaveBeenCalledOnce();
+    });
+
+    it('does not render Copy message when onCopy is not provided', () => {
+      render(<MessageActions onEdit={vi.fn()} onDelete={vi.fn()} />);
+      expect(screen.queryByRole('button', { name: 'Copy message' })).toBeNull();
+    });
+
+    it('renders Copy message before Edit and Delete', () => {
+      render(
+        <MessageActions onCopy={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} />,
+      );
+      const names = screen
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'));
+      expect(names).toEqual(['Copy message', 'Edit message', 'Delete message']);
+    });
+
+    it('renders the toolbar when Copy is the only action', () => {
+      render(<MessageActions onCopy={vi.fn()} />);
+      expect(screen.getByRole('toolbar')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Copy message' })).toBeTruthy();
+    });
+
+    it('calls onCopy, shows the copied state, and announces the copy', async () => {
+      const onCopy = vi.fn();
+      const user = userEvent.setup();
+      render(<MessageActions onCopy={onCopy} />);
+      await user.click(screen.getByRole('button', { name: 'Copy message' }));
+      expect(onCopy).toHaveBeenCalledOnce();
+      expect(screen.getByRole('button', { name: 'Copied!' })).toBeTruthy();
+      expect(screen.getByRole('status').textContent).toBe(
+        'Message copied to clipboard',
+      );
+    });
+
+    it('applies custom Copy message labels', async () => {
+      const user = userEvent.setup();
+      render(
+        <MessageActions
+          onCopy={vi.fn()}
+          labels={{
+            tooltips: { copyMessage: 'Kopieren', copied: 'Kopiert' },
+            ariaLabels: {
+              copyMessage: 'Nachricht kopieren',
+              copiedMessageStatus: 'Nachricht kopiert',
+            },
+          }}
+        />,
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'Nachricht kopieren' }),
+      );
+      expect(screen.getByRole('button', { name: 'Kopiert' })).toBeTruthy();
+      expect(screen.getByRole('status').textContent).toBe('Nachricht kopiert');
     });
   });
 
@@ -176,9 +238,7 @@ describe('MessageActions', () => {
 
     it.each(ASSISTANT_ACTION_NAMES)('disables the %s button', (name) => {
       renderDisabledAssistantActions();
-      expect(
-        screen.getByRole('button', { name }).hasAttribute('disabled'),
-      ).toBe(true);
+      expect(isButtonDisabled(screen.getByRole('button', { name }))).toBe(true);
     });
 
     it('does not call onRegenerate when the disabled Regenerate button is clicked', async () => {
@@ -220,23 +280,21 @@ describe('MessageActions', () => {
     it('leaves the assistant actions enabled by default', () => {
       renderDisabledAssistantActions({ isDisabled: false });
       ASSISTANT_ACTION_NAMES.forEach((name) => {
-        expect(
-          screen.getByRole('button', { name }).hasAttribute('disabled'),
-        ).toBe(false);
+        expect(isButtonDisabled(screen.getByRole('button', { name }))).toBe(
+          false,
+        );
       });
     });
 
     it('disables the user Edit and Delete buttons', () => {
       render(<MessageActions onEdit={vi.fn()} onDelete={vi.fn()} isDisabled />);
       expect(
-        screen
-          .getByRole('button', { name: 'Edit message' })
-          .hasAttribute('disabled'),
+        isButtonDisabled(screen.getByRole('button', { name: 'Edit message' })),
       ).toBe(true);
       expect(
-        screen
-          .getByRole('button', { name: 'Delete message' })
-          .hasAttribute('disabled'),
+        isButtonDisabled(
+          screen.getByRole('button', { name: 'Delete message' }),
+        ),
       ).toBe(true);
     });
   });

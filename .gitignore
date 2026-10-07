@@ -10,6 +10,9 @@ __pycache__/
 # dependencies
 node_modules
 
+# isolated npm cache for consumer-fixture packaging (see tools/*/scripts/pack-and-install.mjs)
+tools/*/.npm-cache/
+
 # IDEs and editors
 /.idea
 .project
@@ -61,3 +64,6 @@ vitest.config.*.timestamp*
 .nx/self-healing
 
 .nx/migrate-runs
+
+# Storybook build output
+storybook-static

@@ -10,17 +10,22 @@ or a plain custom application — by proxying DIAL Core (`saveCustomApplication`
 caller's session access token. The full request/response contract and DIAL Core body mapping
 are owned by the `application-create-api` capability; this requirement covers only the write
 surface shared with update and delete. The request body
-SHALL be validated via `CreateApplicationBodyDto`. The per-user applications list cache SHALL
-be invalidated on success, and DIAL Core error statuses SHALL be mapped to typed HTTP
-responses. `CreateApplicationBodyDto` SHALL NOT define an `intro` field — the `intro` field is
-removed from the request/response contract entirely; a request body that still includes an
-`intro` property SHALL be rejected with a 400 (the global `ValidationPipe`'s
-`forbidNonWhitelisted` behavior applies to any property not declared on the DTO).
+SHALL be validated via `CreateApplicationBodyDto`. On success, the per-user applications and
+deployments-list caches SHALL be invalidated so subsequent catalog and editor reads include the
+new application. DIAL Core error statuses SHALL be mapped to typed HTTP responses. `CreateApplicationBodyDto` SHALL NOT
+define an `intro` field — the `intro` field is removed from the request/response contract
+entirely; a request body that still includes an `intro` property SHALL be rejected with a 400
+(the global `ValidationPipe`'s `forbidNonWhitelisted` behavior applies to any property not
+declared on the DTO).
 
 #### Scenario: Successful create
 - **WHEN** an authenticated user POSTs a valid application body
 - **THEN** the service proxies the create to DIAL Core and returns the created application
   identifier
+
+#### Scenario: Create invalidates both list caches
+- **WHEN** an authenticated user creates an application
+- **THEN** a subsequent deployments-list request includes that application
 
 #### Scenario: Invalid create body
 - **WHEN** the request body fails DTO validation (for example, `name` is missing)
@@ -105,7 +110,8 @@ way `deleteApplication` does, fetch the current stored application via DIAL Core
 `application_type_schema_id` is never in the body and therefore always carried through
 untouched, and `displayVersion` is carried through unless the body supplies `version`.
 `displayName` SHALL be replaced outright on every update; the remaining optional fields SHALL
-be written only when present in the body.
+be written only when present (non-`null`) in the body — `topics` additionally only when non-empty, so
+`topics: []` carries the stored `descriptionKeywords` through unchanged.
 
 **`applicationProperties` replacement semantics:**
 - When the request body omits `applicationProperties`, or supplies it as `null`, the stored
@@ -234,6 +240,8 @@ additional role restriction.
 
 ### Requirement: Quick Apps always get features.skills_supported: true
 
+Every chat-originated Quick App create or update SHALL persist `features.skills_supported: true`; the rationale and mechanics follow.
+
 When a user creates a Quick App from the Admin application, Admin's own UI lets them set the
 `skills_supported` feature flag. Chat has no equivalent UI control for this flag, so a Quick App
 created or updated from chat would otherwise never get it set, and would silently lose skills.
@@ -309,6 +317,16 @@ completes.
   `DEPLOYMENT_ID_PATTERN`
 - **THEN** the endpoint responds `400 Bad Request` and does not call DIAL Core
 
+#### Scenario: Traversal segment in the application name is rejected
+- **WHEN** the `applicationName` path parameter contains an empty, `.`, or `..` segment, raw or
+  percent-encoded (e.g. `applications/b/../x`, `applications/b/./x`, `applications/b/%2e%2e/x`)
+- **THEN** the endpoint responds `400 Bad Request` and does not call DIAL Core
+
+#### Scenario: Dotted application names stay valid
+- **WHEN** the `applicationName` path parameter is `a.b`, `__1.0.0__`, or
+  `applications/bucket/my-app__1.0.0`
+- **THEN** path validation passes
+
 #### Scenario: Not authenticated
 - **WHEN** the request has no valid session cookie
 - **THEN** the endpoint responds `401 Unauthorized`
@@ -333,11 +351,15 @@ completes.
 The backend SHALL expose `DELETE /api/v1/applications/:applicationName` that deletes an
 application for the authenticated session user by proxying DIAL Core
 (`deleteCustomApplication`), using the caller's session access token. The
-`applicationName` path parameter SHALL be validated with the same allowlist pattern used
-by `GetToolsetDto.toolsetName` (`DEPLOYMENT_ID_PATTERN`/`DEPLOYMENT_ID_VALIDATION_MESSAGE`),
-via a new `GetApplicationDto`. The bucket/path SHALL be resolved by parsing an
-`applications/{bucket}/{path}` id when present, falling back to the caller's own bucket
-plus the encoded name otherwise (mirroring `ToolsetsService.resolveToolsetResource`). On
+`applicationName` path parameter SHALL be validated by `GetApplicationDto` with the shared
+`@IsSafeResourceId` validator (`apps/chat-api/src/common/validators/safe-resource-id.validator.ts`,
+the same check `GetToolsetDto.toolsetName`'s `@IsSafeToolsetName` delegates to): the value
+SHALL match the `DEPLOYMENT_ID_PATTERN` allowlist AND no `/`-separated segment — after one
+extra percent-decode, so `%2e%2e` and `%2F` are caught — may be empty, `.`, or `..`. Dots
+inside a segment (`a.b`, `my-app__1.0.0`) remain valid. The bucket/path SHALL be resolved by parsing an
+`applications/{bucket}/{path}` id when present (`parseDialApplicationResource`,
+`apps/chat-api/src/common/utils/dial-application-resource.ts`), falling back to the caller's own bucket
+plus the encoded name otherwise (mirroring `ToolsetsListingService.resolveToolsetResource`). On
 success, the per-user applications list cache (`applications:list:${userSub}`) SHALL be
 invalidated, and the per-user deployments list cache SHALL also be invalidated via
 `DeploymentsService.invalidateListCache(userSub)` (clearing `deployments:list:${userSub}`
@@ -378,6 +400,16 @@ side effects. The endpoint's request/response shape, `operationId`, and generate
 - **WHEN** the `applicationName` path parameter contains characters disallowed by
   `DEPLOYMENT_ID_PATTERN`
 - **THEN** the endpoint responds `400 Bad Request` and does not call DIAL Core
+
+#### Scenario: Traversal segment in the application name is rejected
+- **WHEN** the `applicationName` path parameter contains an empty, `.`, or `..` segment, raw or
+  percent-encoded (e.g. `applications/b/../x`, `applications/b/./x`, `applications/b/%2e%2e/x`)
+- **THEN** the endpoint responds `400 Bad Request` and does not call DIAL Core
+
+#### Scenario: Dotted application names stay valid
+- **WHEN** the `applicationName` path parameter is `a.b`, `__1.0.0__`, or
+  `applications/bucket/my-app__1.0.0`
+- **THEN** path validation passes
 
 #### Scenario: Not authenticated
 - **WHEN** the request has no valid session cookie

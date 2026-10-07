@@ -346,7 +346,7 @@ export const useConversationExport = ({
            * too: they stay valid `files/{bucket}/{path}` ids pointing at the
            * exporting user's own bucket, and the import writes them back
            * verbatim, which restores for that user the very attachments the
-           * mode excluded (issue #8663).
+           * mode excluded ([#8663](https://github.com/epam/ai-dial-chat/issues/8663)).
            */
           const envelope = buildExportEnvelope(
             [stripConversationAttachments(conversation)],
@@ -625,7 +625,16 @@ export const useConversationExport = ({
       if (signal.aborted) return;
 
       try {
-        const envelope = buildExportEnvelope(conversations, []);
+        /*
+         * Export-all ships no attachment bytes, so — as with a single
+         * without-attachments export — the references go too.
+         * Kept, they point at the exporting user's bucket: another user who
+         * imports the file gets a 403 on every preview.
+         */
+        const envelope = buildExportEnvelope(
+          conversations.map(stripConversationAttachments),
+          [],
+        );
         const blob = serializeExportEnvelope(envelope);
         triggerBlobDownload(blob, fileName);
         onSuccess?.({ jobId });

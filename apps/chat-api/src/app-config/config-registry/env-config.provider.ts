@@ -13,7 +13,7 @@ import { ApplicationVisualizerDto } from '../dto/application-visualizer.dto';
 import { CustomVisualizerDto } from '../dto/custom-visualizer.dto';
 import { CONFIG_DEFINITIONS } from './config-registry.constants';
 
-const FILE_MANAGER_ALLOWED_TABS = ['my_files', 'shared', 'organization'];
+const FILE_MANAGER_ALLOWED_TABS = ['all', 'my_files', 'shared', 'organization'];
 
 @Injectable()
 export class EnvConfigProvider implements ConfigProvider {
@@ -30,6 +30,11 @@ export class EnvConfigProvider implements ConfigProvider {
     const definition = CONFIG_DEFINITIONS.find((d) => d.key === key);
     if (!definition) {
       return undefined;
+    }
+
+    if (key === 'ui.activeEventId') {
+      const eventId = this.configService.get('UI_EVENT', { infer: true });
+      return eventId === 'none' ? null : eventId;
     }
 
     // features.asrEnabled is derived from ASR_MODEL presence, not a direct env var
@@ -351,8 +356,8 @@ export class EnvConfigProvider implements ConfigProvider {
    * Parses `APPLICATION_VISUALIZERS` fail-open: invalid JSON or a value that
    * is not a plain object (an array included) yields `{}`; each entry is
    * validated independently, so one malformed entry never drops the others.
-   * Unrecognized fields on an entry (e.g. legacy display flags that 1.0 has
-   * no successor for) are logged and ignored, never causing the entry itself
+   * Unrecognized fields on an entry (e.g. the legacy `expanded` flag that 1.0
+   * has no successor for) are logged and ignored, never causing the entry itself
    * to be dropped.
    */
   private parseApplicationVisualizers(
@@ -439,6 +444,8 @@ export class EnvConfigProvider implements ConfigProvider {
           'mobileHeight',
           'passAuthInfo',
           'passExplicitToken',
+          'borderless',
+          'withoutTitle',
         ]);
         const unknownKeys = Object.keys(rawEntry as object).filter(
           (k) => !knownFields.has(k),
@@ -467,6 +474,8 @@ export class EnvConfigProvider implements ConfigProvider {
           mobileHeight: dto.mobileHeight,
           passAuthInfo: dto.passAuthInfo,
           passExplicitToken: dto.passExplicitToken,
+          borderless: dto.borderless,
+          withoutTitle: dto.withoutTitle,
         };
       },
     );

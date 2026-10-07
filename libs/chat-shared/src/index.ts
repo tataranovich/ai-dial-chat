@@ -1,4 +1,5 @@
 export * from './models/annotation';
+export * from './models/text-refinement';
 export * from './models/conversation-transfer';
 export * from './models/conversation-classification';
 export * from './models/chat';
@@ -13,6 +14,7 @@ export * from './models/tool-menu-item';
 export * from './models/custom-visualizer';
 export * from './models/application-visualizer';
 export * from './models/entity';
+export * from './models/locale';
 export * from './types/attachment';
 export * from './types/entity-type';
 export * from './types/mime-type';
@@ -20,6 +22,7 @@ export * from './types/code-editor';
 export * from './types/file-manager-node';
 export * from './utils/annotation';
 export * from './utils/string-utils';
+export * from './utils/entity-field-limits';
 export * from './utils/merge-class';
 export * from './utils/build-css-vars';
 export * from './utils/message';
@@ -31,6 +34,7 @@ export * from './utils/format-last-used';
 export * from './utils/format-file-size';
 export * from './utils/format-price';
 export * from './utils/file-download';
+export * from './utils/syntax-highlighting';
 export * from './constants/entity-colors';
 export * from './utils/prompt-variables';
 export * from './utils/generate-uuid';
@@ -54,10 +58,18 @@ export * from './components/EntityTypeLabel/EntityTypeLabel';
 export * from './components/FeaturedChip/FeaturedChip';
 export * from './components/EntityHeader/EntityHeader';
 export * from './components/ResourceSummary/ResourceSummary';
+export * from './components/ConfirmationIdentityCard/ConfirmationIdentityCard';
+export * from './components/ConfirmationIdentityRow/ConfirmationIdentityRow';
+export * from './components/ConfirmationView/ConfirmationView';
+export * from './components/ConfirmationView/ConfirmationFooter';
+export * from './components/ConfirmationDialog/ConfirmationDialog';
 export * from './components/MarkdownRenderer/Table/TableHeader';
+export * from './components/TextRefinementField/TextRefinementField';
 export * from './entry-points/markdown';
 export * from './hooks/useAvailableHeightCap';
 export * from './hooks/useIsMobile';
+export * from './hooks/useTextRefinement';
+export * from './hooks/useUnsavedChangesGuard';
 
 /*
  * Explicit `/index` avoids a declaration-resolution collision with this
@@ -71,3 +83,4 @@ export * from './hooks/useIsMobile';
  */
 export * from './file-manager/index';
 export { CHAT_SHARED_CLASS } from './constants/public-class-names';
+export { isSkillSelectionUnsupported } from './utils/is-skill-selection-unsupported';

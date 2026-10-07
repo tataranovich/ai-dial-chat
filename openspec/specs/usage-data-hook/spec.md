@@ -12,8 +12,10 @@ keeps presentational card rendering in `libs/usage-dashboard` while DTO interpre
 ## Requirements
 
 ### Requirement: Usage tab renders the aggregate limit cards
-The system SHALL provide a `Usage` tab/page component, registered as the sole entry in the
-`SettingsTabs` config, that renders a page header (title and one-line description) followed by up
+The system SHALL provide a `Usage` tab/page component
+(`apps/chat/src/pages/SettingsPage/UsageTab/UsageTab.tsx`), registered as the `SettingsTabs.Usage`
+entry in `useSettingsTabConfig` (`apps/chat/src/hooks/useSettingsTabConfig.tsx`) after the default
+`SettingsTabs.Preferences` entry, that renders a page header (title and one-line description) followed by up
 to three aggregate cost-limit cards — Today (`dayCostStats`), This week (`weekCostStats`), This
 month (`monthCostStats`) — via the `@epam/ai-dial-usage-dashboard` library's
 `UsageLimitCardGroup`'s `cards` prop, mapped from `useUsageData`'s result through the
@@ -21,10 +23,21 @@ month (`monthCostStats`) — via the `@epam/ai-dial-usage-dashboard` library's
 render unconditionally, independent of `isLoading`. Its title SHALL be an `<h2>` — `SettingsPage`
 (`apps/chat/src/pages/SettingsPage/SettingsPage.tsx`) already renders the page's sole `<h1>` — with
 both title and description text sourced from localized `UsageI18nKeys` entries, never hardcoded.
-While `isLoading` is `true`, the cards region SHALL render a loading state (no stale/zeroed card
-data). The container SHALL include an `aria-live="polite"` region (visually hidden unless
-announcing) used to announce loading completion and error notifications (see "Deduplicated error
-notifications on fetch failure" below).
+Below the cards it renders `ModelLimitsSection`, fed by `mapUserUsageToModelLimits` and
+`mapOverallCostLimitsToPeriodStatuses`. The cards region SHALL render a loading state (a kit
+`Spinner` labelled by `UsageI18nKeys.Loading`; no stale/zeroed card data) while the initial usage
+fetch is in flight (`isLoading` with no resolved `usage` yet) or `useDeployments()` is still
+loading; a `refreshToken`-triggered re-fetch keeps the previous figures on screen instead. The container SHALL include exactly one always-mounted, visually hidden `role="status"`
+`aria-live="polite"` region: it carries `UsageI18nKeys.Loading` while the loading state shows,
+`UsageI18nKeys.Loaded` once it ends (followed by `UsageI18nKeys.ModelLimitsEmptyState` when there are
+no model rows), and is empty after a fetch failure, because the error notification (see
+"Deduplicated error notification on fetch failure" below) already announces that. The kit `Spinner` is
+itself a status region, so its wrapper SHALL be `aria-hidden` to avoid announcing loading twice.
+
+#### Scenario: Usage tab announces state changes through one status region
+- **WHEN** the Usage tab moves from its loading state to resolved data
+- **THEN** the same single `role="status"` region changes from the loading text to the loaded text,
+  and no other status region is exposed
 
 #### Scenario: Usage tab renders the page header
 - **WHEN** the Settings page is opened and the `Usage` tab is active, regardless of loading state
@@ -64,9 +77,15 @@ budget (identical field names and semantics per the `user-usage-limits-api` capa
 The hook SHALL accept an `enabled: boolean` second parameter, defaulting to `true`, following the
 `useScheduledTasks(enabled)` pattern. When `enabled` is `false`, the effect SHALL NOT call
 `getUserUsage()`, and `isLoading` SHALL initialize to `false` (not the perpetual-loading state a
-disabled hook would otherwise report). The Usage tab component SHALL call
-`useUsageData(getUserUsage, useFeatureFlag('settingsPageEnabled'))` (or receive the resolved flag
-value as a prop from `SettingsPage`), so the fetch only runs when `SettingsPageEnabled` is `true`.
+disabled hook would otherwise report). The parameter stays because it is part of a host-agnostic
+lib hook's contract, not because this app still needs it.
+
+The Usage tab SHALL NOT read a feature flag: the `SettingsPageEnabled` flag is removed, so
+`useFeatureFlag('settingsPageEnabled')` no longer exists and the tab cannot be reached while the
+page is disabled — mounting the tab is itself the signal that the data is wanted.
+`apps/chat/src/pages/SettingsPage/UsageTab/UsageTab.tsx` therefore imports no `useFeatureFlag` and
+passes a literal `true` for `enabled` (positionally required only because it also passes
+`refreshToken`, below).
 
 The hook SHALL accept a `refreshToken: number` third parameter, defaulting to `0`. Changing it SHALL
 re-run the fetch effect, subject to the same `enabled` gate and the same `cancelled` flag. The hook
@@ -129,16 +148,20 @@ promise's rejection, if any.
 - **THEN** `useUsageData` is invoked by the `Usage` tab component (not by `SettingsPage` itself),
   so the endpoint is only called while a user is actually viewing the Usage tab
 
-#### Scenario: Fetch does not run when the feature flag is disabled
-- **WHEN** `SettingsPageEnabled` resolves to `false` and `useUsageData(getUserUsage, false)` is
-  invoked (directly, or because the Usage tab was somehow rendered while the flag is off)
-- **THEN** `GET /api/v1/user/usage` is not called, and the hook returns `isLoading: false`,
-  `usage: undefined`, `usageError: undefined`
+#### Scenario: Arriving at the Settings page does not fetch usage
+- **WHEN** a user opens `/settings`, where `Preferences` is the default tab
+- **THEN** `UsageTab` does not mount and `GET /api/v1/user/usage` is not requested
 
-#### Scenario: Fetch resumes when the feature flag becomes enabled
-- **WHEN** `useUsageData`'s `enabled` argument transitions from `false` to `true` between renders
-- **THEN** the hook's effect runs and calls `getUserUsage()`, matching the behavior of
-  `useUsageData(getUserUsage, true)` on initial mount
+#### Scenario: The Usage tab reads no feature flag
+- **WHEN** the user activates the `Usage` row and the tab renders
+- **THEN** it calls `useUsageData(getUserUsage, true, refreshToken)` without consulting any feature
+  flag, and `GET /api/v1/user/usage` is requested
+
+#### Scenario: An explicit disabled caller still suppresses the fetch
+- **WHEN** any caller invokes `useUsageData(getUserUsage, false)`
+- **THEN** `GET /api/v1/user/usage` is not called, and the hook returns `isLoading: false`,
+  `usage: undefined`, `usageError: undefined` — the lib contract is unchanged even though this app
+  no longer uses it
 
 ### Requirement: Library isolation between apps/chat and libs
 `useUsageData` SHALL live in `libs/chat-hooks` and SHALL NOT import `apps/chat/src/server-api/*`,
@@ -156,7 +179,9 @@ All DTO interpretation — generated field selection, the unlimited-sentinel che
 `libs/chat-hooks/src/usage/`, exported from `@epam/ai-dial-chat-hooks`'s `./usage` entry point — the
 narrow, explicitly justified location recorded in AGENTS.md §Library isolation. It SHALL NOT live in
 `libs/usage-dashboard` or any other hand-authored library outside that recorded exception. The
-`Usage` tab component imports those adapters from `@epam/ai-dial-chat-hooks` and imports
+`Usage` tab component imports those adapters (`mapUsageDataToDashboard`,
+`mapUserUsageToModelLimits`, `mapOverallCostLimitsToPeriodStatuses`) from the
+`@epam/ai-dial-chat-hooks/usage` entry point (and `useUsageData` from the package root) and imports
 `UsageLimitCardGroup` / `ModelLimitsSection` and their normalized display types from
 `@epam/ai-dial-usage-dashboard`, passing app-owned callbacks (`resolveCatalogIconUrl`,
 `resolveLocalizedText`, `formatUsageResetTime`) into the adapters so host-specific URL construction,

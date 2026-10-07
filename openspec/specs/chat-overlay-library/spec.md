@@ -6,7 +6,7 @@ The publishable `chat-overlay` package: iframe lifecycle management, the v1 meth
 ## Requirements
 ### Requirement: Publishable package metadata
 
-`libs/chat-overlay/package.json` SHALL declare `"name": "@epam/ai-dial-chat-overlay"`, `"license": "Apache-2.0"`, and a one-sentence `"description"` (no trailing period, not equal to the package name), placed directly after `"name"`/`"version"` per this repo's lib conventions. The `project.json` SHALL tag the project `"publishable"` and define a `publish` target that runs `node tools/publish-lib.mjs chat-overlay --version={args.ver} --dry={args.dry} --tag={args.tag} --development={args.development}`, matching `libs/conversation-input/project.json`.
+`libs/chat-overlay/package.json` SHALL declare `"name": "@epam/ai-dial-chat-overlay"`, `"license": "Apache-2.0"`, and a one-sentence `"description"` (no trailing period, not equal to the package name), placed directly after `"name"`/`"version"` per this repo's lib conventions. The lib has no `project.json`: the `nx` block in `libs/chat-overlay/package.json` SHALL tag the project `"publishable"` and define a `publish` target whose command is `node tools/publish-lib.mjs {projectName} --version={args.ver} --dry={args.dry} --tag={args.tag} --development={args.development}`. The source `package.json` carries `"private": true`; `tools/publish-lib.mjs` removes it when it writes the publish-ready manifest.
 
 #### Scenario: Package name is not the retired name
 
@@ -14,20 +14,19 @@ The publishable `chat-overlay` package: iframe lifecycle management, the v1 meth
 - **THEN** `"name"` is `"@epam/ai-dial-chat-overlay"`
 - **AND** it is NOT `"@epam/ai-dial-overlay"`
 
-#### Scenario: Publish target mirrors the reference publishable lib
+#### Scenario: Publish target is declared in package.json
 
 - **WHEN** `npm exec nx run chat-overlay:publish -- --dry=true` is executed after a build
-- **THEN** it invokes `tools/publish-lib.mjs` the same way `libs/conversation-input`'s `publish` target does, writing a publish-ready `package.json` into `dist/libs/chat-overlay`
+- **THEN** it invokes `tools/publish-lib.mjs` with the project name, writing a publish-ready `package.json` (without `"private"`) into `libs/chat-overlay/dist`
 
-### Requirement: Vite library-mode build with chat-shared externalized
+### Requirement: Self-contained Vite library-mode build
 
-`libs/chat-overlay/vite.config.mts` SHALL build in Vite library mode (`build.lib`, `formats: ['es']`) with `vite-plugin-dts` for declaration output, matching `libs/conversation-input/vite.config.mts`'s structure. `@epam/ai-dial-chat-shared` SHALL be listed in `build.rollupOptions.external` and as a `peerDependencies` entry in `package.json` — it MUST NOT be bundled into the published output. The lib SHALL NOT depend on React, `react-dom`, or any UI-kit package.
+`libs/chat-overlay/vite.config.mts` SHALL build in Vite library mode (`build.lib`, entry `src/index.ts`, `formats: ['es']`, output `libs/chat-overlay/dist`) with `vite-plugin-dts` for declaration output. The lib is self-contained: it owns the overlay protocol (see Public API surface), does not import `@epam/ai-dial-chat-shared`, and declares no `dependencies` or `peerDependencies` in `package.json`, so the vite config sets no `build.rollupOptions.external`. The lib SHALL NOT depend on React, `react-dom`, or any UI-kit package.
 
-#### Scenario: chat-shared is externalized, not bundled
+#### Scenario: The build has no chat-shared reference
 
-- **WHEN** `npm exec nx build chat-overlay` runs and the output in `dist/libs/chat-overlay/index.js` is inspected
-- **THEN** it contains an unresolved `import`/`require` reference to `@epam/ai-dial-chat-shared`
-- **AND** it does NOT contain the inlined source of any `@epam/ai-dial-chat-shared` module
+- **WHEN** `npm exec nx build chat-overlay` runs and the output in `libs/chat-overlay/dist/index.js` is inspected
+- **THEN** it contains no `import` of `@epam/ai-dial-chat-shared` or any other package
 
 #### Scenario: No React dependency
 
@@ -36,7 +35,7 @@ The publishable `chat-overlay` package: iframe lifecycle management, the v1 meth
 
 ### Requirement: Public API surface
 
-`libs/chat-overlay/src/index.ts` SHALL preserve its existing public API and additionally export the `OverlayAuthUiMode` and `OverlayRequestErrorCode` enums (re-exported from `@epam/ai-dial-chat-shared`), the `ChatOverlayRequestError` class, and the pure protocol types from `@epam/ai-dial-chat-shared` needed by consumers (`ChatOverlayOptions`, `OverlayRequestError`, the request/event type unions, response payload types for every v1 method). It SHALL NOT export the internal `Task`/`DeferredRequest`-equivalent helper classes.
+`libs/chat-overlay/src/index.ts` SHALL export `ChatOverlay`, `ChatOverlayRequestError`, `ChatOverlayManager`, `OverlayPosition`, the `ChatOverlayManagerOptions` type, and everything from the lib's own protocol module (`export * from './protocol'`, which re-exports `libs/chat-overlay/src/protocol/overlay-protocol.ts`). That protocol file owns the overlay wire protocol: the `OverlayAuthUiMode` and `OverlayRequestErrorCode` enums, `ChatOverlayOptions`, `OverlayRequestError`, the request/event type unions, the response payload types for every v1 method, and the message type guards. It SHALL NOT export the internal `Task`/`DeferredRequest`-equivalent helper classes.
 
 #### Scenario: Internal transport helpers are not exported
 
@@ -46,12 +45,12 @@ The publishable `chat-overlay` package: iframe lifecycle management, the v1 meth
 #### Scenario: Consumer can import everything needed from one entry point
 
 - **WHEN** a consumer writes `import { ChatOverlay, ChatOverlayManager, ChatOverlayOptions, OverlayAuthUiMode } from '@epam/ai-dial-chat-overlay'`
-- **THEN** the import resolves without needing a separate import from `@epam/ai-dial-chat-shared`
+- **THEN** the import resolves from that single entry point, with no other package needed
 
 #### Scenario: OverlayAuthUiMode is available from the library entry point
 
 - **WHEN** a consumer imports `OverlayAuthUiMode` from `'@epam/ai-dial-chat-overlay'`
-- **THEN** it has members `External` and `SameWindow` without requiring a separate `@epam/ai-dial-chat-shared` import
+- **THEN** it has members `External` and `SameWindow`
 
 #### Scenario: Request errors are available from the library entry point
 
@@ -293,6 +292,8 @@ Enabling `enabledFeatures` after construction does not retroactively change the 
 
 `setOverlayOptions()` SHALL accept an updated `auth` option via the `Partial<Pick<...>>` shape: when `auth` is included in the update, the stored `options.auth` SHALL be replaced. When `auth` is absent from the update, the existing stored `auth` SHALL be preserved. The updated options are re-sent to the iframe via `sendCurrentOverlayOptions()` as before. An in-progress external login attempt (managed by the app side) is NOT affected by this update; the new map takes effect on the next login initiation.
 
+`ChatOverlayOptions` also accepts a deprecated `signInOptions` (`LegacySignInOptions`: `autoSignIn`, `signInProvider`, `signInInNewWindow`). `sendCurrentOverlayOptions()` derives the effective `auth` on every send through `resolveOverlayAuth` (`libs/chat-overlay/src/lib/internal/legacy-sign-in.ts`): when `signInOptions.autoSignIn` is `true`, `signInProvider` is non-blank, and `auth.autoSignInProvider` is not set, the trimmed `signInProvider` becomes the transmitted `authAutoSignInProvider` and is added to the transmitted `authProviderUiModes` as `sameWindow` (`external` when `signInInNewWindow` is `true`), unless `auth.providerUiModes` already maps that provider. Otherwise the stored `auth` is sent unchanged.
+
 `libs/chat-overlay` MUST NOT fetch providers, construct `/api` URL paths, read auth/session state, inspect cookies, or encode any knowledge of specific IdP brands.
 
 #### Scenario: Constructor without auth option compiles and behaves as before
@@ -300,6 +301,12 @@ Enabling `enabledFeatures` after construction does not retroactively change the 
 - **WHEN** `new ChatOverlay('#root', { domain: 'https://chat.example.com' })` is called
 - **THEN** the instance is created without error
 - **AND** the `SET_OVERLAY_OPTIONS` payload does NOT include `authProviderUiModes`
+
+#### Scenario: Legacy signInOptions are translated into auth fields
+
+- **WHEN** `new ChatOverlay('#root', { domain, signInOptions: { autoSignIn: true, signInProvider: 'keycloak' } })` sends its options
+- **THEN** the `SET_OVERLAY_OPTIONS` payload contains `authAutoSignInProvider: 'keycloak'` and `authProviderUiModes: { keycloak: 'sameWindow' }`
+- **AND** with `signInInNewWindow: true` the mode is `'external'`, and an explicit `auth.autoSignInProvider` suppresses the translation
 
 #### Scenario: Constructor with auth.providerUiModes transmits authProviderUiModes
 
@@ -429,3 +436,44 @@ rather than duplicating the inject-once logic.
 - **THEN** the loader's spinner adopts that color without the host needing an `!important` override
 - **AND** with the property unset the injected fallback `#2764d9` applies
 
+---
+
+### Requirement: `ChatOverlay` transmits `authAutoSignInProvider`
+
+`libs/chat-overlay/src/lib/ChatOverlay.ts` SHALL store `options.auth.autoSignInProvider` with the rest of the `auth` object it already keeps, and `sendCurrentOverlayOptions()` SHALL include `authAutoSignInProvider` in the `SET_OVERLAY_OPTIONS` payload if and only if `options.auth?.autoSignInProvider` is a non-empty string. An absent, empty, or whitespace-only value SHALL be omitted from the payload, matching the existing treatment of `authProviderUiModes` and of `theme` / `modelId` / `overlayConversationId`.
+
+`setOverlayOptions()` already replaces the whole `auth` object when the caller passes `auth`, so a host SHALL be able to add, change, or drop `autoSignInProvider` after construction with no new parameter: the next payload reflects the new value, and dropping it omits the field.
+
+The iframe's `allow` permissions attribute and `sandbox` tokens SHALL be unchanged by this option.
+
+State ownership: the value lives in `ChatOverlay`'s own `options`, the same place `auth.providerUiModes` lives. The library SHALL NOT resolve the provider, call any auth endpoint, or decide whether auto sign-in is possible — that is the app's decision, per `overlay-provider-auth-ui-mode`.
+
+i18n: none. RTL: none — no rendered surface changes.
+
+FEATURE GATE: not gated behind `ENABLED_FEATURES` / `ENABLED_FEATURES_ROLES`.
+
+#### Scenario: Constructor with `auth.autoSignInProvider` transmits the field
+
+- **WHEN** a `ChatOverlay` is constructed with `auth: { providerUiModes: { keycloak: OverlayAuthUiMode.SameWindow }, autoSignInProvider: 'keycloak' }`
+- **THEN** the `SET_OVERLAY_OPTIONS` payload includes `authAutoSignInProvider: 'keycloak'`
+- **AND** it still includes `authProviderUiModes: { keycloak: 'sameWindow' }`
+
+#### Scenario: No `auth` option omits the field
+
+- **WHEN** a `ChatOverlay` is constructed with no `auth` option
+- **THEN** the `SET_OVERLAY_OPTIONS` payload does not include `authAutoSignInProvider`
+
+#### Scenario: Empty provider id omits the field
+
+- **WHEN** a `ChatOverlay` is constructed with `auth: { autoSignInProvider: '   ' }`
+- **THEN** the `SET_OVERLAY_OPTIONS` payload does not include `authAutoSignInProvider`
+
+#### Scenario: `setOverlayOptions` updates the transmitted provider id
+
+- **WHEN** `setOverlayOptions({ auth: { providerUiModes: { keycloak: OverlayAuthUiMode.SameWindow }, autoSignInProvider: 'keycloak' } })` is called on an overlay constructed without `auth`
+- **THEN** the resulting `SET_OVERLAY_OPTIONS` payload includes `authAutoSignInProvider: 'keycloak'`
+
+#### Scenario: `setOverlayOptions` can drop the provider id
+
+- **WHEN** `setOverlayOptions({ auth: { providerUiModes: { keycloak: OverlayAuthUiMode.SameWindow } } })` is called on an overlay that previously sent `authAutoSignInProvider`
+- **THEN** the next `SET_OVERLAY_OPTIONS` payload does not include `authAutoSignInProvider`

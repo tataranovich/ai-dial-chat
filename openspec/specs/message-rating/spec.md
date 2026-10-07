@@ -9,11 +9,13 @@ Rating assistant messages: the BFF endpoint, the optimistic toggle, the negative
 
 ### Requirement: BFF rate endpoint
 
-`POST /api/v1/rate` SHALL accept a JSON body with `conversationId`, `responseId`, `modelId`, a `rate` field, and an optional `comment`. `rate` SHALL be `1` (like), `-1` (dislike), or `null` (clear a previously sent rating). It SHALL proxy the rating to the DIAL Core endpoint `POST /v1/{modelId}/rate` using the authenticated session's access token as a Bearer credential and SHALL include `X-CONVERSATION-ID: <conversationId>` in that outbound BFF-to-DIAL-Core request. On success it SHALL return HTTP 204 No Content. Invalid request bodies SHALL return HTTP 400.
+`POST /api/v1/rate` SHALL accept a JSON body with `conversationId`, `responseId`, `modelId`, a `rate` field, and an optional `comment`. `rate` SHALL be `1` (like), `-1` (dislike), or `null` (clear a previously sent rating). It SHALL proxy the rating to the DIAL Core endpoint `POST /v1/{modelId}/rate` using the authenticated session's access token as a Bearer credential and SHALL include `X-CONVERSATION-ID: <conversationId>` in that outbound BFF-to-DIAL-Core request, plus `X-JOB-TITLE` (`buildJobTitleHeaders(getJobTitleClaim(claims))`) when the session carries a job-title claim. On success it SHALL return HTTP 204 No Content. Invalid request bodies SHALL return HTTP 400.
 
 `modelId` is `conversation.model.id` as set at conversation creation, which for a custom app or quick app is a multi-segment DIAL Core resource path (e.g. `applications/<bucket>/My%20App__1.0`) rather than a bare model id (e.g. `gpt-4o`). The BFF SHALL interpolate `modelId` into the outbound URL path **raw**, with no `encodeURIComponent` (or equivalent) applied to the whole string — matching how `@epam/ai-dial-typescript-sdk`'s own generated URL builders (e.g. `sendChatCompletionRequestUrl`) interpolate `deployment_name`. Encoding the entire string would turn a multi-segment id's literal `/` separators into `%2F` and 404 against DIAL Core, breaking rating for any conversation created against a custom app while leaving bare model ids (which contain no such characters) unaffected. `RateMessageDto.modelId` SHALL be validated with `@MaxLength(256)` and `@Matches(DEPLOYMENT_ID_PATTERN)` (the same allowlist regex used for `deploymentId` elsewhere, from `apps/chat-api/src/common/validators/deployment-id.pattern.ts`) so that a value flowing unencoded into a URL path stays constrained to safe characters.
 
-The outbound JSON body sent to DIAL Core SHALL conform exactly to DIAL Core's own `RateRequest` schema — `{ responseId, rate: boolean }` — and SHALL NOT include `conversationId` or `modelId` as body fields (DIAL Core has no such properties on `RateRequest`; `modelId` selects the URL path segment and `conversationId` drives the `X-CONVERSATION-ID` header only). The BFF SHALL map the browser-facing `rate` value to DIAL Core's boolean as follows: `1` (like) maps to `rate: true`; `-1` (dislike) and `null` (clear) both map to `rate: false`, since DIAL Core has no third state to represent "cleared" separately from "disliked".
+The outbound JSON body sent to DIAL Core SHALL contain `{ responseId, rate: boolean }` and SHALL additionally include `comment` whenever the validated input contains a non-null comment. The BFF SHALL preserve the comment string exactly, including Unicode, whitespace, line breaks, and an explicitly empty string; absent or null comments SHALL be omitted from the outbound JSON. The body SHALL NOT include `conversationId` or `modelId`: `modelId` selects the URL path and `conversationId` drives the `X-CONVERSATION-ID` header. The BFF SHALL map the browser-facing `rate` value to DIAL Core's boolean as follows: `1` (like) maps to `rate: true`; `-1` (dislike) and `null` (clear) both map to `rate: false`, since DIAL Core has no third state to represent "cleared" separately from "disliked".
+
+The BFF SHALL NOT discard `comment` because it is absent from DIAL Core's published `RateRequest` schema, or gate forwarding on the deployment's `supportCommentInRateResponse` feature. The published schema omits a field that Core explicitly handles. In Core commit `db16caa4`, when no `rateEndpoint` is configured, the original request body is passed to the analytics log store. When a `rateEndpoint` is configured, Core removes `comment` unless `supportCommentInRateResponse` is `true`, before forwarding the body and recording it in analytics. Restoring BFF forwarding therefore preserves the comment up to Core; its downstream retention remains Core's responsibility. This behavior is implemented in Core's `DeploymentFeatureController.handleRequestBody` and `HandleRateResponseFn.apply`, with forwarding/removal coverage in `FeaturesApiTest.testRateEndpointModel` and `testRateEndpointApplication`.
 
 The generated `RateApi.rateMessage` method, authentication, authorization, rate limit, and cache behavior SHALL remain unchanged. This change introduces no UI, i18n, RTL, accessibility, feature-flag, or telemetry event changes.
 
@@ -47,6 +49,24 @@ The generated `RateApi.rateMessage` method, authentication, authorization, rate 
 - **WHEN** an authenticated user sends `POST /api/v1/rate` with `{ conversationId, responseId, modelId, rate: null }`
 - **THEN** the endpoint returns HTTP 204, and the BFF calls `POST /v1/{modelId}/rate` on DIAL Core with JSON body `{ responseId, rate: false }`
 
+#### Scenario: Rating comment reaches DIAL Core unchanged
+
+- **WHEN** an authenticated user sends `POST /api/v1/rate` with `{ conversationId, responseId, modelId, rate: -1, comment: "Too short" }`
+- **THEN** the BFF calls `POST /v1/{modelId}/rate` with JSON body `{ responseId, rate: false, comment: "Too short" }`
+- **AND** the endpoint returns HTTP 204 when Core succeeds
+- **AND** the same comment-preservation rule applies to `rate: 1` and `rate: null`, including comments containing Unicode, whitespace, or line breaks
+- **AND** the BFF forwards the comment regardless of the deployment's `supportCommentInRateResponse` feature, leaving downstream filtering to Core
+
+#### Scenario: Explicitly empty comment is preserved
+
+- **WHEN** a valid rating request contains `comment: ""`
+- **THEN** the outbound JSON includes `comment: ""`
+
+#### Scenario: Absent or null comment is omitted
+
+- **WHEN** a valid rating request omits `comment` or supplies `comment: null`
+- **THEN** the outbound JSON contains only `responseId` and the mapped boolean `rate`
+
 #### Scenario: Missing required field returns 400
 
 - **WHEN** `modelId` (or any other required field) is absent from the body
@@ -69,22 +89,22 @@ The generated `RateApi.rateMessage` method, authentication, authorization, rate 
 
 ### Requirement: Generated rate API client
 
-The rate endpoint SHALL be included in `libs/chat-api-client/openapi.json` and SHALL generate a `RateApi` class with a `rateMessage` method accepting `RateMessageDto`. Frontend code SHALL call `POST /api/v1/rate` through an `apps/chat/src/server-api/rate.api.ts` wrapper that delegates to the generated `RateApi`, not through handwritten `base.ts` `post` helpers.
+The rate endpoint SHALL be included in `libs/chat-api-client/openapi.json` and SHALL generate a `RateApi` class with a `rateMessage` method accepting `RateMessageDto`. The app configures one instance, `rateApi = new RateApi(config)`, in `apps/chat/src/server-api/api-client.ts`; there is no `rate.api.ts` wrapper. The host pages (`ConversationPage`, `AppPreviewChat`) pass that instance as `rateApi` into `useConversationHandlers` from `libs/chat-hooks`, which calls `rateApi.rateMessage({ rateMessageDto })` itself. No handwritten `base.ts` `post` helper is used.
 
 #### Scenario: Generated client exposes rateMessage
 
 - **WHEN** `npm run openapi` is run after the BFF rate endpoint is added
 - **THEN** `libs/chat-api-client/src/generated/src/apis/RateApi.ts` contains `rateMessage({ rateMessageDto })`
 
-#### Scenario: Frontend wrapper delegates to generated client
+#### Scenario: The chat-hooks handler calls the injected client
 
-- **WHEN** `rateMessage(body)` is called from `apps/chat/src/server-api/rate.api.ts`
-- **THEN** it calls `rateApi.rateMessage({ rateMessageDto: body })`
+- **WHEN** `handleRateMessage` from `useConversationHandlers` rates a message
+- **THEN** it calls `rateApi.rateMessage({ rateMessageDto: { conversationId, responseId, modelId, rate, comment? } })` on the instance the host page passed in
 
 #### Scenario: Legacy base endpoint is not extended
 
-- **WHEN** the frontend rate wrapper is implemented
-- **THEN** `apps/chat/src/server-api/base.ts` does not gain a new `RATE` endpoint constant for `/api/v1/rate`
+- **WHEN** the frontend rates a message
+- **THEN** `apps/chat/src/server-api/base.ts` has no `RATE` endpoint constant for `/api/v1/rate`
 
 ---
 
@@ -132,14 +152,14 @@ The `MessageActions` component SHALL accept an optional `activeRating?: MessageR
 
 ### Requirement: Optimistic rating toggle in ConversationPage
 
-When the user clicks Like or Dislike on an assistant message in a read-write conversation, the `ConversationPage` SHALL:
+When the user clicks Like or Dislike on an assistant message in a read-write conversation, `handleRateMessage(messageIndex, rating, comment?)` from `useConversationHandlers` (`libs/chat-hooks`) SHALL:
 
 1. Immediately update `message.rating` in local state (optimistic update).
-2. Fire `POST /api/v1/rate` with the new rating value: `1` or `-1` for a fresh Like/Dislike, `null` when the user clicked the currently-active button (toggling it off).
-3. On success, persist the updated conversation via `saveConversation`.
-4. If the API call or the save fails, revert the optimistic update.
+2. Fire `POST /api/v1/rate` with the new rating value: `1` or `-1` for a fresh Like/Dislike, `null` when the user clicked the currently-active button (toggling it off). An empty `comment` is dropped from the request (`...(comment ? { comment } : {})`).
+3. On success, persist the updated conversation via `conversationsApi.saveConversation`.
+4. If the message has no `responseId`, or the API call or the save fails, revert the optimistic update.
 
-In read-only conversations, the Like and Dislike buttons SHALL NOT be rendered.
+It resolves to `true` on success and `false` otherwise. The host pages (`ConversationPage`, `AppPreviewChat`) only wrap it to show the success toasts. In read-only conversations, the Like and Dislike buttons SHALL NOT be rendered.
 
 #### Scenario: Clicking Like sets rating to 1
 
@@ -181,13 +201,13 @@ In read-only conversations, the Like and Dislike buttons SHALL NOT be rendered.
 
 ### Requirement: Negative feedback modal
 
-When the user clicks Dislike on an assistant message that is **not already disliked** in a read-write conversation, the host page SHALL open a `NegativeFeedbackModal` instead of immediately calling the rate API. The modal collects a required feedback category and an optional free-text comment before the rating is submitted. This applies to every host that renders `ConversationView` with rating enabled — both `apps/chat/src/pages/Conversation/Conversation.tsx` (`ConversationPage`) and the App Editor's `apps/chat/src/pages/AppsEditor/AppPreviewChat.tsx` (preview chat) SHALL wire `onDislikeMessage` to open the modal rather than rating immediately, so the preview's rating UX has no reduced functionality relative to a normal conversation.
+When the user clicks Dislike on an assistant message that is **not already disliked** in a read-write conversation, the host page SHALL open a `NegativeFeedbackModal` instead of immediately calling the rate API. The modal collects a required feedback category and an optional free-text comment before the rating is submitted. This applies to every host that renders `ConversationView` with rating enabled — both `apps/chat/src/pages/Conversation/Conversation.tsx` (`ConversationPage`) and the App Editor's `apps/chat/src/pages/ApplicationEditor/setup/AppPreviewChat.tsx` (preview chat) SHALL wire `onDislikeMessage` to open the modal rather than rating immediately, so the preview's rating UX has no reduced functionality relative to a normal conversation.
 
 In read-only conversations, the Dislike button is not rendered, so the modal cannot be triggered.
 
 **Component:** `apps/chat/src/components/ConversationView/Rate/NegativeFeedbackModal.tsx`
 
-**State:** each host page holds `pendingDislikeMessageIndex: number | null` (same pattern as `pendingDeleteIndex`). `handleRateMessage` signature MUST be extended to `(messageIndex: number, rating: MessageRating | null, comment?: string)`, forwarding `comment` to `rateMessage`.
+**State:** each host page holds `pendingDislikeMessageIndex: number | null` (same pattern as `pendingDeleteIndex`). On submit it calls the chat-hooks `handleRateMessage(index, MessageRating.Dislike, comment)`, whose signature is `(messageIndex: number, rating: MessageRating | null, comment?: string) => Promise<boolean>` and which forwards `comment` to `rateApi.rateMessage`.
 
 **Modal contents:**
 - Title: **"Send negative feedback"**
@@ -196,9 +216,9 @@ In read-only conversations, the Dislike button is not rendered, so the modal can
   - "Overactive refusal"
   - "Incomplete response"
   - "Should have triggered thinking"
-  - "Should have search the web"
-- Optional `Textarea` with placeholder **"Type an optional comment to your feedback"**
-- `PrimaryButton` labelled **"Send"** — disabled until a category is selected
+  - "Should have searched the web"
+- Optional `Textarea` with placeholder **"Type an optional comment to your feedback"**, rendered only when the `OverlayFeature.DislikeComment` UI feature is enabled (it is in the default feature list)
+- A **"Send"** button (`ButtonsI18nKeys.Send`) supplied as a 2.0 `Popup` `mainButtons` entry with `ButtonVariant.Primary` — disabled until a category is selected
 - Close (×) icon button
 
 **Comment encoding:** On submit, category and comment are combined as `"${category}: ${comment}"` when both are present, or just `"${category}"` when no comment is entered. This combined string is passed as the `comment` field of `POST /api/v1/rate`. No new backend fields are required.
@@ -257,13 +277,13 @@ In read-only conversations, the Dislike button is not rendered, so the modal can
 
 ### Requirement: Rating toast notifications
 
-After a successful Like toggle-on or a successful negative feedback submission, the `ConversationPage` SHALL display a **floating auto-dismiss toast notification** confirming the rating was received. The toast SHALL NOT appear when a rating is toggled off or when the API call fails.
+After a successful Like toggle-on or a successful negative feedback submission, the host page (`ConversationPage` and `AppPreviewChat`) SHALL show a success notification confirming the rating was received. The notification SHALL NOT appear when a rating is toggled off or when the API call fails.
 
-**Component:** `apps/chat/src/components/ConversationView/RatingToast.tsx` — wraps `Notification` with `NotificationVariant.Success`, rendered in a `fixed` overlay layer (e.g. `fixed bottom-6 start-1/2 -translate-x-1/2 z-50`).
+**Mechanism:** there is no dedicated rating toast component. The host calls `showSuccessNotification` from `NotificationContext` (`useNotification`) when `handleRateMessage` resolves `true`; the shared `NotificationContainer` renders it and dismisses it after `DISMISS_DELAY_MS = 5000`.
 
-**Auto-dismiss:** Toast disappears after **5 000 ms**. Implemented via `setTimeout` keyed to a counter so rapid successive actions each restart the timer correctly.
-
-**Toast copy:** Exact message strings TBD from Figma nodes 1545:16413 (feedback sent) and 1545:15983 (like) — placeholder keys `ChatI18nKeys.LikeToastMessage` and `ChatI18nKeys.FeedbackSentToastMessage`.
+**Toast copy** (`RateI18nKeys`, `rate.*` in `en.json`):
+- Like: title `RateI18nKeys.LikeToastTitle` ("Thank you for your positive feedback!"), message `RateI18nKeys.LikeToastDescription` ("You help us make better products").
+- Negative feedback: title `RateI18nKeys.DislikeToastTitle` ("Thank you for letting us know about this issue"), message `RateI18nKeys.LikeToastDescription`.
 
 #### Scenario: Successful Like shows a success toast
 
@@ -285,16 +305,16 @@ After a successful Like toggle-on or a successful negative feedback submission, 
 - **WHEN** the rate API call fails for any reason
 - **THEN** no toast is displayed (the optimistic UI revert serves as the error signal)
 
-#### Scenario: Rapid successive ratings restart the timer
+#### Scenario: Rapid successive ratings each add a notification
 
 - **WHEN** the user triggers two rating successes within 5 000 ms of each other
-- **THEN** the toast is shown for each action and the auto-dismiss timer resets on the second action
+- **THEN** each success adds its own notification, and each auto-dismisses 5 000 ms after it appears
 
 ---
 
 ### Requirement: Message rating actions disabled in read-only conversations
 
-All message rating UI and interactions SHALL be suppressed when viewing a read-only conversation. The conversation is read-only when the `isReadonly` flag is set on the conversation list item, or when the user lacks WRITE permission on the resource.
+All message rating UI and interactions SHALL be suppressed when viewing a read-only conversation. The conversation is read-only when the `isReadonly` flag is set on the conversation list item, or when the user lacks WRITE permission on the resource. Independently of read-only state, `ConversationMessageItem` also hides Like and Dislike when the `OverlayFeature.Likes` UI feature is disabled.
 
 #### Scenario: Rating buttons hidden in read-only conversation
 

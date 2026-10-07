@@ -2,13 +2,14 @@
 
 In-memory tracking of active generations per principal+path, enforcing one active generation per conversation and supporting stop, complete, and error transitions. The owner key is opaque to this capability — `generation-principal-ownership` defines how it is derived.
 ## Requirements
+
 ### Requirement: In-memory generation registry keyed by principal and path
 
 `ConversationGenerationService` (`apps/chat-api/src/conversations/conversation-generation.service.ts`) SHALL track generations in an in-memory map keyed by `` `${ownerKey}::${path}` ``, where `ownerKey` is the caller's principal key as defined by `generation-principal-ownership` — the cookie session id for a cookie-authenticated caller, and the verified `providerId`+`sub` pair for a header-authenticated caller. The service SHALL accept that key as an opaque `ownerKey` parameter on the public, client-addressed operations `register`, `abort` and `attach`, and SHALL NOT itself inspect the authentication mode or derive the key. Worker-facing operations address their entry through the lease returned by `register` instead.
 
 Each entry stores the client-supplied `generationId`, the internal operation identity, an `AbortController`, an explicit lifecycle state drawn from a named string enum, an optional cancellation reason, `startedAt`, the assembled message snapshot, its attach emitter, its max-duration timer, its runtime-tracking release, and its pre-rendered subject-free log label.
 
-The lifecycle states SHALL be exactly: running; cancellation-requested; finalizing, entered when the terminal write is dispatched; retained, entered when that write has not settled within the finalization bound; and released, meaning the entry is no longer in the map. Every state other than released denotes continuing ownership of the key.
+The lifecycle states SHALL be exactly the members of `GenerationLifecycleState`: `Active` (`'active'`, running); `CancelRequested` (`'cancel_requested'`); `Finalizing` (`'finalizing'`), entered when the terminal write is dispatched; `Settling` (`'settling'`), the retained state entered when that write has not settled within the finalization bound; and `Released` (`'released'`), meaning the entry is no longer in the map. Every state other than released denotes continuing ownership of the key.
 
 The registry is not persisted; a pod restart clears it, and the registry is not a cross-pod coordination mechanism.
 
@@ -53,7 +54,7 @@ Stale handling SHALL request cancellation rather than remove an entry. On each `
 
 Stale handling SHALL NOT clear the entry's max-duration timer, SHALL NOT delete the registry key, SHALL NOT release the entry's runtime generation tracking, and SHALL NOT deliver a terminal event. Those belong to the owning worker's single settlement, which still runs exactly once. An entry that already has a cancellation reason, or that is finalizing or retained pending an unsettled write, SHALL be left untouched, so cancellation is not requested twice.
 
-Aborting is requested only by the four cancellation entry points — user Stop, stale expiry, max-duration timeout, and shutdown. Entry removal SHALL NOT abort as a side effect, and the shutdown path SHALL NOT be copied into stale handling.
+Aborting is requested by the four cancellation entry points — user Stop, stale expiry, max-duration timeout, and shutdown — and additionally, defensively and idempotently, by the `finally` block of the streaming generator in `apps/chat-api/src/conversations/streaming/conversation-streaming.service.ts` when its consumer abandons it before the relay loop reaches a terminal outcome; that path sets no cancellation reason and finalizes as a user stop only if a user-stop reason was already recorded, otherwise as a non-user abort. Entry removal SHALL NOT abort as a side effect, and the shutdown path SHALL NOT be copied into stale handling.
 
 The stale threshold SHALL be derived from the configured maximum generation duration so that it can never pre-empt the max-duration timer:
 
@@ -67,6 +68,8 @@ Stale handling SHALL be triggered by `register` only. No per-request sweep timer
 
 The stale sweep SHALL NOT be described as a backstop for a process crash. A crash loses the registry, its timers, and the sweep together; after a restart the registry is empty and no claim can be made about any write that was in flight.
 
+For a generation on the background path defined by `background-responses-generation`, `BackgroundGenerationService` (`apps/chat-api/src/conversations/generation/background-generation.service.ts`) SHALL treat an aborted relay whose cancellation reason is anything other than user-stop — including stale-expiry — as a detach: no Core cancel and no conversation write are made, the outcome metric is recorded as `DetachedShutdown` for shutdown and `DetachedMaxDuration` otherwise, and the lease is settled through `complete`, delivering a `done` terminal event.
+
 #### Scenario: An expired running generation is cancelled, not removed
 
 - **GIVEN** a generation is still running and has passed the stale threshold
@@ -78,6 +81,12 @@ The stale sweep SHALL NOT be described as a backstop for a process crash. A cras
 - **GIVEN** a generation is cancelled by the stale sweep
 - **WHEN** its worker unwinds
 - **THEN** the worker performs its own single terminal save attempt, delivers exactly one terminal event per subscriber, and releases the registry entry — the entry is never removed while its worker is still running
+
+#### Scenario: Stale cancellation detaches a background generation
+
+- **GIVEN** a background generation is cancelled by the stale sweep
+- **WHEN** its relay observes the abort
+- **THEN** no Core cancel and no conversation write are made, the outcome is recorded as `DetachedMaxDuration`, and the entry settles with a `done` terminal event
 
 #### Scenario: A configured maximum above 30 minutes is not pre-empted by the stale threshold
 
@@ -106,6 +115,8 @@ No path other than settlement SHALL clear this timer. In particular, stale handl
 
 This bound is independent of the client's HTTP connection: it fires whether or not the originating browser connection is still open, and it is not affected by disconnect (which, per `backend-owned-generation-persistence`, has no effect on the generation). It is the traffic-independent bound on a running generation; stale handling is a backstop for entries this timer cannot cover, and is not a backstop for a process crash, which loses the timer and the registry together.
 
+For a generation on the background path defined by `background-responses-generation`, the timer SHALL instead detach: it SHALL abort only the entry's relay of the DIAL Core stream, SHALL NOT cancel the Core job, SHALL NOT write the conversation (the message stays `pending`), SHALL end the client stream without a terminal event, and SHALL release the registry entry. The job then continues in DIAL Core, bounded by Core's background-job TTL, and is resumed through attach.
+
 #### Scenario: A stalled generation is finalized without depending on client disconnect or the stale sweep
 
 - **GIVEN** a generation is registered and actively streaming, and the client remains connected throughout
@@ -129,6 +140,12 @@ This bound is independent of the client's HTTP connection: it fires whether or n
 - **WHEN** the first generation's max-duration timer fires
 - **THEN** it matches no entry by internal operation identity and aborts nothing
 
+#### Scenario: A background generation is detached, not finalized, at the max duration
+
+- **GIVEN** a background generation is still running when `MAX_GENERATION_DURATION_MS` elapses
+- **WHEN** the timer fires
+- **THEN** the relay is aborted and the registry entry released, no Core cancel is sent, no conversation write is made, and the message stays `pending`
+
 ### Requirement: Each admitted generation has an internal operation identity distinct from the client generation id
 
 `ConversationGenerationService.register` SHALL mint a process-local internal operation identity for every admitted entry and SHALL return it to the caller together with the entry's `AbortController` as an opaque lease value. The lease SHALL be the only way a worker addresses its own entry.
@@ -150,7 +167,7 @@ The two public, client-addressed operations — `abort(ownerKey, path, generatio
 
 ### Requirement: A present registry entry is always a conflict — ownership is released only by the owning worker
 
-`register` SHALL admit a generation only when the registry holds no entry for the `ownerKey + path` key. An entry in any non-released lifecycle state — running, cancellation-requested, finalizing, or retained pending an unsettled terminal write — is still owned and SHALL be rejected with `ConflictException` (HTTP 409). `register` SHALL NOT remove or replace an existing entry under any circumstance.
+`register` SHALL admit a generation only when the registry holds no entry for the `ownerKey + path` key. An entry in any non-released lifecycle state — `Active`, `CancelRequested`, `Finalizing`, or `Settling` (retained pending an unsettled terminal write) — is still owned and SHALL be rejected with `ConflictException` (HTTP 409). `register` SHALL NOT remove or replace an existing entry under any circumstance.
 
 The registry key SHALL be freed only by the owning worker's single settlement, after its one terminal save attempt has settled. As a result, no replacement generation can exist for a key while an older worker retains the ability to write that conversation.
 
@@ -238,7 +255,7 @@ Subscriber and resource release SHALL be bounded: if a generation's terminal wri
 
 Safe ownership handoff SHALL NOT be bounded. An entry whose terminal write has not settled SHALL be **retained** in the registry in a distinct retained state, continuing to own its `ownerKey + path` key and continuing to reject `register` with 409, because releasing the key would readmit the stale-overwrite this capability exists to prevent. Ownership SHALL NOT be cleared merely in order to report fewer active generations.
 
-Recovery SHALL be: the write settling — resolving or rejecting — releases the entry; otherwise the entry persists for the process lifetime and a process restart clears it. A terminal write that fails or whose failure is ambiguous about whether the data was committed SHALL be treated as settled, and ownership released, because the worker is demonstrably finished.
+Recovery SHALL be: the write settling — resolving or rejecting — releases the entry; otherwise the entry persists for the process lifetime and a process restart clears it. A terminal write that fails or whose failure is ambiguous about whether the data was committed SHALL be treated as settled, and ownership released, because the worker is demonstrably finished. When the terminal save throws, the worker SHALL settle through `persistenceFailed(lease)`, which delivers `{ type: 'error', errorType, message }` taken from `GENERATION_PERSISTENCE_ERROR` to every subscriber regardless of the cancellation reason — including a user Stop — so a storage failure stays visible, and the completion stream SHALL yield one additional `data: { error: GENERATION_PERSISTENCE_ERROR }` SSE frame.
 
 #### Scenario: A never-settling terminal write releases subscribers but not ownership
 
@@ -257,9 +274,17 @@ Recovery SHALL be: the write settling — resolving or rejecting — releases th
 - **WHEN** a terminal write rejects without establishing whether the data was committed
 - **THEN** the failure is logged, the entry settles and releases its registry key, and no second write is attempted
 
+#### Scenario: A failed terminal save after a user Stop reports a persistence error
+
+- **GIVEN** a generation was stopped by the user
+- **WHEN** its terminal save rejects
+- **THEN** every subscriber receives an `error` terminal event carrying `GENERATION_PERSISTENCE_ERROR`'s type and message rather than `stopped`, and the completion stream emits a `GENERATION_PERSISTENCE_ERROR` SSE frame
+
 ### Requirement: Process shutdown has its own contract and promises nothing about storage
 
 `onModuleDestroy` SHALL remain a distinct path from stale cancellation, and SHALL NOT be reused as the implementation of eviction. Because shutdown leaves no worker to await, it SHALL notify every attach subscriber with a `stopped` terminal event using the same isolated raw-listener delivery, release every entry's timer, listeners, registry key, and runtime tracking, and abort every entry's `AbortController`.
+
+For an entry on the background path defined by `background-responses-generation`, shutdown SHALL detach instead of finishing it: the relay is aborted, the client's completion stream ends cleanly, the entry is released, and no Core cancel and no conversation write are made; the message stays `pending` for recovery on another instance.
 
 Shutdown SHALL NOT be documented or reported as establishing any outcome for an in-flight persistence write. Neither process shutdown nor a process crash can establish whether a write that was already dispatched committed.
 
@@ -274,3 +299,8 @@ Shutdown SHALL NOT be documented or reported as establishing any outcome for an 
 - **WHEN** the module is destroyed while a terminal write is in flight
 - **THEN** the shutdown path neither waits for that write nor reports its outcome, and the capability does not assert whether it committed
 
+#### Scenario: Shutdown detaches a background generation
+
+- **GIVEN** a background generation is running on the instance
+- **WHEN** the module is destroyed
+- **THEN** its relay is aborted and its entry released, no Core cancel is sent, no conversation write is made, and the message stays `pending`

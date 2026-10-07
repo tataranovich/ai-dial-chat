@@ -6,12 +6,20 @@ import {
   MarkdownRenderer,
   type MarkdownRendererClassNames,
 } from './MarkdownRenderer';
+import { PlainTextRenderer } from './PlainTextRenderer';
 import type { MarkdownTableActionLabels } from './Table/MarkdownTable';
 
 /** Props for the {@link MDMessageViewer} markdown renderer. */
 interface MDMessageViewerProps {
   /** Raw markdown string to render. */
   content: string;
+  /**
+   * Renders `content` verbatim as escaped plain text instead of running the
+   * Markdown pipeline — the conversation's `plain_text` response format.
+   * Markdown-only props (`components`, `urlTransform`, the code-block and
+   * table labels) do not apply while it is set. Defaults to `false`.
+   */
+  isPlainText?: boolean;
   /** Enables gradual reveal for appended streaming content. */
   isStreaming?: boolean;
   /**
@@ -34,6 +42,8 @@ interface MDMessageViewerProps {
   codeBlockCopyLabel?: string;
   /** Accessible label for the copy button after copying. Forwarded to {@link MarkdownRenderer}. */
   codeBlockCopiedLabel?: string;
+  /** Accessible label for the code-block download button. Forwarded to {@link MarkdownRenderer}. */
+  codeBlockDownloadLabel?: string;
   /** Syntax highlight color theme for code blocks. Forwarded to {@link MarkdownRenderer}. */
   codeBlockTheme?: CodeBlockTheme;
   /** Localized labels for Markdown table actions. Forwarded to {@link MarkdownRenderer}. */
@@ -43,6 +53,8 @@ interface MDMessageViewerProps {
   tableOnOpenInCanvas?: (markdown: string) => void;
   /** Accessible label for a table's scrollable region. Forwarded to {@link MarkdownRenderer}. */
   tableScrollRegionAriaLabel?: string;
+  /** Accessible label for a block formula's scrollable region. Forwarded to {@link MarkdownRenderer}. */
+  mathScrollRegionAriaLabel?: string;
   /**
    * Per-element typography classes. Defaults to {@link DEFAULT_MARKDOWN_CLASS_NAMES};
    * pass {@link COMPACT_MARKDOWN_CLASS_NAMES} for the smaller body scale. Give a
@@ -51,37 +63,50 @@ interface MDMessageViewerProps {
   classNames?: MarkdownRendererClassNames;
 }
 
-/** Renders assistant message content as formatted markdown. */
+/** Renders assistant message content as formatted markdown, or as escaped plain text when `isPlainText` is set. */
 export const MDMessageViewer: FC<MDMessageViewerProps> = memo(
   ({
     content,
+    isPlainText,
     isStreaming,
     thinkingLabel,
     components,
     urlTransform,
     codeBlockCopyLabel,
     codeBlockCopiedLabel,
+    codeBlockDownloadLabel,
     codeBlockTheme,
     tableActionLabels,
     tableDownloadFilename,
     tableOnOpenInCanvas,
     tableScrollRegionAriaLabel,
+    mathScrollRegionAriaLabel,
     classNames = DEFAULT_MARKDOWN_CLASS_NAMES,
-  }) => (
-    <MarkdownRenderer
-      content={content}
-      isStreaming={isStreaming}
-      thinkingLabel={thinkingLabel}
-      components={components}
-      urlTransform={urlTransform}
-      codeBlockCopyLabel={codeBlockCopyLabel}
-      codeBlockCopiedLabel={codeBlockCopiedLabel}
-      codeBlockTheme={codeBlockTheme}
-      tableActionLabels={tableActionLabels}
-      tableDownloadFilename={tableDownloadFilename}
-      tableOnOpenInCanvas={tableOnOpenInCanvas}
-      tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
-      classNames={classNames}
-    />
-  ),
+  }) =>
+    isPlainText ? (
+      <PlainTextRenderer
+        content={content}
+        isStreaming={isStreaming}
+        thinkingLabel={thinkingLabel}
+        classNames={classNames}
+      />
+    ) : (
+      <MarkdownRenderer
+        content={content}
+        isStreaming={isStreaming}
+        thinkingLabel={thinkingLabel}
+        components={components}
+        urlTransform={urlTransform}
+        codeBlockCopyLabel={codeBlockCopyLabel}
+        codeBlockCopiedLabel={codeBlockCopiedLabel}
+        codeBlockDownloadLabel={codeBlockDownloadLabel}
+        codeBlockTheme={codeBlockTheme}
+        tableActionLabels={tableActionLabels}
+        tableDownloadFilename={tableDownloadFilename}
+        tableOnOpenInCanvas={tableOnOpenInCanvas}
+        tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
+        mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
+        classNames={classNames}
+      />
+    ),
 );

@@ -43,22 +43,33 @@ describe('Card — selected state', () => {
 });
 
 describe('Card — long version', () => {
-  it('caps the version at 30% of the row so it cannot overlap the name', () => {
+  it('lets the version fill the space the name leaves, right-aligned', () => {
     render(
       <Card item={makeItem({ version: 'With Google Search Grounding' })} />,
     );
 
     const version = screen.getByText('With Google Search Grounding');
-    expect(version.className).toContain('max-w-[30%]');
-    expect(version.className).toContain('shrink-0');
+    expect(version.className).toContain('flex-1');
+    expect(version.className).toContain('min-w-0');
+    expect(version.className).toContain('text-end');
+    expect(version.className).not.toContain('max-w-[30%]');
   });
 
-  it('lets the name truncate instead of being pushed out', () => {
+  it('caps the name at 66% of the row so the version keeps the rest', () => {
     render(<Card item={makeItem()} />);
 
     const name = screen.getByText('Claude');
+    expect(name.className).toContain('max-w-[66%]');
     expect(name.className).toContain('min-w-0');
     expect(name.className).toContain('truncate');
+  });
+
+  it('lets the name take the whole row when there is no version', () => {
+    render(<Card item={makeItem({ version: undefined })} />);
+
+    const name = screen.getByText('Claude');
+    expect(name.className).toContain('flex-1');
+    expect(name.className).not.toContain('max-w-[66%]');
   });
 });
 
@@ -302,5 +313,26 @@ describe('Card — public class names', () => {
     expect(screen.getByRole('article', { hidden: true }).classList).toContain(
       CATALOG_CLASS.card,
     );
+  });
+});
+
+describe('Card — description markdown labels', () => {
+  it('names the description code-block buttons with the supplied labels', () => {
+    render(
+      <Card
+        item={makeItem({ description: '```ts\nconst a = 1;\n```' })}
+        markdownLabels={{
+          codeBlockCopyLabel: 'Kopieren',
+          codeBlockDownloadLabel: 'Herunterladen',
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Kopieren', hidden: true }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Herunterladen', hidden: true }),
+    ).toBeTruthy();
   });
 });

@@ -13,6 +13,7 @@ import {
 import { IconStarFilled } from '@tabler/icons-react';
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -40,7 +41,12 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
   onToggleFavorite,
   onBrowse,
   onViewDetails,
+  className,
+  rowClassName,
   searchQuery,
+  listboxId,
+  activeOptionId,
+  isMenu = false,
   labels = {},
   colors,
   nameClassName = 'dial-small-text',
@@ -76,6 +82,19 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
       timeouts.clear();
     };
   }, []);
+
+  const isListbox = listboxId != null;
+  const isMenuMode = isMenu && !isListbox;
+  /* The list wrappers step aside (`role="none"`) wherever the rows belong to a listbox or a host menu. */
+  const listItemRole = isListbox || isMenuMode ? 'none' : undefined;
+  let rowRole = 'button';
+  if (isListbox) {
+    rowRole = 'option';
+  } else if (isMenuMode) {
+    rowRole = 'menuitem';
+  }
+  /* Names the listbox: the "My Collection" header is what the rows sit under. */
+  const headerId = useId();
 
   const isSearchMode = searchQuery != null;
   const normalizedQuery = searchQuery?.toLowerCase() ?? '';
@@ -119,7 +138,7 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
   const handleToggleFavorite = (id: string) => {
     setLeavingIds((prev) => new Set(prev).add(id));
     const timeout = setTimeout(() => {
-      onToggleFavorite(id);
+      onToggleFavorite?.(id);
       setLeavingIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -131,13 +150,30 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
   };
 
   const renderRow = (item: FavoriteSkillItem) => {
+    /*
+     * Listbox mode: the row is an option the owning text field points at via
+     * `aria-activedescendant`, so its id is derived from the listbox id (item
+     * ids are resource URLs, hence the encoding). The row itself stays
+     * tabbable so Tab walks from row to row, while its secondary controls
+     * (star, "View details") drop out of the Tab sequence — otherwise every
+     * step between two rows passes a destructive "Remove from favorites".
+     */
+    const optionId = isListbox
+      ? `${listboxId}-${encodeURIComponent(item.id)}`
+      : undefined;
+    const secondaryTabIndex = isListbox ? -1 : undefined;
     const row = (
+      // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- the computed role is always interactive ('option', 'menuitem' or 'button').
       <div
-        role="button"
+        role={rowRole}
+        id={optionId}
+        aria-selected={isListbox ? optionId === activeOptionId : undefined}
+        aria-label={item.name}
         tabIndex={0}
         className={mergeClasses(
           'flex cursor-pointer items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 transition-colors',
           styles.row,
+          rowClassName,
         )}
         onClick={() => onSelect(item)}
         onKeyDown={(e) => handleKeyDown(e, item)}
@@ -160,28 +196,32 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
             {item.name}
           </span>
         )}
-        <ToggleIconButton
-          icon={
-            <IconStarFilled
-              size={DIAL_ICON_SIZE.SM}
-              className={styles.star}
-              aria-hidden
-            />
-          }
-          aria-label={removeFromFavoritesLabel}
-          /* Every row in this panel is a favorite, so the star is always on. */
-          isSelected
-          onClick={(e) => {
-            e.stopPropagation();
-            handleToggleFavorite(item.id);
-          }}
-        />
+        {onToggleFavorite && (
+          <ToggleIconButton
+            icon={
+              <IconStarFilled
+                size={DIAL_ICON_SIZE.SM}
+                className={styles.star}
+                aria-hidden
+              />
+            }
+            aria-label={removeFromFavoritesLabel}
+            /* Every row in this panel is a favorite, so the star is always on. */
+            isSelected
+            tabIndex={secondaryTabIndex}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleFavorite(item.id);
+            }}
+          />
+        )}
       </div>
     );
 
     return (
       <li
         key={item.id}
+        role={listItemRole}
         className={
           leavingIds.has(item.id) ? styles.rowLeaving : styles.rowEnter
         }
@@ -193,19 +233,24 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
          * and renders nothing on touch-only devices, where tapping the row
          * still selects the skill.
          */}
-        <InteractiveTooltip
-          asChild
-          contentClassName="max-w-[550px]"
-          content={
-            <SkillInfoTooltipContent
-              description={item.description}
-              viewDetailsLabel={viewDetailsLabel}
-              onViewDetails={() => onViewDetails(item)}
-            />
-          }
-        >
-          {row}
-        </InteractiveTooltip>
+        {onViewDetails ? (
+          <InteractiveTooltip
+            asChild
+            contentClassName="max-w-[550px]"
+            content={
+              <SkillInfoTooltipContent
+                description={item.description}
+                viewDetailsLabel={viewDetailsLabel}
+                onViewDetails={() => onViewDetails(item)}
+                viewDetailsTabIndex={secondaryTabIndex}
+              />
+            }
+          >
+            {row}
+          </InteractiveTooltip>
+        ) : (
+          row
+        )}
       </li>
     );
   };
@@ -219,7 +264,12 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
   const renderListBody = () => {
     if (visibleFavorites.length > 0) {
       return (
-        <ul className="flex flex-col gap-1 px-1 pb-1">
+        <ul
+          id={listboxId}
+          role={isListbox ? 'listbox' : listItemRole}
+          aria-labelledby={isListbox ? headerId : undefined}
+          className="flex flex-col gap-1 px-1 pb-1"
+        >
           {visibleFavorites.map(renderRow)}
         </ul>
       );
@@ -258,11 +308,13 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
     <div
       className={mergeClasses(
         'flex w-full flex-col desktop:w-[280px]',
+        className,
         SKILLS_CLASS.favoritesPanel,
       )}
       style={cssVars}
     >
       <p
+        id={headerId}
         className={mergeClasses(
           headerClassName,
           SECTION_HEADING_CLASS_NAME,
@@ -284,6 +336,7 @@ export const FavoriteSkillsPanel: FC<FavoriteSkillsPanelProps> = ({
 
       <div className={mergeClasses('border-t px-2 py-3', styles.footer)}>
         <GhostButton
+          role={isMenuMode ? 'menuitem' : undefined}
           label={browseLabel}
           className="w-full justify-center"
           onClick={onBrowse}

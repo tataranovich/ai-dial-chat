@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { encodeDialResourcePath } from '../common/utils/encode-dial-path';
 import { StringUtils } from '../common/utils/string-utils';
 import type { CreateScheduledTaskBodyDto } from './dto/create-scheduled-task.dto';
 import type {
@@ -9,10 +10,8 @@ import {
   type ScheduledTaskRunDto,
   ScheduledTaskRunStatus,
 } from './dto/scheduled-task-run.dto';
-import type {
-  ScheduledTaskDto,
-  ScheduleTriggerType,
-} from './dto/scheduled-task.dto';
+import type { ScheduledTaskDto } from './dto/scheduled-task.dto';
+import { ScheduleTriggerType } from './dto/scheduled-task.dto';
 
 interface UpstreamScheduleTrigger {
   date?: string;
@@ -30,7 +29,7 @@ interface UpstreamSchedulePayload {
   /*
    * Not confirmed against a live DIAL Scheduler response or its
    * openapi.json — assumed to mirror display_name/service_id as a
-   * top-level field per design.md. Verify before relying on this in
+   * top-level field per `openspec/changes/archive/2026-07-23-add-scheduled-tasks-api/design.md`. Verify before relying on this in
    * production and update this comment once confirmed.
    */
   description?: string;
@@ -44,7 +43,11 @@ interface UpstreamSchedulePayload {
     retry: null;
     timeout: null;
     payload: {
-      messages: { role: 'user'; content: string }[];
+      messages: {
+        role: 'user';
+        content: string;
+        custom_content?: { skills: { url: string }[] };
+      }[];
       model: string;
     };
   };
@@ -58,9 +61,10 @@ export interface UpstreamScheduleResponse {
   created_at?: string;
   updated_at?: string;
   /*
-   * List items only carry `trigger_type` (no nested `trigger`); `trigger`
-   * above is populated for shapes that do include it (e.g. create/update
-   * responses), so both are read here rather than picking one.
+   * List items only carry `trigger_type` (no nested `trigger`); GET responses
+   * carry the nested `trigger` with no `trigger_type`, and create/update
+   * responses carry both — so `triggerType` is derived from whichever source
+   * is present (see `deriveTriggerType`).
    */
   trigger_type?: string;
   service_id?: string;
@@ -70,7 +74,11 @@ export interface UpstreamScheduleResponse {
   properties?: {
     payload?: {
       model?: string;
-      messages?: { role: string; content: string }[];
+      messages?: {
+        role: string;
+        content: string;
+        custom_content?: { skills?: { url: string }[] };
+      }[];
     };
   };
   [key: string]: unknown;
@@ -151,7 +159,21 @@ export const toUpstreamSchedulePayload = (
     retry: null,
     timeout: null,
     payload: {
-      messages: [{ role: 'user', content: body.prompt }],
+      messages: [
+        {
+          role: 'user',
+          content: body.prompt,
+          ...(body.skillUrls?.length
+            ? {
+                custom_content: {
+                  skills: [...new Set(body.skillUrls)].map((url) => ({
+                    url: encodeDialResourcePath(url),
+                  })),
+                },
+              }
+            : {}),
+        },
+      ],
       model: body.model,
     },
   },
@@ -160,7 +182,7 @@ export const toUpstreamSchedulePayload = (
 /*
  * No upstream field documenting an explicit active/paused state has been
  * confirmed against a live DIAL Scheduler response or its OpenAPI spec (see
- * design.md "Decision 1" / "Open Questions" for add-scheduled-task-active-toggle).
+ * `openspec/changes/archive/2026-08-11-add-scheduled-task-active-toggle/design.md` "Decision 1" / "Open Questions" for add-scheduled-task-active-toggle).
  * This derives isActive from the only currently observed signal —
  * next_run_time — as a documented assumption, not a confirmed contract.
  * Replace with an authoritative upstream field here (and only here) once
@@ -173,6 +195,25 @@ const deriveIsActive = (
     return undefined;
   }
   return upstream.next_run_time != null;
+};
+
+/*
+ * List responses carry `trigger_type` but no nested `trigger`; GET responses
+ * (observed live) carry the nested `trigger` with no `trigger_type`. Derive
+ * the trigger kind from whichever source is present so the DTO always names
+ * it — the completed-state derivation and the detail page's field fallbacks
+ * both branch on `triggerType`.
+ */
+const deriveTriggerType = (
+  upstream: UpstreamScheduleResponse,
+): ScheduleTriggerType | undefined => {
+  if (upstream.trigger?.cron != null) {
+    return ScheduleTriggerType.Cron;
+  }
+  if (upstream.trigger?.date != null) {
+    return ScheduleTriggerType.Date;
+  }
+  return upstream.trigger_type as ScheduleTriggerType | undefined;
 };
 
 export const fromUpstreamSchedule = (
@@ -193,7 +234,7 @@ export const fromUpstreamSchedule = (
   nextRunTime: upstream.next_run_time,
   createdAt: upstream.created_at,
   updatedAt: upstream.updated_at,
-  triggerType: upstream.trigger_type as ScheduleTriggerType | undefined,
+  triggerType: deriveTriggerType(upstream),
   isActive: deriveIsActive(upstream),
   isDeleted: upstream.is_deleted ?? false,
   serviceId: upstream.service_id,
@@ -201,6 +242,10 @@ export const fromUpstreamSchedule = (
   description: upstream.description,
   model: upstream.properties?.payload?.model,
   prompt: upstream.properties?.payload?.messages?.[0]?.content,
+  skillUrls:
+    upstream.properties?.payload?.messages?.[0]?.custom_content?.skills?.map(
+      (skill) => skill.url,
+    ) ?? (upstream.properties?.payload ? [] : undefined),
 });
 
 export interface UpstreamScheduleRun {
@@ -209,6 +254,7 @@ export interface UpstreamScheduleRun {
   start_time: string;
   end_time?: string | null;
   conversation_id?: string | null;
+  result?: ({ stage?: unknown } & Record<string, unknown>) | null;
 }
 
 const UPSTREAM_RUN_STATUS_MAP: Record<string, ScheduledTaskRunStatus> = {
@@ -231,15 +277,20 @@ const deriveDurationSeconds = (
 
 export const fromUpstreamRun = (
   upstream: UpstreamScheduleRun,
-): ScheduledTaskRunDto => ({
-  id: upstream.id,
-  status:
-    UPSTREAM_RUN_STATUS_MAP[upstream.status] ?? ScheduledTaskRunStatus.Missed,
-  startTime: upstream.start_time,
-  endTime: upstream.end_time,
-  durationSeconds: deriveDurationSeconds(
-    upstream.start_time,
-    upstream.end_time,
-  ),
-  conversationId: upstream.conversation_id ?? undefined,
-});
+): ScheduledTaskRunDto => {
+  const resultStage = upstream.result?.stage;
+
+  return {
+    id: upstream.id,
+    status:
+      UPSTREAM_RUN_STATUS_MAP[upstream.status] ?? ScheduledTaskRunStatus.Missed,
+    startTime: upstream.start_time,
+    endTime: upstream.end_time,
+    durationSeconds: deriveDurationSeconds(
+      upstream.start_time,
+      upstream.end_time,
+    ),
+    conversationId: upstream.conversation_id ?? undefined,
+    ...(typeof resultStage === 'string' ? { resultStage } : {}),
+  };
+};

@@ -1,29 +1,33 @@
-# Spec: conversation-history-panel
+# conversation-history-panel Specification
 
 ## Purpose
 
 The `conversation-panel` library: grouped, searchable, filterable conversation history with per-item actions, persistent on desktop and a drawer on mobile.
-
 ## Requirements
-
 ### Requirement: `libs/conversation-panel` library exposes `ConversationPanel`
 
-A new library `@epam/ai-dial-conversation-panel` SHALL exist at `libs/conversation-panel/`. It SHALL export `ConversationPanel` and the types: `ConversationPanelProps`, `ConversationPanelStyles`, `ConversationHistoryColors`, `ConversationHistoryTypography`, `ConversationHistoryItem`, `ConversationSource` (string enum), `FilterTab` (string enum), `FilterLabels`, `ConversationGroupProps`. The library SHALL declare `react`, `@epam/ai-dial-ui-kit`, `@tabler/icons-react` as peer dependencies. It SHALL have `"license": "Apache-2.0"` in `package.json`.
+A library `@epam/ai-dial-conversation-panel` SHALL exist at `libs/conversation-panel/`. Its `src/index.ts` SHALL export `ConversationPanel`, `RenameConversationPopup`, `CONVERSATION_PANEL_CLASS`, and the types `ConversationMove`, `ConversationPanelProps`, `ConversationPanelStyles`, `ConversationColors`, `NewChatButtonColors`, `ConversationPanelTypography`, `ConversationPanelLabels`, `ConversationItem`, `FilterLabels`, `RenameConversationPopupProps`, `RenameConversationPopupLabels`, and `RenameConversationPopupStyles`. It SHALL NOT export `FilterTab`, which is owned by `@epam/ai-dial-chat-shared` — `ConversationItem.source` and `ConversationMove.targetGroupKey` are typed as `FilterTab`, and consumers import that enum from its own package alongside this one. The library SHALL declare `react`, `@epam/ai-dial-chat-shared`, and `@epam/ai-dial-ui-kit` as peer dependencies, and `@tabler/icons-react`, `react-window`, and `@epam/ai-dial-sidebar` as regular dependencies. It SHALL have `"license": "Apache-2.0"` in `package.json`.
 
-The library imports `SidebarPanel`, `SearchInput`, and `SidebarOrientation` from `@epam/ai-dial-sidebar` to use as the panel shell.
+The library imports `SidebarPanel`, `SidebarOrientation`, `PanelEmpty`, and `PanelNoResults` from `@epam/ai-dial-sidebar` for the panel shell and empty states, and the 2.0 `Search` and `Skeleton` components from `@epam/ai-dial-ui-kit`.
 
 #### Scenario: ConversationPanel is importable in apps/chat
 
 - **WHEN** `apps/chat` imports `ConversationPanel` from `@epam/ai-dial-conversation-panel`
 - **THEN** TypeScript resolves the import without error
 
+#### Scenario: `FilterTab` resolves from its owning package
+
+- **WHEN** `apps/chat` or any module inside `libs/conversation-panel` needs `FilterTab`
+- **THEN** it imports the enum from `@epam/ai-dial-chat-shared`, and importing it from
+  `@epam/ai-dial-conversation-panel` does not resolve
+
 ---
 
 ### Requirement: Panel header contains the title prop; toggle button is in the app Header
 
-`ConversationPanel` SHALL render a header bar containing the panel title from the `title: string` prop. `ConversationPanel` SHALL accept `isOpen: boolean`; when `false`, the panel collapses to zero width via a CSS transition. On mobile an optional `onToggle?: () => void` prop triggers a close button (rendered by `SidebarPanel.onClose`) inside the panel header; when `isOpen` is `false` the `<aside>` has `aria-hidden="true"`.
+`ConversationPanel` SHALL render a header bar containing the panel title from `labels.title`. All panel text arrives in one required `labels: ConversationPanelLabels` object (`title`, `emptyLabel`, `noResultsLabel`, `loadingLabel?`, `newChatLabel`, `searchPlaceholder`, `searchClearLabel`, `filterLabels`, `groupLabels?`, `actionsLabel?`, `unreadIndicatorLabel?`, `closeAriaLabel?`). `ConversationPanel` SHALL accept `isOpen: boolean`; when `false`, the panel collapses to zero width via a CSS transition. On mobile an optional `onToggle?: () => void` prop triggers a close button (rendered by `SidebarPanel.onClose`) inside the panel header. When `isOpen` is `false`, `SidebarPanel` sets `inert` on the `<aside>` (not `aria-hidden`), so a closed panel's controls leave the tab order and the accessibility tree.
 
-The desktop toggle button lives in `apps/chat/src/components/Header/Header.tsx` via `isHistoryPanelOpen` and `onHistoryPanelToggle` props. The panel width when open is `w-[325px]`.
+The desktop toggle button lives in `apps/chat/src/components/Header/Header.tsx` via the `isConversationPanelOpen` and `onConversationPanelToggle` props. The panel width when open is `w-[324px] mobile:w-full`.
 
 #### Scenario: Panel is visible when isOpen is true
 
@@ -33,7 +37,7 @@ The desktop toggle button lives in `apps/chat/src/components/Header/Header.tsx` 
 #### Scenario: Panel collapses when isOpen is false
 
 - **WHEN** `isOpen` changes to `false`
-- **THEN** the `<aside>` has `aria-hidden="true"` and its width collapses to 0
+- **THEN** the `<aside>` is `inert` and its width collapses to 0
 
 ---
 
@@ -42,9 +46,9 @@ The desktop toggle button lives in `apps/chat/src/components/Header/Header.tsx` 
 When `isOpen` is `true`, `ConversationPanel` SHALL render conversation items split into four collapsible sections:
 
 - **Pinned** — items where `isPinned === true`, shown first.
-- **My chats** — items where `source` is not `ConversationSource.Shared` or `ConversationSource.Organization` and `isPinned` is falsy.
-- **Shared** — items where `source === ConversationSource.Shared` and `isPinned` is falsy.
-- **Organization** — items where `source === ConversationSource.Organization` and `isPinned` is falsy.
+- **My chats** — items where `source` is not `FilterTab.Shared` or `FilterTab.Organization` and `isPinned` is falsy.
+- **Shared** — items where `source === FilterTab.Shared` and `isPinned` is falsy.
+- **Organization** — items where `source === FilterTab.Organization` and `isPinned` is falsy.
 
 Each section renders a disclosure button (chevron icon) as its header that toggles open/closed. All sections start expanded. When a section is collapsed, all items in that section SHALL be hidden regardless of whether any item in that section is the currently active conversation. A section with zero items after active search + tab filter SHALL be hidden. Each item SHALL display the conversation `title` (truncated) and its deployment icon according to the following rules:
 
@@ -52,9 +56,9 @@ Each section renders a disclosure button (chevron icon) as its header that toggl
 - When `item.isIconLoading` is `false` or `undefined` and `item.iconUrl` is set, the resolved image MUST be shown.
 - When `item.isIconLoading` is `false` or `undefined` and `item.iconUrl` is absent, the default fallback icon MUST be shown.
 
-When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `undefined`, the deployment icon SHALL show a tooltip with that text on hover. The item SHALL call `onSelectConversation(id)` when activated. The active conversation (matching `activeConversationId`) SHALL receive `aria-current="page"`. Section headings via optional `groupLabels?: { pinned?, myChats?, shared?, organization? }` (English defaults: `"Pinned"`, `"My chats"`, `"Shared"`, `"Organization"`).
+When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `undefined`, the deployment icon SHALL show a tooltip with that text on hover. The item SHALL call `onSelectConversation(id)` when activated. The active conversation (matching `activeConversationId`) SHALL receive `aria-current="page"`. Section headings via optional `labels.groupLabels?: { pinned?, myChats?, shared?, organization? }` (English defaults: `"Pinned"`, `"My chats"`, `"Shared"`, `"Organization"`).
 
-`apps/chat/src/components/ConversationPanel/ConversationPanelView.tsx` computes each row's `iconTooltip` as the resolved deployment's `displayName` when `findDeploymentByIdOrReference` finds a match for the id extracted by `getModelIdFromConversationId`. When no match is found (the deployment is unavailable, or the extracted id was contaminated by real conversation-folder path segments — see the `getModelIdFromConversationId` requirement above), `iconTooltip` SHALL fall back to only the **last** `/`-separated segment of the extracted id, percent-decoded — NOT the full extracted id/path — to avoid showing a misleading or unreadable full path as the tooltip.
+`useConversationPanelItems` (`libs/chat-hooks/src/conversation/useConversationPanelItems/useConversationPanelItems.ts`), which `ConversationPanelView` uses to build its rows, computes each row's `iconTooltip` through the host's `resolveIconTooltip` from the deployment its lookup finds for the id extracted by `getModelIdFromConversationId`. When no match is found (the deployment is unavailable, or the extracted id was contaminated by real conversation-folder path segments — see the `getModelIdFromConversationId` requirement above), `iconTooltip` SHALL fall back to only the **last** `/`-separated segment of the extracted id, percent-decoded — NOT the full extracted id/path — to avoid showing a misleading or unreadable full path as the tooltip.
 
 #### Scenario: Renders pinned conversations in Pinned section
 
@@ -89,27 +93,26 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 #### Scenario: Fallback tooltip shows only the last path segment when no deployment matches
 
 - **GIVEN** `getModelIdFromConversationId` extracted `'YH folder01.1/YH folder01.2/YH folder01.3/dial-chathub-v2-gpt-5.5-2026-04-24'` for a row (contaminated by real conversation-folder segments) and no deployment in `deployments` has that `id` or `reference`
-- **WHEN** `ConversationPanelView` computes that row's `iconTooltip`
+- **WHEN** `useConversationPanelItems` computes that row's `iconTooltip`
 - **THEN** `iconTooltip` is `'dial-chathub-v2-gpt-5.5-2026-04-24'` (the last segment, decoded), not the full extracted path
 
 #### Scenario: Middle mouse button click opens conversation in a new tab
 
 - **WHEN** the user middle-clicks (scroll wheel click) a conversation row
-- **THEN** the conversation URL (`item.href`) is opened in a new browser tab
-- **AND** the browser autoscroll indicator does NOT appear
+- **THEN** the browser opens the conversation URL (`item.href`) in a new tab through the row's native `<a>` link
 
-`ConversationHistoryItem` SHALL include an optional `href?: string` field — a browser-navigable URL for the conversation. When `href` is set, the row intercepts `mousedown` (button 1) to suppress the browser autoscroll cursor and intercepts `auxclick` (button 1) to call `window.open(href, '_blank', 'noreferrer')`. Both handlers are attached to the interactive `<button>` element (not the surrounding `<li>`). `ConversationPanelView` in `apps/chat` SHALL populate `href` using `getConversationRoute(id)` for each item.
+`ConversationItem` SHALL include an optional `href?: string` field — a browser-navigable URL for the conversation. When `href` is set, `ConversationRow` wraps the row `Button` in a native `<a href={item.href} className="contents">`: a plain click is `preventDefault`-ed and calls `onSelectConversation(id)`, and a middle-click uses the browser's native link behaviour to open the URL in a new tab (there are no `mousedown`/`auxclick` handlers and no `window.open` call). The inner `Button` gets `tabIndex={-1}` so the link is the single focus stop. `ConversationPanelView` in `apps/chat` SHALL populate `href` using `getConversationRoute(id)` for each item.
 
 #### Scenario: Empty state is shown when no conversations
 
 - **WHEN** `conversations` is an empty array
-- **THEN** the `emptyLabel` prop text is rendered instead of sections
+- **THEN** the `labels.emptyLabel` text is rendered instead of sections
 
 ---
 
 ### Requirement: Panel shows a skeleton loader while conversations are loading
 
-`ConversationPanel` SHALL accept an optional `isLoading?: boolean` prop. When `isLoading` is `true`, the panel body SHALL render a column of skeleton placeholder rows instead of the conversation list, empty state, or no-results state. Each skeleton row SHALL display a 24 × 24 px circular avatar placeholder and a title rectangle beside it. Row widths vary deterministically via `60 + (i * 23 % 35)` percent. The skeleton uses `Skeleton` from `@epam/ai-dial-ui-kit` with `color="var(--bg-layer-4)"` for contrast against the `bg-layer-raised` panel background. `ConversationPanelView` in `apps/chat` passes `isLoading` from `ConversationsContext`.
+`ConversationPanel` SHALL accept an optional `isLoading?: boolean` prop. When `isLoading` is `true`, the panel body SHALL render a column of skeleton placeholder rows instead of the conversation list, empty state, or no-results state. Each skeleton row SHALL display a 24 × 24 px circular avatar placeholder and a title rectangle beside it. Row widths vary deterministically via `60 + (i * 23 % 35)` percent. The skeleton uses `Skeleton` from `@epam/ai-dial-ui-kit` with its color from the stylesheet export `var(--cp-skeleton-color, var(--bg-control-disable-primary, #dce0e8))`, overridable through `styles.colors.skeletonColor`. `ConversationPanelView` in `apps/chat` passes `isLoading` from `ConversationsContext`.
 
 #### Scenario: Skeleton is shown while loading
 
@@ -136,19 +139,19 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 #### Scenario: Deployment icon tooltip shown when iconTooltip is provided
 
-- **WHEN** a `ConversationHistoryItem` has `iconTooltip: "Claude 3.5 Sonnet"`
+- **WHEN** a `ConversationItem` has `iconTooltip: "Claude 3.5 Sonnet"`
 - **THEN** hovering the deployment icon in that row shows a tooltip with "Claude 3.5 Sonnet"
 
 #### Scenario: No deployment icon tooltip when iconTooltip is absent
 
-- **WHEN** a `ConversationHistoryItem` has no `iconTooltip` field
+- **WHEN** a `ConversationItem` has no `iconTooltip` field
 - **THEN** no tooltip appears on the deployment icon
 
 ---
 
 ### Requirement: Panel renders a New chat button
 
-`ConversationPanel` SHALL render a full-width "New chat" button (with `IconPlus` icon) below the header. Clicking it SHALL call `onNewChat: () => void`. The button is keyboard-accessible. Its label comes from `newChatLabel` prop.
+`ConversationPanel` SHALL render a full-width "New chat" button (with `IconPlus` icon) below the header. Clicking it SHALL call `onNewChat: () => void`. The button is keyboard-accessible. Its label comes from `labels.newChatLabel`.
 
 #### Scenario: Clicking New chat calls onNewChat
 
@@ -159,7 +162,7 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 ### Requirement: Panel renders a search input to filter conversations
 
-`ConversationPanel` SHALL render a text input below the New chat button with a search icon. Placeholder comes from `searchPlaceholder` prop. Search state is internal `useState<string>`. Typing filters items by case-insensitive title substring match. Sections with zero matching items are hidden. Clearing restores the full list.
+`ConversationPanel` SHALL render the ui-kit `Search` field below the New chat button, inside a `role="search"` wrapper. Its placeholder and accessible name come from `labels.searchPlaceholder`, and its clear button label from `labels.searchClearLabel`. Search state is internal `useState<string>`. Typing filters items by case-insensitive title substring match. Sections with zero matching items are hidden. Clearing restores the full list.
 
 #### Scenario: Search filters conversation list
 
@@ -175,17 +178,17 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 ### Requirement: Panel renders filter tabs — All / My chats / Shared / Organization
 
-`ConversationPanel` SHALL render a segmented tab control with four tabs corresponding to `FilterTab` enum values (`All`, `MyChats`, `Shared`, `Organization`). Active tab state is internal `useState<FilterTab>` (default: `FilterTab.All`). Items are filtered by `item.source === tab` (or all when `FilterTab.All`). Filtering combines with search. The active tab SHALL have `aria-selected="true"`; the tab list SHALL have `role="tablist"`. Labels via `filterLabels: FilterLabels`.
+`ConversationPanel` SHALL render four filter tabs corresponding to `FilterTab` enum values (`All`, `MyChats`, `Shared`, `Organization`) through `FilterTabs`, which renders the ui-kit `FilterChips`: toggle buttons carrying `aria-pressed` inside a `role="group"` named by `filterLabels.groupAriaLabel` (default `"Filter chats"`). There is no `tablist` and no `aria-selected`. Active tab state is internal `useState<FilterTab>` (default: `FilterTab.All`). Items are filtered by `item.source === tab` (or all when `FilterTab.All`). Filtering combines with search. Labels via `labels.filterLabels: FilterLabels`.
 
-#### Scenario: Active tab is marked aria-selected
+#### Scenario: Active tab is marked aria-pressed
 
 - **WHEN** "My chats" tab is selected
-- **THEN** that tab has `aria-selected="true"` and others have `aria-selected="false"`
+- **THEN** that chip has `aria-pressed="true"` and the others have `aria-pressed="false"`
 
 #### Scenario: Selecting a tab filters by source
 
 - **WHEN** the user clicks the "Shared" tab
-- **THEN** only conversations with `source === ConversationSource.Shared` are shown
+- **THEN** only conversations with `source === FilterTab.Shared` are shown
 
 ---
 
@@ -216,11 +219,13 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 ### Requirement: Panel rows expose per-item actions (pin, rename, delete, share)
 
-`ConversationPanel` SHALL accept `getActions?: (item: ConversationHistoryItem) => DropdownItem[]` and `actionsLabel?: string` (English default: `"More actions"`). When `getActions` returns a non-empty array for a row, an ellipsis trigger button is rendered on that row; activating it opens a dropdown built from the returned `DropdownItem[]`. When `getActions` is omitted or returns an empty array, no trigger is rendered.
+`ConversationPanel` SHALL accept `getActions?: (item: ConversationItem) => DropdownItem[]`, with the trigger's accessible name from `labels.actionsLabel` (English default: `"More actions"`). When `getActions` returns a non-empty array for a row, an ellipsis trigger button is rendered on that row; activating it opens a dropdown built from the returned `DropdownItem[]`. When `getActions` is omitted or returns an empty array, no trigger is rendered.
 
-Row-level actions (pin/unpin, rename, duplicate, delete, share) are wired in `ConversationPanelView` where `ConversationsContext` supplies the mutation methods.
+Row-level actions are wired in `ConversationPanelView` where `ConversationsContext` supplies the mutation methods.
 
-For owned, non-readonly conversations (`isReadonly: false`, `sharedWithMe: false`, `publishedWithMe: false`), `getActions` SHALL include a `share` action (in addition to `pin`/`unpin`, `rename`, `duplicate`, `delete`) that opens `ShareConversationPopoverContainer` for the conversation. Readonly conversations (readonly, shared-with-me, or published-with-me) continue to receive only `pin`/`unpin` and `duplicate` — no `share` action is added for them.
+For owned, non-readonly conversations (`isReadonly: false`, `sharedWithMe: false`, `publishedWithMe: false`), `getActions` SHALL return, in order: `pin`/`unpin`, `rename`, `duplicate`, export (unless conversation export is hidden), `share` (only when `OverlayFeature.ConversationsSharing` is enabled; opens `ShareConversationPopoverContainer`), `publish` (when publishing is enabled and the conversation has no published folders) or `unpublish` (when publishing is enabled and it has published folders), `revoke-access` (when sharing is enabled and revoke is visible for the conversation), and `delete`.
+
+Readonly conversations (readonly, shared-with-me, or published-with-me) SHALL receive `pin`/`unpin`, `duplicate`, and export (unless hidden); a shared-with-me row also gets `unshare` ("Remove from my list"). No `share` action is added for them.
 
 #### Scenario: Row actions trigger renders when getActions returns items
 
@@ -236,13 +241,14 @@ For owned, non-readonly conversations (`isReadonly: false`, `sharedWithMe: false
 
 - **GIVEN** a conversation row where `isReadonly`, `sharedWithMe`, and `publishedWithMe` are all `false`
 - **WHEN** the row's actions trigger is activated
+- **AND** `OverlayFeature.ConversationsSharing` is enabled
 - **THEN** the dropdown includes a "Share" item alongside pin, rename, duplicate, and delete
 
 #### Scenario: Readonly conversation's action menu excludes Share
 
 - **GIVEN** a conversation row where `sharedWithMe` is `true`
 - **WHEN** the row's actions trigger is activated
-- **THEN** the dropdown includes only pin/unpin and duplicate; no "Share" item is present
+- **THEN** the dropdown includes pin/unpin, duplicate, export (unless hidden), and "Remove from my list"; no "Share" item is present
 
 #### Scenario: Selecting Share opens the share popover
 
@@ -254,19 +260,19 @@ For owned, non-readonly conversations (`isReadonly: false`, `sharedWithMe: false
 
 ### Requirement: Panel is responsive — persistent on desktop, drawer on mobile
 
-`ConversationPanel` SHALL render the same markup regardless of viewport. On desktop it is a persistent `w-[325px]` panel that pushes `<main>` via flex row. On mobile `ConversationPanelView` passes `className="inset-y-0 start-0 z-50"` plus `onToggle={onClose}` so `SidebarPanel` renders a close button inside the panel header; the parent manages `isOpen` state.
+`ConversationPanel` SHALL render the same markup regardless of viewport. On desktop it is a persistent `w-[324px]` panel that pushes `<main>` via flex row. On mobile `ConversationPanelView` passes `className="fixed inset-y-0 start-0 z-50"`, `isOverlay`, and `onToggle={onClose}`, so the panel slides over the content as a drawer (instead of collapsing its width beside it) and `SidebarPanel` renders a close button inside the panel header; the parent manages `isOpen` state.
 
 Mobile close is handled exclusively via the close button inside the panel header (via `onToggle` → `SidebarPanel.onClose`). There is no backdrop overlay.
 
 #### Scenario: Desktop renders a persistent panel
 
 - **WHEN** the app is rendered at a desktop viewport
-- **THEN** the panel occupies a persistent `w-[325px]` column beside `<main>` and renders no close button
+- **THEN** the panel occupies a persistent `w-[324px]` column beside `<main>` and renders no close button
 
 #### Scenario: Mobile renders a closable drawer
 
 - **WHEN** the app is rendered at a mobile viewport and the panel is open
-- **THEN** the panel is positioned with `inset-y-0 start-0 z-50` and its header carries a close button
+- **THEN** the panel is positioned with `fixed inset-y-0 start-0 z-50` as an overlay drawer and its header carries a close button
 - **AND** no backdrop overlay is rendered
 
 ---
@@ -282,82 +288,20 @@ Tests SHALL be in `libs/conversation-panel/src/components/ConversationPanel/test
 
 ---
 
-### Requirement: `ConversationHistoryItem` exposes `iconTooltip` for the deployment icon tooltip
+### Requirement: `ConversationItem` exposes `iconTooltip` for the deployment icon tooltip
 
-`ConversationHistoryItem` SHALL include an optional `iconTooltip?: string` field. When present, `ConversationRow` SHALL forward it as the `tooltip` prop of `DeploymentIcon`. When absent, no tooltip is rendered on the icon.
+`ConversationItem` SHALL include an optional `iconTooltip?: string` field. When present, `ConversationRow` SHALL forward it as the `tooltip` prop of `DeploymentIcon`. When absent, no tooltip is rendered on the icon.
 
 #### Scenario: iconTooltip field is accepted without TypeScript error
 
-- **WHEN** a `ConversationHistoryItem` object is constructed with `iconTooltip: "My Agent"`
+- **WHEN** a `ConversationItem` object is constructed with `iconTooltip: "My Agent"`
 - **THEN** TypeScript resolves the type without error
-
----
-
-### Requirement: Scheduled-task conversations show a TASK badge in the history panel
-
-`ConversationHistoryItem` (exported from `@epam/ai-dial-conversation-panel`) SHALL include two optional presentational fields: `showTaskBadge?: boolean` and `taskBadgeLabel?: string`. The lib carries no knowledge of scheduler ids, feature flags, or API shapes — these are plain display props, following the same pattern as the existing `iconTooltip` field.
-
-`ConversationRow` SHALL render a compact pill badge (clock icon + uppercase label text) at the end of the row, after the title and before/alongside the row's overflow-actions trigger, whenever `showTaskBadge` is `true`. The badge uses a neutral/grey background consistent with the design system's informational-pill styling. When `showTaskBadge` is `false` or omitted, no badge is rendered and row layout is unchanged from today.
-
-The badge is **informational only**: it has no click handler, is not a link, and does not navigate anywhere. It renders regardless of whether the `scheduledTasksEnabled` navigation feature flag is enabled for the current user — the underlying conversation exists independent of that flag.
-
-**App wiring (`ConversationPanelView` in `apps/chat`).** The app maps `ConversationListItemDto.isScheduledTask` to `showTaskBadge`, and resolves `taskBadgeLabel` from the i18n key `conversationPanel.taskBadgeLabel` (English default: `"TASK"`). `scheduleId`/`runId` are not passed to the lib in this iteration since no interactive behavior consumes them yet. This mapping follows the existing pattern used for `sharedWithMe`/`publishedWithMe` → `ConversationSource`.
-
-**Row layout.** When both a task badge and the row's overflow-actions trigger (see "Panel rows expose per-item actions") are present, `ConversationRow` SHALL adjust end-padding (mirroring the existing `getButtonPaddingEnd` pattern) so the title, badge, and action trigger do not overlap and the title still truncates with ellipsis.
-
-**a11y.** The clock icon inside the badge SHALL be `aria-hidden` — the row's own accessible name already comes from the conversation title, and the badge does not need its own separate accessible name beyond the visible "TASK" text, which remains in the accessibility tree as plain text content.
-
-**RTL.** The badge SHALL use logical spacing utilities (`ms-*`/`me-*`, `end-*`) so it stays pinned to the trailing edge of the row in both LTR and RTL. The "TASK" label text itself is not mirrored or flipped.
-
-**i18n.** `conversationPanel.taskBadgeLabel` (value `"TASK"`) SHALL be added to `apps/chat/src/i18n/locales/en.json` and to the `ConversationPanelI18nKeys` type/interface consumed by `ConversationPanelView`.
-
-#### Scenario: Scheduler-created conversation row shows the TASK badge
-
-- **GIVEN** a `ConversationHistoryItem` with `showTaskBadge: true` and `taskBadgeLabel: "TASK"`
-- **WHEN** `ConversationRow` renders that item
-- **THEN** the row displays a pill badge with a clock icon and the text "TASK" at the end of the row
-
-#### Scenario: Normal conversation row shows no badge
-
-- **GIVEN** a `ConversationHistoryItem` with `showTaskBadge` omitted or `false`
-- **WHEN** `ConversationRow` renders that item
-- **THEN** no task badge is rendered and the row layout matches the current (pre-change) layout
-
-#### Scenario: Badge is shown independent of the scheduledTasksEnabled feature flag
-
-- **GIVEN** the `scheduledTasksEnabled` navigation feature flag is disabled for the current user
-- **AND** a conversation list item has `isScheduledTask: true`
-- **WHEN** the history panel renders that item
-- **THEN** the TASK badge is still shown on that row
-
-#### Scenario: Badge click does nothing
-
-- **GIVEN** a row with the TASK badge rendered
-- **WHEN** the user clicks directly on the badge
-- **THEN** no navigation occurs and the row's normal `onSelectConversation` behavior for the row click still applies (the badge has no separate click handler that stops propagation or redirects)
-
-#### Scenario: Badge icon is aria-hidden
-
-- **WHEN** `ConversationRow` renders a row with `showTaskBadge: true`
-- **THEN** the clock icon inside the badge has `aria-hidden="true"` while the "TASK" text remains in the accessible tree
-
-#### Scenario: Badge stays at the trailing edge in RTL
-
-- **GIVEN** `dir="rtl"` is set on an ancestor element
-- **WHEN** a row with `showTaskBadge: true` renders
-- **THEN** the badge appears at the visual end (left side in RTL) using logical spacing classes, and the "TASK" text is not mirrored
-
-#### Scenario: Row spacing accommodates badge and actions trigger together
-
-- **GIVEN** a row has both `showTaskBadge: true` and a non-empty `getActions` result
-- **WHEN** the row renders
-- **THEN** the title truncates with ellipsis and the badge and actions trigger are both fully visible without overlapping
 
 ---
 
 ### Requirement: `getModelIdFromConversationId` correctly extracts the deployment ID from multi-segment and slash-containing conversation IDs
 
-`apps/chat/src/utils/get-model-id-from-conversation-id.ts` SHALL export `getModelIdFromConversationId(id: string): string | undefined`.
+`libs/chat-hooks/src/conversation/get-model-id-from-conversation-id.ts` SHALL export `getModelIdFromConversationId(id: string): string | undefined`. It is called from `useConversationPanelItems`.
 
 The backend encodes each `/`-separated segment of the conversation path individually with `encodeURIComponent` (`encodeDialResourcePath`). This means **both** the deployment ID and the conversation title can introduce extra URL path segments:
 
@@ -368,7 +312,7 @@ The backend encodes each `/`-separated segment of the conversation path individu
 
 DIAL Scheduler additionally writes scheduled-task conversations under the reserved `conversations/{bucket}/.scheduler/{scheduleId}/{filename}` path shape (matching `apps/chat-api/src/conversations/utils/parse-scheduled-task-conversation-path.ts`'s `SCHEDULER_SEGMENT = '.scheduler'`). When the segment immediately after the bucket is the literal string `.scheduler`, the function MUST treat that segment and the one immediately following it (the schedule id) as a reserved path prefix and skip both before extracting the deployment id from the remaining segments — they are never part of the deployment id.
 
-The function MUST scan the remaining segments (after skipping bucket, and after skipping the `.scheduler`/scheduleId pair when present) **left-to-right** and stop at the **first** segment (after URL-decoding) that contains `__`. Segments before that one form the deployment ID path prefix. The part of the separator segment before `__` is the final piece of the deployment ID. Segments after the separator segment are part of the title and MUST be ignored.
+The function MUST scan the remaining segments (after skipping bucket, and after skipping the `.scheduler`/scheduleId pair when present) **left-to-right** and stop at the **first** segment (after URL-decoding) that contains `__`. Segments before that one form the deployment ID path prefix. The part of the separator segment before `__` is the final piece of the deployment ID — except for a versioned application: when the first prefix segment is `applications` and the part after the first `__` is a version (dot-separated numeric parts, optionally followed by `-`/`+` metadata), the `__{version}` suffix is kept as part of the final piece. Segments after the separator segment are part of the title and MUST be ignored.
 
 The function MUST return `undefined` when:
 - The input has fewer than 3 `/`-separated segments.
@@ -405,6 +349,16 @@ Note: outside the specifically-reserved `.scheduler/{scheduleId}` prefix, this f
 
 - **WHEN** `getModelIdFromConversationId('bucket/gpt-4__title')` is called
 - **THEN** it returns `undefined`
+
+#### Scenario: Versioned application keeps its version suffix
+
+- **WHEN** `getModelIdFromConversationId('conversations/bucket/applications/app-bucket/my-app__1.0__title')` is called
+- **THEN** it returns `'applications/app-bucket/my-app__1.0'`
+
+#### Scenario: Numeric title of a model conversation is not treated as a version
+
+- **WHEN** `getModelIdFromConversationId('conversations/bucket/gpt-4__18')` is called
+- **THEN** it returns `'gpt-4'`
 
 #### Scenario: Scheduled-task conversation strips the .scheduler/{scheduleId} prefix
 
@@ -451,12 +405,12 @@ The `Conversation` type declares `assistantModelId: string`, but conversations c
 ```ts
 interface ConversationMove {
   draggedId: string;
-  targetGroupKey: ConversationGroupKey;  // which group the item was dropped into
+  targetGroupKey: FilterTab;             // which group the item was dropped into
   afterId: string | null;               // item to insert after; null = top of group
 }
 ```
 
-`ConversationGroupKey` is also exported from the lib (`Pinned | MyChats | Shared | Organization`).
+`targetGroupKey` uses `FilterTab` from `@epam/ai-dial-chat-shared` (`Pinned`, `MyChats`, `Shared`, `Organization`); the lib exports no separate group-key type.
 
 **Drop rules enforced by the lib:**
 
@@ -486,13 +440,13 @@ The lib enforces rules via `computeAllowedDropGroups` (computed at drag start); 
 #### Scenario: Dragging a My Chats conversation to the Pinned section pins it
 
 - **WHEN** the user drags a My Chats conversation and drops it onto the Pinned section header
-- **THEN** `onMoveConversation` is called with `targetGroupKey: ConversationGroupKey.Pinned` and `afterId: null`
+- **THEN** `onMoveConversation` is called with `targetGroupKey: FilterTab.Pinned` and `afterId: null`
 - **AND** the app calls `pinConversation(contextId, true)`
 
 #### Scenario: Dragging a pinned conversation to My Chats unpins it
 
 - **WHEN** the user drags a pinned conversation (with `source: MyChats`) and drops it onto a My Chats row
-- **THEN** `onMoveConversation` is called with `targetGroupKey: ConversationGroupKey.MyChats`
+- **THEN** `onMoveConversation` is called with `targetGroupKey: FilterTab.MyChats`
 - **AND** the app calls `pinConversation(contextId, false)`
 
 #### Scenario: Cross-category drop is blocked
@@ -609,52 +563,176 @@ Navigation MUST occur regardless of whether the conversation is owned, shared, o
 
 ### Requirement: Unread scheduler-created conversations show an unread dot in the history panel
 
-`ConversationHistoryItem` (exported from `@epam/ai-dial-conversation-panel`) SHALL include one optional presentational field: `isUnread?: boolean`. The lib carries no knowledge of scheduler ids, bucket storage, or API shapes — this is a plain display prop, following the same pattern as the existing `showTaskBadge`/`iconTooltip` fields.
+`ConversationItem` (exported from `@epam/ai-dial-conversation-panel`) SHALL include one optional presentational field: `isUnread?: boolean`. The lib carries no knowledge of scheduler ids, bucket storage, or API shapes — this is a plain display prop, following the same pattern as the existing `leadingIcon`/`iconTooltip` fields.
 
-`ConversationRow` SHALL render a small filled dot immediately before the row's leading icon (the `avatar`/`iconBefore` slot) whenever `isUnread` is `true`. The dot uses the design system's accent/notification color. When `isUnread` is `false` or omitted, no dot is rendered and the leading-icon layout is unchanged from today. The dot is decorative status, not a control — it has no click handler and is not a link.
+When `isUnread` is `true`, `ConversationRow` SHALL:
 
-**Accessible name.** Since AAA requires status to not be conveyed by color alone, the dot wrapper SHALL carry a visually-hidden (`sr-only`) label (i18n key `conversationPanel.unreadIndicatorLabel`, English default: `"Unread"`) so screen reader users hear the unread state; the visible dot element itself SHALL be `aria-hidden`.
+1. render a `7.11px` round dot centered in a 24×24 container at the **trailing edge** of the row, after the title, using the design system's accent/notification color (`--cp-unread-dot`, overridable via `ConversationColors.unreadDot`, default `--text-accent`);
+2. render the title with the `dial-small-semi-text` typography class (600 weight, 14/24) instead of `itemTitleClassName`. The weight change SHALL NOT change the row height.
 
-**App wiring (`ConversationPanelView` in `apps/chat`).** The app maps `ConversationListItemDto.isUnread` to `ConversationHistoryItem.isUnread` — the same mapping pattern already used for `isScheduledTask` → `showTaskBadge`.
+When `isUnread` is `false` or omitted, no dot renders, the title keeps its normal weight, and the leading slot no longer reserves any space for an indicator (the former 12×12 pre-avatar slot is removed). The dot is decorative status, not a control — it has no click handler and is not a link.
 
-**Mark-as-viewed on open.** When the user opens (clicks, or middle-clicks to open in a new tab) a row whose item has `isScheduledTask: true` and `isUnread: true`, the app SHALL optimistically clear the row's unread dot in local state and call the mark-viewed action (`ConversationsContext.markConversationViewed(id)`, which calls `PATCH /api/v1/conversations/viewed?path=<path>`). If the call fails, the app SHALL roll back the local state to `isUnread: true` (same optimistic-update-with-rollback pattern already used for pinning). Opening a conversation directly via URL navigation (not via a history panel row click) SHALL also trigger the same mark-viewed call once the conversation is confirmed loaded.
+**Row layout.** When both the unread dot and the overflow-actions trigger are present, `ConversationRow` SHALL adjust end padding (mirroring the existing `getButtonPaddingEnd` pattern) so the title truncates with an ellipsis and neither the dot nor the trigger overlaps it. In the hover, focus-within, and open-menu states where the actions trigger appears, the dot SHALL be visually hidden so the trigger takes its trailing spot; the `sr-only` unread label SHALL stay in the accessibility tree in every state.
 
-**RTL.** The dot SHALL be positioned using logical properties (`start-0` relative to its wrapper) so it stays before the icon in both LTR and RTL — "before" the icon means the visual start edge, which flips with direction.
+**Accessible name.** Since AAA requires status to not be conveyed by color or weight alone, the dot wrapper SHALL carry a visually-hidden (`sr-only`) label (i18n key `conversationPanel.unreadIndicatorLabel`, English default: `"Unread"`) so screen reader users hear the unread state; the visible dot element itself SHALL be `aria-hidden`. The dot color's contrast against the row background (default, hover, active) SHALL be at least 3:1 (non-text UI component).
 
-**i18n.** `conversationPanel.unreadIndicatorLabel` (value `"Unread"`) SHALL be added to `apps/chat/src/i18n/locales/en.json` and to the `ConversationPanelI18nKeys` type/interface consumed by `ConversationPanelView`.
+**App wiring (`ConversationPanelView` in `apps/chat`).** The app maps `ConversationListItemDto.isUnread` to `ConversationItem.isUnread` for scheduled-task items through `resolveTaskPresentation`.
 
-#### Scenario: Unread scheduler-created conversation row shows the unread dot
+**Mark-as-viewed on open.** When the user opens (clicks, or middle-clicks to open in a new tab) a row whose item has `isScheduledTask: true` and `isUnread: true`, the app SHALL optimistically clear the row's unread state in local state and call the mark-viewed action (`ConversationsContext.markConversationViewed(id)`, which calls `PATCH /api/v1/conversations/viewed?path=<path>`). If the call fails, the app SHALL roll back the local state to `isUnread: true` (same optimistic-update-with-rollback pattern already used for pinning). Opening a conversation directly via URL navigation or from a task's History (not via a history panel row click) SHALL also trigger the same mark-viewed call once the conversation is confirmed loaded — this relies on the context's full, uncollapsed list (see `scheduled-task-conversation-grouping`).
 
-- **GIVEN** a `ConversationHistoryItem` with `isUnread: true`
+**RTL.** The dot SHALL be positioned with logical properties (`ms-*`/`me-*`, `end-*`) so it stays at the trailing edge in both LTR and RTL — the visual left side in RTL.
+
+**i18n.** `conversationPanel.unreadIndicatorLabel` (value `"Unread"`) remains in `apps/chat/src/i18n/locales/en.json` and the `ConversationPanelI18nKeys` type.
+
+#### Scenario: Unread row shows a trailing dot and a heavier title
+
+- **GIVEN** a `ConversationItem` with `isUnread: true`
 - **WHEN** `ConversationRow` renders that item
-- **THEN** the row displays a dot before the leading icon, with an accessible "Unread" label
+- **THEN** a dot renders after the title at the row's trailing edge, the title uses the heavier weight, and an accessible "Unread" label is present
 
-#### Scenario: Read or non-scheduler conversation row shows no dot
+#### Scenario: Read or non-scheduler row shows no dot and normal weight
 
-- **GIVEN** a `ConversationHistoryItem` with `isUnread` omitted or `false`
+- **GIVEN** a `ConversationItem` with `isUnread` omitted or `false`
 - **WHEN** `ConversationRow` renders that item
-- **THEN** no unread dot is rendered and the leading-icon layout matches the current (pre-change) layout
+- **THEN** no dot renders, the title uses the normal weight, and no space is reserved before the leading icon
 
-#### Scenario: Opening an unread task conversation clears the dot optimistically
+#### Scenario: Opening an unread task conversation clears the unread state optimistically
 
 - **GIVEN** a history panel row with `isUnread: true` for a scheduler-created conversation
 - **WHEN** the user clicks the row to open it
-- **THEN** the row's dot disappears immediately (before the network call resolves) and `PATCH /api/v1/conversations/viewed?path=<path>` is called for that conversation
+- **THEN** the dot and heavier weight disappear immediately (before the network call resolves) and `PATCH /api/v1/conversations/viewed?path=<path>` is called for that conversation
 
-#### Scenario: Failed mark-viewed call restores the unread dot
+#### Scenario: Failed mark-viewed call restores the unread state
 
-- **GIVEN** the user opens an unread task conversation and the optimistic dot-clear has been applied
-- **WHEN** the `PATCH /api/v1/conversations/:id/viewed` call fails
-- **THEN** the row's unread dot is restored (rolled back to `isUnread: true`)
+- **GIVEN** the user opens an unread task conversation and the optimistic clear has been applied
+- **WHEN** the `PATCH /api/v1/conversations/viewed` call fails
+- **THEN** the row's dot and heavier title weight are restored (rolled back to `isUnread: true`)
 
 #### Scenario: Dot is decorative and has no click handler
 
 - **GIVEN** a row with the unread dot rendered
 - **WHEN** the user clicks directly on the dot
-- **THEN** the row's normal `onSelectConversation` behavior for the row click still applies (the dot has no separate click handler that stops propagation or redirects)
+- **THEN** the row's normal `onSelectConversation` behavior for the row click still applies
 
-#### Scenario: Dot position respects RTL
+#### Scenario: Dot and actions trigger do not overlap the title
+
+- **GIVEN** a row with `isUnread: true` and a non-empty `getActions` result, and a long title
+- **WHEN** the row renders and is hovered
+- **THEN** the title truncates with an ellipsis and neither the dot nor the trigger overlaps it
+
+#### Scenario: Dot stays at the trailing edge in RTL
 
 - **GIVEN** `dir="rtl"` is set on an ancestor element
 - **WHEN** a row with `isUnread: true` renders
-- **THEN** the dot appears at the visual start edge of the leading icon (right side in RTL)
+- **THEN** the dot appears at the visual end of the row (left side in RTL)
+
+### Requirement: A conversation row can carry a host-supplied leading icon
+
+`ConversationItem` (exported from `@epam/ai-dial-conversation-panel`) SHALL include an optional presentational field `leadingIcon?: ReactNode`. When it is set, `ConversationRow` SHALL render it in the leading slot **instead of** the deployment avatar (`iconUrl`/`isIconLoading`/`iconTooltip` are then ignored for that row). When it is omitted, the row renders the deployment avatar exactly as today. The lib carries no knowledge of what the icon means — it has no schedule, task, or feature-flag concept; the host decides which items get an icon and which icon.
+
+The leading slot SHALL keep the avatar's footprint (same box size and alignment) so titles of icon rows and avatar rows stay aligned.
+
+**App wiring (`ConversationPanelView` in `apps/chat`).** For every item with `isScheduledTask === true`, the app SHALL supply its existing `ScheduledTasksIcon` (the same glyph as the Scheduled tasks navigation entry) at 16px with `stroke={DIAL_KIT_ICON_STROKE}`, `aria-hidden`, colored `var(--text-visual-blue, #1189C8)`, inside a 24×24 box with 4px padding, 8px corner radius, and `var(--bg-visual-blue, #D6EDF9)` background. The icon is supplied through `useConversationPanelItems`'s `resolveTaskPresentation` resolver (see `chat-hooks-conversation-panel-controller`). Like the former TASK badge, it is shown regardless of the `scheduledTasksEnabled` flag.
+
+**a11y.** The icon is decorative: the row's accessible name remains the conversation title. The lib SHALL NOT add a tooltip or accessible name for a `leadingIcon`.
+
+**RTL.** The leading slot uses the existing logical layout of the row; the icon itself SHALL NOT be mirrored (a clock/task glyph has no inherent direction).
+
+**i18n.** None — the icon has no text.
+
+#### Scenario: Row with a leading icon replaces the avatar
+
+- **GIVEN** a `ConversationItem` with `leadingIcon` set and `iconUrl` set
+- **WHEN** `ConversationRow` renders it
+- **THEN** the leading icon is rendered and the deployment avatar is not
+
+#### Scenario: Row without a leading icon is unchanged
+
+- **GIVEN** a `ConversationItem` with `leadingIcon` omitted
+- **WHEN** `ConversationRow` renders it
+- **THEN** the deployment avatar (or its loading skeleton) renders exactly as before
+
+#### Scenario: Task conversation shows the task icon
+
+- **GIVEN** a list item with `isScheduledTask: true`
+- **WHEN** the history panel renders it
+- **THEN** its row shows the task icon with `aria-hidden="true"` and no TASK pill
+
+#### Scenario: Title alignment holds between icon and avatar rows
+
+- **WHEN** a task row and an ordinary row render one above the other
+- **THEN** both titles start at the same inline offset
+
+### Requirement: The host keeps conversation panel props referentially stable
+
+The host SHALL pass props to both memoized panel components that keep the same reference across renders unless their inputs change. The components are the app's `ConversationPanelView` (`apps/chat/src/components/ConversationPanel/ConversationPanelView.tsx`, exported as `memo(ConversationPanelView)`) and the `ConversationPanel` from `libs/conversation-panel`, which is itself wrapped in `memo`. In particular:
+
+- `App` (`apps/chat/src/app/app.tsx`) SHALL pass `onRequestedFilterChange` as a `useCallback`-stabilized function, not an inline arrow;
+- `ConversationPanelView` SHALL pass `labels` as a `useMemo`-stabilized object, keyed on the translation function and the already-memoized label parts;
+- `ConversationPanelView` SHALL pass `headerActions` as a `useMemo`-stabilized element, keyed on the inputs it closes over.
+
+A re-render of `App` whose panel-relevant inputs are unchanged (for example, a sources-sidebar context update during an SSE stream) SHALL NOT re-render `ConversationPanelView`. A re-render of `ConversationPanelView` whose `ConversationPanel` inputs are unchanged SHALL NOT re-render `ConversationPanel`.
+
+The lib's public API does not change. No lib code changes, and host knowledge stays in the app. This adds no user-visible string, RTL behavior, accessibility semantic, feature flag or telemetry.
+
+#### Scenario: App re-render with unchanged panel inputs
+
+- **GIVEN** `App` is rendered on a conversation route with the panel open
+- **WHEN** `App` re-renders because an unrelated context value changes (for example, `SourcesSidebarContext.messages`)
+- **THEN** `ConversationPanelView` does not re-render
+
+#### Scenario: Panel view re-render with unchanged lib inputs
+
+- **GIVEN** `ConversationPanelView` is rendered
+- **WHEN** it re-renders without a change in `conversations`, `isLoading`, `isOpen`, the active conversation, translations, or any callback it forwards
+- **THEN** the lib's `ConversationPanel` does not re-render
+
+#### Scenario: Changing an input still propagates
+
+- **WHEN** the active conversation id passed to `ConversationPanelView` changes
+- **THEN** `ConversationPanelView` and `ConversationPanel` re-render and the new row is marked active
+
+### Requirement: Changing the active conversation re-renders only the affected rows
+
+In `libs/conversation-panel`, `ConversationRow` SHALL be wrapped in `React.memo`. Row-level inputs SHALL be referentially stable across a change of `activeConversationId` for every row whose own state did not change. In particular:
+
+- each row receives `isActive` as a boolean, not the active id;
+- `DeploymentIcon`'s `labels` and `styles` SHALL NOT be fresh object literals when their inputs are unchanged;
+- the row's action items SHALL be computed with `useMemo` keyed on `getActions` and `item`, so they are built only when the row renders with a changed item or a changed `getActions`.
+
+With a stable `conversations` array and a stable `getActions` from the host, a change of `activeConversationId` SHALL re-render only two `ConversationRow`s: the row that loses the active state and the row that gains it. react-window may still re-render its row wrappers; the row bodies are what this requirement limits.
+
+The host SHALL keep `getActions` stable across navigation. `ConversationPanelView` reads the active conversation id inside `getActions` through a ref updated on each render, so the id is not a `useCallback` dependency.
+
+The virtual list SHALL overscan `max(5, ceil(viewportRows / 2))` rows on each side, where `viewportRows = ceil(listHeight / ITEM_ROW_HEIGHT)`. This replaces the previous two viewports per side.
+
+Existing row behavior is unchanged:
+
+- the action trigger renders only when `getActions` returns a non-empty array;
+- menu content still updates while the menu is open when the host's `getActions` identity changes, for example when a revoke-count or publish-history lookup lands;
+- `aria-current="page"` on the active row, the unread dot rules, drag-and-drop and `href` behavior stay as they are.
+
+The public API is unchanged: no prop is added, removed or retyped. This adds no user-visible string, RTL or accessibility change, feature flag or telemetry.
+
+#### Scenario: Navigation re-renders only the old and new active rows
+
+- **GIVEN** a panel rendering rows A, B and C with A active, a stable `conversations` array and a stable `getActions`
+- **WHEN** `activeConversationId` changes from A to B
+- **THEN** only the `ConversationRow`s for A and B re-render, and C does not
+
+#### Scenario: Action items are not rebuilt for a row that does not re-render
+
+- **GIVEN** a stable `getActions` spy and the panel from the previous scenario
+- **WHEN** `activeConversationId` changes from A to B
+- **THEN** `getActions` is not called for C
+
+#### Scenario: Open menu still refreshes when the host's actions change
+
+- **GIVEN** a row whose action menu is open
+- **WHEN** the host passes a new `getActions` that returns a different list for that item
+- **THEN** the open menu shows the new list
+
+#### Scenario: A row without actions renders no trigger
+
+- **WHEN** `getActions` returns `[]` for an item
+- **THEN** that row renders no action trigger

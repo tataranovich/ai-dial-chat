@@ -12,9 +12,11 @@ import type {
   ActionRowLayout,
   ChatSettingsConfig,
   CommandMenuConfig,
+  HighlightedTextRange,
   InputColors,
   InputTypography,
   MenuOverlayConfig,
+  ModelMenuStyles,
   ModelSelectorLabels,
   SendOnEnter,
   TextInsertion,
@@ -55,6 +57,13 @@ export interface ConversationInputStyles {
    * `ATTACHMENT_INPUT_CLASS`.
    */
   attachmentTray?: AttachmentTrayStyles;
+  /**
+   * Styling hooks for the model menu in both presentations — the desktop
+   * dropdown and the mobile sheet — so a host restyles its panel, search row
+   * and selected row without a descendant selector on
+   * `CONVERSATION_INPUT_CLASS.modelMenu*`.
+   */
+  modelMenu?: ModelMenuStyles;
 }
 
 /** Props accepted by the `EditMessageInput` component. */
@@ -62,17 +71,53 @@ export interface EditMessageInputProps {
   /** Initial message text pre-populated in the textarea. */
   message?: string;
   /**
-   * Host-supplied content rendered inside the text area at its inline-start;
-   * typed text starts after it on the first line and wraps at full width
-   * below. Forwarded to the inner `Input`.
+   * Optional token that forces the textarea to resync from `message`, even
+   * when `message` itself is the same string as before (e.g. the host
+   * spliced a mention into its own copy of the draft at a known position and
+   * needs the textarea to adopt it). Forwarded to the inner `Input`.
    */
-  inlineStartSlot?: ReactNode;
+  messageRevision?: number;
   /**
-   * Called when Backspace is pressed with the caret collapsed at position 0
-   * while `inlineStartSlot` content is shown (the slot's remove gesture).
+   * Called with the textarea's current value on every change (typing,
+   * deleting, pasting, undo/redo) — not only on save. A host tracking live
+   * state derived from the draft (e.g. skill-mention anchors that must
+   * reconcile as the user edits around them) wires this; omit it to ignore
+   * keystrokes between saves.
+   */
+  onChange?: (message: string) => void;
+  /**
+   * Ranges of `message` rendered as highlighted runs (e.g. a restored skill
+   * mention). Forwarded to the inner `Input`.
+   */
+  activeMentions?: HighlightedTextRange[];
+  /**
+   * Called on Backspace with the caret collapsed at some position, to ask
+   * whether a tracked range ends exactly there — see `Input`'s prop of the
+   * same name. Forwarded to the inner `Input`.
+   */
+  onBackspaceAtCaret?: (
+    caretPosition: number,
+  ) => HighlightedTextRange | undefined;
+  /**
+   * One-shot caret placement applied whenever the internal message resyncs
+   * from a new `message` value (e.g. right after inserting a mention).
    * Forwarded to the inner `Input`.
    */
-  onInlineStartRemove?: () => void;
+  caretPositionOverride?: number;
+  /**
+   * Host-injected slash-command menu, forwarded to the inner `Input` — see
+   * `Input`'s prop of the same name. Absent disables the mechanism during
+   * edit.
+   */
+  commandMenu?: CommandMenuConfig;
+  /**
+   * Host-injected overlay entries for the `+` menu. `EditMessageInput` hides
+   * the inner `Input`'s own footer (`hideActionBar`) and renders its own
+   * external `AddAttachmentButton` instead, so these entries are forwarded to
+   * that button, not to `Input`. Absent renders no add-menu overlay entries
+   * during edit.
+   */
+  menuOverlays?: MenuOverlayConfig[];
   /** Pre-existing attachments from the original message, shown in the attachment tray. */
   initialAttachments?: DisplayAttachment[];
   /** Called when the user clicks the Cancel button. */
@@ -99,6 +144,10 @@ export interface EditMessageInputProps {
   retryLabel?: string;
   /** Accessible label for each attachment card's in-progress upload progress bar. Defaults to `'Uploading'`. */
   uploadingLabel?: string;
+  /** Accessible name of each pasted-text attachment card, which expands its text back into the composer when activated. Defaults to `'Expand pasted text'`. */
+  expandLabel?: string;
+  /** Accessible name of each non-pasted attachment card when `onAttachmentClick` makes it interactive. Name it after what the host handler does (e.g. opening the attachment in a canvas). When omitted, the card default applies (`'Open attachment'` on image tiles, `'Download attachment'` on file and link tiles). Pasted-text cards keep `expandLabel`. */
+  clickLabel?: string;
   /** Accessible label for the add-menu trigger button. */
   addMenuTitle?: string;
   /** Label for the attach-file menu item. */
@@ -188,6 +237,8 @@ export interface EditMessageInputProps {
 
 /** Props accepted by the `ConversationInput` component. */
 export interface ConversationInputProps {
+  /** Changing this token requests textarea focus without altering its value or caret. */
+  focusRequestId?: number;
   /** Placeholder text shown inside the textarea when empty. */
   placeholder?: string;
   /**
@@ -216,6 +267,14 @@ export interface ConversationInputProps {
    */
   messageRevision?: number;
   /**
+   * Called with the textarea's current value on every change (typing,
+   * deleting, pasting, undo/redo) — not only on send. A host tracking live
+   * state derived from the draft (e.g. skill-mention anchors that must
+   * reconcile as the user edits around them) wires this; omit it to ignore
+   * keystrokes between sends, as before this prop existed.
+   */
+  onChange?: (message: string) => void;
+  /**
    * Text inserted at the caret each time its `revision` changes, leaving the
    * surrounding draft intact. Unlike `message`, this never replaces what the
    * user has written, and it is made through the browser's editing pipeline so
@@ -226,6 +285,8 @@ export interface ConversationInputProps {
   welcomeText?: string;
   /** Optional description text rendered below the welcome heading. Ignored when `welcomeText` is absent. */
   descriptionText?: string;
+  /** Slot rendered between the welcome heading and the input, e.g. conversation starters. */
+  belowWelcomeSlot?: ReactNode;
   /** Called when the user submits a message (Enter or send button). Receives the current local attachments as the second argument. */
   onSend?: (message: string, attachments: Attachment[]) => void;
   /** Called immediately after an attachment is added. Returns the uploaded attachment URL and stored name. */
@@ -286,7 +347,17 @@ export interface ConversationInputProps {
   retryLabel?: string;
   /** Accessible label for each attachment card's in-progress upload progress bar. Defaults to `'Uploading'`. */
   uploadingLabel?: string;
-  /** When `true`, blocks all text input, send, attach, and drop interactions. Starter/action buttons and the model selector remain usable. Defaults to `false`. */
+  /** Accessible name of each pasted-text attachment card, which expands its text back into the composer when activated. Defaults to `'Expand pasted text'`. */
+  expandLabel?: string;
+  /** Accessible name of each non-pasted attachment card when `onAttachmentClick` makes it interactive. Name it after what the host handler does (e.g. opening the attachment in a canvas). When omitted, the card default applies (`'Open attachment'` on image tiles, `'Download attachment'` on file and link tiles). Pasted-text cards keep `expandLabel`. */
+  clickLabel?: string;
+  /**
+   * When `true`, blocks typing, the attach menu, dictation, Enter-to-send,
+   * and dropped files (`pendingDropFiles` are consumed and discarded, never
+   * added to the tray). The send button still submits a message that is
+   * already populated (e.g. by a starter). Starter/action buttons and the
+   * model selector remain usable. Defaults to `false`.
+   */
   isInputDisabled?: boolean;
   /**
    * When `true`, the model selector renders in a disabled, non-interactive
@@ -414,7 +485,6 @@ export interface ConversationInputProps {
    * the flat deployment list. Receives `onClose` so the panel can close the
    * popover after a selection or an explicit dismiss.
    */
-  // TODO: review usage
   modelPickerOverlay?: (onClose: () => void) => ReactNode;
   /** Resolved tool toggle items rendered in a "Tools" submenu. When empty or absent, no Tools item is shown. */
   toolsMenuItems?: ToolMenuItem[];
@@ -440,17 +510,24 @@ export interface ConversationInputProps {
    */
   menuOverlays?: MenuOverlayConfig[];
   /**
-   * Host-supplied content rendered inside the text area at its inline-start;
-   * typed text starts after it on the first line and wraps at full width
-   * below. Forwarded to the inner `Input`.
+   * Ranges of `message` rendered as highlighted runs (e.g. a tracked skill
+   * mention). Forwarded to the inner `Input`.
    */
-  inlineStartSlot?: ReactNode;
+  activeMentions?: HighlightedTextRange[];
   /**
-   * Called when Backspace is pressed with the caret collapsed at position 0
-   * while `inlineStartSlot` is present (the slot's remove gesture). Forwarded
-   * to the inner `Input`.
+   * Called on Backspace with the caret collapsed at some position, to ask
+   * whether a tracked range ends exactly there — see `Input`'s prop of the
+   * same name. Forwarded to the inner `Input`.
    */
-  onInlineStartRemove?: () => void;
+  onBackspaceAtCaret?: (
+    caretPosition: number,
+  ) => HighlightedTextRange | undefined;
+  /**
+   * One-shot caret placement applied whenever the internal message resyncs
+   * from a new `message` value (e.g. right after inserting a mention).
+   * Forwarded to the inner `Input`.
+   */
+  caretPositionOverride?: number;
   /**
    * Host-injected slash-command menu: typing `triggerPrefix` as the first
    * character of an empty textarea — or pasting into an empty textarea a

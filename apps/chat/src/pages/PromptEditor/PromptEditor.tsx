@@ -1,3 +1,4 @@
+import { TextRefinementPurpose } from '@epam/ai-dial-chat-api-client';
 import {
   getApiErrorDetails,
   PROMPT_CONTENT_MAX_LENGTH,
@@ -27,6 +28,8 @@ import { useNotification } from '../../context/NotificationContext';
 import { usePrompts } from '../../context/PromptsContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useOperationNotification } from '../../hooks/useOperationNotification';
+import { useTextRefinementCallback } from '../../hooks/useTextRefinementCallback';
+import { useTextRefinementLabels } from '../../hooks/useTextRefinementLabels';
 import { useUiFeature } from '../../hooks/useUiFeature';
 import {
   createPrompt,
@@ -58,7 +61,7 @@ const PromptEditorPage: FC = () => {
   const { refetchPrompts } = usePrompts();
 
   const promptId = searchParams.get(EditorQuery.Id) ?? undefined;
-  const returnUrl = searchParams.get(EditorQuery.ReturnUrl) ?? ROUTES.Catalog;
+  const returnUrl = ROUTES.Catalog;
   const isEditMode = promptId != null;
 
   const [loadedValues, setLoadedValues] = useState<PromptEditorValues>();
@@ -231,17 +234,23 @@ const PromptEditorPage: FC = () => {
     ],
   );
 
+  const onRefineDescription = useTextRefinementCallback(
+    TextRefinementPurpose.PromptDescription,
+  );
+  const refinementLabels = useTextRefinementLabels();
   const labels = useMemo<PromptEditorLabels>(
     () => ({
+      ...refinementLabels,
       createTitle: t(PromptEditorI18nKeys.CreateTitle),
       editTitle: t(PromptEditorI18nKeys.EditTitle),
-      backButtonLabel: t(PromptEditorI18nKeys.BackButtonLabel),
+      backButtonAriaLabel: t(PromptEditorI18nKeys.BackButtonLabel),
       nameLabel: t(PromptEditorI18nKeys.NameLabel),
       namePlaceholder: t(PromptEditorI18nKeys.NamePlaceholder),
       descriptionLabel: t(PromptEditorI18nKeys.DescriptionLabel),
       descriptionPlaceholder: t(PromptEditorI18nKeys.DescriptionPlaceholder),
       contentLabel: t(PromptEditorI18nKeys.ContentLabel),
       contentPlaceholder: t(PromptEditorI18nKeys.ContentPlaceholder),
+      createLabel: t(ButtonsI18nKeys.Create),
       saveLabel: t(ButtonsI18nKeys.Save),
       cancelLabel: t(ButtonsI18nKeys.Cancel),
       retryLabel: t(PromptEditorI18nKeys.RetryLabel),
@@ -252,7 +261,7 @@ const PromptEditorPage: FC = () => {
       charactersRemaining: (count) =>
         t(PromptEditorI18nKeys.CharactersRemaining, { count }),
     }),
-    [t],
+    [t, refinementLabels],
   );
 
   if (!isPromptsEnabled) return null;
@@ -275,6 +284,7 @@ const PromptEditorPage: FC = () => {
       onBack={handleBack}
       onCancel={handleCancel}
       onRetry={handleRetry}
+      onRefineDescription={onRefineDescription}
     />
   );
 };

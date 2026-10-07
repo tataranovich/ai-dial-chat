@@ -8,14 +8,12 @@ import {
   MoveItemDtoNodeTypeEnum,
   RenameItemDtoNodeTypeEnum,
 } from '@epam/ai-dial-chat-api-client';
+import { getParentFolderPath } from '@epam/ai-dial-chat-shared';
 import type { DialCopiedItem } from '@epam/ai-dial-react-file-manager';
 import { DialFileNodeType } from '@epam/ai-dial-react-file-manager';
 import { getVirtualPathName } from './dial-file-manager-path.util';
 import type { PreparedCopyMoveItem } from './dial-file-manager.model';
-import {
-  getParentFolderPath,
-  virtualPathToApiPath,
-} from './resolve-dial-file-api-path';
+import { virtualPathToApiPath } from './resolve-dial-file-api-path';
 
 /** Builds the `copyFiles` DTOs (with their destination display name) for `onCopyFiles`. */
 export const prepareCopyItems = (
@@ -70,7 +68,7 @@ interface BuiltMoveRenameEntry {
 }
 
 /**
- * Rename-vs-move disambiguation (design.md D3): entries whose parent folder
+ * Rename-vs-move disambiguation (`openspec/changes/archive/2026-07-21-split-use-dial-file-manager/design.md` D3): entries whose parent folder
  * is unchanged become `renameDtos`; entries whose parent folder changed
  * become `preparedMoveItems`.
  */

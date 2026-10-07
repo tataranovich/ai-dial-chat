@@ -9,6 +9,11 @@ import {
   ScheduledTaskRepeat,
 } from '@epam/ai-dial-scheduled-tasks';
 import {
+  getUtcDayShift,
+  toLocalDayOfMonth,
+  toUtcCronDayOfMonth,
+} from '../shared/cron-day-of-month';
+import {
   apSchedulerDayToJsDay,
   jsDayToApSchedulerDay,
 } from '../shared/cron-weekday';
@@ -40,7 +45,10 @@ const DEFAULT_TIME_PLACEHOLDER = '09:00';
  * equivalents, since DIAL Scheduler executes `cron.fields` in UTC with no
  * per-schedule timezone field. Uses a single reference `Date` and reads its
  * UTC getters back, so the browser's own timezone/DST handling does the
- * conversion instead of manual offset arithmetic.
+ * conversion instead of manual offset arithmetic. The monthly `day` is the
+ * one exception: the reference stays on today and only its UTC day shift is
+ * applied to the number (see `toUtcCronDayOfMonth`), because rolling the
+ * reference to that day overflows short months.
  *
  * `Hourly` is a partial exception: the `hour` field is always the literal
  * `'*'` (the hour boundary itself is timezone-invariant), but the
@@ -73,8 +81,6 @@ const buildCronFields = (
     const targetLocalDay = apSchedulerDayToJsDay(Number(values.dayOfWeek));
     const diff = (targetLocalDay - reference.getDay() + 7) % 7;
     reference.setDate(reference.getDate() + diff);
-  } else if (hasDayOfMonth) {
-    reference.setDate(Number(values.dayOfMonth));
   }
 
   const fields: Record<string, string> = {
@@ -86,7 +92,10 @@ const buildCronFields = (
     fields.day_of_week = String(jsDayToApSchedulerDay(reference.getUTCDay()));
   }
   if (hasDayOfMonth) {
-    fields.day = String(reference.getUTCDate());
+    fields.day = toUtcCronDayOfMonth(
+      Number(values.dayOfMonth),
+      getUtcDayShift(reference),
+    );
   }
 
   return fields;
@@ -157,18 +166,23 @@ export const mapFormValuesToCreateBody = (
     trigger,
     model: values.modelId,
     prompt: values.prompt.trim(),
+    ...(values.skillUrls?.length
+      ? { skillUrls: [...new Set(values.skillUrls)] }
+      : {}),
     ...(trimmedDescription ? { description: trimmedDescription } : {}),
   };
 };
 
 /**
- * Maps validated edit-form values to the `PUT /api/v1/scheduled-tasks/:scheduleId`
- * request body. `UpdateScheduledTaskBodyDto` has the same shape as
- * `CreateScheduledTaskBodyDto`, so this reuses the same trigger-building logic.
+ * Maps a complete, validated edit draft to an update body. An unset skill
+ * emits null to remove the saved reference; hydrate from detail before editing.
  */
 export const mapFormValuesToUpdateBody = (
   values: ScheduledTaskCreateFormValues,
-): UpdateScheduledTaskBodyDto => mapFormValuesToCreateBody(values);
+): UpdateScheduledTaskBodyDto => ({
+  ...mapFormValuesToCreateBody(values),
+  skillUrls: [...new Set(values.skillUrls ?? [])],
+});
 
 /**
  * Converts a UTC ISO instant to the local `YYYY-MM-DDTHH:mm` string the
@@ -268,11 +282,11 @@ const parseCronFields = (
     const targetUtcDay = apSchedulerDayToJsDay(utcDayOfWeek);
     const diff = (targetUtcDay - reference.getUTCDay() + 7) % 7;
     reference.setUTCDate(reference.getUTCDate() + diff);
-  } else if (hasDayOfMonth) {
-    const utcDay = Number(fields.day);
-    if (Number.isNaN(utcDay)) return { ok: false };
-    reference.setUTCDate(utcDay);
   }
+  const dayOfMonth = hasDayOfMonth
+    ? toLocalDayOfMonth(String(fields.day), getUtcDayShift(reference))
+    : undefined;
+  if (hasDayOfMonth && !dayOfMonth) return { ok: false };
 
   return {
     ok: true,
@@ -281,7 +295,7 @@ const parseCronFields = (
     ...(hasDayOfWeek
       ? { dayOfWeek: String(jsDayToApSchedulerDay(reference.getDay())) }
       : {}),
-    ...(hasDayOfMonth ? { dayOfMonth: String(reference.getDate()) } : {}),
+    ...(dayOfMonth ? { dayOfMonth } : {}),
   };
 };
 
@@ -296,7 +310,11 @@ const parseCronFields = (
 export const mapScheduledTaskDtoToFormValues = (
   dto: ScheduledTaskDto,
 ): ScheduledTaskDtoMappingResult => {
-  if (!dto.model || !dto.prompt) {
+  if (
+    !dto.model ||
+    typeof dto.prompt !== 'string' ||
+    (!dto.prompt.trim() && !dto.skillUrls?.length)
+  ) {
     return {
       ok: false,
       reason: UnsupportedTriggerReason.MissingRequiredFields,
@@ -315,11 +333,12 @@ export const mapScheduledTaskDtoToFormValues = (
 
   const base: Pick<
     ScheduledTaskCreateFormValues,
-    'displayName' | 'modelId' | 'prompt' | 'description'
+    'displayName' | 'modelId' | 'prompt' | 'description' | 'skillUrls'
   > = {
     displayName: dto.displayName,
     modelId: dto.model,
     prompt: dto.prompt,
+    skillUrls: [...new Set(dto.skillUrls ?? [])],
     ...(dto.description ? { description: dto.description } : {}),
   };
 

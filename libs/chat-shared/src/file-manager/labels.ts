@@ -5,9 +5,11 @@
  * reaches (see the note in `./index.ts`).
  */
 import type {
+  DialFile,
   DialFileManager,
   DialFileManagerTabs,
 } from '@epam/ai-dial-react-file-manager';
+import type { TransferQueueLabels } from '@epam/ai-dial-ui-kit';
 import type { ComponentProps, ReactNode } from 'react';
 
 type DialFileManagerComponentProps = ComponentProps<typeof DialFileManager>;
@@ -51,7 +53,7 @@ export interface DialFileManagerShellLabels {
   showHiddenFilesLabel: string;
   /** Label shown when hidden files are currently hidden. */
   hideHiddenFilesLabel: string;
-  /** Returns a bulk-selection count label (e.g. "3 selected"). */
+  /** Returns the text shown after the selection-count badge; the file manager renders the count itself, so omit it (e.g. "items selected"). */
   getSelectionLabel: (count: number) => string;
   /** Label for the "Upload files" action in the New menu. */
   uploadFilesLabel: string;
@@ -103,20 +105,20 @@ export interface DialFileManagerShellLabels {
   operationLoaderMoveTitle: string;
   /** Cancel-button label in the operation loader modal. */
   operationLoaderCancelLabel: string;
-  /** Returns the delete confirmation dialog title for the given item names. */
-  deleteConfirmTitle: (names: string[]) => ReactNode;
+  /** Returns the delete confirmation dialog title for the given item names and items; the items carry `nodeType`, so a folder and a file can be titled differently. */
+  deleteConfirmTitle: (names: string[], items: DialFile[]) => ReactNode;
   /** Returns the delete confirmation dialog body for the given item names. */
   deleteConfirmBody: (names: string[]) => ReactNode;
   /** Confirm-button label in the delete confirmation dialog. */
   deleteConfirmLabel: string;
   /** Cancel-button label in the delete confirmation dialog. */
   deleteCancelLabel: string;
-  /** Title for the upload progress modal. */
-  uploadProgressTitle: string;
-  /** Cancel-button label in the upload progress modal. */
-  cancelLabel: string;
-  /** Returns upload progress text (e.g. "3 of 5 uploaded"). */
-  getUploadProgressText: (done: number, total: number) => string;
+  /** Accessible name of the delete confirmation dialog's close control. Unset falls back to the file manager's English default. */
+  deleteCloseLabel?: string;
+  /** Returns the upload queue heading for the number of files in it (e.g. "Uploading 5 files"). */
+  getUploadQueueTitle: (count: number) => string;
+  /** Translated strings for the upload `TransferQueue`; unset ones fall back to the kit's English defaults. */
+  uploadQueueLabels?: Partial<TransferQueueLabels>;
   /** Empty-state title when a search yields no results. */
   searchEmptyStateTitle: string;
   /** Empty-state title for an empty subfolder. */
@@ -127,6 +129,8 @@ export interface DialFileManagerShellLabels {
   emptyStateByTab: Record<DialFileManagerTabs, EmptyStateCopy>;
   /** Per-tab tree header label. */
   treeHeaderByTab: Record<DialFileManagerTabs, string>;
+  /** Search field placeholder per source tab of the browsed folder; a tab without an entry keeps the file manager's default. */
+  searchPlaceholderByTab?: Partial<Record<DialFileManagerTabs, string>>;
   /** Messages for inline rename validation. */
   renameValidationMessages: RenameValidationMessages;
   /** Options for the conflict resolution popup. */

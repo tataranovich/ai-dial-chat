@@ -18,9 +18,16 @@ import type { TabItem } from '@epam/ai-dial-ui-kit';
 import {
   IconArrowNarrowLeft,
   IconPencilMinus,
+  IconPlayerPlay,
   IconTrashX,
 } from '@tabler/icons-react';
-import { type CSSProperties, type FC, type ReactNode, useState } from 'react';
+import {
+  type CSSProperties,
+  type FC,
+  type ReactNode,
+  useId,
+  useState,
+} from 'react';
 import type { ScheduledTaskDetailViewProps } from '../../models/scheduled-task-detail-view-props';
 import { ScheduledTaskDetailTab } from '../../types/scheduled-task-detail-tab';
 import { ScheduledTaskHistorySectionVariant } from '../../types/scheduled-task-history-section-variant';
@@ -43,12 +50,18 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
   labels,
   onBack,
   onEdit,
+  onStartNow,
+  isStarting = false,
+  isStartNowDisabled = false,
+  isStartNowBusy = false,
   onDelete,
   isDeleting = false,
   isDeleted = false,
+  isCompleted = false,
   isActive,
   isActiveUpdating = false,
   isActiveDisabled = false,
+  activeDisabledReason,
   onActiveChange,
   displayName,
   isLoading = false,
@@ -58,8 +71,10 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
   modelLabel,
   repeatsLabel,
   activeWindowLabel,
+  completedLabel,
   nextRunLabel,
   instructionsMarkdown,
+  skillDisplayNames,
   renderInstructions,
   runs,
   runsIsLoading = false,
@@ -108,6 +123,11 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
   const [activeTabId, setActiveTabId] = useState<string>(
     ScheduledTaskDetailTab.Details,
   );
+  const startNowBusyReasonId = useId();
+  /* The "Starting…" label already explains the pending POST, so the busy
+   * reason applies only to an already-running task. */
+  const startNowBusyReason =
+    isStartNowBusy && !isStarting ? labels.startNowBusyLabel : undefined;
 
   const detailTabs: TabItem[] = [
     { id: ScheduledTaskDetailTab.Details, label: labels.detailsTitle },
@@ -134,11 +154,13 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
         modelLabel: labels.modelLabel,
         repeatsLabel: labels.repeatsLabel,
         activeWindowLabel: labels.activeWindowLabel,
+        completedFieldLabel: labels.completedFieldLabel,
       }}
       description={description}
       modelLabel={modelLabel}
       repeatsLabel={repeatsLabel}
       activeWindowLabel={activeWindowLabel}
+      completedLabel={completedLabel}
       fieldLabelClassName={fieldLabelClassName}
       fieldValueClassName={fieldValueClassName}
     />
@@ -147,8 +169,17 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
   const configurationSection = (
     <ScheduledTaskConfigurationSection
       instructionsLabel={labels.instructionsLabel}
+      skillLabel={labels.skillLabel}
+      skillDisplayNames={skillDisplayNames}
       instructionsMarkdown={instructionsMarkdown}
       renderInstructions={renderInstructions}
+      markdownLabels={{
+        codeBlockCopyLabel: labels.codeBlockCopyLabel,
+        codeBlockCopiedLabel: labels.codeBlockCopiedLabel,
+        codeBlockDownloadLabel: labels.codeBlockDownloadLabel,
+        tableScrollRegionAriaLabel: labels.tableScrollRegionAriaLabel,
+        mathScrollRegionAriaLabel: labels.mathScrollRegionAriaLabel,
+      }}
       fieldLabelClassName={fieldLabelClassName}
     />
   );
@@ -207,14 +238,14 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
     <div
       style={cssVars}
       className={mergeClasses(
-        'flex h-full w-full flex-col overflow-y-auto',
+        'flex h-full min-h-0 w-full flex-col overflow-hidden',
         styles.container,
         className,
       )}
     >
       <div
         className={mergeClasses(
-          'flex h-16 shrink-0 items-center justify-between gap-2 px-8',
+          'flex min-h-16 shrink-0 items-center justify-between gap-2 px-4 py-2 desktop:h-16 desktop:flex-nowrap desktop:px-8 desktop:py-0',
           styles.header,
         )}
       >
@@ -263,15 +294,32 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
-          {!isDeleted && isActive !== undefined && (
-            <Switch
-              id="scheduled-task-active-switch"
-              labelProps={{ label: labels.activeStatusLabel }}
-              isOn={isActive}
-              disabled={isActiveUpdating || isActiveDisabled || isDeleting}
-              onChange={(value) => onActiveChange?.(value)}
-            />
+        <div
+          className={mergeClasses(
+            'flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 desktop:flex-none desktop:flex-nowrap',
+            styles.headerActions,
+          )}
+        >
+          {!isDeleted && !isCompleted && isActive !== undefined && (
+            <>
+              <Switch
+                id="scheduled-task-active-switch"
+                labelProps={{ label: labels.activeStatusLabel }}
+                isOn={isActive}
+                disabled={isActiveUpdating || isActiveDisabled || isDeleting}
+                onChange={(value) => onActiveChange?.(value)}
+              />
+              {isActiveDisabled && activeDisabledReason && (
+                <span
+                  className={mergeClasses(
+                    fieldValueClassName,
+                    styles.subtitleText,
+                  )}
+                >
+                  {activeDisabledReason}
+                </span>
+              )}
+            </>
           )}
 
           {!isDeleted && onDelete && (
@@ -287,7 +335,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
               }
               onClick={onDelete}
               disabled={isDeleting}
-              className="shrink-0"
+              className="min-h-11 shrink-0"
             />
           )}
 
@@ -303,8 +351,47 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
               }
               onClick={onEdit}
               disabled={isDeleting}
-              className="shrink-0"
+              className="min-h-11 shrink-0"
             />
+          )}
+          {!isDeleted && onStartNow && labels.startNowButtonLabel && (
+            <div aria-busy={isStarting}>
+              {startNowBusyReason && (
+                <span id={startNowBusyReasonId} className="sr-only">
+                  {startNowBusyReason}
+                </span>
+              )}
+              <NeutralButton
+                label={
+                  isStarting
+                    ? (labels.startingLabel ?? labels.startNowButtonLabel)
+                    : labels.startNowButtonLabel
+                }
+                iconBefore={
+                  <IconPlayerPlay
+                    size={DIAL_ICON_SIZE.SM}
+                    aria-hidden
+                    stroke={DIAL_KIT_ICON_STROKE}
+                  />
+                }
+                onClick={onStartNow}
+                disabled={
+                  isDeleting ||
+                  isStarting ||
+                  isStartNowDisabled ||
+                  isStartNowBusy
+                }
+                aria-describedby={
+                  startNowBusyReason ? startNowBusyReasonId : undefined
+                }
+                tooltipProps={
+                  startNowBusyReason
+                    ? { tooltip: startNowBusyReason }
+                    : undefined
+                }
+                className="min-h-11 shrink-0"
+              />
+            </div>
           )}
         </div>
       </div>
@@ -341,6 +428,11 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
           {labels.activeStatusAnnouncement}
         </span>
       )}
+      {labels.startStatusAnnouncement != null && (
+        <span role="status" aria-live="polite" className="sr-only">
+          {labels.startStatusAnnouncement}
+        </span>
+      )}
 
       {isLoading && (
         <div className="flex flex-1 items-center justify-center">
@@ -360,7 +452,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
       {!isLoading &&
         !error &&
         (isMobile ? (
-          <div className="flex flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <Tabs
               ariaLabel={labels.tabsAriaLabel ?? 'Scheduled task sections'}
               className="px-8"
@@ -386,14 +478,13 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
             style={
               {
                 flexDirection: 'row',
-                flexWrap: 'wrap',
                 '--st-details-width': layout?.detailsWidth,
                 '--st-history-width': layout?.historyWidth,
                 '--st-history-max-height': layout?.historyMaxHeight,
                 '--st-configuration-min-width': layout?.configurationMinWidth,
               } as CSSProperties
             }
-            className="flex flex-1"
+            className="flex min-h-0 flex-1 overflow-y-auto desktop:overflow-hidden"
           >
             <div
               role="group"
@@ -403,7 +494,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
                 maxWidth: '100%',
               }}
               className={mergeClasses(
-                'flex w-full flex-col gap-5 border-e px-8 py-6',
+                'flex min-h-0 w-full flex-col gap-5 overflow-y-auto border-e px-8 py-6',
                 styles.detailsColumn,
               )}
             >
@@ -416,7 +507,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
                 flex: `1 1 ${layout?.configurationMinWidth ?? '320px'}`,
                 minWidth: 0,
               }}
-              className="flex w-full min-w-0 flex-col gap-5 px-8 py-6"
+              className="flex min-h-0 w-full min-w-0 flex-col gap-5 overflow-y-auto px-8 py-6"
             >
               <h2 className={sectionTitleClassName}>
                 {labels.configurationTitle}
@@ -429,7 +520,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
                 flex: `0 1 calc(${layout?.historyWidth ?? '360px'} + 48px)`,
                 minWidth: 0,
               }}
-              className="flex w-full items-start justify-center p-6"
+              className="flex min-h-0 w-full items-start justify-center overflow-y-auto p-6"
             >
               {buildHistorySection(ScheduledTaskHistorySectionVariant.Card)}
             </div>

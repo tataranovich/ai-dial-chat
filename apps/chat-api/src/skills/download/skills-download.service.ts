@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { handleDialSdkError } from '../../common/dial/dial-error.mapper';
 import { getBearerAuthHeaders } from '../../common/utils/auth-header';
@@ -18,7 +23,7 @@ export interface SkillDownload {
  * `apps/chat-api/src/files/download/files-download.service.ts`'s
  * `SAFE_DOWNLOAD_HEADERS` and including `etag`, since skill downloads carry
  * a resource-version ETag the plain file-download endpoint has no equivalent
- * for (design.md D5). `content-length` is intentionally omitted: the SDK's
+ * for (`openspec/changes/archive/2026-08-24-add-prompt-catalog-entity-type/design.md` D5). `content-length` is intentionally omitted: the SDK's
  * Fetch response body may already be transport-decoded, so the upstream wire
  * length is not necessarily the number of bytes this BFF streams to its
  * caller. Node must frame the outgoing response from the actual body.
@@ -31,6 +36,30 @@ export const SAFE_SKILL_DOWNLOAD_HEADERS = [
 
 const GROUPING_FOLDER_DOWNLOAD_MESSAGE =
   'The requested path is a grouping folder, not a skill — use GET /api/v1/skills to list its contents instead of downloading it';
+
+/**
+ * `openapi-fetch` resolves an empty-bodied error response (e.g. DIAL Core's
+ * `403` with `Content-Length: 0`) with `error: undefined`, so the SDK's
+ * `error` field alone cannot tell a failure from a success — the status
+ * decides. Checking only `error` let such a response stream its empty body
+ * back to the caller as a `200`.
+ */
+const isFailedResponse = (error: unknown, response: Response): boolean =>
+  error != null || response.status >= 400;
+
+/**
+ * DIAL Core masks a missing resource as `403` ("You don't have an access
+ * to …"). The caller always has access to their own bucket, so a `403` there
+ * can only mean the resource does not exist — it is reported as the `404`
+ * the frontend contract expects. A `403` on another user's bucket stays a
+ * genuine access denial.
+ */
+const isMaskedNotFound = (
+  response: Response,
+  bucket: string,
+  callerBucket: string | undefined,
+): boolean =>
+  response.status === 403 && callerBucket != null && bucket === callerBucket;
 
 @Injectable()
 export class SkillsDownloadService {
@@ -56,13 +85,17 @@ export class SkillsDownloadService {
    * `downloadSkillGroupingFolder` contract instead — a `400` with no body
    * (schema.ts declares no `200` at all for that case) — which this method
    * turns into a `BadRequestException` directing the caller to list
-   * metadata instead (design.md's negative-contract rule), rather than
+   * metadata instead (`openspec/changes/archive/2026-08-10-add-skills-bff-api/design.md`'s negative-contract rule), rather than
    * forwarding an empty/error body as if it were a ZIP stream.
+   *
+   * `callerBucket` is the authenticated user's own bucket; a `403` for that
+   * bucket is DIAL Core masking a missing skill and becomes a `404`.
    */
   async downloadSkill(
     bucket: string,
     path: string,
     accessToken: string,
+    callerBucket?: string,
   ): Promise<SkillDownload> {
     const abortController = new AbortController();
     const timeoutSignal = AbortSignal.timeout(
@@ -81,9 +114,12 @@ export class SkillsDownloadService {
           },
         );
 
-      if (error != null) {
+      if (isFailedResponse(error, response)) {
         if (response.status === 400) {
           throw new BadRequestException(GROUPING_FOLDER_DOWNLOAD_MESSAGE);
+        }
+        if (isMaskedNotFound(response, bucket, callerBucket)) {
+          throw new NotFoundException('Skill not found');
         }
         return handleDialSdkError(
           error,
@@ -119,13 +155,15 @@ export class SkillsDownloadService {
    * for this operation is the literal string `application/json` regardless
    * of the file's real type (upstream schema debt) — this method trusts the
    * dynamic `Content-Type` response *header* instead, forwarded verbatim
-   * through the safe-header allowlist.
+   * through the safe-header allowlist. A `403` for `callerBucket` becomes a
+   * `404`, as in `downloadSkill`.
    */
   async downloadSkillFile(
     bucket: string,
     path: string,
     filePath: string,
     accessToken: string,
+    callerBucket?: string,
   ): Promise<SkillDownload> {
     const abortController = new AbortController();
     const timeoutSignal = AbortSignal.timeout(
@@ -145,7 +183,10 @@ export class SkillsDownloadService {
           },
         );
 
-      if (error != null) {
+      if (isFailedResponse(error, response)) {
+        if (isMaskedNotFound(response, bucket, callerBucket)) {
+          throw new NotFoundException('File or skill not found');
+        }
         return handleDialSdkError(
           error,
           'skills.downloadSkillFile',

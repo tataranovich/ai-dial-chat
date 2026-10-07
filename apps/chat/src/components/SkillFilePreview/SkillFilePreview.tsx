@@ -9,8 +9,10 @@ import { useTranslation } from 'react-i18next';
 import {
   AttachmentCanvasI18nKeys,
   ButtonsI18nKeys,
+  ChatI18nKeys,
 } from '../../constants/translation-keys';
 import { useTheme } from '../../context/ThemeContext';
+import { usePdfPreviewLoader } from '../../hooks/attachment/usePdfPreviewLoader';
 import { SkillFilePreviewState } from '../../types/skill-file-preview';
 import { ThemeId } from '../../types/theme-id';
 import { configurePdfWorker } from '../../utils/pdf';
@@ -37,6 +39,7 @@ interface Props {
  */
 export const SkillFilePreview: FC<Props> = ({ state, onRetry }) => {
   const { t } = useTranslation();
+  const loadPdf = usePdfPreviewLoader();
   const { currentTheme } = useTheme();
   const { content, fileName } = useAttachmentCanvas();
 
@@ -78,6 +81,11 @@ export const SkillFilePreview: FC<Props> = ({ state, onRetry }) => {
           ),
           pdfPageNumberLabel: t(AttachmentCanvasI18nKeys.PdfPageNumberLabel),
           xlsxFormulaLabel: t(AttachmentCanvasI18nKeys.XlsxFormulaLabel),
+          codeBlockCopyLabel: t(ButtonsI18nKeys.Copy),
+          codeBlockCopiedLabel: t(ButtonsI18nKeys.Copied),
+          codeBlockDownloadLabel: t(ButtonsI18nKeys.Download),
+          tableScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableTable),
+          mathScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableFormula),
         }}
         codeBlockTheme={
           currentTheme === ThemeId.Dark
@@ -85,6 +93,7 @@ export const SkillFilePreview: FC<Props> = ({ state, onRetry }) => {
             : CodeBlockTheme.Light
         }
         configurePdfWorker={configurePdfWorker}
+        loadPdf={loadPdf}
         hidePdfToolbar
       />
     </div>

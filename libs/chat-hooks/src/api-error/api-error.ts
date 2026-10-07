@@ -6,12 +6,24 @@ interface ApiErrorBody {
 
 /** Normalized shape returned by {@link getApiErrorDetails}. */
 export interface ApiErrorDetails {
+  /** Stable domain error code supplied by the API, when present. */
+  code?: string;
   /** HTTP status code carried by the error, when available. */
   status?: number;
   /** Resolved human-readable error message, or `null` when none could be resolved. */
   message: string | null;
   /** Extracted W3C trace ID, when the error's response carries a valid `traceparent`. */
   traceId?: string;
+  /**
+   * Error code reported by the service behind the API, when the API forwards one
+   * (`upstreamCode`). Passed through as-is; the host decides whether to act on it.
+   */
+  upstreamCode?: string;
+  /**
+   * Error reason reported by the service behind the API, when the API forwards one
+   * (`upstreamMessage`). Untranslated; the host decides whether to display it.
+   */
+  upstreamMessage?: string;
 }
 
 interface ApiErrorResponse {
@@ -112,11 +124,11 @@ export const getApiErrorMessage = async (
   return null;
 };
 
-/** Normalizes any API error into a `{ status?, message, traceId? }` shape. */
+/** Normalizes any API error into a `{ status?, message, traceId?, code?, upstreamCode?, upstreamMessage? }` shape. */
 /*
  * Duck-types any error carrying a `response`-shaped `Response` — a generated
  * `@epam/ai-dial-chat-api-client` `ResponseError` or a host's own raw-fetch
- * request-error class — into one `{ status?, message, traceId? }` shape.
+ * request-error class — into one `{ status?, message, traceId?, code?, upstreamCode?, upstreamMessage? }` shape.
  *
  * Resolution order: parse a `traceparent` from the JSON error body first; if the body has no
  * valid `traceparent` (or the body can't be parsed as JSON), fall back to the response's
@@ -135,6 +147,9 @@ export const getApiErrorDetails = async (
   let message: string | null = null;
   let bodyTraceId: string | undefined;
   let jsonBodyFailed = false;
+  let code: string | undefined;
+  let upstreamCode: string | undefined;
+  let upstreamMessage: string | undefined;
 
   if (response) {
     try {
@@ -143,6 +158,13 @@ export const getApiErrorDetails = async (
       const body = await responseForBody.json();
       message = resolveMessageFromBody(body);
       if (isRecord(body)) {
+        code = typeof body.code === 'string' ? body.code : undefined;
+        upstreamCode =
+          typeof body.upstreamCode === 'string' ? body.upstreamCode : undefined;
+        upstreamMessage =
+          typeof body.upstreamMessage === 'string'
+            ? body.upstreamMessage
+            : undefined;
         bodyTraceId = extractTraceId(body.traceparent);
       }
     } catch {
@@ -167,5 +189,12 @@ export const getApiErrorDetails = async (
         : undefined,
     );
 
-  return { status, message, traceId };
+  return {
+    status,
+    message,
+    traceId,
+    ...(code ? { code } : {}),
+    ...(upstreamCode ? { upstreamCode } : {}),
+    ...(upstreamMessage ? { upstreamMessage } : {}),
+  };
 };

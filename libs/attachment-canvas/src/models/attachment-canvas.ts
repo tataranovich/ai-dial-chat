@@ -10,7 +10,7 @@ import type {
   CallToolResult,
   Implementation,
 } from '@modelcontextprotocol/sdk/types.js';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import {
   AttachmentContentType,
   AttachmentErrorType,
@@ -82,7 +82,7 @@ export interface OoxmlDocxHighlightLocation {
   path: number[];
   /** Inclusive start character offset within the story's matched text. */
   start: number;
-  /** Exclusive end character offset, already converted from the wire's inclusive `end`. */
+  /** Exclusive end character offset — the wire's `end`, already exclusive, copied through unchanged. */
   endExclusive: number;
   /** The cited text, compared against the text resolved over `[start, endExclusive)`. */
   text: string;
@@ -98,7 +98,7 @@ export interface OoxmlPptxHighlightLocation {
   shapeId: string;
   /** Inclusive start character offset within the shape's matched text. */
   start: number;
-  /** Exclusive end character offset, already converted from the wire's inclusive `end`. */
+  /** Exclusive end character offset — the wire's `end`, already exclusive, copied through unchanged. */
   endExclusive: number;
   /** The cited text, compared against the text resolved over `[start, endExclusive)`. */
   text: string;
@@ -200,10 +200,16 @@ export interface CodeCanvasContent {
 export interface HtmlCanvasContent {
   /** Discriminates the content type to select the correct renderer. */
   type: AttachmentContentType.Html;
-  /** Full HTML text rendered via `srcdoc` in a sandboxed iframe. Used for file attachments. */
+  /** Full HTML text rendered via `srcdoc` in a sandboxed iframe. Populated only when no `url` is available (local, non-downloadable file attachments); when `url` is set, "View source" instead calls `resolveSourceText`. */
   srcdoc?: string;
-  /** External URL rendered via `src` in a sandboxed iframe. Used for external link sources. */
+  /** URL rendered via `src` in a sandboxed iframe when `srcdoc` is absent, or in preference to `srcdoc` when `isSameOriginUrl` is set. Also used as the download-button/"Open in new tab" target. */
   url?: string;
+  /** True when `url`'s origin matches the embedding document's own origin. Forces the iframe sandbox to omit `allow-same-origin` — granting it would let a same-origin framed document reach this page's own cookies/storage — and makes `src` take precedence over `srcdoc`; also skips the `contentDocument` block-detection check, since the iframe is intentionally opaque-origin either way. */
+  isSameOriginUrl?: boolean;
+  /** Lazily fetches the full HTML source text for the "View source" toggle. Used instead of an eagerly-populated `srcdoc` when `url` is set; absent when `srcdoc` is already populated. */
+  resolveSourceText?: () => Promise<string>;
+  /** Host-served bootstrap document used to render `srcdoc` without inheriting the embedding page's CSP. When set alongside `srcdoc`, the iframe loads this URL via `src` (still `sandbox="allow-scripts"`) and posts `{ type: HTML_PREVIEW_FRAME_RENDER_MESSAGE, html: srcdoc }` to it once loaded, so the HTML renders under that response's own policy. Ignored when `srcdoc` is absent or `isSameOriginUrl` selects `url`. */
+  srcdocHostUrl?: string;
 }
 
 /** Content payload for a custom-visualizer attachment rendered inside a sandboxed iframe. */
@@ -477,6 +483,16 @@ export interface AttachmentCanvasLabels {
   tableCopiedLabel?: string;
   /** Label for downloading a Markdown table as CSV. */
   tableDownloadCsvLabel?: string;
+  /** Accessible label for the copy button on fenced code blocks inside `Markdown`/`MarkdownTable` content. Defaults to `'Copy code'`. */
+  codeBlockCopyLabel?: string;
+  /** Status announced after a fenced code block inside `Markdown`/`MarkdownTable` content has been copied. Defaults to `'Copied!'`. */
+  codeBlockCopiedLabel?: string;
+  /** Accessible label for the download button on fenced code blocks inside `Markdown`/`MarkdownTable` content. Defaults to `'Download code'`. */
+  codeBlockDownloadLabel?: string;
+  /** Accessible label for a table's horizontally scrollable region inside `Markdown`/`MarkdownTable` content. Defaults to `'Scrollable table'`. */
+  tableScrollRegionAriaLabel?: string;
+  /** Accessible label for a block formula's horizontally scrollable region inside `Markdown`/`MarkdownTable` content. Defaults to `'Scrollable formula'`. */
+  mathScrollRegionAriaLabel?: string;
   /** Accessible name for the OOXML citation-highlights overlay region. Defaults to `'Cited locations'`. */
   ooxmlHighlightsLabel?: string;
   /** Status announced once navigation to the selected OOXML citation highlight completes. Defaults to `'Scrolled to the cited location'`. */
@@ -495,6 +511,8 @@ export interface AttachmentCanvasProps {
   content: AttachmentCanvasContent;
   /** File name displayed as the panel title. */
   fileName?: string;
+  /** Host-supplied controls rendered in the header before the title. */
+  leftActions?: ReactNode;
   /** User-visible strings. */
   labels: AttachmentCanvasLabels;
   /** Called when the user activates the download button. When omitted the download button is hidden. Hidden automatically when content type is `Unsupported`. */
@@ -539,6 +557,8 @@ export interface AttachmentCanvasProps {
    * bundled worker asset.
    */
   configurePdfWorker?: () => void | Promise<void>;
+  /** Called with the message text when a `Visualizer` or `GroupedVisualizer` iframe posts `SEND_MESSAGE`. Forwarded to `VisualizerCanvasRenderer` as `onSendMessage`; when omitted, those messages are ignored. */
+  onVisualizerSendMessage?: (content: string) => void;
 }
 
 /** User-visible strings for `AttachmentCanvasBody`'s content states. */
@@ -564,6 +584,11 @@ export type AttachmentCanvasBodyLabels = Pick<
   | 'tableCopyLabel'
   | 'tableCopiedLabel'
   | 'tableDownloadCsvLabel'
+  | 'codeBlockCopyLabel'
+  | 'codeBlockCopiedLabel'
+  | 'codeBlockDownloadLabel'
+  | 'tableScrollRegionAriaLabel'
+  | 'mathScrollRegionAriaLabel'
   | 'ooxmlHighlightsLabel'
   | 'ooxmlHighlightNavigatedLabel'
 >;
@@ -617,4 +642,6 @@ export interface AttachmentCanvasBodyProps {
    * bundled worker asset.
    */
   configurePdfWorker?: () => void | Promise<void>;
+  /** Called with the message text when a `Visualizer` or `GroupedVisualizer` iframe posts `SEND_MESSAGE`. Forwarded to `VisualizerCanvasRenderer` as `onSendMessage`; when omitted, those messages are ignored. */
+  onVisualizerSendMessage?: (content: string) => void;
 }

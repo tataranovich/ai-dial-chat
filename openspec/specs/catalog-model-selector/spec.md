@@ -11,24 +11,28 @@ The model selector rendered inside the conversation input, the labels contract t
 `InputProps` in `libs/conversation-input/src/models/Input.ts` SHALL declare the following optional props, each with an inline JSDoc comment:
 
 ```ts
-/** List of deployment items to populate the model selector menu. When `undefined`, the selector is not rendered. */
+/**
+ * List of deployment items to populate the model selector menu. When `undefined`, the selector is not rendered.
+ * `iconUrl` on each item must already be a fully resolved URL usable in `<img src>` — the host app
+ * resolves DIAL file IDs, theme-relative names, etc. before passing the list.
+ */
 deployments?: DeploymentItem[];
 
-/** ID of the currently selected deployment. When `null`/`undefined` and `deployments` is defined, the send button is disabled. */
+/** ID of the currently selected deployment. When `null` or `undefined` and `deployments` is defined, the send button is disabled. */
 selectedDeploymentId?: string | null;
 
 /** Called when the user selects a different deployment from the dropdown. Receives the selected item's `id`. */
 onDeploymentChange?: (id: string) => void;
 
-/** Labels shown inside the model selector dropdown for the trigger and its various states. */
+/** Labels shown inside the model selector dropdown for the trigger and various loading states. */
 modelSelectorLabels?: ModelSelectorLabels;
 ```
 
-`DeploymentItem` SHALL be the host-agnostic model from `@epam/ai-dial-chat-shared` (`libs/chat-shared/src/models/deployment.ts`) — `id`, optional `displayName`, `iconUrl`, `type`, `inputAttachmentTypes`, and `features`. The lib MUST NOT import a generated API-client DTO for this: the selector renders whatever the host resolved, and taking a wire type here would tie the input to one backend's response shape.
+`DeploymentItem` SHALL be the host-agnostic model from `@epam/ai-dial-chat-shared` (`libs/chat-shared/src/models/deployment.ts`) — `id` plus optional fields including `displayName`, `iconUrl`, `type`, `inputAttachmentTypes`, `features`, `maxInputAttachments`, `description`, `displayVersion`, `isFeatured`, `isHidden`, and `topics`. The lib MUST NOT import a generated API-client DTO for this: the selector renders whatever the host resolved, and taking a wire type here would tie the input to one backend's response shape.
 
 `iconUrl` SHALL already be a fully resolved URL usable directly in `<img src>`. Resolving DIAL file ids, theme-relative names, and the like is the host's job, done before the list is passed in.
 
-The four label strings SHALL be grouped into one `ModelSelectorLabels` object rather than passed as separate props, so adding a label is not a new prop on `InputProps`. It SHALL carry `ariaLabel`, `loading`, `error`, `empty`, `searchPlaceholder`, `closeLabel`, and `unavailableTooltip`.
+The selector's label strings SHALL be grouped into one `ModelSelectorLabels` object rather than passed as separate props, so adding a label is not a new prop on `InputProps`. It SHALL carry the optional fields `ariaLabel`, `loading`, `error`, `empty`, `searchPlaceholder`, `closeLabel`, and `unavailableTooltip`; the lib falls back to English defaults (`'Select model'`, `'Search'`, `'Close'`, `'This deployment is no longer available'`) when the host omits one.
 
 `ConversationInputProps` in `libs/conversation-input/src/models/ConversationInput.ts` SHALL forward these props to the inner `InputProps` with identical JSDoc. Every exported prop/type/interface addition in `libs/conversation-input` MUST have a JSDoc comment.
 
@@ -51,16 +55,16 @@ The four label strings SHALL be grouped into one `ModelSelectorLabels` object ra
 
 ### Requirement: The selector is an icon-only trigger with a searchable menu
 
-The `Input` component SHALL render the model selector — `ModelSelectorControl` — in the right-side action group of the bottom toolbar row, after any tools control and before the microphone/send/stop control.
+The `Input` component SHALL render the model selector — `ModelSelectorControl` — in the trailing footer-actions group (`CONVERSATION_INPUT_CLASS.footerActions`) of the action row, after the optional usage-limits slot and before the microphone/send/stop control. A host `renderFooterActions` replaces this whole group.
 
 The trigger SHALL:
 - Render `selectedItem.iconUrl` as an `<img>` when present, and a fallback icon chosen from the item's `type` otherwise.
 - Take its accessible name from `modelSelectorLabels.ariaLabel`, incorporating the selected item's `displayName` (falling back to its `id`) so a screen-reader user hears the current selection.
-- Stay compact and icon-only with a caret; the selected item's name SHALL NOT be rendered as visible toolbar text, which would let a long model name push the textarea around.
+- Without a host `modelPickerOverlay`, stay compact and icon-only with a caret; the selected item's name is exposed only through the tooltip and accessible name. When the host supplies `modelPickerOverlay` (as `ConversationView`, `ConversationRoute`, and `NewConversationComposer` do), the desktop trigger is a chip that renders the selected name (`max-w-[180px]`, truncated) and its version as visible text, with a `name · version` tooltip, and opens the host overlay instead of the built-in menu; on mobile the trigger stays icon-only and the overlay opens in a `BottomSheetShell`.
 - Call `onDeploymentChange(item.id)` when a menu item is chosen.
-- Be disabled while `isStreaming` is `true`.
+- Be disabled while `isStreaming` is `true`, or while `isModelSelectorDisabled` is `true` (a disabled composer input alone, `isInputDisabled`, does not disable it).
 
-The menu SHALL include a search field, labelled by `modelSelectorLabels.searchPlaceholder`, filtering the list client-side. On mobile the same list SHALL be presented through `ModelSelectorBottomSheet` instead of a dropdown, closed by a control labelled `modelSelectorLabels.closeLabel`.
+The built-in menu SHALL include a search field, labelled by `modelSelectorLabels.searchPlaceholder`, filtering the list client-side. On mobile the same list SHALL be presented through `ModelSelectorBottomSheet` instead of a dropdown, closed by a control labelled `modelSelectorLabels.closeLabel`.
 
 A `selectedDeploymentId` that matches no entry in `deployments` SHALL still render the trigger, marked with `modelSelectorLabels.unavailableTooltip` — a deployment removed from the catalog after a conversation was created must be visibly explained, not silently blanked.
 
@@ -69,7 +73,7 @@ The selector SHALL NOT be rendered at all when `deployments` is `undefined`, kee
 #### Scenario: Selector renders with deployments
 
 - **WHEN** `deployments` is a non-empty array and `selectedDeploymentId` matches an item
-- **THEN** the selector is present in the right-side toolbar action group, and the selected item's `displayName` is available through the trigger's accessible name rather than as visible toolbar text
+- **THEN** the selector is present in the trailing footer-actions group, and the selected item's `displayName` is available through the trigger's accessible name (and, without `modelPickerOverlay`, not as visible toolbar text)
 
 #### Scenario: Trigger icon uses iconUrl when available
 
@@ -95,6 +99,12 @@ The selector SHALL NOT be rendered at all when `deployments` is `undefined`, kee
 
 - **WHEN** `isStreaming` is `true`
 - **THEN** the trigger is non-interactive and has a visual disabled state
+
+#### Scenario: Streaming blocks every trigger presentation, including keyboard activation
+
+- **GIVEN** `isStreaming` is `true` and `isModelSelectorDisabled` is `false`
+- **WHEN** the trigger is the built-in desktop `Dropdown` (no `modelPickerOverlay`, e.g. a fixed-model host), the overlay chip, or the mobile icon button
+- **THEN** it carries `aria-disabled="true"` and the same dimmed disabled styling `isModelSelectorDisabled` applies, the built-in `Dropdown` receives `disabled`, and activating the trigger by pointer or keyboard opens no menu, overlay, or bottom sheet
 
 #### Scenario: No deployments prop — selector not rendered
 
@@ -140,7 +150,7 @@ Loading, error, and empty states SHALL NOT widen the toolbar with visible text. 
 
 All user-visible selector strings SHALL be keyed under `deploymentSelector.*` in `apps/chat/src/i18n/locales/en.json` and referenced through `DeploymentSelectorI18nKeys`, except the search placeholder, which reuses the shared `BasicI18nKeys.SearchPlaceholder`. `libs/conversation-input` MUST NOT call `useTranslation` or `t()`.
 
-`apps/chat/src/hooks/conversation/useModelSelectorLabels.ts` SHALL assemble the `ModelSelectorLabels` object from `{ isLoading, error, itemCount }`, memoised on those inputs and `t`. Its shape encodes the selector's state: `ariaLabel`, `searchPlaceholder`, `closeLabel`, and `unavailableTooltip` are always strings, while `loading`, `error`, and `empty` are `string | undefined` and are populated **only** when that state is the active one — `empty` requires not loading, no error, and a zero count.
+`apps/chat/src/hooks/conversation/useModelSelectorLabels.ts` SHALL assemble the `ModelSelectorLabels` object from `{ isLoading, error, itemCount }`, memoised on those inputs and `t`. Its shape encodes the selector's state: `ariaLabel`, `searchPlaceholder`, `closeLabel`, and `unavailableTooltip` are always strings, while `loading`, `error`, and `empty` are `string | undefined`: `loading` is set while `isLoading` is true, `error` while `error` is truthy (the two are independent), and `empty` only when the list is not loading, carries no error, and has a zero count.
 
 That inversion is the contract: the lib does not take `isLoading`/`hasError` booleans and decide what to show. It shows whichever state label it was given, so the host owns the precedence between loading, error, and empty in one place.
 
@@ -148,7 +158,7 @@ Both surfaces that render a conversation input — `ConversationView` and `NewCo
 
 #### Scenario: Only the active state's label is defined
 
-- **WHEN** the deployment list is loading
+- **WHEN** the deployment list is loading and carries no error
 - **THEN** `loading` is a string and `error` and `empty` are `undefined`
 
 #### Scenario: Empty requires a settled, successful, zero-length list
@@ -165,9 +175,9 @@ Both surfaces that render a conversation input — `ConversationView` and `NewCo
 
 ### Requirement: Only conversational favorites populate the selector
 
-`DeploymentSelectorPanel.tsx` (`apps/chat/src/components/DeploymentSelector/`) SHALL build the selector's list from the user's favorited catalog items, filtered to conversational entity types only: `CatalogEntityType.Model` and `CatalogEntityType.Agent`. Non-conversational types (`Toolset`, `Skill`, and any other `CatalogEntityType`) SHALL be excluded — they are not things a user can talk to.
+`DeploymentSelectorPanel.tsx` (`apps/chat/src/components/DeploymentSelector/`) SHALL build the selector's list from the user's favorited catalog items, filtered to conversational entity types only: `CatalogEntityType.Model` and `CatalogEntityType.Agent`. Non-conversational types (`Toolset`, `Skill`, and any other `CatalogEntityType`) SHALL be excluded — they are not things a user can talk to. Items with `isHidden` set (operator `HIDDEN_ENTITY_TAGS`) are excluded as well. An optional `pinnedItem` is placed first, ahead of the favorites, and goes through the same filter; the currently selected item is shown in its own section and is removed from the favorites list.
 
-This filter SHALL be memoised on the favorites list, and the search query SHALL be applied on top of the already-filtered list rather than over the raw favorites.
+This filter SHALL be memoised on the favorites list and `pinnedItem`, and the search query SHALL be applied on top of the already-filtered list rather than over the raw favorites.
 
 #### Scenario: Favorited application appears in the selector
 
@@ -197,7 +207,7 @@ A selector row renders the entity name followed by its version label. Because fa
 
 `DeploymentSelectorPanel.tsx` SHALL lay the pair out in a wrapping flex line: the name keeps its natural width and truncates with its overflow tooltip when it alone exceeds the row, and the version takes the width the name leaves. When the pair no longer fits on one line, the version SHALL move onto a line of its own at full width rather than truncate — the row grows, and nothing is hidden behind a hover.
 
-The version SHALL therefore carry no `max-w-*` cap and no `truncate`. This is a deliberate departure from the shared `ItemHeader`/`AppIdentity` 30% rule, which stands for cards and headers where row height is fixed; a selector row is `h-auto` and can spend a second line.
+The version SHALL therefore carry no `max-w-*` cap and no `truncate`. This is a deliberate departure from the fixed-height rules used for cards and headers: `ItemHeader` caps the version at 30% of the row, and `AppIdentity` (catalog cards) caps the name at 66% (`max-w-[66%] shrink-0`) and lets the version fill the rest, right-aligned and truncated (`min-w-0 flex-1 text-end`), with the name taking the whole row when there is no version. A selector row is `h-auto` and can spend a second line instead.
 
 #### Scenario: A version that fits is shown in full
 

@@ -1,5 +1,7 @@
+import { TextRefinementPurpose } from '@epam/ai-dial-chat-api-client';
 import { getApiErrorDetails } from '@epam/ai-dial-chat-hooks';
 import { prepareScheduledTaskCreateBody } from '@epam/ai-dial-chat-hooks/scheduled-tasks';
+import { isSkillSelectionUnsupported } from '@epam/ai-dial-chat-shared';
 import {
   ScheduledTaskCreateForm,
   ScheduledTaskCreateFormErrors,
@@ -7,26 +9,33 @@ import {
   ScheduledTaskRepeat,
 } from '@epam/ai-dial-scheduled-tasks';
 import { EditorThemes } from '@epam/ai-dial-ui-kit';
-import { memo, useCallback, useId, useMemo, useState, type FC } from 'react';
+import { memo, useCallback, useEffect, useId, useState, type FC } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import DeploymentSelectorFieldTrigger from '../../components/DeploymentSelector/DeploymentSelectorFieldTrigger';
 import RouteFallback from '../../components/RouteFallback/RouteFallback';
-import { ScheduledTaskCreateQuery } from '../../constants/scheduled-tasks';
-import { ScheduledTasksI18nKeys } from '../../constants/translation-keys';
+import ScheduledTaskSkillField from '../../components/ScheduledTaskSkillField/ScheduledTaskSkillField';
+import {
+  ScheduledTasksI18nKeys,
+  SkillSelectorI18nKeys,
+} from '../../constants/translation-keys';
 import { useAppConfig, useFeatureFlag } from '../../context/AppConfigContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useScheduledTaskFormLabels } from '../../hooks/scheduled-tasks/useScheduledTaskFormLabels';
+import { useScheduledTaskSkillSupport } from '../../hooks/scheduled-tasks/useScheduledTaskSkillSupport';
+import { useTextRefinementCallback } from '../../hooks/useTextRefinementCallback';
 import { createScheduledTask } from '../../server-api/scheduled-tasks.api';
 import { ROUTES } from '../../types/routes';
 import { ThemeId } from '../../types/theme-id';
 import { UserConfigStatus } from '../../types/user-config-status';
-import { mapScheduledTaskValidationErrors } from '../../utils/scheduled-task-form-validation';
+import { resolveScheduledTaskErrorMessage } from '../../utils/map-scheduled-task-dto';
+import {
+  getLiveScheduledTaskFieldError,
+  mapScheduledTaskValidationErrors,
+  mapScheduledTaskApiError,
+} from '../../utils/scheduled-task-form-validation';
 import NotFoundPage from '../NotFound/NotFound';
-
-const MAX_ASCII_CONTROL_CODE = 31;
-const ASCII_DELETE_CODE = 127;
 
 const DEFAULT_VALUES: ScheduledTaskCreateFormValues = {
   displayName: '',
@@ -39,34 +48,19 @@ const DEFAULT_VALUES: ScheduledTaskCreateFormValues = {
   prompt: '',
 };
 
-const containsControlCharacter = (value: string): boolean =>
-  Array.from(value).some((character) => {
-    const codePoint = character.codePointAt(0);
-    return (
-      codePoint !== undefined &&
-      (codePoint <= MAX_ASCII_CONTROL_CODE || codePoint === ASCII_DELETE_CODE)
-    );
-  });
-
-const resolveReturnUrl = (candidate: string | null): string => {
-  if (
-    candidate === null ||
-    !candidate.startsWith('/') ||
-    candidate.startsWith('//') ||
-    candidate.includes('\\') ||
-    containsControlCharacter(candidate)
-  ) {
-    return ROUTES.ScheduledTasks;
-  }
-  return candidate;
-};
-
 const ScheduledTaskCreatePage: FC = () => {
   const { t } = useTranslation();
+  const onRefineDescription = useTextRefinementCallback(
+    TextRefinementPurpose.ScheduledTaskDescription,
+  );
+  const onRefineInstructions = useTextRefinementCallback(
+    TextRefinementPurpose.ScheduledTaskInstructions,
+  );
+
   const { status: appConfigStatus } = useAppConfig();
   const isEnabled = useFeatureFlag('scheduledTasksEnabled');
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const { key: draftKey } = useLocation();
   const { showSuccessNotification, showErrorNotification } = useNotification();
   const { currentTheme } = useTheme();
   const modelLabelId = useId();
@@ -78,12 +72,24 @@ const ScheduledTaskCreatePage: FC = () => {
     useState<ScheduledTaskCreateFormValues>(DEFAULT_VALUES);
   const [errors, setErrors] = useState<ScheduledTaskCreateFormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSkillsSupported = useScheduledTaskSkillSupport(values?.modelId);
+  /* A capability change invalidates a prior server rejection. Local validation
+   * below continues to block a selected skill until support is confirmed. */
+  useEffect(() => {
+    setErrors((previous) =>
+      previous.skillUrls ? { ...previous, skillUrls: undefined } : previous,
+    );
+  }, [isSkillsSupported]);
+  const effectiveErrors = {
+    ...errors,
+    skillUrls: values?.skillUrls?.some((url) =>
+      isSkillSelectionUnsupported(url, isSkillsSupported),
+    )
+      ? t(SkillSelectorI18nKeys.UnsupportedTooltipLabel)
+      : errors.skillUrls,
+  };
 
-  const returnUrl = useMemo(
-    () =>
-      resolveReturnUrl(searchParams.get(ScheduledTaskCreateQuery.ReturnUrl)),
-    [searchParams],
-  );
+  const returnUrl = ROUTES.ScheduledTasks;
 
   const labels = useScheduledTaskFormLabels('create');
 
@@ -94,13 +100,18 @@ const ScheduledTaskCreatePage: FC = () => {
     ) => {
       setValues((prev) => ({ ...prev, [field]: value }));
       setErrors((prev) => {
-        if (!(field in prev)) return prev;
         const next = { ...prev };
+        if (field === 'modelId' || field === 'skillUrls') delete next.skillUrls;
+        if (field === 'prompt' || field === 'skillUrls') delete next.prompt;
         delete next[field as keyof ScheduledTaskCreateFormErrors];
+        const liveError = getLiveScheduledTaskFieldError(field, value, t);
+        if (liveError) {
+          next[field as keyof ScheduledTaskCreateFormErrors] = liveError;
+        }
         return next;
       });
     },
-    [],
+    [t],
   );
 
   const handleModelSelect = useCallback(
@@ -119,6 +130,7 @@ const ScheduledTaskCreatePage: FC = () => {
   const handleSubmit = useCallback(async () => {
     const prepared = prepareScheduledTaskCreateBody(values, {
       now: new Date(),
+      isSkillsSupported,
     });
     if (!prepared.ok) {
       setErrors(mapScheduledTaskValidationErrors(prepared.errors, t));
@@ -133,15 +145,26 @@ const ScheduledTaskCreatePage: FC = () => {
       });
       navigate(returnUrl, { state: { refresh: true } });
     } catch (error) {
-      const { traceId } = await getApiErrorDetails(error);
+      const details = await getApiErrorDetails(error);
+      const fieldErrors = mapScheduledTaskApiError(details.code, t);
+      if (fieldErrors) {
+        setErrors(fieldErrors);
+        setIsSubmitting(false);
+        return;
+      }
       showErrorNotification({
-        message: t(ScheduledTasksI18nKeys.CreateErrorNotification),
-        requestId: traceId,
+        message: resolveScheduledTaskErrorMessage(
+          details,
+          ScheduledTasksI18nKeys.CreateErrorNotification,
+          t,
+        ),
+        requestId: details.traceId,
       });
       setIsSubmitting(false);
     }
   }, [
     values,
+    isSkillsSupported,
     showSuccessNotification,
     showErrorNotification,
     t,
@@ -159,9 +182,24 @@ const ScheduledTaskCreatePage: FC = () => {
 
   return (
     <ScheduledTaskCreateForm
+      key={draftKey}
+
+      onRefineDescription={onRefineDescription}
+      onRefineInstructions={onRefineInstructions}
       labels={labels}
       values={values}
-      errors={errors}
+      initialValues={DEFAULT_VALUES}
+      errors={effectiveErrors}
+      skillSelector={
+        <ScheduledTaskSkillField
+          fieldLabel={labels.skillLabel}
+          value={values.skillUrls ?? []}
+          onChange={(value) => handleFieldChange('skillUrls', value)}
+          isSkillsSupported={isSkillsSupported}
+          isDisabled={isSubmitting}
+          error={effectiveErrors.skillUrls}
+        />
+      }
       modelSelector={
         <DeploymentSelectorFieldTrigger
           selectedId={values.modelId || null}

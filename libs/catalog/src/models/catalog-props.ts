@@ -16,6 +16,7 @@ import type { CatalogItem } from './catalog-item';
 import type { CatalogStyles } from './catalog-styles';
 import type {
   CatalogContentFilePreview,
+  CatalogContentFileTreeRenderProps,
   CatalogItemDetailsFetchResult,
 } from './item-details-data';
 import type { ItemDetailsTexts } from './item-details-props';
@@ -83,6 +84,20 @@ export interface CatalogTitles {
   filterMyAppsLabel?: string;
   /** Label for the Topics section inside the filter dropdown. Default: 'Topics'. */
   filterTopicsLabel?: string;
+  /** Placeholder and accessible name of the Create menu's search field. Default: 'Search'. */
+  createSearchPlaceholder?: string;
+  /** Accessible name of the Create menu search field's clear button. Default: 'Clear search'. */
+  createSearchClearLabel?: string;
+  /** Text shown when the Create menu search leaves no options. Default: 'No results found'. */
+  createNoResultsLabel?: string;
+}
+
+/** Controlled search field rendered at the top of the Create menu. */
+export interface CatalogCreateSearch {
+  /** Current search query. */
+  value: string;
+  /** Called with the new query on every edit, and with `''` when the menu closes. */
+  onChange: (value: string) => void;
 }
 
 /** Props for Catalog. */
@@ -113,7 +128,7 @@ export interface CatalogProps {
    * for the same reason as `tabs`.
    */
   topicOptions?: Set<string>;
-  /** Items to display in the Favorites section. */
+  /** Items to display in the Favorites section. Items with `isHidden` are not rendered. */
   favorites: CatalogItem[];
   /** Grouped text labels for headings and actions. */
   titles?: CatalogTitles;
@@ -262,6 +277,13 @@ export interface CatalogProps {
    */
   renderContentFilePreview?: (fileId: string, fileName: string) => ReactNode;
   /**
+   * Renders the details panel's Content-tab file selector tree in place of
+   * the built-in one. Forwarded to `DetailsPanel.renderContentFileTree`.
+   */
+  renderContentFileTree?: (
+    props: CatalogContentFileTreeRenderProps,
+  ) => ReactNode;
+  /**
    * Called immediately when the "Delete" button in the details panel is
    * clicked, with no confirmation step. Shown only when the item's `isMyApp`
    * is `true` and its `type` is `Application` or `Toolset`. May return a
@@ -376,6 +398,8 @@ export interface CatalogProps {
   createOptions?: DropdownItem[];
   /** Called when the Create button is clicked (used when `createOptions` is absent). */
   onCreateClick?: () => void;
+  /** When provided, the Create menu shows a search field; the host filters `createOptions` by its value. */
+  createSearch?: CatalogCreateSearch;
   /** Hides the "Create" button entirely, e.g. when rendering as a read-only picker. Default: false. */
   hideCreateButton?: boolean;
   /**

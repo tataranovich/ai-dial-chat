@@ -21,7 +21,7 @@ import { useOperationNotification } from '../useOperationNotification';
 export { SkillArchiveImportStatus };
 
 /*
- * Per design.md (`add-skill-archive-import`): 400/413/422 are archive-content problems
+ * Per `openspec/changes/archive/2026-08-20-add-skill-archive-import/design.md` (`add-skill-archive-import`): 400/413/422 are archive-content problems
  * (missing/invalid manifest, unsafe path, size limits), 409 is a name collision, 429 is rate
  * limiting, and 502/503 mean DIAL Core is unavailable. Anything else (401/403/network
  * failure/...) falls back to a generic message.
@@ -51,9 +51,13 @@ interface UseSkillArchiveImportResult {
   statusMessage: string | undefined;
   /** Localized rejection message for the drop zone; `undefined` when nothing was rejected. */
   selectionError: string | undefined;
+  /** Localized message for the drop zone — a local rejection or a failed import; `undefined` when there is none. */
+  errorText: string | undefined;
+  /** Whether an import request is in flight; the dialog stays open meanwhile. */
+  isUploading: boolean;
   /** Opens the upload dialog, unless an import is already in flight. */
   openDialog: () => void;
-  /** Closes the upload dialog and clears any rejection message. */
+  /** Closes the upload dialog, aborting an in-flight import, and clears any error. */
   closeDialog: () => void;
   /** Wire to the dialog drop zone's `onChange`. */
   handleFilesSelected: (files: File[]) => void;
@@ -65,7 +69,7 @@ interface UseSkillArchiveImportResult {
  * Host adapter for the Catalog "Upload" action: configures the import request, raises the
  * "Skill created" notification, refreshes `SkillsContext`, and translates the library
  * controller's semantic status/error outcomes — keeping that whole workflow out of `CatalogView`
- * (design.md D10, `add-skill-archive-import`).
+ * (`openspec/changes/archive/2026-08-20-add-skill-archive-import/design.md` D10, `add-skill-archive-import`).
  */
 export const useSkillArchiveImport = (): UseSkillArchiveImportResult => {
   const { t } = useTranslation();
@@ -83,29 +87,29 @@ export const useSkillArchiveImport = (): UseSkillArchiveImportResult => {
     [notifyOperationSuccess, refetchSkills],
   );
 
+  /*
+   * Every failure is rendered inline in the still-open dialog. Only the unmapped/unexpected
+   * case also raises a toast, since that is the one place the trace id is shown — the mapped
+   * kinds (validation, collision, rate limit, service unavailable) already tell the user
+   * exactly what happened.
+   */
   const onError = useCallback(
     async (error: unknown, kind: SkillArchiveImportErrorKind) => {
-      const message = t(ERROR_I18N_KEYS[kind]);
+      if (kind !== SkillArchiveImportErrorKind.Generic) return;
 
-      /* Trace ids are only meaningful for the unmapped/unexpected case — the mapped kinds
-       * (validation, collision, rate limit, service unavailable) already tell the user exactly
-       * what happened. */
-      const requestId =
-        kind === SkillArchiveImportErrorKind.Generic
-          ? (await getApiErrorDetails(error)).traceId
-          : undefined;
-
+      const { traceId } = await getApiErrorDetails(error);
       showErrorNotification({
         title: t(SkillArchiveImportI18nKeys.ErrorTitle),
-        message,
-        requestId,
+        message: t(ERROR_I18N_KEYS[kind]),
+        requestId: traceId,
       });
     },
     [showErrorNotification, t],
   );
 
   const importArchive = useCallback(
-    (file: File) => requestSkillArchiveImport(file),
+    (file: File, signal: AbortSignal) =>
+      requestSkillArchiveImport(file, signal),
     [],
   );
 
@@ -148,11 +152,18 @@ export const useSkillArchiveImport = (): UseSkillArchiveImportResult => {
       ? t(SkillArchiveImportI18nKeys.ErrorUnsupportedFilename)
       : undefined;
 
+  const importError =
+    controller.status === SkillArchiveImportStatus.Error && controller.errorKind
+      ? t(ERROR_I18N_KEYS[controller.errorKind])
+      : undefined;
+
   return {
     isDialogOpen: controller.isDialogOpen,
     status: controller.status,
     statusMessage,
     selectionError,
+    errorText: selectionError ?? importError,
+    isUploading: controller.isUploading,
     openDialog: controller.openDialog,
     closeDialog: controller.closeDialog,
     handleFilesSelected: controller.handleFilesSelected,
