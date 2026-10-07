@@ -200,7 +200,7 @@ jobs:
           lfs: true
       # HACK: jobs.<job_id>.if does not support hashFiles function, so we check it on the step
       - if: ${{ hashFiles('apps/chat-api/Dockerfile') != '' }}
-        uses: epam/ai-dial-ci/actions/build_docker@4.11.0
+        uses: tataranovich/ai-dial-ci/actions/build_docker@main
         with:
           image-names: ghcr.io/${{ github.repository }}-bff
           image-tags: test
