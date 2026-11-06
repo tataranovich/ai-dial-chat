@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # TEMPORARY minimal image to speed up release workflow testing. Original Dockerfile is commented out below.
-FROM node:14.0.0-alpine
+FROM node:24.22.2-alpine3.24
 CMD ["node", "-v"]
 
 #
