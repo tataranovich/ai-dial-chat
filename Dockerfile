@@ -2,6 +2,8 @@
 
 # TEMPORARY minimal image to speed up release workflow testing. Original Dockerfile is commented out below.
 FROM node:24.22.2-alpine3.24
+# Runtime does not need npm; its bundled deps (brace-expansion, undici) carry HIGH CVEs (same as the real runner stage)
+RUN rm -rf /usr/local/lib/node_modules/npm && rm -f /usr/local/bin/npm /usr/local/bin/npx
 CMD ["node", "-v"]
 
 #
