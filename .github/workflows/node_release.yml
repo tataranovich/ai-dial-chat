@@ -227,7 +227,7 @@ jobs:
     needs: [test, calculate_version, docker_plan]
     if: ${{ needs.docker_plan.outputs.enabled == 'true' }}
     strategy:
-      fail-fast: true
+      fail-fast: false # report Trivy results for every platform even if another one failed
       matrix: ${{ fromJSON(needs.docker_plan.outputs.matrix) }}
     runs-on: ${{ fromJSON(matrix.runner) }}
     permissions:
