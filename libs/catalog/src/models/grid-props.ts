@@ -1,3 +1,4 @@
+import type { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import type { CSSProperties } from 'react';
 import type { CatalogItem } from './catalog-item';
 import type { CatalogMarkdownLabels } from './item-details-props';
@@ -6,6 +7,8 @@ import type { CatalogMarkdownLabels } from './item-details-props';
 export interface CardGridTitles {
   /** Empty-state heading text. Default: `'No results'`. */
   noResultsTitle?: string;
+  /** Secondary line under the empty-state heading. Omitted when not set. */
+  noResultsDescription?: string;
   /** Label for the "Featured" tag on cards. Default: `'Featured'`. */
   featuredLabel?: string;
   /** Accessible label for the star button when the item is not starred. Default: `'Add to favorites'`. */
@@ -14,6 +17,8 @@ export interface CardGridTitles {
   removeFromFavoritesAriaLabel?: string;
   /** Accessible label for the logged-out warning icon on card avatars, and the text shown in its hover tooltip. Default: `'Authorize to use this toolset.'`. */
   credentialsBadgeLoggedOutLabel?: string;
+  /** Text shown in a card's footer when the item is in no folder. Default: `'No folder'`. */
+  noFolderLabel?: string;
 }
 
 /** Props for `CardGrid`. */
@@ -34,6 +39,8 @@ export interface CardGridProps {
   titles?: CardGridTitles;
   /** Code-block, table and formula labels forwarded to each card's description markdown. Defaults to the renderer's English labels. */
   markdownLabels?: CatalogMarkdownLabels;
+  /** Active Browse tab; an item listed under it is labeled with that type instead of `item.type`. */
+  activeTab?: CatalogEntityType;
   /** Called when a card body is clicked. */
   onItemClick?: (item: CatalogItem) => void;
   /** When true, renders skeleton placeholder cards instead of actual content. */

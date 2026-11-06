@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
 import type { Request, Response } from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConversationController } from '../conversation.controller';
+import { ConversationWatchController } from '../conversation-watch.controller';
+import { createConversationWatchController } from './conversation-controller.fixture';
 
 class TestResponse extends EventEmitter {
   writableEnded = false;
@@ -18,18 +19,17 @@ const request = {
   user: { at: 'test-token', bucket: 'test-bucket' },
 } as unknown as Request;
 
-describe('ConversationController.watchConversation — early close and backpressure', () => {
-  let controller: ConversationController;
+describe('ConversationWatchController.watchConversation — early close and backpressure', () => {
+  let controller: ConversationWatchController;
   let response: TestResponse;
   let watchConversation: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     response = new TestResponse();
     watchConversation = vi.fn();
-    controller = new ConversationController(
-      { watchConversation } as never,
-      {} as never,
-    );
+    controller = createConversationWatchController({
+      watchConversation,
+    } as never);
   });
 
   afterEach(() => {

@@ -37,6 +37,68 @@ const field = (overrides: Partial<SkillSelectorFieldProps> = {}) => (
 );
 
 describe('SkillSelectorField', () => {
+  it('renders a removable unavailable tag beside a normal selection', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      field({
+        value: ['skills/public/deleted', 'skills/public/summary'],
+        unavailableValues: ['skills/public/deleted'],
+        displayNames: { 'skills/public/deleted': 'Deleted (unavailable)' },
+        onChange,
+      }),
+    );
+    const tag = screen.getByText('Deleted (unavailable)');
+    expect(screen.queryByTitle('Deleted (unavailable)')).toBeNull();
+    expect(screen.getByTitle('Summary')).toBeTruthy();
+    await user.hover(tag);
+    expect((await screen.findByRole('tooltip')).textContent).toBe(
+      'The skill has been deleted or access revoked',
+    );
+    expect(screen.getByText('Summary')).toBeTruthy();
+    const remove = screen.getByRole('button', {
+      name: 'Remove Deleted (unavailable)',
+    });
+    remove.focus();
+    await user.keyboard('{Enter}');
+    expect(onChange).toHaveBeenCalledWith(['skills/public/summary']);
+  });
+  it('explains unsupported models even when a selected skill is unavailable', async () => {
+    const user = userEvent.setup();
+    render(
+      field({
+        value: ['skills/public/deleted'],
+        unavailableValues: ['skills/public/deleted'],
+        displayNames: { 'skills/public/deleted': 'Deleted (unavailable)' },
+        isSkillsSupported: false,
+      }),
+    );
+    await user.hover(screen.getByRole('combobox', { name: /^Skills/ }));
+    expect((await screen.findByRole('tooltip')).textContent).toBe(
+      'Unsupported',
+    );
+    expect(
+      screen.getByRole('button', { name: 'Remove Deleted (unavailable)' }),
+    ).toBeTruthy();
+  });
+
+  it('shows a field error alongside unavailable tags', () => {
+    render(
+      field({
+        value: ['skills/public/deleted'],
+        unavailableValues: ['skills/public/deleted'],
+        displayNames: { 'skills/public/deleted': 'Deleted (unavailable)' },
+        error: 'The skill has been deleted or access revoked',
+      }),
+    );
+    const trigger = screen.getByRole('combobox', { name: /^Skills/ });
+    expect(trigger.getAttribute('aria-invalid')).toBe('true');
+    expect(trigger.getAttribute('aria-describedby')).toBe(
+      screen.getByText('The skill has been deleted or access revoked').id,
+    );
+    expect(screen.getByText('Deleted (unavailable)')).toBeTruthy();
+  });
+
   it('lists every skill as an option and toggles selection in RTL', async () => {
     const user = userEvent.setup();
     const Host = () => {
@@ -114,23 +176,30 @@ describe('SkillSelectorField', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('explains why an empty unsupported field is disabled', async () => {
+  it('describes a disabled empty unsupported field to screen readers only', async () => {
     const user = userEvent.setup();
     render(field({ isSkillsSupported: false }));
     const trigger = screen.getByRole('combobox', { name: 'Skills' });
     expect((trigger as HTMLInputElement).disabled).toBe(true);
-    expect(trigger.getAttribute('aria-describedby')).toBeTruthy();
+    const descriptionId = trigger.getAttribute('aria-describedby');
+    expect(descriptionId).toBeTruthy();
+    const description = screen.getByText(
+      'Selected model does not support skills. Select a different model to use a skill.',
+    );
+    expect(description.id).toBe(descriptionId);
     await user.hover(trigger);
-    expect(await screen.findByRole('tooltip')).toBeTruthy();
+    /* The reason is screen-reader-only — no tooltip or caption renders it. */
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
-  it('associates a host validation error with the combobox', () => {
+  it('passes a host validation error to Select as the error, not the description', () => {
     render(field({ error: 'Choose supported skills' }));
     const trigger = screen.getByRole('combobox', { name: 'Skills' });
-    expect(trigger.getAttribute('aria-describedby')).toBeTruthy();
     expect(trigger.getAttribute('aria-invalid')).toBe('true');
-    expect(screen.getByRole('alert').textContent).toBe(
-      'Choose supported skills',
+    // The kit links Select's own error, and only it, as the description.
+    expect(trigger.getAttribute('aria-describedby')).toBe(
+      screen.getByText('Choose supported skills').id,
     );
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

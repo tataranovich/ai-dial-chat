@@ -5,12 +5,28 @@ import {
 import {
   getApiErrorDetails,
   getApiErrorStatus,
+  getNextCronOccurrence,
+  getScheduledTasksLoginRetryState,
+  mergeScheduledTaskRuns,
+  OfflineCredentialsGateStatus,
+  OfflineCredentialsLoginOutcomeType,
+  resolveScheduledTasksLoginBannerState,
+  ScheduledTaskRunStatusFeedback,
+  ScheduledTasksLoginBannerState,
+  useStartScheduledTask,
+  type StartScheduledTaskApi,
 } from '@epam/ai-dial-chat-hooks';
 import {
   ScheduledTaskDetailView,
   type ScheduledTaskRunItem,
 } from '@epam/ai-dial-scheduled-tasks';
-import { GhostButton } from '@epam/ai-dial-ui-kit';
+import {
+  ButtonAppearance,
+  ElementSize,
+  ErrorMessageNotification,
+  GhostButton,
+  NeutralButton,
+} from '@epam/ai-dial-ui-kit';
 import {
   memo,
   useCallback,
@@ -24,14 +40,13 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router';
 import RouteFallback from '../../components/RouteFallback/RouteFallback';
 import ScheduledTaskDeleteModal from '../../components/ScheduledTaskDeleteModal/ScheduledTaskDeleteModal';
-import ScheduledTasksLoginBanner, {
-  ScheduledTasksLoginBannerState,
-} from '../../components/ScheduledTasksLoginBanner/ScheduledTasksLoginBanner';
+import ScheduledTasksLoginBanner from '../../components/ScheduledTasksLoginBanner/ScheduledTasksLoginBanner';
 import {
   getConversationRoute,
   getScheduledTaskEditRoute,
 } from '../../constants/routes';
 import {
+  BasicI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
   ConversationPanelI18nKeys,
@@ -39,40 +54,31 @@ import {
 } from '../../constants/translation-keys';
 import { useAppConfig, useFeatureFlag } from '../../context/AppConfigContext';
 import { useConversations } from '../../context/ConversationsContext';
-import { useDeployments } from '../../context/DeploymentsContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useLanguage } from '../../hooks/language/useLanguage';
-import {
-  OfflineCredentialsGateStatus,
-  useOfflineCredentialsGate,
-} from '../../hooks/offlineCredentials/useOfflineCredentialsGate';
-import {
-  OfflineCredentialsLoginOutcomeType,
-  useOfflineCredentialsLogin,
-} from '../../hooks/offlineCredentials/useOfflineCredentialsLogin';
+import { useOfflineCredentialsGate } from '../../hooks/offlineCredentials/useOfflineCredentialsGate';
+import { useOfflineCredentialsLogin } from '../../hooks/offlineCredentials/useOfflineCredentialsLogin';
+import { useScheduledTaskModelPreview } from '../../hooks/scheduled-tasks/useScheduledTaskModelPreview';
 import { useScheduledTaskRuns } from '../../hooks/scheduled-tasks/useScheduledTaskRuns';
-import { useScheduledTaskSkillDisplayNames } from '../../hooks/scheduled-tasks/useScheduledTaskSkillDisplayNames';
-import {
-  mergeScheduledTaskRuns,
-  ScheduledTaskRunStatusFeedback,
-  useStartScheduledTask,
-} from '../../hooks/scheduled-tasks/useStartScheduledTask';
+import { useScheduledTaskSkillPreview } from '../../hooks/scheduled-tasks/useScheduledTaskSkillPreview';
 import { useStaleGuard } from '../../hooks/useStaleGuard';
 import {
   deleteScheduledTask,
   getScheduledTask,
+  getScheduledTaskRun,
   pauseScheduledTask,
   resumeScheduledTask,
+  startScheduledTask,
 } from '../../server-api/scheduled-tasks.api';
 import { ROUTES } from '../../types/routes';
 import { UserConfigStatus } from '../../types/user-config-status';
-import { resolveLocalizedText } from '../../utils/locale';
 import {
   buildScheduleLabel,
   getDeleteErrorMessageKey,
   resolveScheduledTaskErrorMessage,
 } from '../../utils/map-scheduled-task-dto';
 import { mapScheduledTaskRunDtosToItems } from '../../utils/map-scheduled-task-run-dto';
+import { isSchedulerConsentMissing } from '../../utils/scheduler-consent';
 import NotFoundPage from '../NotFound/NotFound';
 
 const resolveCredentialsBannerState = ({
@@ -87,15 +93,11 @@ const resolveCredentialsBannerState = ({
   status: OfflineCredentialsGateStatus;
 }): ScheduledTasksLoginBannerState | undefined => {
   if (!isCredentialsRequired) return undefined;
-  if (isLoggingIn) return ScheduledTasksLoginBannerState.LoginInProgress;
-  if (retryState) return retryState;
-  if (
-    status === OfflineCredentialsGateStatus.Available ||
-    status === OfflineCredentialsGateStatus.Unavailable
-  ) {
-    return ScheduledTasksLoginBannerState.Shown;
-  }
-  return undefined;
+  return resolveScheduledTasksLoginBannerState({
+    isLoggingIn,
+    retryState,
+    status,
+  });
 };
 
 const RUN_STATUS_LABEL_KEYS: Record<
@@ -108,6 +110,12 @@ const RUN_STATUS_LABEL_KEYS: Record<
   [ScheduledTaskRunDtoStatusEnum.Missed]: 'missed',
 };
 
+/* Module-level so the hook's polling effects keep a stable dependency. */
+const START_SCHEDULED_TASK_API: StartScheduledTaskApi = {
+  startScheduledTask,
+  getScheduledTaskRun,
+};
+
 const ScheduledTaskDetailPage: FC = () => {
   const { t } = useTranslation();
   const { showSuccessNotification, showErrorNotification } = useNotification();
@@ -115,12 +123,13 @@ const ScheduledTaskDetailPage: FC = () => {
   const isEnabled = useFeatureFlag('scheduledTasksEnabled');
   const navigate = useNavigate();
   const { scheduleId = '' } = useParams<{ scheduleId: string }>();
-  const { items: deploymentItems } = useDeployments();
-  const { language } = useLanguage();
+  const { displayLanguage } = useLanguage();
   const { conversations, refreshConversations } = useConversations();
 
   const [task, setTask] = useState<ScheduledTaskDto | null>(null);
-  const skillDisplayNames = useScheduledTaskSkillDisplayNames(task?.skillUrls);
+  const { skillDisplayNames, renderSkillName } = useScheduledTaskSkillPreview(
+    task?.skillUrls,
+  );
   const [isTaskLoading, setIsTaskLoading] = useState(true);
   const [taskError, setTaskError] = useState<Error | null>(null);
   const [isNotFound, setIsNotFound] = useState(false);
@@ -151,6 +160,11 @@ const ScheduledTaskDetailPage: FC = () => {
     startFeedbackPending.current = false;
   }, [scheduleId, isEnabled]);
 
+  /* Set from the manually started run below; the history hook is created
+     first because the start hook consumes its loaded runs. */
+  const [hasAcceptedInProgressRun, setHasAcceptedInProgressRun] =
+    useState(false);
+
   const {
     items: runDtos,
     isLoading: runsIsLoading,
@@ -165,12 +179,14 @@ const ScheduledTaskDetailPage: FC = () => {
     scheduleId,
     isEnabled && Boolean(scheduleId),
     task?.nextRunTime,
+    hasAcceptedInProgressRun,
   );
 
   const isTaskDeleted = task?.isDeleted === true;
   const {
     status: credentialsStatus,
     connect: offlineCredentialsConnect,
+    schedulerServiceConsent,
     refetch: refetchOfflineCredentials,
   } = useOfflineCredentialsGate();
   const { login: loginOfflineCredentials } = useOfflineCredentialsLogin();
@@ -183,6 +199,7 @@ const ScheduledTaskDetailPage: FC = () => {
     start: startTask,
     terminalRun,
   } = useStartScheduledTask({
+    api: START_SCHEDULED_TASK_API,
     scheduleId,
     enabled: isEnabled,
     canStart:
@@ -246,6 +263,14 @@ const ScheduledTaskDetailPage: FC = () => {
       cancelled.value = true;
     };
   }, [isEnabled, scheduleId, taskFetchToken]);
+
+  useEffect(() => {
+    setHasAcceptedInProgressRun(
+      mergeScheduledTaskRuns(acceptedRuns, runDtos).some(
+        (run) => run.status === ScheduledTaskRunDtoStatusEnum.InProgress,
+      ),
+    );
+  }, [acceptedRuns, runDtos]);
 
   const mergedRunDtos = useMemo(
     () => mergeScheduledTaskRuns(acceptedRuns, runDtos),
@@ -338,6 +363,20 @@ const ScheduledTaskDetailPage: FC = () => {
     /* A run can discover revoked credentials after the route's initial check. */
     void refetchOfflineCredentials();
   }, [credentialsRunId, isEnabled, refetchOfflineCredentials, scheduleId]);
+  /*
+   * Consent is evaluated before the login state: with the scheduler service
+   * consent missing, editing, starting, and resuming cannot succeed (the BFF
+   * rejects each with `scheduledTaskAdminConsentRequired`), so the Edit and
+   * Start now actions hide, and the Active switch disables while the task is
+   * paused — turning it on would always fail, while pausing and deleting
+   * still work (the BFF checks consent on neither). No limited-access banner
+   * renders on the detail route — it is a list-page surface only. An
+   * unresolved check fails open (the gate defaults to `unknown`).
+   */
+  const isLimitedAccess = isSchedulerConsentMissing(schedulerServiceConsent);
+  /* Edit needs a loaded, non-deleted task AND a present scheduler service
+   * consent — an unloaded or deleted task renders no header actions at all. */
+  const isTaskEditable = Boolean(task) && !isTaskDeleted && !isLimitedAccess;
   const credentialsBannerState = resolveCredentialsBannerState({
     isCredentialsRequired,
     isLoggingIn,
@@ -353,33 +392,38 @@ const ScheduledTaskDetailPage: FC = () => {
     [navigate],
   );
 
-  const taskModel = task?.model;
-  const modelLabel = useMemo(() => {
-    if (!taskModel) return undefined;
-    const deployment = deploymentItems.find((item) => item.id === taskModel);
-    return deployment
-      ? resolveLocalizedText(deployment.displayName, language) || taskModel
-      : taskModel;
-  }, [taskModel, deploymentItems, language]);
+  const { modelDisplayName: modelLabel, renderModelName } =
+    useScheduledTaskModelPreview(task?.model);
 
   const repeatsLabel = useMemo(
-    () => (task ? buildScheduleLabel(task, t, language) : undefined),
-    [task, t, language],
+    () => (task ? buildScheduleLabel(task, t, displayLanguage) : undefined),
+    [task, t, displayLanguage],
   );
 
   const cronWindow = task?.trigger.cron;
+  const taskNextRunTime = task?.nextRunTime;
   const activeWindowLabel = useMemo(() => {
-    if (!cronWindow?.startDate || !cronWindow?.endDate) return undefined;
+    if (!cronWindow?.endDate) return undefined;
+    /*
+     * Without an explicit start date the window begins at the next scheduled
+     * occurrence: the server's `nextRunTime`, or one computed from the cron
+     * fields when the server has none (e.g. an inactive task).
+     */
+    const effectiveStartDate =
+      cronWindow.startDate ??
+      taskNextRunTime ??
+      getNextCronOccurrence(cronWindow)?.toISOString();
+    if (!effectiveStartDate) return undefined;
     const dateFormatter = new Intl.DateTimeFormat(undefined, {
       dateStyle: 'medium',
+      timeStyle: 'short',
     });
     return t(ScheduledTasksI18nKeys.DetailActiveWindowValue, {
-      startDate: dateFormatter.format(new Date(cronWindow.startDate)),
+      startDate: dateFormatter.format(new Date(effectiveStartDate)),
       endDate: dateFormatter.format(new Date(cronWindow.endDate)),
     });
-  }, [cronWindow, t]);
+  }, [cronWindow, taskNextRunTime, t]);
 
-  const taskNextRunTime = task?.nextRunTime;
   const nextRunLabel = useMemo(() => {
     if (!taskNextRunTime) return undefined;
     let formatted = taskNextRunTime;
@@ -396,11 +440,12 @@ const ScheduledTaskDetailPage: FC = () => {
 
   const labels = useMemo(
     () => ({
-      backAriaLabel: t(ScheduledTasksI18nKeys.CreateBackButtonLabel),
-      editButtonLabel: t(ScheduledTasksI18nKeys.CardEditActionLabel),
+      backAriaLabel: t(ButtonsI18nKeys.Back),
+      editButtonLabel: t(ButtonsI18nKeys.Edit),
       deleteButtonLabel: t(ButtonsI18nKeys.Delete),
       deletedStateLabel: t(ScheduledTasksI18nKeys.DetailDeletedStateLabel),
       errorLabel: t(ScheduledTasksI18nKeys.DetailErrorLabel),
+      loadingAriaLabel: t(BasicI18nKeys.Loading),
       detailsTitle: t(ScheduledTasksI18nKeys.CreateDetailsSectionTitle),
       descriptionLabel: t(ScheduledTasksI18nKeys.CreateDescriptionLabel),
       modelLabel: t(ScheduledTasksI18nKeys.CreateModelOrAgentLabel),
@@ -411,11 +456,15 @@ const ScheduledTaskDetailPage: FC = () => {
       ),
       instructionsLabel: t(ScheduledTasksI18nKeys.CreateInstructionsLabel),
       skillLabel: t(ScheduledTasksI18nKeys.CreateSkillLabel),
-      retryLabel: t(ScheduledTasksI18nKeys.ListRetryLabel),
+      retryLabel: t(ButtonsI18nKeys.Retry),
       historyTitle: t(ScheduledTasksI18nKeys.DetailHistoryTitle),
       historyEmptyLabel: t(ScheduledTasksI18nKeys.DetailHistoryEmptyLabel),
+      historyEmptyDescription: t(
+        ScheduledTasksI18nKeys.DetailHistoryEmptyDescription,
+      ),
       historyErrorLabel: t(ScheduledTasksI18nKeys.DetailHistoryErrorLabel),
-      historyRetryLabel: t(ScheduledTasksI18nKeys.ListRetryLabel),
+      tabsAriaLabel: t(ScheduledTasksI18nKeys.DetailTabsAriaLabel),
+      historyRetryLabel: t(ButtonsI18nKeys.Retry),
       historyLoadingMoreLabel: t(
         ScheduledTasksI18nKeys.DetailHistoryLoadingMoreLabel,
       ),
@@ -429,6 +478,9 @@ const ScheduledTaskDetailPage: FC = () => {
       startNowBusyLabel: t(ScheduledTasksI18nKeys.DetailStartBusy),
       startStatusAnnouncement,
       unreadIndicatorLabel: t(ConversationPanelI18nKeys.UnreadIndicatorLabel),
+      openConversationLabel: t(
+        ScheduledTasksI18nKeys.DetailHistoryOpenConversationLabel,
+      ),
       codeBlockCopyLabel: t(ButtonsI18nKeys.Copy),
       codeBlockCopiedLabel: t(ButtonsI18nKeys.Copied),
       codeBlockDownloadLabel: t(ButtonsI18nKeys.Download),
@@ -476,22 +528,33 @@ const ScheduledTaskDetailPage: FC = () => {
     (task?.triggerType === 'date' && task?.nextRunTime == null) ||
     (task?.triggerType === 'cron' &&
       cronWindowEndDate != null &&
-      new Date(cronWindowEndDate).getTime() <= Date.now());
+      new Date(cronWindowEndDate).getTime() <= Date.now()) ||
+    /* Turning the task on runs the consent-checked resume; while the consent
+     * is missing the switch renders disabled with no reason label — just the
+     * disabled control (product decision). Pausing still works, so an active
+     * task keeps an enabled switch. */
+    (isLimitedAccess && task?.isActive !== true);
 
   /*
    * The disabled switch's explanatory text differs per case: a fired one-time
-   * schedule already ran, while a recurring schedule's activity window has
+   * schedule already ran, and a recurring schedule's activity window has
    * closed — the user sees why the toggle is dead rather than a bare disabled
    * control. Only computed while the switch renders; a completed task hides
-   * the switch, so it gets no reason.
+   * the switch, so it gets no reason. Limited access disables the switch
+   * without a reason of its own.
    */
-  let activeDisabledReason: string | undefined;
-  if (isActiveDisabled && !isTaskCompleted) {
-    activeDisabledReason =
-      task?.triggerType === 'date'
-        ? t(ScheduledTasksI18nKeys.DetailActiveDisabledReasonCompleted)
-        : t(ScheduledTasksI18nKeys.DetailActiveDisabledReasonExpired);
-  }
+  const getActiveDisabledReason = (): string | undefined => {
+    if (!isActiveDisabled || isTaskCompleted) return undefined;
+    if (task?.triggerType === 'date' && task?.nextRunTime == null)
+      return t(ScheduledTasksI18nKeys.DetailActiveDisabledReasonCompleted);
+    if (
+      task?.triggerType === 'cron' &&
+      cronWindowEndDate != null &&
+      new Date(cronWindowEndDate).getTime() <= Date.now()
+    )
+      return t(ScheduledTasksI18nKeys.DetailActiveDisabledReasonExpired);
+    return undefined;
+  };
 
   const completedLabel = isTaskCompleted
     ? t(ScheduledTasksI18nKeys.CardCompletedBadgeLabel)
@@ -646,6 +709,16 @@ const ScheduledTaskDetailPage: FC = () => {
     t,
   ]);
 
+  /*
+   * Start now needs a loaded, non-deleted task AND a present scheduler
+   * service consent — the BFF asserts the consent on the start mutation, so
+   * an absent consent resolves to no handler and the view renders no Start
+   * now button. Pause and Delete check no consent, so their handlers resolve
+   * independently of the limited-access state.
+   */
+  const resolveStartNowHandler = () =>
+    task && !isTaskDeleted && !isLimitedAccess ? handleStartNow : undefined;
+
   const handleOfflineCredentialsLogin = useCallback(() => {
     if (!offlineCredentialsConnect) return;
     setIsLoggingIn(true);
@@ -659,33 +732,12 @@ const ScheduledTaskDetailPage: FC = () => {
       );
       setIsLoggingIn(false);
 
-      switch (outcome.type) {
-        case OfflineCredentialsLoginOutcomeType.Success:
-          setCredentialsStatusAnnouncement(
-            t(
-              ScheduledTasksI18nKeys.OfflineCredentialsBannerSuccessAnnouncement,
-            ),
-          );
-          setCredentialsRetryState(undefined);
-          break;
-        case OfflineCredentialsLoginOutcomeType.PopupBlocked:
-          setCredentialsRetryState(
-            ScheduledTasksLoginBannerState.RetryPopupBlocked,
-          );
-          break;
-        case OfflineCredentialsLoginOutcomeType.Cancelled:
-          setCredentialsRetryState(
-            ScheduledTasksLoginBannerState.RetryCancelled,
-          );
-          break;
-        case OfflineCredentialsLoginOutcomeType.TimedOut:
-          setCredentialsRetryState(ScheduledTasksLoginBannerState.RetryTimeout);
-          break;
-        case OfflineCredentialsLoginOutcomeType.Failure:
-        default:
-          setCredentialsRetryState(ScheduledTasksLoginBannerState.RetryFailed);
-          break;
+      if (outcome.type === OfflineCredentialsLoginOutcomeType.Success) {
+        setCredentialsStatusAnnouncement(
+          t(ScheduledTasksI18nKeys.OfflineCredentialsBannerSuccessAnnouncement),
+        );
       }
+      setCredentialsRetryState(getScheduledTasksLoginRetryState(outcome.type));
     };
     void run();
   }, [
@@ -712,8 +764,8 @@ const ScheduledTaskDetailPage: FC = () => {
       <ScheduledTaskDetailView
         labels={labels}
         onBack={handleBack}
-        onEdit={task && !isTaskDeleted ? handleEdit : undefined}
-        onStartNow={task && !isTaskDeleted ? handleStartNow : undefined}
+        onEdit={isTaskEditable ? handleEdit : undefined}
+        onStartNow={resolveStartNowHandler()}
         onDelete={task && !isTaskDeleted ? handleDeleteClick : undefined}
         isDeleting={isDeleting}
         isStarting={isStarting}
@@ -729,7 +781,7 @@ const ScheduledTaskDetailPage: FC = () => {
         isActive={isTaskDeleted ? undefined : task?.isActive}
         isActiveUpdating={isActiveUpdating}
         isActiveDisabled={isActiveDisabled}
-        activeDisabledReason={activeDisabledReason}
+        activeDisabledReason={getActiveDisabledReason()}
         onActiveChange={isTaskDeleted ? undefined : handleActiveChange}
         displayName={task?.displayName ?? ''}
         isLoading={isTaskLoading}
@@ -737,12 +789,14 @@ const ScheduledTaskDetailPage: FC = () => {
         onRetry={handleRetry}
         description={task?.description}
         modelLabel={modelLabel}
+        renderModelName={renderModelName}
         repeatsLabel={repeatsLabel}
         activeWindowLabel={activeWindowLabel}
         completedLabel={completedLabel}
         nextRunLabel={nextRunLabel}
         instructionsMarkdown={task?.prompt}
         skillDisplayNames={skillDisplayNames}
+        renderSkillName={renderSkillName}
         runs={runItems}
         runsIsLoading={runsIsLoading && mergedRunDtos.length === 0}
         runsIsLoadingMore={runsIsLoadingMore}
@@ -755,15 +809,17 @@ const ScheduledTaskDetailPage: FC = () => {
         onRunClick={handleRunClick}
       />
       {runsError && mergedRunDtos.length > 0 && (
-        <div
-          role="alert"
-          className="flex flex-wrap items-center gap-2 px-4 py-2"
-        >
-          <span>{labels.historyErrorLabel}</span>
-          <GhostButton
-            label={labels.historyRetryLabel}
-            onClick={refetchRuns}
-            className="min-h-11"
+        <div className="px-4 py-2">
+          <ErrorMessageNotification
+            message={labels.historyErrorLabel}
+            action={
+              <NeutralButton
+                appearance={ButtonAppearance.Outlined}
+                size={ElementSize.Small}
+                label={labels.historyRetryLabel}
+                onClick={refetchRuns}
+              />
+            }
           />
         </div>
       )}

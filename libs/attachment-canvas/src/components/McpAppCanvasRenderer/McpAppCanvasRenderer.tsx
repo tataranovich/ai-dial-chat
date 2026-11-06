@@ -1,5 +1,9 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { DIAL_KIT_ICON_STROKE, Spinner } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_KIT_ICON_STROKE,
+  LiveRegion,
+  Spinner,
+} from '@epam/ai-dial-ui-kit';
 import { AppFrame } from '@mcp-ui/client';
 import type { Implementation } from '@modelcontextprotocol/sdk/types.js';
 import { IconAlertTriangle } from '@tabler/icons-react';
@@ -14,6 +18,8 @@ export interface McpAppCanvasRendererProps {
   content: McpAppCanvasContent;
   /** Message shown when the app fails to initialize. Defaults to `'Failed to load app'`. */
   errorLabel?: string;
+  /** Accessible name of the loading spinner. Defaults to `'Loading…'`. */
+  loadingLabel?: string;
   /** Called once the mounted app completes its `ui/initialize` handshake, with its declared name/version. Omitted when the app didn't declare an `appInfo`. */
   onAppInfo?: (appInfo: Implementation) => void;
 }
@@ -36,6 +42,7 @@ enum RendererStatus {
 export const McpAppCanvasRenderer: FC<McpAppCanvasRendererProps> = ({
   content,
   errorLabel = 'Failed to load app',
+  loadingLabel = 'Loading…',
   onAppInfo,
 }) => {
   const [status, setStatus] = useState<RendererStatus>(RendererStatus.Loading);
@@ -101,8 +108,12 @@ export const McpAppCanvasRenderer: FC<McpAppCanvasRendererProps> = ({
     <div
       ref={containerRef}
       className={mergeClasses(
-        /* `min-h-[200px]` is a Loading-overlay floor, not the intended size — see `openspec/changes/archive/2026-09-30-mcp-apps-support/design.md` D19. */
-        'relative h-full min-h-[200px] w-full',
+        /*
+         * Loading-overlay floor, not the intended size (design.md D19); the error
+         * floor is larger so the error icon keeps its size instead of shrinking.
+         */
+        'relative h-full w-full',
+        isErrored ? 'min-h-[160px]' : 'min-h-[100px]',
         isFullscreen && styles.fullscreenFrame,
         !isFullscreen &&
           status === RendererStatus.Loading &&
@@ -134,9 +145,13 @@ export const McpAppCanvasRenderer: FC<McpAppCanvasRendererProps> = ({
             styles.loadingOverlay,
           )}
         >
-          <Spinner />
+          <Spinner ariaLabel={loadingLabel} />
         </div>
       )}
+      {/* Mounted before the overlay so the failure is announced when it appears. */}
+      <LiveRegion visuallyHidden>
+        {isErrored && [errorLabel, errorDetail].filter(Boolean).join('. ')}
+      </LiveRegion>
       {isErrored && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4">
           <IconAlertTriangle
@@ -146,7 +161,7 @@ export const McpAppCanvasRenderer: FC<McpAppCanvasRendererProps> = ({
             className={styles.errorIcon}
           />
           <p
-            role="alert"
+            aria-hidden
             className={mergeClasses('text-center', styles.statusLabel)}
           >
             {errorLabel}

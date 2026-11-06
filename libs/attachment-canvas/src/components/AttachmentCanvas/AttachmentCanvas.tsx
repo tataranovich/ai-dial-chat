@@ -37,6 +37,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
   isOpen,
   isLoading = false,
   onClose,
+  onRetry,
   content,
   fileName,
   leftActions,
@@ -54,6 +55,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
     visualizerErrorLabel,
     unsupportedLabel = 'Preview is not supported for this file',
     loadErrorLabel = 'Failed to load file',
+    loadErrorRetryLabel = 'Retry',
     forbiddenErrorLabel = "You don't have permission to access this file",
     htmlFrameBlockedLabel = 'This page cannot be displayed in preview',
     htmlOpenInNewTabLabel = 'Open in new tab',
@@ -81,6 +83,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
     mathScrollRegionAriaLabel,
     ooxmlHighlightsLabel,
     ooxmlHighlightNavigatedLabel,
+    loadingLabel,
   },
   onDownload,
   onCopyText,
@@ -88,6 +91,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
   onCopyJson,
   tableDownloadFilename,
   isMobile = false,
+  isBoundedOverlay = false,
   defaultWidth,
   minWidth = 600,
   maxWidth = 1500,
@@ -233,24 +237,31 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
   return (
     <SidebarPanel
       isOpen={isOpen}
+      isBoundedOverlay={isBoundedOverlay}
       orientation={SidebarOrientation.Right}
       title={panelTitle}
       labels={{ ariaLabel, closeLabel, resizeLabel }}
       onClose={onClose}
-      resizable={!isMobile}
+      resizable={!isMobile || isBoundedOverlay}
       defaultWidth={defaultWidth}
       minWidth={minWidth}
       maxWidth={maxWidth}
       onResizeStop={onResizeStop}
       styles={{
         ...panelStyles,
+        cssVars: {
+          ...buildCssVars({ '--ac-header-border': colors?.headerBorder }),
+          ...panelStyles?.cssVars,
+        },
         titleClassName: panelStyles?.titleClassName ?? 'dial-h3-text',
         headerClassName: mergeClasses(
-          'border-b border-tertiary',
+          'border-b',
+          styles.panelHeader,
           panelStyles?.headerClassName,
         ),
         className: mergeClasses(
-          isOpen ? 'mobile:w-full mobile:max-w-full' : 'w-0',
+          !isBoundedOverlay &&
+            (isOpen ? 'mobile:w-full mobile:max-w-full' : 'w-0'),
           className,
           panelStyles?.className,
           ATTACHMENT_CANVAS_CLASS.panel,
@@ -415,9 +426,11 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
             ? setMcpAppInfo
             : undefined
         }
+        onRetry={onRetry}
         labels={{
           unsupportedLabel,
           loadErrorLabel,
+          loadErrorRetryLabel,
           forbiddenErrorLabel,
           visualizerErrorLabel,
           htmlFrameBlockedLabel,
@@ -443,6 +456,7 @@ const AttachmentCanvasBase: FC<AttachmentCanvasProps> = ({
           mathScrollRegionAriaLabel,
           ooxmlHighlightsLabel,
           ooxmlHighlightNavigatedLabel,
+          loadingLabel,
         }}
         styles={bodyStylesProp}
         codeBlockTheme={codeBlockTheme}

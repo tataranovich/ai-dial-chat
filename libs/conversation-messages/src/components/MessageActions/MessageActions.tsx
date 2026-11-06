@@ -10,6 +10,8 @@ import {
   DIAL_KIT_ICON_STROKE,
   ElementSize,
   GhostIconButton,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import {
   IconMarkdown,
@@ -21,7 +23,7 @@ import {
   IconThumbUpFilled,
   IconTrashX,
 } from '@tabler/icons-react';
-import { FC, useCallback, useState } from 'react';
+import { FC, useCallback, useEffect, useRef, useState } from 'react';
 import type { MessageActionsProps } from '../../models/message-actions';
 import styles from './MessageActions.module.scss';
 
@@ -40,6 +42,8 @@ export const MessageActions: FC<MessageActionsProps> = ({
   onDislike,
   activeRating,
   isAlwaysVisible,
+  leadingContent,
+  trailingContent,
   isDisabled = false,
   className,
   labels,
@@ -48,6 +52,22 @@ export const MessageActions: FC<MessageActionsProps> = ({
   const { tooltips, ariaLabels } = labels ?? {};
   const [copied, setCopied] = useState<'copy' | 'markdown' | null>(null);
   const [copyStatus, setCopyStatus] = useState('');
+  const copiedResetTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  /*
+   * A pending "Copied" reset must not outlive the toolbar: a setState from a
+   * stale timer after unmount fires after jsdom teardown in tests
+   * ("window is not defined") and is wasted work in the browser.
+   */
+  useEffect(() => () => clearTimeout(copiedResetTimerRef.current), []);
+
+  const scheduleCopiedReset = useCallback(() => {
+    clearTimeout(copiedResetTimerRef.current);
+    copiedResetTimerRef.current = setTimeout(
+      () => setCopied(null),
+      COPIED_RESET_MS,
+    );
+  }, []);
 
   const hasAnyAction =
     onEdit != null ||
@@ -56,7 +76,9 @@ export const MessageActions: FC<MessageActionsProps> = ({
     onCopy != null ||
     onCopyMarkdown != null ||
     onLike != null ||
-    onDislike != null;
+    onDislike != null ||
+    leadingContent != null ||
+    trailingContent != null;
 
   const cssVars = buildCssVars({
     '--ma-active-rating-text': colors?.activeRatingText,
@@ -70,8 +92,14 @@ export const MessageActions: FC<MessageActionsProps> = ({
         ? (ariaLabels?.copiedMessageStatus ?? 'Message copied to clipboard')
         : (ariaLabels?.copiedStatus ?? 'Copied to clipboard'),
     );
-    setTimeout(() => setCopied(null), COPIED_RESET_MS);
-  }, [onCopy, role, ariaLabels?.copiedStatus, ariaLabels?.copiedMessageStatus]);
+    scheduleCopiedReset();
+  }, [
+    onCopy,
+    role,
+    ariaLabels?.copiedStatus,
+    ariaLabels?.copiedMessageStatus,
+    scheduleCopiedReset,
+  ]);
 
   const handleCopyMarkdown = useCallback(() => {
     onCopyMarkdown?.();
@@ -79,12 +107,13 @@ export const MessageActions: FC<MessageActionsProps> = ({
     setCopyStatus(
       ariaLabels?.copiedMarkdownStatus ?? 'Copied as Markdown to clipboard',
     );
-    setTimeout(() => setCopied(null), COPIED_RESET_MS);
-  }, [onCopyMarkdown, ariaLabels?.copiedMarkdownStatus]);
+    scheduleCopiedReset();
+  }, [onCopyMarkdown, ariaLabels?.copiedMarkdownStatus, scheduleCopiedReset]);
 
   /*
-   * No handler means a read-only message: an empty toolbar with a live region
-   * nothing ever populates is dead DOM, so render nothing at all.
+   * No handler and no leading or trailing content means a read-only message:
+   * an empty toolbar with a live region nothing ever populates is dead DOM,
+   * so render nothing at all.
    */
   if (!hasAnyAction) {
     return null;
@@ -96,14 +125,15 @@ export const MessageActions: FC<MessageActionsProps> = ({
       aria-label={ariaLabels?.actionsGroup ?? 'Message actions'}
       style={cssVars}
       className={mergeClasses(
-        'flex gap-1',
+        'flex items-center gap-1',
         !isAlwaysVisible && 'opacity-0 group-hover:opacity-100',
         className,
       )}
     >
-      <span role="status" aria-live="polite" className="sr-only">
+      {leadingContent}
+      <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
         {copyStatus}
-      </span>
+      </LiveRegion>
       {role === MessageRole.User ? (
         <>
           {onCopy && (
@@ -257,6 +287,7 @@ export const MessageActions: FC<MessageActionsProps> = ({
           )}
         </>
       )}
+      {trailingContent}
     </div>
   );
 };

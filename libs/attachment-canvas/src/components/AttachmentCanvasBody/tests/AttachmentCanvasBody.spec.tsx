@@ -1,5 +1,6 @@
 import { MarkdownRenderer } from '@epam/ai-dial-chat-shared';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AttachmentCanvasContent } from '../../../models/attachment-canvas';
 import {
@@ -22,15 +23,30 @@ vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
 });
 
 vi.mock('react-json-view-lite', () => ({
-  JsonView: ({ data }: { data: object }) => (
-    <section aria-label="json-viewer">{JSON.stringify(data)}</section>
+  JsonView: ({
+    data,
+    style,
+  }: {
+    data: object;
+    style?: { label?: string; clickableLabel?: string };
+  }) => (
+    <section
+      aria-label="json-viewer"
+      data-label-class-name={style?.label}
+      data-clickable-label-class-name={style?.clickableLabel}
+    >
+      {JSON.stringify(data)}
+    </section>
   ),
   defaultStyles: {},
 }));
 
 const visualizerSubscriptions = new Map<string, (payload: unknown) => void>();
 
-vi.mock('@epam/ai-dial-visualizer-connector', () => ({
+vi.mock('@epam/ai-dial-visualizer-connector', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('@epam/ai-dial-visualizer-connector')
+  >()),
   VisualizerConnector: vi.fn().mockImplementation(function () {
     return {
       ready: vi.fn().mockReturnValue(new Promise(() => undefined)),
@@ -48,13 +64,22 @@ interface PdfContentMockProps {
   url: string;
   configurePdfWorker?: () => void | Promise<void>;
   selectedPageNumber?: number;
+  onLoadError?: (url: string) => void;
 }
 
-vi.mock('../../PdfContent/PdfContent', () => ({
-  PdfContent: vi.fn(({ url }: PdfContentMockProps) => (
-    <section aria-label="pdf-content">{url}</section>
-  )),
-}));
+const pdfMounts = vi.hoisted(() => ({ onMount: vi.fn() }));
+
+vi.mock('../../PdfContent/PdfContent', async () => {
+  const { useEffect } = await import('react');
+  return {
+    PdfContent: vi.fn(({ url }: PdfContentMockProps) => {
+      useEffect(() => {
+        pdfMounts.onMount();
+      }, []);
+      return <section aria-label="pdf-content">{url}</section>;
+    }),
+  };
+});
 
 vi.mock('../../OoxmlContent/OoxmlContent', () => ({
   OoxmlContent: ({
@@ -98,6 +123,24 @@ describe('AttachmentCanvasBody', () => {
     );
     expect(screen.queryByText('ignored')).toBeNull();
     expect(screen.getByRole('status')).toBeTruthy();
+  });
+
+  it('names the isLoading spinner with labels.loadingLabel, defaulting to "Loading…"', () => {
+    const content: AttachmentCanvasContent = {
+      type: AttachmentContentType.PlainText,
+      text: 'ignored',
+    };
+    const { rerender } = renderBody(content, { isLoading: true });
+    expect(screen.getByRole('img', { name: 'Loading…' })).toBeTruthy();
+
+    rerender(
+      <AttachmentCanvasBody
+        content={content}
+        isLoading
+        labels={{ loadingLabel: 'Chargement…' }}
+      />,
+    );
+    expect(screen.getByRole('img', { name: 'Chargement…' })).toBeTruthy();
   });
 
   it('renders PlainText content', () => {
@@ -157,6 +200,18 @@ describe('AttachmentCanvasBody', () => {
     expect(container.querySelector('.overflow-hidden')).toBeNull();
   });
 
+  it('keeps padding off the Markdown scroller so a code block header pins to its very top', () => {
+    const { container } = renderBody({
+      type: AttachmentContentType.Markdown,
+      text: '# Title',
+    });
+
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- the unlabeled scroller; padding on it would offset sticky headers
+    const scroller = container.querySelector('.overflow-auto');
+    expect(scroller?.className).not.toMatch(/\bp-4\b/);
+    expect(scroller?.firstElementChild?.className).toContain('p-4');
+  });
+
   it.each([
     AttachmentContentType.Markdown,
     AttachmentContentType.MarkdownTable,
@@ -196,6 +251,49 @@ describe('AttachmentCanvasBody', () => {
       value: { key: 'value' },
     });
     expect(screen.getByRole('region', { name: 'json-viewer' })).toBeTruthy();
+  });
+
+  it('sets JSON keys in the semibold code step unless the host overrides the viewer typography', () => {
+    const content = {
+      type: AttachmentContentType.Json as const,
+      value: { key: 'value' },
+    };
+    const view = renderBody(content);
+    const viewer = screen.getByRole('region', { name: 'json-viewer' });
+    expect(viewer.getAttribute('data-label-class-name')).toContain(
+      'dial-code-semi-text',
+    );
+    expect(viewer.getAttribute('data-clickable-label-class-name')).toContain(
+      'dial-code-semi-text',
+    );
+    expect(viewer.getAttribute('data-label-class-name')).not.toContain(
+      'font-semibold',
+    );
+
+    view.unmount();
+    const { unmount } = renderBody(content, {
+      styles: { typography: { jsonClassName: 'dial-tiny-code-text' } },
+    });
+    expect(
+      screen
+        .getByRole('region', { name: 'json-viewer' })
+        .getAttribute('data-label-class-name'),
+    ).not.toContain('dial-code-semi-text');
+
+    unmount();
+    renderBody(content, {
+      styles: {
+        typography: {
+          jsonClassName: 'dial-tiny-code-text',
+          jsonLabelClassName: 'dial-tiny-code-semi-text',
+        },
+      },
+    });
+    expect(
+      screen
+        .getByRole('region', { name: 'json-viewer' })
+        .getAttribute('data-label-class-name'),
+    ).toContain('dial-tiny-code-semi-text');
   });
 
   it('renders plain code content when no language is set', () => {
@@ -265,6 +363,48 @@ describe('AttachmentCanvasBody', () => {
     await screen.findByRole('region', { name: 'pdf-content' });
     const [props] = vi.mocked(PdfContent).mock.calls[0];
     expect(props.selectedPageNumber).toBeUndefined();
+  });
+
+  it('remounts PdfContent when the same PDF URL is reopened after its load failed', async () => {
+    const { rerender } = renderBody({
+      type: AttachmentContentType.Pdf,
+      url: 'https://example.com/doc.pdf',
+    });
+    await screen.findByRole('region', { name: 'pdf-content' });
+    expect(pdfMounts.onMount).toHaveBeenCalledOnce();
+
+    const [props] = vi.mocked(PdfContent).mock.calls[0];
+    act(() => props.onLoadError?.('https://example.com/doc.pdf'));
+    rerender(
+      <AttachmentCanvasBody
+        content={{
+          type: AttachmentContentType.Pdf,
+          url: 'https://example.com/doc.pdf',
+          page: 3,
+        }}
+      />,
+    );
+    await screen.findByRole('region', { name: 'pdf-content' });
+    expect(pdfMounts.onMount).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps PdfContent mounted when the same PDF URL is reopened after a successful load', async () => {
+    const { rerender } = renderBody({
+      type: AttachmentContentType.Pdf,
+      url: 'https://example.com/doc.pdf',
+    });
+    await screen.findByRole('region', { name: 'pdf-content' });
+    rerender(
+      <AttachmentCanvasBody
+        content={{
+          type: AttachmentContentType.Pdf,
+          url: 'https://example.com/doc.pdf',
+          page: 3,
+        }}
+      />,
+    );
+    await screen.findByRole('region', { name: 'pdf-content' });
+    expect(pdfMounts.onMount).toHaveBeenCalledOnce();
   });
 
   it("announces the pdfContentLoadingLabel while PdfContent's dynamic import is pending", async () => {
@@ -426,7 +566,7 @@ describe('AttachmentCanvasBody', () => {
       layout: { themeId: 'light' },
       visualizerName: 'my-viz',
     });
-    expect(screen.getByRole('status')).toBeTruthy();
+    expect(screen.getAllByRole('status').length).toBeGreaterThan(0);
   });
 
   it.each([
@@ -484,6 +624,39 @@ describe('AttachmentCanvasBody', () => {
       errorType: AttachmentErrorType.LoadFailed,
     });
     expect(screen.getByText('Failed to load file')).toBeTruthy();
+  });
+
+  it('offers Retry under a LoadFailed error when onRetry is given', async () => {
+    const onRetry = vi.fn();
+    renderBody(
+      {
+        type: AttachmentContentType.Error,
+        errorType: AttachmentErrorType.LoadFailed,
+      },
+      { onRetry, labels: { loadErrorRetryLabel: 'Try again' } },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it('offers no Retry without onRetry or for a Forbidden error', () => {
+    const { unmount } = renderBody({
+      type: AttachmentContentType.Error,
+      errorType: AttachmentErrorType.LoadFailed,
+    });
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    unmount();
+
+    renderBody(
+      {
+        type: AttachmentContentType.Error,
+        errorType: AttachmentErrorType.Forbidden,
+      },
+      { onRetry: vi.fn() },
+    );
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
   it('renders the Forbidden error message', () => {

@@ -1,6 +1,4 @@
-import { type CatalogItem } from '@epam/ai-dial-catalog';
 import { useShareLink } from '@epam/ai-dial-chat-hooks';
-import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { ShareLinkAccess, SharePopover } from '@epam/ai-dial-share';
 import type { FC } from 'react';
 import { memo } from 'react';
@@ -11,26 +9,20 @@ import {
   ShareI18nKeys,
 } from '../../constants/translation-keys';
 import { shareApi } from '../../server-api/api-client';
-
-/*
- * Agent-tab entities (Agent + Application, both shown under the "Agents"
- * catalog tab — see libs/catalog/src/utils/catalog-tabs.ts), Skill, Toolset,
- * and Prompt support edit access. Model can only ever be shared view-only, so
- * its access control is a static label, not a dropdown.
- */
-const EDITABLE_ACCESS_TYPES = new Set<CatalogEntityType>([
-  CatalogEntityType.Agent,
-  CatalogEntityType.Prompt,
-  CatalogEntityType.Skill,
-  CatalogEntityType.Toolset,
-]);
+import { formatShareExpiryNote } from '../../utils/share';
 
 /** Props for `SharePopoverContainer`. */
 interface Props {
-  /** The catalog item being shared. */
-  item: CatalogItem;
+  /** DIAL Core id of the resource being shared. */
+  itemId: string;
+  /** Whether the link may grant edit access; otherwise it is view-only and the access control is a static label. */
+  canEditAccess: boolean;
   /** Whether the item being shared is a QuickApp; shows the nested-items warning note when true. */
   isQuickApp?: boolean;
+  /** Replaces the default deployment-worded view note, e.g. with a project's own wording. */
+  visibilityNote?: string;
+  /** Replaces the default deployment-worded note shown while edit access is selected. */
+  visibilityNoteEdit?: string;
   /** Called when the popover should close. */
   onClose: () => void;
 }
@@ -41,13 +33,15 @@ interface Props {
  * receives as flat props.
  */
 const SharePopoverContainer: FC<Props> = ({
-  item,
+  itemId,
+  canEditAccess,
   isQuickApp = false,
+  visibilityNote,
+  visibilityNoteEdit,
   onClose,
 }) => {
   const { t } = useTranslation();
-  const { data, isLoading, error, setAccess } = useShareLink(shareApi, item.id);
-  const canEditAccess = EDITABLE_ACCESS_TYPES.has(item.type);
+  const { data, isLoading, error, setAccess } = useShareLink(shareApi, itemId);
 
   return (
     <SharePopover
@@ -59,7 +53,7 @@ const SharePopoverContainer: FC<Props> = ({
       onAccessChange={setAccess}
       onClose={onClose}
       labels={{
-        title: t(ShareI18nKeys.Title),
+        title: t(ButtonsI18nKeys.Share),
         qrButtonLabel: t(ShareI18nKeys.QrButtonLabel),
         linkLabel: t(ButtonsI18nKeys.Link),
         anyoneWithLinkTitle: t(ShareI18nKeys.AnyoneWithLinkTitle),
@@ -67,18 +61,16 @@ const SharePopoverContainer: FC<Props> = ({
         accessAriaLabel: t(ShareI18nKeys.AccessAriaLabel),
         accessViewLabel: t(BasicI18nKeys.CanView),
         accessEditLabel: t(BasicI18nKeys.CanEdit),
-        visibilityNote: t(ShareI18nKeys.VisibilityNote),
-        visibilityNoteEdit: t(ShareI18nKeys.VisibilityNoteEdit),
+        visibilityNote: visibilityNote ?? t(ShareI18nKeys.VisibilityNote),
+        visibilityNoteEdit:
+          visibilityNoteEdit ?? t(ShareI18nKeys.VisibilityNoteEdit),
         nestedItemsNote: isQuickApp
           ? t(ShareI18nKeys.NestedItemsNote)
           : undefined,
         copyButtonLabel: t(ButtonsI18nKeys.Copy),
         copiedButtonLabel: t(ShareI18nKeys.CopiedButtonLabel),
         linkAriaLabel: t(ShareI18nKeys.LinkAriaLabel),
-        expiryNote:
-          data?.expiresInDays != null
-            ? t(ShareI18nKeys.ExpiryNote, { days: data.expiresInDays })
-            : undefined,
+        expiryNote: formatShareExpiryNote(data, t),
         qrCodeAriaLabel: t(ShareI18nKeys.QrCodeAriaLabel),
         qrCopyButtonLabel: t(ButtonsI18nKeys.Copy),
         qrCopiedButtonLabel: t(ShareI18nKeys.CopiedButtonLabel),

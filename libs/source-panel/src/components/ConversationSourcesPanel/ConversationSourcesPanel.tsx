@@ -9,6 +9,8 @@ import {
   NoDataContent,
   Search,
   mergeClasses,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import { IconDownload } from '@tabler/icons-react';
 import {
@@ -38,6 +40,7 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
   onSourceClick,
   onDownloadAll,
   isMobile,
+  isBoundedOverlay = false,
   defaultWidth,
   minWidth,
   maxWidth,
@@ -107,7 +110,10 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
   if (isGloballyEmpty) {
     bodyContent = (
       <div className="flex h-full items-center justify-center">
-        <NoDataContent title={labels.noDataLabel} />
+        <NoDataContent
+          title={labels.noDataLabel}
+          description={labels.noDataDescription}
+        />
       </div>
     );
   } else {
@@ -115,7 +121,10 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
       <>
         {additionalSections}
         {isNoResults ? (
-          <PanelNoResults label={labels.noResultsLabel} />
+          <PanelNoResults
+            label={labels.noResultsLabel}
+            description={labels.noResultsDescription}
+          />
         ) : (
           <>
             <FilesSection
@@ -123,6 +132,7 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
               title={labels.uploadedSectionTitle}
               searchQuery={searchQuery}
               titleClassName={styles?.typography?.sectionTitleClassName}
+              className={styles?.sectionClassName}
               onAttachmentClick={onAttachmentClick}
               attachmentClickLabel={labels.attachmentClickLabel}
             />
@@ -131,6 +141,7 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
               title={labels.generatedSectionTitle}
               searchQuery={searchQuery}
               titleClassName={styles?.typography?.sectionTitleClassName}
+              className={styles?.sectionClassName}
               onAttachmentClick={onAttachmentClick}
               attachmentClickLabel={labels.attachmentClickLabel}
             />
@@ -140,6 +151,7 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
               searchQuery={searchQuery}
               typography={styles?.typography}
               colors={styles?.colors}
+              className={styles?.sectionClassName}
               copyLabel={labels.copySourceLabel}
               copiedLabel={labels.sourceCopiedLabel}
               codeBlockCopyLabel={labels.codeBlockCopyLabel}
@@ -158,10 +170,11 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
   return (
     <SidebarPanel
       isOpen={isOpen}
+      isBoundedOverlay={isBoundedOverlay}
       orientation={SidebarOrientation.Right}
       styles={{
         className: mergeClasses(
-          isMobile && isOpen && 'w-full',
+          isMobile && !isBoundedOverlay && isOpen && 'w-full',
           SOURCE_PANEL_CLASS.panel,
         ),
         bodyClassName: 'flex flex-col overflow-hidden p-0',
@@ -169,7 +182,7 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
       labels={labels}
       title={title}
       onClose={onClose}
-      resizable={!isMobile}
+      resizable={!isMobile || isBoundedOverlay}
       defaultWidth={defaultWidth}
       minWidth={minWidth}
       maxWidth={maxWidth}
@@ -197,9 +210,9 @@ const ConversationSourcesPanel: FC<ConversationSourcesPanelProps> = ({
           />
         </div>
       )}
-      <span role="status" aria-live="polite" className="sr-only">
+      <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
         {isNoResults ? labels.noResultsLabel : ''}
-      </span>
+      </LiveRegion>
       <div className="flex-1 overflow-y-auto p-4 pt-0">{bodyContent}</div>
     </SidebarPanel>
   );

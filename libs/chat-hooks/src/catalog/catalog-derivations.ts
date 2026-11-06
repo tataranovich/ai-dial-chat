@@ -1,14 +1,19 @@
-import type { CatalogItem } from '@epam/ai-dial-catalog';
+import { type CatalogItem, getCatalogItemTabs } from '@epam/ai-dial-catalog';
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 
 /**
- * Filters catalog items to those whose type is in `visibleTypes`.
+ * Filters catalog items to those listed under at least one tab in `visibleTypes` (see `getCatalogItemTabs`) and whose `supportsChat` is not `false`.
  * Call only when selector mode is active; otherwise pass through the original array.
  */
 export const filterCatalogItemsBySelector = (
   items: readonly CatalogItem[],
   visibleTypes: ReadonlySet<CatalogEntityType>,
-): CatalogItem[] => items.filter((item) => visibleTypes.has(item.type));
+): CatalogItem[] =>
+  items.filter(
+    (item) =>
+      getCatalogItemTabs(item).some((tab) => visibleTypes.has(tab)) &&
+      item.supportsChat !== false,
+  );
 
 /**
  * Filters out items owned by the current user when `hideOwned` is true.
@@ -29,14 +34,14 @@ export const deriveFavoriteItems = (
   items.filter((item) => item.isUserFavorite && !item.isHidden);
 
 /**
- * Returns the subset of `tabOrder` entries whose entity type is present in
- * `items`, preserving tab order.
+ * Returns the subset of `tabOrder` entries that at least one item in `items`
+ * is listed under (see `getCatalogItemTabs`), preserving tab order.
  */
 export const deriveAvailableTabIds = <T extends CatalogEntityType>(
   items: readonly CatalogItem[],
   tabOrder: readonly T[],
 ): T[] => {
-  const presentTypes = new Set(items.map((item) => item.type));
+  const presentTypes = new Set(items.flatMap(getCatalogItemTabs));
   return tabOrder.filter((type) => presentTypes.has(type));
 };
 
@@ -53,3 +58,20 @@ export const reconcileFilterTopics = (
     Array.from(persistedTopics).filter((topic) => availableTopics.has(topic)),
   );
 };
+
+/*
+ * Agent-tab entities (Agent + Application, both shown under the "Agents"
+ * catalog tab — see libs/catalog/src/utils/catalog-tabs.ts), Skill, Toolset,
+ * and Prompt support edit access. Model can only ever be shared view-only, so
+ * its access control is a static label, not a dropdown.
+ */
+const EDITABLE_ACCESS_TYPES = new Set<CatalogEntityType>([
+  CatalogEntityType.Agent,
+  CatalogEntityType.Prompt,
+  CatalogEntityType.Skill,
+  CatalogEntityType.Toolset,
+]);
+
+/** Whether a share link for a catalog entity of this type may grant edit access. */
+export const canEditShareAccess = (type: CatalogEntityType): boolean =>
+  EDITABLE_ACCESS_TYPES.has(type);

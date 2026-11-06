@@ -5,6 +5,9 @@ const pad = (value: number): string => String(value).padStart(2, '0');
 /** 24-hour `HH:mm` time-of-day, matching the `Calendar` time control's value shape. */
 export const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
+/** Separator between the date and time parts of a `datetime-local` value. */
+export const DATETIME_LOCAL_SEPARATOR = 'T';
+
 /** Converts the `datetime-local`-style `values.runAt` string to a `Date` for `Calendar`'s controlled value, or `null` when empty. */
 export const runAtToCalendarValue = (runAt: string | undefined): Date | null =>
   runAt ? new Date(runAt) : null;
@@ -18,7 +21,7 @@ export const calendarValueToRunAt = (value: CalendarValue): string => {
   if (Number.isNaN(date.getTime())) {
     return '';
   }
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}${DATETIME_LOCAL_SEPARATOR}${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
 /*
@@ -27,7 +30,7 @@ export const calendarValueToRunAt = (value: CalendarValue): string => {
  * as UTC midnight per the ECMA-262 date-time string format — which would
  * shift the displayed calendar day by one in any timezone behind UTC.
  */
-/** Converts a `YYYY-MM-DD` date-only string (`values.startDate`/`endDate`) to a `Date` for `Calendar`'s controlled value, or `null` when empty. */
+/** Converts a date-only `YYYY-MM-DD` window-boundary value to a `Date` for `Calendar`'s controlled value, or `null` when empty. */
 export const dateValueToCalendarValue = (
   dateValue: string | undefined,
 ): Date | null => {

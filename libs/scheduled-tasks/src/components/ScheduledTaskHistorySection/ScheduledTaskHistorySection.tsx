@@ -1,5 +1,10 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { GhostButton } from '@epam/ai-dial-ui-kit';
+import {
+  GhostButton,
+  LiveRegion,
+  LiveRegionElement,
+  LiveRegionPoliteness,
+} from '@epam/ai-dial-ui-kit';
 import { type CSSProperties, type FC } from 'react';
 import type { ScheduledTaskHistorySectionProps } from '../../models/scheduled-task-history-section-props';
 import { ScheduledTaskHistorySectionVariant } from '../../types/scheduled-task-history-section-variant';
@@ -29,6 +34,8 @@ export const ScheduledTaskHistorySection: FC<
   onLoadMore,
   onRunClick,
   runTimestampClassName = 'dial-small-text',
+  runTimestampUnreadClassName = 'dial-small-semi-text',
+  errorDetailsClassName = 'dial-tiny-text',
   sectionTitleClassName = 'dial-body-semi-text',
   colors,
   styles: historyStyles,
@@ -46,11 +53,11 @@ export const ScheduledTaskHistorySection: FC<
         styles.historyCard,
       )
     : 'pt-2';
+  const loadMoreErrorText =
+    labels.historyLoadMoreErrorLabel ?? labels.historyErrorLabel;
   const footer = loadMoreError ? (
     <li className={footerClassName}>
-      <p role="alert">
-        {labels.historyLoadMoreErrorLabel ?? labels.historyErrorLabel}
-      </p>
+      <p>{loadMoreErrorText}</p>
       {onRetryLoadMore && (
         <GhostButton
           label={labels.historyRetryLabel}
@@ -75,10 +82,21 @@ export const ScheduledTaskHistorySection: FC<
     </p>
   ) : undefined;
 
+  /* The failed page is reported in the list footer, which mounts with the error; this region is mounted first so the failure is announced. */
+  const loadMoreErrorAnnouncement = (
+    <LiveRegion
+      politeness={LiveRegionPoliteness.Assertive}
+      visuallyHidden
+      as={LiveRegionElement.Span}
+    >
+      {loadMoreError ? loadMoreErrorText : ''}
+    </LiveRegion>
+  );
+
   const loadingMoreAnnouncement = labels.historyLoadingMoreLabel ? (
-    <span role="status" aria-live="polite" className="sr-only">
+    <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
       {isLoadingMore ? labels.historyLoadingMoreLabel : ''}
-    </span>
+    </LiveRegion>
   ) : undefined;
 
   const runList = (
@@ -93,19 +111,26 @@ export const ScheduledTaskHistorySection: FC<
       labels={{
         historyTitle: labels.historyTitle,
         emptyLabel: labels.historyEmptyLabel,
+        emptyDescription: labels.historyEmptyDescription,
         errorLabel: labels.historyErrorLabel,
         retryLabel: labels.historyRetryLabel,
         runStatusLabels: labels.runStatusLabels,
         unreadIndicatorLabel: labels.unreadIndicatorLabel,
+        openConversationLabel: labels.openConversationLabel,
       }}
       footer={footer}
       styles={{
-        typography: { runTimestampClassName },
+        typography: {
+          runTimestampClassName,
+          runTimestampUnreadClassName,
+          errorDetailsClassName,
+        },
         colors: historyStyles?.colors ?? colors,
         rowMinHeight: historyStyles?.rowMinHeight,
         rowHoverBackground: historyStyles?.rowHoverBackground,
         rowFocusBackground: historyStyles?.rowFocusBackground,
         rowFocusOutline: historyStyles?.rowFocusOutline,
+        rowExpandedBackground: historyStyles?.rowExpandedBackground,
       }}
     />
   );
@@ -114,7 +139,7 @@ export const ScheduledTaskHistorySection: FC<
     return (
       <div
         className={mergeClasses(
-          'flex max-h-[var(--st-history-max-height,70vh)] w-full max-w-full flex-col overflow-y-auto rounded-xl shadow-md',
+          'flex max-h-(--st-history-max-height,70vh) w-full max-w-full flex-col overflow-y-auto rounded-xl shadow-md',
           styles.historyCard,
           styles.cardLayout,
         )}
@@ -126,15 +151,26 @@ export const ScheduledTaskHistorySection: FC<
       >
         <div
           className={mergeClasses(
-            'sticky top-0 z-10 flex flex-col gap-4 rounded-t-xl px-6 pb-2 pt-5',
+            'sticky top-0 z-10 flex flex-col gap-4 rounded-t-xl px-6 pt-5 pb-2',
             styles.historyCard,
           )}
         >
           <h2 className={sectionTitleClassName}>{labels.historyTitle}</h2>
           {nextRun}
           {loadingMoreAnnouncement}
+          {loadMoreErrorAnnouncement}
         </div>
-        <div className="flex flex-1 flex-col gap-4 px-6 pb-2">{runList}</div>
+        {/*
+         * Rows bleed 12px (their pill padding) into the card's 24px padding,
+         * so each status icon lines up with the "History" heading and the
+         * time starts 44px from the card edge (24 + 16px icon + 4px gap).
+         */}
+        <div
+          className="flex flex-1 flex-col gap-4 px-6 pb-2"
+          style={{ '--strhl-row-bleed': '12px' } as CSSProperties}
+        >
+          {runList}
+        </div>
       </div>
     );
   }
@@ -143,6 +179,7 @@ export const ScheduledTaskHistorySection: FC<
     <div className="flex flex-col gap-4">
       {nextRun}
       {loadingMoreAnnouncement}
+      {loadMoreErrorAnnouncement}
       {runList}
     </div>
   );

@@ -83,14 +83,38 @@ export const joinSkillPath = (
   relativePath: string,
 ): string => (folderPath ? `${folderPath}/${relativePath}` : relativePath);
 
-/** The folder containing `path`, or `''` for a top-level entry. */
-export const parentSkillPath = (path: string): string =>
-  splitParentPath(path) ?? '';
+/**
+ * Returns the first `name (n).ext` sibling of `path` that `takenPaths` does not
+ * hold, numbering from 1 the way the DIAL file manager names a duplicate.
+ */
+export const buildDuplicatePath = (
+  path: string,
+  takenPaths: ReadonlySet<string>,
+): string => {
+  const separatorIndex = path.lastIndexOf('/');
+  const folderPath = separatorIndex === -1 ? '' : path.slice(0, separatorIndex);
+  const fileName = path.slice(separatorIndex + 1);
+  // A leading dot starts a hidden name (`.env`), not an extension.
+  const extensionIndex = fileName.lastIndexOf('.');
+  const hasExtension = extensionIndex > 0;
+  const baseName = hasExtension ? fileName.slice(0, extensionIndex) : fileName;
+  const extension = hasExtension ? fileName.slice(extensionIndex) : '';
+  let index = 1;
+  let candidate = joinSkillPath(
+    folderPath,
+    `${baseName} (${index})${extension}`,
+  );
+  while (takenPaths.has(candidate)) {
+    index += 1;
+    candidate = joinSkillPath(folderPath, `${baseName} (${index})${extension}`);
+  }
+  return candidate;
+};
 
 /**
  * Resolves the folder an add action targets (`''` is the skill root). The
  * header adds into the selected folder, or the root when a file (or nothing)
- * is selected; "Add child" adds into the node; "Add sibling" adds next to it.
+ * is selected; a folder's own menu entries add into it.
  */
 export const resolveAddTarget = (
   source: SkillAddSource,
@@ -100,8 +124,6 @@ export const resolveAddTarget = (
   switch (source) {
     case SkillAddSource.Child:
       return node.path;
-    case SkillAddSource.Sibling:
-      return parentSkillPath(node.path);
     case SkillAddSource.Header:
       return node.kind === SkillFileNodeKind.Folder ? node.path : '';
   }
@@ -114,16 +136,8 @@ export const resolveAddTarget = (
 export const listChildNames = (
   nodes: SkillFileTreeNode[],
   folderPath: string,
-): Set<string> => {
-  const prefix = folderPath ? `${folderPath}/` : '';
-  const names = new Set<string>();
-  for (const { path } of nodes) {
-    if (!path.startsWith(prefix) || path === folderPath) continue;
-    const rest = path.slice(prefix.length);
-    names.add(rest.split('/')[0]);
-  }
-  return names;
-};
+): Set<string> =>
+  new Set(listFolderEntries(nodes, folderPath).map((entry) => entry.name));
 
 /** Messages `validateFolderName` returns, resolved from the editor's labels. */
 export interface FolderNameMessages {
@@ -152,4 +166,69 @@ export const validateFolderName = (
   }
   if (siblingNames.has(name)) return messages.duplicate;
   return undefined;
+};
+
+/** One direct child of a folder, as listed in the folder preview. */
+export interface SkillFolderEntry {
+  /** Relative path from the skill root. */
+  path: string;
+  /** Final path segment. */
+  name: string;
+  /** Whether the child is a file or a folder. */
+  kind: SkillFileNodeKind;
+  /** Number of direct children, for a folder; `0` for a file. */
+  childCount: number;
+}
+
+/** Lists the direct children of `folderPath`, folders first, each group sorted by name; implicit folders implied by deeper paths are included. */
+export const listFolderEntries = (
+  nodes: SkillFileTreeNode[],
+  folderPath: string,
+): SkillFolderEntry[] => {
+  const prefix = folderPath ? `${folderPath}/` : '';
+  const entries = new Map<string, SkillFolderEntry>();
+  const childPaths = new Map<string, Set<string>>();
+
+  for (const node of nodes) {
+    if (!node.path.startsWith(prefix) || node.path === folderPath) continue;
+    const rest = node.path.slice(prefix.length);
+    const separatorIndex = rest.indexOf('/');
+    const isDirect = separatorIndex === -1;
+    const name = isDirect ? rest : rest.slice(0, separatorIndex);
+    const path = `${prefix}${name}`;
+    const kind =
+      isDirect && node.kind === SkillFileNodeKind.File
+        ? SkillFileNodeKind.File
+        : SkillFileNodeKind.Folder;
+    if (!entries.has(path)) {
+      entries.set(path, { path, name, kind, childCount: 0 });
+    }
+    if (!isDirect) {
+      const grandchildStart = separatorIndex + 1;
+      const grandchildEnd = rest.indexOf('/', grandchildStart);
+      const grandchild = rest.slice(
+        grandchildStart,
+        grandchildEnd === -1 ? undefined : grandchildEnd,
+      );
+      childPaths.set(path, (childPaths.get(path) ?? new Set()).add(grandchild));
+    }
+  }
+
+  return [...entries.values()]
+    .map((entry) => ({
+      ...entry,
+      childCount: childPaths.get(entry.path)?.size ?? 0,
+    }))
+    .sort((a, b) => {
+      if (a.kind !== b.kind) {
+        return a.kind === SkillFileNodeKind.Folder ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+};
+
+/** Returns every ancestor folder path of `path`, outermost first (`a/b/c.md` gives `a`, `a/b`). */
+export const listAncestorPaths = (path: string): string[] => {
+  const segments = path.split('/').slice(0, -1);
+  return segments.map((_, index) => segments.slice(0, index + 1).join('/'));
 };

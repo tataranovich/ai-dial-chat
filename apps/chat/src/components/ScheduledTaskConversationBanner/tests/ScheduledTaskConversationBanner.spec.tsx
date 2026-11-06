@@ -39,20 +39,20 @@ vi.mock('../../../context/ActiveScheduledTaskContext', () => ({
   }),
 }));
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  contextMocks.status = 'task-conversation';
-  contextMocks.scheduleId = 'schedule-1';
-  contextMocks.runId = 'run-1';
-  contextMocks.conversationUpdatedAt = undefined;
-  contextMocks.taskState = 'success';
-  contextMocks.task = { id: 'schedule-1', displayName: 'Weekly digest' } as {
-    displayName: string;
-  };
-  contextMocks.historyItems = [];
-});
-
 describe('ScheduledTaskConversationBanner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    contextMocks.status = 'task-conversation';
+    contextMocks.scheduleId = 'schedule-1';
+    contextMocks.runId = 'run-1';
+    contextMocks.conversationUpdatedAt = undefined;
+    contextMocks.taskState = 'success';
+    contextMocks.task = { id: 'schedule-1', displayName: 'Weekly digest' } as {
+      displayName: string;
+    };
+    contextMocks.historyItems = [];
+  });
+
   it('shows only the task name when neither the matching run nor the conversation timestamp is available', () => {
     renderBanner();
 
@@ -98,7 +98,9 @@ describe('ScheduledTaskConversationBanner', () => {
 
     renderBanner();
 
-    expect(screen.getByRole('status')).toBeTruthy();
+    expect(
+      screen.getByText('scheduledTasks.conversationBanner.loadingLabel'),
+    ).toBeTruthy();
     expect(screen.queryByText('Weekly digest')).toBeNull();
   });
 
@@ -108,8 +110,24 @@ describe('ScheduledTaskConversationBanner', () => {
 
     renderBanner();
 
-    expect(screen.getByRole('alert')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy();
+    expect(
+      screen.getByText('scheduledTasks.conversationBanner.unavailableLabel'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'buttons.retry' })).toBeTruthy();
+  });
+
+  it('shows the unavailable message without a retry for an unavailable task', () => {
+    contextMocks.taskState = 'unavailable';
+    contextMocks.task = null;
+
+    renderBanner();
+
+    expect(
+      screen.getByText('scheduledTasks.conversationBanner.unavailableLabel'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
   });
 
   it('renders the Task details link targeting the task detail route', () => {

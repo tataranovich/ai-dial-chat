@@ -1,17 +1,27 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduledTaskDetailsSummary } from '../ScheduledTaskDetailsSummary';
+import styles from '../ScheduledTaskDetailsSummary.module.scss';
 
+/* Captures every mock-rendered MDMessageViewer's props so label forwarding is assertable. */
+const viewerCalls = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@epam/ai-dial-chat-shared')>();
   return {
     ...actual,
-    MDMessageViewer: ({ content }: { content: string }) => <div>{content}</div>,
+    MDMessageViewer: (props: Record<string, unknown>) => {
+      viewerCalls.push(props);
+      return <div>{props.content as string}</div>;
+    },
   };
 });
 
 describe('ScheduledTaskDetailsSummary', () => {
+  beforeEach(() => {
+    viewerCalls.length = 0;
+  });
+
   it('shows all skill names and URL fallbacks in order, hiding an empty selection', () => {
     const { container, rerender } = render(
       <ScheduledTaskDetailsSummary
@@ -131,5 +141,127 @@ describe('ScheduledTaskDetailsSummary', () => {
 
     expect(screen.queryByRole('button')).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('renders field labels tiny and secondary, values small by default', () => {
+    render(
+      <ScheduledTaskDetailsSummary
+        modelLabel="Model"
+        modelDisplayName="GPT-5.1"
+        skillLabel="Skill"
+        skillDisplayNames={['Translate Text']}
+        instructionsLabel="Instructions"
+        instructionsMarkdown="Do work"
+      />,
+    );
+
+    expect(screen.getByText('Model').className).toContain('dial-tiny-text');
+    expect(screen.getByText('Model').className).toContain(styles.fieldLabel);
+    expect(screen.getByText('GPT-5.1').className).toContain('dial-small-text');
+    expect(screen.getByText('Skill').className).toContain('dial-tiny-text');
+    expect(screen.getByText('Skill').className).toContain(styles.fieldLabel);
+  });
+
+  it('forwards the supplied markdown labels to the default renderer, omitting them otherwise', () => {
+    render(
+      <ScheduledTaskDetailsSummary
+        modelLabel="Model"
+        instructionsLabel="Instructions"
+        instructionsMarkdown="plain instructions"
+      />,
+    );
+    expect(viewerCalls.at(-1)).toMatchObject({ content: 'plain instructions' });
+    expect(viewerCalls.at(-1)?.codeBlockCopyLabel).toBeUndefined();
+
+    render(
+      <ScheduledTaskDetailsSummary
+        modelLabel="Model"
+        instructionsLabel="Instructions"
+        instructionsMarkdown="plain instructions"
+        markdownLabels={{
+          codeBlockCopyLabel: 'Kopiuj',
+          codeBlockCopiedLabel: 'Skopiowano',
+          codeBlockDownloadLabel: 'Pobierz',
+          tableScrollRegionAriaLabel: 'Przewijalna tabela',
+          mathScrollRegionAriaLabel: 'Przewijalny wzór',
+        }}
+      />,
+    );
+    expect(viewerCalls.at(-1)).toMatchObject({
+      codeBlockCopyLabel: 'Kopiuj',
+      codeBlockCopiedLabel: 'Skopiowano',
+      codeBlockDownloadLabel: 'Pobierz',
+      tableScrollRegionAriaLabel: 'Przewijalna tabela',
+      mathScrollRegionAriaLabel: 'Przewijalny wzór',
+    });
+  });
+
+  it('defaults the built-in viewer to the small 14/20 scale and merges a host map over it', () => {
+    render(
+      <ScheduledTaskDetailsSummary
+        modelLabel="Model"
+        instructionsLabel="Instructions"
+        instructionsMarkdown="plain instructions"
+      />,
+    );
+    expect(viewerCalls.at(-1)?.classNames).toMatchObject({
+      p: expect.stringContaining('dial-small-text'),
+      h1: expect.stringContaining('dial-small-semi-text'),
+    });
+
+    render(
+      <ScheduledTaskDetailsSummary
+        modelLabel="Model"
+        instructionsLabel="Instructions"
+        instructionsMarkdown="plain instructions"
+        instructionsClassNames={{ p: 'custom-p' }}
+      />,
+    );
+    expect(viewerCalls.at(-1)?.classNames).toMatchObject({
+      p: 'custom-p',
+      h1: expect.stringContaining('dial-small-semi-text'),
+    });
+  });
+
+  it('takes the built-in viewer type step from the typography styles', () => {
+    render(
+      <ScheduledTaskDetailsSummary
+        modelLabel="Model"
+        instructionsLabel="Instructions"
+        instructionsMarkdown="plain instructions"
+        styles={{
+          typography: {
+            instructionsHeadingClassName: 'custom-heading',
+            instructionsTextClassName: 'custom-text',
+          },
+        }}
+      />,
+    );
+    const classNames = viewerCalls.at(-1)?.classNames as
+      Record<string, string> | undefined;
+    expect(classNames?.h2).toContain('custom-heading');
+    expect(classNames?.h2).not.toContain('dial-small-semi-text');
+    expect(classNames?.ul).toContain('custom-text');
+    expect(classNames?.ul).not.toContain('dial-small-text');
+  });
+
+  it('lets a host override the field label and value classes', () => {
+    render(
+      <ScheduledTaskDetailsSummary
+        modelLabel="Model"
+        instructionsLabel="Instructions"
+        modelDisplayName="GPT-5.1"
+        instructionsMarkdown="Do work"
+        styles={{
+          typography: {
+            fieldLabelClassName: 'custom-label',
+            fieldValueClassName: 'custom-value',
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Model').className).toContain('custom-label');
+    expect(screen.getByText('GPT-5.1').className).toContain('custom-value');
   });
 });

@@ -32,8 +32,9 @@ is enabled; the API key input is rendered only in the "with login" mode.
 
 ### Requirement: OAuth credential fields
 When OAuth auth is selected with config, the system SHALL allow entering client id, client
-secret, authorization endpoint, token endpoint, and scopes, and SHALL require client id and
-client secret before triggering the login, except that client secret is not required when the
+secret, authorization endpoint, token endpoint, scopes, and resource, and SHALL require client id, client
+secret, authorization endpoint, and token endpoint before saving or triggering the login, except
+that client secret is not required when the
 editor was opened to edit a toolset that was already saved with OAuth-with-config credentials
 (i.e. the editor's route carries an existing toolset id) — Core never returns a stored client
 secret, so re-entering it is not required to log in again with the already-stored value. The
@@ -42,9 +43,47 @@ derive from this same "editing an already-saved toolset" state (`isEditMode`, i.
 route `toolsetId`), not from whether the toolset has merely acquired a persisted draft id during
 the current create flow (e.g. from an earlier "Log in" persist).
 
+The Resource field carries the RFC 8707 `resource` indicator (`ToolsetAuthFormData.resource` in
+`libs/toolset-editor/src/models/toolset-form.ts`). It SHALL be rendered by `AuthSection` only for
+OAuth with config (`WithLogin.WithConfig`), after Scopes, and SHALL NOT be rendered for "With
+Login" (dynamic registration), API Key, or None — DIAL Core rejects a supplied `resource` for those.
+It is optional. A non-blank value SHALL be an absolute URI (a scheme, `:` and at least one more
+character; it parses with `new URL`) with no `#fragment`, no whitespace and at most 2048 characters
+— the same rule chat-api's `OAUTH_RESOURCE_PATTERN` and length cap enforce, so the editor never lets
+through a value the save would reject; otherwise the field shows "Enter an absolute URI without a fragment"
+and blocks the save and the login, exactly like the endpoint errors. The check SHALL live in
+`libs/toolset-editor/src/utils/toolsets.ts` and be used both by the `ToolsetEditor` error surfacing
+and by `isToolsetAuthValid`. The field, its label, placeholder and error SHALL follow the same
+`Input` wiring as the token endpoint (`labelProps`, `error`, `invalid`, `disabled` while saving), so
+the error is announced through the control's `aria-describedby`; it adds no new keyboard handling.
+Direction impact: none beyond the existing form column — the value is a URI and inherits the form's
+logical layout.
+
+Labels, all optional with English defaults in the lib and filled with `t()` by `apps/chat`
+(`ToolsetApplicationEditor`):
+
+| Lib prop                                      | Default                                   | i18n key                                     |
+| --------------------------------------------- | ----------------------------------------- | -------------------------------------------- |
+| `AuthSectionLabels.resourceLabel`             | `'Resource'`                              | `toolsetEditor.auth.resourceLabel`           |
+| `AuthSectionLabels.resourcePlaceholder`       | `'Enter resource URI'`                    | `toolsetEditor.auth.resourcePlaceholder`     |
+| `ToolsetEditorValidationLabels.resourceInvalid` | `'Enter an absolute URI without a fragment'` | `toolsetEditor.auth.resourceInvalid`      |
+
+The host maps the field both ways in `apps/chat/src/utils/toolsets.ts`: `authSettingsDtoToForm`
+reads `authSettings.resource` (empty string when absent), and `formToToolsetBody` sends it only for
+OAuth with config — the trimmed value when non-blank; when blank, `''` on update (DIAL Core clears
+the stored value) and nothing on create (DIAL Core may resolve it from the server's Protected
+Resource Metadata). For every other auth type and login mode the body carries no `resource`.
+
 #### Scenario: Missing OAuth client credentials
 - **WHEN** OAuth auth with config is selected and client id or client secret is empty
 - **THEN** the system shows required errors for the missing field(s) and blocks the login
+
+#### Scenario: Missing OAuth endpoints
+- **WHEN** OAuth auth with config is selected and the authorization endpoint or token endpoint is
+  empty
+- **THEN** both endpoint inputs are marked required, the system shows "Authorization endpoint is
+  required" / "Token endpoint is required" for the missing field(s), and blocks the save and the
+  login; a non-empty value that is not an `http(s)` URL shows "Enter a valid http(s) URL" instead
 
 #### Scenario: Client secret required while creating a new toolset
 - **WHEN** a user is creating a new toolset (the editor was not opened with an existing toolset
@@ -57,8 +96,44 @@ the current create flow (e.g. from an earlier "Log in" persist).
 - **WHEN** a user opens the editor to edit a toolset that was already saved with OAuth
   with-login-&-config credentials (the editor's route carries that toolset's id)
 - **THEN** the Client Secret field is not marked required and the Log In button can become
-  enabled without a client secret value, provided the other required fields (client id, valid
-  endpoints) are filled in
+  enabled without a client secret value, provided the other required fields (client id,
+  authorization endpoint, token endpoint) are filled in with valid values
+
+#### Scenario: Resource field shown only for static registration
+- **WHEN** OAuth is selected with "With Login & Config"
+- **THEN** a Resource input is rendered after Scopes, without a required marker
+- **WHEN** OAuth is selected with "With Login", or API Key or None is selected
+- **THEN** no Resource input is rendered
+
+#### Scenario: Invalid resource blocks save and login
+- **WHEN** the Resource field holds `mcp.notion.com/mcp` (relative) or
+  `https://mcp.notion.com/mcp#tools` (fragment)
+- **THEN** the field shows "Enter an absolute URI without a fragment", the save is blocked, and the
+  Log In button stays disabled
+
+#### Scenario: Blank resource is valid
+- **WHEN** the Resource field is empty or whitespace only
+- **THEN** no Resource error is shown and the remaining OAuth fields alone decide whether save and
+  login are allowed
+
+#### Scenario: Stored resource round-trips
+- **WHEN** the editor opens a static OAuth toolset whose stored `authSettings.resource` is
+  `https://mcp.notion.com/mcp` and the user saves without touching the field
+- **THEN** the field shows `https://mcp.notion.com/mcp` and the update body carries
+  `authSettings.resource: "https://mcp.notion.com/mcp"`
+
+#### Scenario: Clearing the resource removes it
+- **WHEN** the user clears the Resource field of a saved static OAuth toolset and saves
+- **THEN** the update body carries `authSettings.resource: ""`, not an omitted field
+
+#### Scenario: Blank resource on create is omitted
+- **WHEN** a new static OAuth toolset is created with the Resource field empty
+- **THEN** the create body's `authSettings` has no `resource` key
+
+#### Scenario: Dynamic registration never sends resource
+- **WHEN** a toolset is saved with OAuth "With Login", even if its form state carries a `resource`
+  read from DIAL Core
+- **THEN** the body's `authSettings` has no `resource` key
 
 ### Requirement: Login mode selection
 For API Key and OAuth, the system SHALL offer login-mode radios backed by the `WithLogin` enum
@@ -293,9 +368,17 @@ matching the refresh that already happens on a successful login, so a toolset ca
 badge outside the editor (e.g. in the Catalog) reflects the logged-out status without requiring
 an unrelated navigation or page refresh first.
 
+"Disabling the authentication type selector" here and in the saving requirement below means
+the type cannot be changed: every non-selected segment of the `SegmentedControl` is disabled,
+while the selected segment stays enabled and checked so the current type remains perceivable
+and focusable rather than being rendered as dimmed, disabled content.
+
 #### Scenario: Disabled fields when logged in
 - **WHEN** the loaded toolset is already logged in
-- **THEN** the auth type selector and credential fields are disabled and only Log out is active
+- **THEN** every non-selected auth type segment and the credential fields are disabled and only
+  Log out is active
+- **AND** the selected auth type segment stays enabled and checked, and activating it does not
+  change the authentication type
 
 #### Scenario: Confirm logout
 - **WHEN** a user clicks Log out and confirms the dialog
@@ -323,8 +406,8 @@ between the saving state and authentication-type changes.
 
 #### Scenario: Saving disables auth controls
 - **WHEN** a save is in progress
-- **THEN** the authentication type selector and credential fields are disabled until the
-  save completes
+- **THEN** every non-selected authentication type segment and the credential fields are
+  disabled until the save completes, while the selected segment stays enabled and checked
 
 ### Requirement: QuickApps toolset login relay via postMessage
 
@@ -452,3 +535,64 @@ the login was initiated from the Toolset Editor's Auth section or the Catalog De
   request succeeds
 - **THEN** the system shows a success notification, marks the toolset as logged in, and refetches
   the shared toolset list
+
+### Requirement: Saved OAuth client secret hint in edit mode
+
+When the editor is opened to edit an already-saved toolset (`isEditMode`) with OAuth "Custom login" (`with-config`) selected, and the loaded toolset carries `authSettings.clientSecretHint`, the Client secret input SHALL stay empty and SHALL show the hint masked as six asterisks followed by the hint (e.g. `******d4c6`) as its placeholder, with the caption `Leave empty to keep the saved secret.` as the input's accessible description. The masked value SHALL be shown only while the user has typed no new secret; as soon as the field has a value, the regular placeholder and no "keep" caption apply. The hint SHALL NOT be shown in create mode, on the "Standard login" mode, or for API-key toolsets.
+
+Saving or logging in with the field left empty SHALL send no `clientSecret` (unchanged from the existing `isEditMode` rule of "OAuth credential fields"), so DIAL Core keeps the stored secret. The hint SHALL never be sent as, or in place of, the client secret.
+
+The host maps the hint from `DialToolsetDto.authSettings.clientSecretHint` into `ToolsetAuthFormData.clientSecretHint` in `authSettingsDtoToForm` (`apps/chat/src/utils/toolsets.ts`); `formToToolsetBody` builds `clientSecret` only from `ToolsetAuthFormData.clientSecret`. The caption is localised through the new i18n key `toolsetEditor.auth.clientSecretKeepCaption` (`ToolsetEditorI18nKeys.ClientSecretKeepCaption`), passed by `ToolsetApplicationEditor` as `labels.settings.auth.clientSecretKeepCaption`; the masked placeholder carries no translatable text. RTL impact: none — the masked value is direction-neutral and no directional icon is added. Not gated behind `ENABLED_FEATURES`.
+
+#### Scenario: Editing a toolset with a saved secret shows the masked hint
+
+- **GIVEN** a saved OAuth "Custom login" toolset whose `GET /api/v1/toolsets/{toolsetName}` response has `authSettings.clientSecretHint: "d4c6"`
+- **WHEN** the user opens it in the toolset editor
+- **THEN** the Client secret input is empty, its placeholder is `******d4c6`, and it is described by `Leave empty to keep the saved secret.`
+
+#### Scenario: Leaving the field empty keeps the stored secret
+
+- **GIVEN** the editor shows the masked hint
+- **WHEN** the user saves without typing a client secret
+- **THEN** the `PATCH /api/v1/toolsets/{toolsetName}` body has no `authSettings.clientSecret` and no `clientSecretHint`
+
+#### Scenario: Typing a new secret replaces the hint display
+
+- **GIVEN** the editor shows the masked hint
+- **WHEN** the user types a new client secret
+- **THEN** the hint placeholder and the "keep" caption are no longer shown, and saving sends the typed value as `clientSecret`
+
+#### Scenario: No hint available
+
+- **GIVEN** the loaded toolset has no `authSettings.clientSecretHint`
+- **WHEN** the user opens it in the editor
+- **THEN** the Client secret input renders with the regular `Enter client secret` placeholder and no "keep" caption, exactly as before
+
+### Requirement: Editor OAuth login uses the stored resource
+The toolset editor's OAuth login SHALL build the authorize URL with the same `resource` DIAL Core
+will send on the token exchange (`apps/chat/src/hooks/toolsets/useToolsetEditorOAuthLogin.ts`).
+For "With Login & Config" with a non-blank Resource field, the form value is that value and the
+existing flow is unchanged. When the Resource field is blank, DIAL Core may have resolved a value
+from the server's Protected Resource Metadata during the save, so the hook SHALL open the popup
+synchronously first (as the dynamic-registration branch does), persist the toolset through
+`ensureSaved`, read the stored auth settings through `fetchToolsetAuthSettings`, and navigate the
+popup with the form's settings plus the stored `resource`. It SHALL report only `{ resource }` back
+to the editor in the outcome's `auth`, so the Resource field shows the resolved value — the stored
+settings carry no client secret, so merging all of them would clear the one the user typed. A failed fetch closes the popup and reports
+`ToolsetOAuthLoginStatus.Failed` with the trace id, as the dynamic branch does. The dynamic
+registration branch already navigates with the fetched settings and so carries the stored
+`resource` through the shared authorize-URL builder.
+
+#### Scenario: Blank field, server publishes metadata
+- **WHEN** a user saves a static OAuth toolset for `https://mcp.notion.com/mcp` with the Resource
+  field blank and clicks Log In, and DIAL Core stored `resource: "https://mcp.notion.com/mcp"`
+- **THEN** the popup opens before any network call and is navigated to an authorize URL carrying
+  `resource=https%3A%2F%2Fmcp.notion.com%2Fmcp`, and the Resource field then shows that value
+
+#### Scenario: Filled field skips the extra read
+- **WHEN** the Resource field holds a value and the user clicks Log In
+- **THEN** no stored-settings read happens and the authorize URL carries the form's value
+
+#### Scenario: Stored-settings read fails
+- **WHEN** the Resource field is blank and reading the saved toolset fails
+- **THEN** the popup closes and the editor reports a failed login with the request's trace id

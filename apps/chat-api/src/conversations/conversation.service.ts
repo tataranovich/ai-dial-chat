@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { ScheduledTaskUnreadService } from '../scheduled-task-unread/scheduled-task-unread.service';
-import { ConversationNamingService } from './conversation-naming.service';
+import { ConversationReadStateService } from '../scheduled-task-unread/conversation-read-state.service';
 import { ConversationLifecycleService } from './lifecycle/conversation-lifecycle.service';
 import { ConversationListingService } from './listing/conversation-listing.service';
+import { ConversationTitleStreamService } from './listing/conversation-title-stream.service';
+import { ConversationNamingService } from './naming/conversation-naming.service';
 import { ConversationPersistenceService } from './persistence/conversation-persistence.service';
+import { PublishedFolderAttachmentsService } from './published-folder-attachments.service';
 import { ConversationStreamingService } from './streaming/conversation-streaming.service';
 import {
   buildConversationUrl,
@@ -11,7 +13,7 @@ import {
 } from './utils/conversation.utils';
 
 /*
- * Thin orchestrator for ConversationController. Every method here delegates
+ * Thin orchestrator for the conversations controllers. Every method here delegates
  * to exactly one of the four focused conversation services below — see
  * openspec/changes/archive/2026-08-07-split-conversation-service/design.md for the ownership
  * map and why the split follows this boundary. Pure 1:1 delegates are bound
@@ -26,20 +28,52 @@ export class ConversationService {
     private readonly lifecycleService: ConversationLifecycleService,
     private readonly streamingService: ConversationStreamingService,
     private readonly conversationNamingService: ConversationNamingService,
-    private readonly scheduledTaskUnreadService: ScheduledTaskUnreadService,
+    private readonly conversationReadStateService: ConversationReadStateService,
+    private readonly publishedFolderAttachments: PublishedFolderAttachmentsService,
+    private readonly titleStreamService: ConversationTitleStreamService,
   ) {}
 
   // Persistence
-  getConversation = this.persistenceService.getConversation.bind(
-    this.persistenceService,
-  );
+  /**
+   * Reads a conversation for a caller. A conversation from the public bucket
+   * has its folder attachments resolved to the published folder, because DIAL
+   * Core leaves those links pointing at the author's private bucket. Internal
+   * readers (streaming, naming, saving) use the persistence service directly
+   * and always see the stored body.
+   */
+  async getConversation(
+    conversationPath: string,
+    token: string,
+    sessionBucket: string,
+  ) {
+    const conversation = await this.persistenceService.getConversation(
+      conversationPath,
+      token,
+      sessionBucket,
+    );
+    return this.publishedFolderAttachments.resolve(
+      conversation,
+      conversationPath,
+      token,
+      sessionBucket,
+    );
+  }
 
   // Listing
   listConversations = this.listingService.listConversations.bind(
     this.listingService,
   );
+  getConversationTitles = this.listingService.getConversationTitles.bind(
+    this.listingService,
+  );
   getConversationMetadata = this.listingService.getConversationMetadata.bind(
     this.listingService,
+  );
+  admitConversationTitleStream = this.titleStreamService.admit.bind(
+    this.titleStreamService,
+  );
+  streamConversationTitles = this.titleStreamService.streamTitles.bind(
+    this.titleStreamService,
   );
 
   // Lifecycle
@@ -101,12 +135,25 @@ export class ConversationService {
     );
   }
 
+  /** Makes a regular chat unseen again because a new generation is starting. Best effort: never rejects. */
+  markConversationUnviewed(
+    conversationPath: string,
+    token: string,
+    bucket: string,
+  ): Promise<void> {
+    return this.conversationReadStateService.markUnviewed(
+      buildConversationUrl(bucket, conversationPath),
+      token,
+      bucket,
+    );
+  }
+
   markConversationViewed(
     conversationPath: string,
     token: string,
     bucket: string,
   ): Promise<void> {
-    return this.scheduledTaskUnreadService.markViewed(
+    return this.conversationReadStateService.markViewed(
       buildConversationUrl(bucket, conversationPath),
       token,
       bucket,

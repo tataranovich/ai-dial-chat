@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsDefined,
   IsEnum,
   IsNotEmpty,
@@ -26,11 +27,17 @@ import {
   LOCALE_CODE_PATTERN,
   LOCALE_CODE_VALIDATION_MESSAGE,
 } from '../../common/validators/locale-code.pattern';
-import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
 import {
-  SEMVER_VERSION_PATTERN,
-  SEMVER_VERSION_VALIDATION_MESSAGE,
-} from '../../common/validators/semver-version.pattern';
+  OAUTH_RESOURCE_MAX_LENGTH,
+  OAUTH_RESOURCE_PATTERN,
+  OAUTH_RESOURCE_VALIDATION_MESSAGE,
+} from '../../common/validators/oauth-resource.pattern';
+import {
+  RESOURCE_FOLDER_PATH_PATTERN,
+  RESOURCE_FOLDER_PATH_VALIDATION_MESSAGE,
+} from '../../common/validators/resource-folder-path.pattern';
+import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
+import { IsValidFilePath } from '../../files/dto/file-path.validator';
 
 export enum ToolsetTransport {
   Http = 'HTTP',
@@ -53,7 +60,9 @@ export enum ToolsetAuthType {
 const ENDPOINT_URL_PATTERN = /^https?:\/\/[^\s]+$/;
 const ENDPOINT_URL_MESSAGE = 'Must be a valid http(s) URL';
 
-const VERSION_MAX_LENGTH = 64;
+const VERSION_PATTERN = /^[\w.+-]{1,64}$/;
+const VERSION_MESSAGE =
+  'Must contain only word characters, dots, hyphens, and plus signs (max 64 chars)';
 
 export class ToolsetAuthSettingsBodyDto {
   @ApiProperty({ enum: ToolsetAuthType, example: ToolsetAuthType.None })
@@ -109,6 +118,22 @@ export class ToolsetAuthSettingsBodyDto {
   @IsString()
   @IsOptional()
   codeChallenge?: string;
+
+  @ApiPropertyOptional({
+    example: 'https://mcp.example.com/mcp',
+    maxLength: OAUTH_RESOURCE_MAX_LENGTH,
+    description:
+      'OAUTH with a static client: the RFC 8707 resource indicator DIAL Core ' +
+      'sends on the token exchange. Omitted keeps the stored value, an empty ' +
+      'string clears it. DIAL Core rejects it for a dynamically registered client.',
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(OAUTH_RESOURCE_MAX_LENGTH)
+  @Matches(OAUTH_RESOURCE_PATTERN, {
+    message: OAUTH_RESOURCE_VALIDATION_MESSAGE,
+  })
+  resource?: string;
 }
 
 export class ToolsetBodyDto {
@@ -121,10 +146,7 @@ export class ToolsetBodyDto {
   @ApiPropertyOptional({ example: '0.0.1' })
   @IsString()
   @IsOptional()
-  @MaxLength(VERSION_MAX_LENGTH)
-  @Matches(SEMVER_VERSION_PATTERN, {
-    message: SEMVER_VERSION_VALIDATION_MESSAGE,
-  })
+  @Matches(VERSION_PATTERN, { message: VERSION_MESSAGE })
   version?: string;
 
   @ApiPropertyOptional({
@@ -209,6 +231,31 @@ export class ToolsetBodyDto {
   @ValidateNested()
   @Type(() => ToolsetAuthSettingsBodyDto)
   authSettings!: ToolsetAuthSettingsBodyDto;
+}
+
+/** Create body: the shared toolset fields plus where and how to create it. */
+export class CreateToolsetBodyDto extends ToolsetBodyDto {
+  @ApiPropertyOptional({
+    example: 'Search',
+    description:
+      "Plain-text personal folder to create the toolset in, relative to the caller's bucket. Omit or leave empty for the root.",
+  })
+  @IsString()
+  @IsOptional()
+  @IsValidFilePath()
+  @Matches(RESOURCE_FOLDER_PATH_PATTERN, {
+    message: RESOURCE_FOLDER_PATH_VALIDATION_MESSAGE,
+  })
+  folderPath?: string;
+
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'Never overwrite an existing toolset: answer 409 when `{name}__{version}` is already taken in the folder.',
+  })
+  @IsBoolean()
+  @IsOptional()
+  createOnly?: boolean;
 }
 
 export class MutatedToolsetDto {

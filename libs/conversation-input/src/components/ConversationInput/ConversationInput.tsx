@@ -11,6 +11,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   welcomeText,
   descriptionText,
   belowWelcomeSlot,
+  aboveInputSlot,
   styles: stylesProp,
   className,
   inputClassName,
@@ -33,11 +34,13 @@ export const ConversationInput: FC<ConversationInputProps> = ({
       )}
     >
       {welcomeText && (
-        <div className="flex flex-col items-center gap-4 text-center">
+        <div className="flex max-w-full flex-col items-center gap-4 text-center">
+          {/* `overflow-wrap: anywhere` breaks a name with no spaces, such as
+              an e-mail address, instead of letting it run off both edges. */}
           <h1
             className={mergeClasses(
               styles.welcome,
-              'm-0',
+              'm-0 max-w-full wrap-anywhere',
               typography?.welcomeClassName || 'dial-display2-text',
             )}
           >
@@ -71,6 +74,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
           welcomeText ? 'max-w-[700px]' : 'max-w-[748px]',
         )}
       >
+        {aboveInputSlot != null && <div className="mb-2">{aboveInputSlot}</div>}
         <Input
           placeholder={placeholder}
           isStreaming={isStreaming}

@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SCHEDULED_TASKS_CLASS } from '../../../constants/public-class-names';
 import type { ScheduledTaskItem } from '../../../models/scheduled-task-item';
 import { ScheduledTasksProps } from '../../../models/scheduled-tasks-props';
 import { ScheduledTasksSortKey } from '../../../types/scheduled-tasks-sort-key';
@@ -48,6 +49,19 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
     label: string;
     onClick: () => void;
   }) => <button onClick={onClick}>{label}</button>,
+  NeutralButton: ({
+    label,
+    onClick,
+    'aria-label': ariaLabel,
+  }: {
+    label: string;
+    onClick?: () => void;
+    'aria-label'?: string;
+  }) => (
+    <button aria-label={ariaLabel} onClick={onClick}>
+      {label}
+    </button>
+  ),
   FolderPath: ({ segments }: { segments: string[] }) => (
     <>{segments.join(' / ')}</>
   ),
@@ -59,7 +73,9 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
     <article {...rest}>{children}</article>
   ),
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
-  Spinner: () => <div role="progressbar" />,
+  Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
+    <div role="progressbar" aria-label={ariaLabel} />
+  ),
   Skeleton: ({ color }: { color?: string }) => (
     <div data-skeleton data-color={color} />
   ),
@@ -79,10 +95,19 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
     text: ReactNode;
     className?: string;
   }) => <span className={className}>{text}</span>,
-  NoDataContent: ({ title, icon }: { title: string; icon?: ReactNode }) => (
+  NoDataContent: ({
+    title,
+    description,
+    icon,
+  }: {
+    title: string;
+    description?: string;
+    icon?: ReactNode;
+  }) => (
     <div>
-      {icon}
+      {icon ?? <span>default illustration</span>}
       <span>{title}</span>
+      {description != null && <span>{description}</span>}
     </div>
   ),
   ButtonVariant: { Primary: 'primary', Neutral: 'neutral' },
@@ -93,15 +118,13 @@ vi.mock('@tabler/icons-react', () => ({
   IconArrowsSort: () => <svg />,
   IconCalendarTime: () => <svg />,
   IconCheck: () => <svg />,
-  IconClockHour3: ({ stroke }: { stroke?: number }) => (
-    <span>clock-hour-3 icon, stroke {stroke}</span>
-  ),
   IconChevronDown: () => <svg />,
   IconChevronUp: () => <svg />,
   IconChevronRight: () => <svg />,
   IconDotsVertical: () => <svg />,
   IconEdit: () => <svg />,
   IconFolder: () => <svg />,
+  IconLogout: () => <svg />,
   IconPlayerPlay: () => <svg />,
   IconPlus: () => <svg />,
   IconTrash: () => <svg />,
@@ -116,28 +139,32 @@ const buildItem = (
   ...overrides,
 });
 
+const baseLabels: ScheduledTasksProps['labels'] = {
+  title: 'Scheduled tasks',
+  subtitle: 'Automate recurring tasks with scheduled runs.',
+  createButtonLabel: 'New task',
+  searchPlaceholder: 'Search scheduled tasks...',
+  searchAriaLabel: 'Search scheduled tasks by name',
+  clearSearchLabel: 'Clear scheduled tasks search',
+  sortLabel: 'Sort',
+  sortOptions: [
+    { value: ScheduledTasksSortKey.FirstToRun, label: 'First to run' },
+    { value: ScheduledTasksSortKey.LastToRun, label: 'Last to run' },
+  ],
+  emptyStateLabel: 'No scheduled tasks yet',
+  noResultsLabel: 'No results',
+  errorLabel: 'Something went wrong',
+  retryLabel: 'Retry',
+  loadingMoreLabel: 'Loading more scheduled tasks…',
+};
+
+let onCreateClickMock: (() => void) | undefined = vi.fn();
+
 const renderScheduledTasks = (overrides?: Partial<ScheduledTasksProps>) =>
   render(
     <ScheduledTasks
-      labels={{
-        title: 'Scheduled tasks',
-        subtitle: 'Automate recurring tasks with scheduled runs.',
-        createButtonLabel: 'New task',
-        searchPlaceholder: 'Search scheduled tasks...',
-        searchAriaLabel: 'Search scheduled tasks by name',
-        clearSearchLabel: 'Clear scheduled tasks search',
-        sortLabel: 'Sort',
-        sortOptions: [
-          { value: ScheduledTasksSortKey.FirstToRun, label: 'First to run' },
-          { value: ScheduledTasksSortKey.LastToRun, label: 'Last to run' },
-        ],
-        emptyStateLabel: 'No scheduled tasks yet',
-        noResultsLabel: 'No results',
-        errorLabel: 'Something went wrong',
-        retryLabel: 'Retry',
-        loadingMoreLabel: 'Loading more scheduled tasks…',
-      }}
-      onCreateClick={vi.fn()}
+      labels={baseLabels}
+      onCreateClick={onCreateClickMock}
       searchQuery=""
       onSearchQueryChange={vi.fn()}
       sortKey={ScheduledTasksSortKey.FirstToRun}
@@ -148,6 +175,10 @@ const renderScheduledTasks = (overrides?: Partial<ScheduledTasksProps>) =>
   );
 
 describe('ScheduledTasks', () => {
+  beforeEach(() => {
+    onCreateClickMock = vi.fn();
+  });
+
   it('renders the header and toolbar from props', () => {
     renderScheduledTasks();
 
@@ -181,7 +212,9 @@ describe('ScheduledTasks', () => {
   it('shows a spinner and no other content when isLoading', () => {
     renderScheduledTasks({ isLoading: true, items: [buildItem()] });
 
-    expect(screen.getByRole('progressbar')).toBeTruthy();
+    expect(
+      screen.getByRole('progressbar', { name: 'Loading scheduled tasks' }),
+    ).toBeTruthy();
     expect(screen.queryByText('Competitor Updates')).toBeNull();
   });
 
@@ -233,16 +266,31 @@ describe('ScheduledTasks', () => {
     ).toBeGreaterThan(0);
   });
 
-  it('illustrates the empty state with the scheduled-task clock at illustration weight', () => {
-    renderScheduledTasks({ items: [] });
+  it('illustrates the empty state with the kit default illustration and its description', () => {
+    renderScheduledTasks({
+      items: [],
+      labels: {
+        ...baseLabels,
+        emptyStateDescription: 'Tasks will appear here',
+      },
+    });
 
-    expect(screen.getByText('clock-hour-3 icon, stroke 1')).toBeTruthy();
+    expect(screen.getByText('default illustration')).toBeTruthy();
+    expect(screen.getByText('Tasks will appear here')).toBeTruthy();
   });
 
-  it('shows no clock illustration in the no-results state', () => {
-    renderScheduledTasks({ items: [], searchQuery: 'missing' });
+  it('renders the no-results state as an empty state with its description', () => {
+    renderScheduledTasks({
+      items: [],
+      searchQuery: 'missing',
+      labels: {
+        ...baseLabels,
+        noResultsDescription: 'Try a different search term',
+      },
+    });
 
-    expect(screen.queryByText(/clock-hour-3 icon/)).toBeNull();
+    expect(screen.getByText('default illustration')).toBeTruthy();
+    expect(screen.getByText('Try a different search term')).toBeTruthy();
   });
 
   it('renders the no-results state, not the empty state, when the server returns zero matches for an active search', () => {
@@ -294,12 +342,32 @@ describe('ScheduledTasks', () => {
   });
 
   it('calls onCreateClick when the create button is clicked', async () => {
-    const onCreateClick = vi.fn();
-    renderScheduledTasks({ onCreateClick });
+    onCreateClickMock = vi.fn();
+    renderScheduledTasks();
 
     await userEvent.click(screen.getByRole('button', { name: 'New task' }));
 
-    expect(onCreateClick).toHaveBeenCalledOnce();
+    expect(onCreateClickMock).toHaveBeenCalledOnce();
+  });
+
+  it('renders no create button when no onCreateClick callback is provided', () => {
+    onCreateClickMock = undefined;
+    renderScheduledTasks();
+
+    expect(screen.queryByRole('button', { name: 'New task' })).toBeNull();
+  });
+
+  it('renders exactly one header action button — the create action, with no disconnect/logout affordance', () => {
+    renderScheduledTasks();
+
+    /* The disconnect/logout surface moved to the Settings Extensions section;
+       the header carries only the create action. */
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
+    const headerButtons = screen
+      .getAllByRole('button')
+      .filter((button) => button.textContent === 'New task');
+    expect(headerButtons).toHaveLength(1);
   });
 
   it('calls onSearchQueryChange when typing in the search input', async () => {
@@ -574,10 +642,50 @@ describe('ScheduledTasks', () => {
       ).toBeTruthy();
     });
 
-    it('renders nothing extra when banner is omitted', () => {
-      renderScheduledTasks({ items: [buildItem()] });
+    it.each([undefined, null, false, true])(
+      'reserves no banner gap when banner is %s',
+      (banner) => {
+        renderScheduledTasks({ items: [buildItem()], banner });
 
-      expect(screen.queryByText('Example banner')).toBeNull();
+        /* A visually empty flex child still adds a gap; inspect the sibling
+         * before the status/content region because a text query cannot detect it. */
+        // eslint-disable-next-line testing-library/no-node-access -- Verifies the absence of an empty layout wrapper.
+        const beforeStatus = screen.getByRole('status').previousElementSibling;
+        expect(
+          beforeStatus?.contains(
+            screen.getByRole('textbox', {
+              name: 'Search scheduled tasks by name',
+            }),
+          ),
+        ).toBe(true);
+      },
+    );
+
+    it.each([0, 'Example banner'])('renders a %s banner', (banner) => {
+      renderScheduledTasks({ items: [buildItem()], banner });
+
+      expect(screen.getByText(String(banner))).toBeTruthy();
+    });
+
+    it('caps the banner to the card grid width so the two align horizontally', () => {
+      renderScheduledTasks({
+        items: [buildItem({ displayName: 'Daily summary' })],
+        banner: <div>Example banner</div>,
+      });
+
+      /* eslint-disable testing-library/no-node-access -- CSS-level alignment
+       * assertion: the banner wrapper and the card grid carry the same
+       * maxWidth style, so a banner never renders wider than the cards below
+       * it; no semantic query reaches a style attribute. */
+      const bannerWrapper = screen.getByText('Example banner').parentElement;
+      const cardGrid = screen
+        .getByText('Daily summary')
+        .closest(`.${SCHEDULED_TASKS_CLASS.cardGrid}`);
+      /* eslint-enable testing-library/no-node-access */
+      expect(bannerWrapper?.getAttribute('style')).toContain(
+        'max-width: 1180px',
+      );
+      expect(cardGrid?.getAttribute('style')).toContain('max-width: 1180px');
     });
 
     it('renders the banner during the loading state', () => {

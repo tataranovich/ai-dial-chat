@@ -30,17 +30,19 @@ const buildProps = (
     detailsSectionTitle: 'Details',
     detailsSectionSubtitle: 'Basic info',
     configurationSectionTitle: 'Configuration',
-    configurationSectionSubtitle: 'Instructions',
     displayNameLabel: 'Name',
     displayNameRequired: 'Name is required',
-    runAtLabel: 'Run at',
+    runAtLabel: 'Date and time',
+    runAtPlaceholder: 'Pick date and time',
     timeLabel: 'Time',
     timeInvalidLabel: 'Enter a valid time',
     repeatLabel: 'Repeat',
     repeatOptions: [{ key: ScheduledTaskRepeat.Daily, label: 'Daily' }],
-    dayOfWeekLabel: 'Day of week',
+    dayOfWeekLabel: 'Day',
     dayOfMonthLabel: 'Day of month',
     minuteLabel: 'Minute',
+    daysOfWeekLabel: 'Days',
+    customDayOptions: [{ value: '0', shortLabel: 'M', fullName: 'Monday' }],
     startDateLabel: 'Start date',
     startDatePlaceholder: 'Pick start date',
     endDateLabel: 'End date',
@@ -114,6 +116,32 @@ describe('ScheduledTaskCreateForm — unsaved changes', () => {
 
     expect(props.onCancel).not.toHaveBeenCalled();
     expect(screen.queryByText('Discard unsaved changes?')).toBeNull();
+  });
+
+  it('shortens the confirming action to Discard on a mobile screen', async () => {
+    try {
+      vi.stubGlobal(
+        'matchMedia',
+        vi.fn(() => ({
+          matches: true,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+      const props = buildProps({
+        values: { ...initialValues, displayName: 'Changed' },
+      });
+      render(<ScheduledTaskCreateForm {...props} />);
+
+      await userEvent.click(
+        screen.getAllByRole('button', { name: 'Cancel' })[0],
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+      expect(props.onCancel).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('calls onCancel only after Discard changes is chosen', async () => {

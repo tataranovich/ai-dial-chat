@@ -1,4 +1,10 @@
+import {
+  DEFAULT_PROJECT_CONTEXT_ALLOWED_EXTENSIONS,
+  DEFAULT_PROJECT_CONTEXT_FILE_MAX_BYTES,
+  DEFAULT_PROJECT_CONTEXT_TOTAL_MAX_BYTES,
+} from '../../projects/constants/project-context.constants';
 import type { ConfigDefinition } from '../app-config.types';
+import { CelebrationDeliveryMode } from '../types/celebration-delivery';
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
   {
@@ -276,6 +282,66 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     envVar: 'UI_EVENT',
   },
   {
+    key: 'ui.celebrationsEnabledByDefault',
+    type: 'config',
+    valueType: 'boolean',
+    visibility: 'client',
+    defaultValue: true,
+    critical: false,
+    description:
+      'Operator default for the seasonal-celebrations switch in Settings → Preferences, applied to users who have not saved a choice of their own; a saved choice overrides it. On by default; only false, 0 or no turns it off. Has no visible effect without ui.activeEventId.',
+    owner: 'chat-team',
+    envVar: 'UI_EVENT_ENABLED_BY_DEFAULT',
+  },
+  {
+    key: 'ui.celebrationDelivery.mode',
+    type: 'config',
+    valueType: 'string',
+    visibility: 'client',
+    defaultValue: CelebrationDeliveryMode.Bundled,
+    critical: false,
+    description:
+      'Where celebration scenes come from: bundled (compiled scenes only, no celebration request) or prefer-external (allowlisted scenes and admitted events from external packs served by /api/v1/celebrations). Sourced from UI_EVENT_DELIVERY_MODE; bundled by default.',
+    owner: 'chat-team',
+    envVar: 'UI_EVENT_DELIVERY_MODE',
+  },
+  {
+    key: 'ui.celebrationDelivery.revision',
+    type: 'config',
+    valueType: 'string',
+    visibility: 'client',
+    defaultValue: '0',
+    critical: false,
+    description:
+      'Operator revision of the celebration delivery policy; a change restarts a playing scene. Sourced from UI_EVENT_DELIVERY_REVISION; "0" by default.',
+    owner: 'chat-team',
+    envVar: 'UI_EVENT_DELIVERY_REVISION',
+  },
+  {
+    key: 'ui.celebrationDelivery.externalScenes',
+    type: 'config',
+    valueType: 'json',
+    visibility: 'client',
+    defaultValue: [],
+    critical: false,
+    description:
+      'Scenes of compiled celebration events that may come from an external pack, as eventId/sceneId pairs. Sourced from UI_EVENT_EXTERNAL_SCENES (comma-separated, at most 64); empty by default.',
+    owner: 'chat-team',
+    envVar: 'UI_EVENT_EXTERNAL_SCENES',
+  },
+  {
+    key: 'ui.celebrationDelivery.externalEvents',
+    type: 'config',
+    valueType: 'json',
+    visibility: 'client',
+    defaultValue: [],
+    critical: false,
+    description:
+      'Celebration event IDs without a compiled module that may come entirely from an external pack. Sourced from UI_EVENT_EXTERNAL_EVENTS (comma-separated, at most 64); empty by default.',
+    owner: 'chat-team',
+    envVar: 'UI_EVENT_EXTERNAL_EVENTS',
+  },
+  {
     key: 'overlay.enabled',
     type: 'config',
     valueType: 'boolean',
@@ -354,6 +420,21 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     allowedRolesEnvVar: 'SCHEDULED_TASKS_ENABLED_ROLES',
   },
   {
+    key: 'features.projectsEnabled',
+    type: 'feature',
+    valueType: 'boolean',
+    visibility: 'client',
+    defaultValue: false,
+    critical: false,
+    description:
+      'Whether the Projects feature is enabled, including the GET /api/v1/projects ' +
+      'listing endpoint, the Projects page, and its sidebar navigation entry. ' +
+      'Set PROJECTS_ENABLED_ROLES to restrict to specific roles.',
+    owner: 'chat-team',
+    envVar: 'PROJECTS_ENABLED',
+    allowedRolesEnvVar: 'PROJECTS_ENABLED_ROLES',
+  },
+  {
     key: 'features.defaultDeploymentPinned',
     type: 'feature',
     valueType: 'boolean',
@@ -380,6 +461,19 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
       'that renders it. Off by default; port of the legacy ALLOW_VISUALIZER_SEND_MESSAGES.',
     owner: 'chat-team',
     envVar: 'ALLOW_VISUALIZER_SEND_MESSAGES',
+  },
+  {
+    key: 'features.usageLimitsControl',
+    type: 'feature',
+    valueType: 'boolean',
+    visibility: 'client',
+    defaultValue: false,
+    critical: false,
+    description:
+      'Whether the conversation input shows the token/cost usage-limits control ' +
+      'next to the model selector. Off by default.',
+    owner: 'chat-team',
+    envVar: 'USAGE_LIMITS_CONTROL_ENABLED',
   },
   {
     key: 'uiFeatures.enabledUiFeatures',
@@ -430,6 +524,18 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
     envVar: 'PUBLICATION_FILTER_SOURCES',
   },
   {
+    key: 'content.additionalLocales',
+    type: 'config',
+    valueType: 'json',
+    visibility: 'client',
+    defaultValue: [],
+    critical: false,
+    description:
+      "Additional content locales (BCP-47 tags) a toolset's or application's Name/Description can be translated into. Sourced from ADDITIONAL_CONTENT_LOCALES (comma-separated); when that is absent, the deprecated AVAILABLE_LOCALES is read. Canonicalised and de-duplicated; the frontend drops the primary locale.",
+    owner: 'chat-team',
+    envVar: 'ADDITIONAL_CONTENT_LOCALES',
+  },
+  {
     key: 'attachments.maxFileSizeBytes',
     type: 'config',
     valueType: 'number',
@@ -440,5 +546,53 @@ export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
       'Maximum attachment/upload file size in bytes, surfaced to the client so it can reject an oversized file before attempting to upload it. Sourced from FILE_UPLOAD_MAX_BYTES — the same variable that already bounds the POST /api/v1/files Multer limit — so the frontend pre-check and the backend enforcement can never diverge.',
     owner: 'chat-team',
     envVar: 'FILE_UPLOAD_MAX_BYTES',
+  },
+  {
+    key: 'projects.contextFileMaxBytes',
+    type: 'config',
+    valueType: 'number',
+    visibility: 'client',
+    defaultValue: DEFAULT_PROJECT_CONTEXT_FILE_MAX_BYTES,
+    critical: false,
+    description:
+      'Maximum size in bytes of one project context file. Sourced from PROJECT_CONTEXT_FILE_MAX_BYTES, the same variable POST /api/v1/projects enforces, so the New project form rejects an oversized file before uploading it.',
+    owner: 'chat-team',
+    envVar: 'PROJECT_CONTEXT_FILE_MAX_BYTES',
+  },
+  {
+    key: 'projects.contextTotalMaxBytes',
+    type: 'config',
+    valueType: 'number',
+    visibility: 'client',
+    defaultValue: DEFAULT_PROJECT_CONTEXT_TOTAL_MAX_BYTES,
+    critical: false,
+    description:
+      "Maximum combined size in bytes of a project's context files — the New project form's capacity. Sourced from PROJECT_CONTEXT_TOTAL_MAX_BYTES, which POST /api/v1/projects enforces.",
+    owner: 'chat-team',
+    envVar: 'PROJECT_CONTEXT_TOTAL_MAX_BYTES',
+  },
+  {
+    key: 'projects.contextAllowedExtensions',
+    type: 'config',
+    valueType: 'json',
+    visibility: 'client',
+    defaultValue: [...DEFAULT_PROJECT_CONTEXT_ALLOWED_EXTENSIONS],
+    critical: false,
+    description:
+      'Lower-case file extensions, without a dot, accepted as project context files. Sourced from PROJECT_CONTEXT_ALLOWED_EXTENSIONS, which POST /api/v1/projects enforces.',
+    owner: 'chat-team',
+    envVar: 'PROJECT_CONTEXT_ALLOWED_EXTENSIONS',
+  },
+  {
+    key: 'usageLimits.warningThresholdPercent',
+    type: 'config',
+    valueType: 'number',
+    visibility: 'client',
+    defaultValue: 75,
+    critical: false,
+    description:
+      'Percentage (1–99) of a capped day/week/month token or cost limit at which the composer shows its usage banner above the input. Governs the banner only — the usage dial and the Settings → Usage page keep their fixed 75% running-low mark.',
+    owner: 'chat-team',
+    envVar: 'USAGE_LIMITS_WARNING_THRESHOLD_PERCENT',
   },
 ];

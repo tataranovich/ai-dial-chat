@@ -1,4 +1,4 @@
-import { VisualizerConnectorRequests } from '@epam/ai-dial-shared';
+import { VisualizerConnectorRequests } from '@epam/ai-dial-visualizer-connector';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -25,7 +25,10 @@ const subscribeMock = vi.fn(
 let lastConstructorRoot: HTMLElement | undefined;
 let lastConstructorOptions: Record<string, unknown> | undefined;
 
-vi.mock('@epam/ai-dial-visualizer-connector', () => ({
+vi.mock('@epam/ai-dial-visualizer-connector', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('@epam/ai-dial-visualizer-connector')
+  >()),
   VisualizerConnector: vi.fn().mockImplementation(function (
     root: HTMLElement,
     options: Record<string, unknown>,
@@ -68,10 +71,10 @@ describe('VisualizerCanvasRenderer', () => {
 
     expect(lastConstructorOptions).toMatchObject({
       domain: content.url,
-      hostDomain: window.location.origin,
       visualizerName: content.visualizerName,
       requestTimeout: content.requestTimeout,
     });
+    expect(lastConstructorOptions).not.toHaveProperty('hostDomain');
     expect(lastConstructorRoot).toBeInstanceOf(HTMLElement);
   });
 
@@ -83,7 +86,7 @@ describe('VisualizerCanvasRenderer', () => {
 
     await waitFor(() => expect(sendMock).toHaveBeenCalledOnce());
     expect(sendMock).toHaveBeenCalledWith(
-      VisualizerConnectorRequests.sendVisualizeData,
+      VisualizerConnectorRequests.SendVisualizeData,
       {
         mimeType: content.mimeType,
         visualizerData: {
@@ -109,7 +112,13 @@ describe('VisualizerCanvasRenderer', () => {
 
     renderComponent({ errorLabel: 'Failed to load visualizer' });
 
-    expect(await screen.findByRole('alert')).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('status')
+          .some((region) => region.textContent === 'Failed to load visualizer'),
+      ).toBe(true),
+    );
   });
 
   it('shows an error state when ready rejects', async () => {
@@ -117,7 +126,13 @@ describe('VisualizerCanvasRenderer', () => {
 
     renderComponent({ errorLabel: 'Failed to load visualizer' });
 
-    expect(await screen.findByRole('alert')).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('status')
+          .some((region) => region.textContent === 'Failed to load visualizer'),
+      ).toBe(true),
+    );
     expect(sendMock).not.toHaveBeenCalled();
   });
 
@@ -126,8 +141,19 @@ describe('VisualizerCanvasRenderer', () => {
 
     renderComponent({ errorLabel: 'Failed to load visualizer' });
 
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('Failed to load visualizer')).toBeNull();
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('names the spinner with loadingLabel and hides the visible copy from assistive tech', () => {
+    readyMock.mockReturnValue(new Promise(() => undefined));
+
+    renderComponent({ loadingLabel: 'Preparing chart…' });
+
+    expect(screen.getByRole('img', { name: 'Preparing chart…' })).toBeTruthy();
+    expect(
+      screen.getByText('Preparing chart…').getAttribute('aria-hidden'),
+    ).toBe('true');
   });
 });
 
@@ -176,7 +202,7 @@ describe('VisualizerCanvasRenderer — SEND_MESSAGE', () => {
     postFromIframe(payload);
 
     expect(onSendMessage).not.toHaveBeenCalled();
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('Failed to load visualizer')).toBeNull();
   });
 
   it('ignores a valid message when no onSendMessage is given', () => {
@@ -271,7 +297,7 @@ describe('VisualizerCanvasRenderer — grouped content', () => {
 
     await waitFor(() => expect(sendMock).toHaveBeenCalledOnce());
     expect(sendMock).toHaveBeenCalledWith(
-      VisualizerConnectorRequests.sendGroupedVisualizeData,
+      VisualizerConnectorRequests.SendGroupedVisualizeData,
       {
         attachments: groupedContent.attachments,
         layout: groupedContent.layout,
@@ -287,7 +313,7 @@ describe('VisualizerCanvasRenderer — grouped content', () => {
 
     await waitFor(() => expect(sendMock).toHaveBeenCalledOnce());
     expect(sendMock).not.toHaveBeenCalledWith(
-      VisualizerConnectorRequests.sendVisualizeData,
+      VisualizerConnectorRequests.SendVisualizeData,
       expect.anything(),
     );
   });
@@ -330,6 +356,12 @@ describe('VisualizerCanvasRenderer — grouped content', () => {
 
     renderGrouped({ errorLabel: 'Failed to load visualizer' });
 
-    expect(await screen.findByRole('alert')).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('status')
+          .some((region) => region.textContent === 'Failed to load visualizer'),
+      ).toBe(true),
+    );
   });
 });

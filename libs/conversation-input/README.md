@@ -105,6 +105,12 @@ import type { AttachmentTrayStyles } from '@epam/ai-dial-attachment-input';
 
 `Input` takes the same object as a top-level `attachmentTray` prop.
 
+`styles.typography.input` (`InputTypography`) sets the composer's type:
+`fontClassName` on the textarea (default `'dial-body-paragraph-text'`), and
+`modelSelectorNameClassName` / `modelSelectorVersionClassName` on the selected
+model's name and version on the selector trigger (default `'dial-small-text'` /
+`'dial-tiny-text'`).
+
 `styles.modelMenu` themes the model menu in both presentations — the desktop
 dropdown and the mobile bottom sheet — with one `ModelMenuStyles` object.
 `className` lands on the menu panel (also when `modelPickerOverlay` supplies
@@ -114,14 +120,15 @@ to `itemClassName`. Each is merged after the component's own classes, so a
 conflicting utility replaces the default instead of landing beside it.
 `colors` takes runtime values, in both presentations:
 
-| Field                    | Colours                       | Default                                                        |
-| ------------------------ | ----------------------------- | -------------------------------------------------------------- |
-| `searchHeaderBackground` | The search row                | `--bg-layer-raised` on desktop, transparent in the sheet       |
-| `itemText`               | Every row's label and icon    | `--text-primary`                                               |
-| `itemHoverBackground`    | A hovered row                 | `--bg-control-accent-alpha-hover` / `--bg-layer-raised`        |
-| `selectedItemBackground` | The selected row at rest      | None                                                           |
-| `selectedItemText`       | The selected row's label      | `itemText`                                                     |
-| `checkIcon`              | The selected row's check mark | The row's text colour on desktop, `--text-accent` in the sheet |
+| Field                    | Colours                                                          | Default                                                        |
+| ------------------------ | ---------------------------------------------------------------- | -------------------------------------------------------------- |
+| `searchHeaderBackground` | The search row                                                   | `--bg-layer-raised` on desktop, transparent in the sheet       |
+| `itemText`               | Every row's label and icon                                       | `--text-primary`                                               |
+| `itemHoverBackground`    | A hovered row                                                    | `--bg-control-accent-alpha-hover` / `--bg-layer-raised`        |
+| `selectedItemBackground` | The selected row at rest                                         | None                                                           |
+| `selectedItemText`       | The selected row's label                                         | `itemText`                                                     |
+| `checkIcon`              | The selected row's check mark                                    | The row's text colour on desktop, `--text-accent` in the sheet |
+| `overlayBackground`      | The desktop panel when `modelPickerOverlay` supplies the content | `--bg-layer-raised`                                            |
 
 A row colour that is not set leaves that part of the row exactly as the kit
 draws it. The desktop panel renders in a portal outside the composer, so these
@@ -162,6 +169,13 @@ its `text` in at the caret each time its `revision` changes and leaves the rest 
 the draft alone, and `Ctrl`/`Cmd`+`Z` undoes it. Use `message` to seed or reset the composer, and
 `textInsertion` for anything the user triggers while a draft may already exist —
 a prompt picked from a library, a snippet, a slash-command expansion.
+
+When `Input` mounts already holding a `message` and is autofocused, it places the
+caret at the end of that text. A `textInsertion` into a composer the user has never
+focused, whose caret is still at the browser's default start position, lands at the
+end of the text rather than in front of it; once the user has focused the composer,
+or a host has placed the caret through `caretPositionOverride`, the insertion goes
+at that caret.
 
 ```tsx
 import type { TextInsertion } from '@epam/ai-dial-conversation-input';
@@ -224,6 +238,77 @@ label and send behavior are unaffected.
 Hosts supply localized strings through these props. The parent chat keeps its
 existing `sendTooltip` prop without opting into `emptyMessageTooltip`.
 
+`aboveInputSlot` renders a host-supplied node directly above the input, inside
+the same width-constrained container (`700px` on the welcome screen, `748px`
+otherwise), separated from it by a fixed block-axis gap. Omitting it, or
+passing `null`, adds no element and leaves the layout unchanged. The lib does
+not inspect the node — the host decides what to render and when.
+`belowWelcomeSlot` sits higher, between the welcome heading and the composer.
+For a usage-limit notice, pass a [`UsageLimitBannerView`](#usagelimitbannerview).
+
+```tsx
+<ConversationInput
+  onSend={handleSend}
+  aboveInputSlot={<p role="status">Daily limit 80% used.</p>}
+/>
+```
+
+### UsageLimitBannerView
+
+A presentational usage-limit notice built for `aboveInputSlot`: a section
+message rendered with the kit `Notification` (warning / error variant, kept on
+the neutral `--bg-layer-sunken` surface, recoloured by `colors.background`), with a limit sentence in semibold and an optional
+reset sentence after it. `UsageLimitBannerSeverity.Warning` renders the kit's
+filled warning icon and `UsageLimitBannerSeverity.Reached` its filled error icon.
+Both announce politely through `role="status"`, because the banner reports
+state rather than replying to an action. A banner mounted together with its
+text is not announced reliably, so a host that shows it conditionally should
+keep a kit `LiveRegion` mounted around it and pass `isLiveRegion={false}` —
+the root then takes `role="none"` and the host's region is the only one.
+
+The component holds no state and knows nothing about usage data. The host
+decides when to render it and passes every string already translated and
+formatted: `limitText` verbatim, and `reset` as the visible `label`, the
+`isoValue` for the `<time dateTime>`, and an optional `ariaLabel` spoken instead
+of `label` (the `<time>` is then hidden and an `sr-only` sibling carries it).
+The close button renders only when `onClose` is supplied; dismissal state is the
+host's. Its accessible name is `closeAriaLabel` (default
+`'Close notification'`).
+
+```tsx
+import {
+  ConversationInput,
+  UsageLimitBannerSeverity,
+  UsageLimitBannerView,
+} from '@epam/ai-dial-conversation-input';
+
+<ConversationInput
+  onSend={handleSend}
+  aboveInputSlot={
+    isBannerVisible ? (
+      <UsageLimitBannerView
+        severity={UsageLimitBannerSeverity.Warning}
+        limitText="Daily limit 80% used."
+        reset={{
+          isoValue: '2026-10-14T00:00:00Z',
+          label: 'Resets at 3:00 AM GMT+3.',
+          ariaLabel:
+            'Usage resets Oct 14, 2026, 3:00 AM Eastern European Summer Time',
+        }}
+        onClose={handleDismiss}
+        closeAriaLabel="Close usage notice"
+      />
+    ) : undefined
+  }
+/>;
+```
+
+`limitTextClassName` (default `'dial-small-paragraph-semi-text'`) and
+`resetTextClassName` (default `'dial-small-paragraph-text'`) take classes from
+the kit type scale; `className` lands on the banner root next to
+`dial-ci-usage-banner`. `colors` (`UsageLimitBannerColors`) sets `background`
+(default `--bg-layer-sunken`).
+
 ### EditMessageInput
 
 Renders the input in edit mode for revising an existing message. `onCancel` and `onSave` are required; `onSave` receives the new text, the attachments the user kept, and any newly added ones.
@@ -239,6 +324,8 @@ import { EditMessageInput } from '@epam/ai-dial-conversation-input';
   onUploadAttachment={uploadAttachment}
 />;
 ```
+
+`sendOnEnter` (a `SendOnEnter` member, default `SendOnEnter.Enter`) picks the key combination that saves the edit, with the same rules as on `Input` and `ConversationInput`. Pass the host's send-key preference so editing behaves like the main composer.
 
 ### Input
 
@@ -256,9 +343,11 @@ Set `isAudioMessageSupported` to show the microphone. Pass translated `transcrib
 
 Base text input with auto-resize and keyboard shortcut handling. Use directly when a stripped-down input is needed — `ConversationInput` wraps it with the app-facing props it needs. The layout is always two rows: the textarea on its own full-width row, and the action bar (`+` button, tools chips, model selector, send/stop, mic) below it. Pass `hideActionBar` to render only the textarea and the attachment tray.
 
+Below 768px the tools chips show only the tools that are switched on; an unselected tool is switched on from the `+` menu's Tools bottom sheet, which a phone always offers even when `canRemoveTools` is `false`.
+
 `onChange` (on `Input`, `ConversationInput`, and `EditMessageInput`) fires with the textarea's current value on every change — typing, deleting, pasting, undo/redo — not only on send/save. Omit it to ignore keystrokes between sends, as before this prop existed on `ConversationInput`/`EditMessageInput`; a host tracking live state derived from the draft (e.g. skill-mention anchors that must reconcile as the user edits around them) wires this alongside `activeMentions`/`onBackspaceAtCaret`.
 
-`commandMenu` (on `Input`, `ConversationInput`, and `EditMessageInput`) mounts a host-injected slash-command menu. The trigger is evaluated against the whitespace-delimited word around the caret, not the whole textarea value, so it opens whenever the configured `triggerPrefix` starts that word — typed as its first character anywhere in the text (start, middle, or after other words/mentions), or arriving in a paste that produces such a word. The menu stays open while the caret's word keeps matching the prefix followed by a query with no whitespace or second prefix character, and closes the moment it stops (including when the caret moves to a different, non-matching word); selection typically goes through `ctx.close({ consumeQuery: true })`, which removes that `/query` text from wherever it sits in the textarea. `ctx.caretPosition` gives the triggering word's start offset, for splicing a selection's result in at that same spot. A dismissed menu also reopens the moment its word returns to exactly the bare `triggerPrefix` — whether reached by typing it fresh, or by backspacing down to it after typing more and dismissing (e.g. `/sdf` → dismiss → Backspace ×3 → `/` reopens) — even though dismissing at any other query value keeps that same word's menu closed until the word stops matching and starts again.
+`commandMenu` (on `Input`, `ConversationInput`, and `EditMessageInput`) mounts a host-injected slash-command menu. The trigger is evaluated against the whitespace-delimited word around the caret, not the whole textarea value, so it opens whenever the configured `triggerPrefix` starts that word — typed as its first character anywhere in the text (start, middle, or after other words/mentions), or arriving in a paste that produces such a word. The menu stays open while the caret's word keeps matching the prefix followed by a query with no whitespace or second prefix character, and closes the moment it stops (including when the caret moves to a different, non-matching word); selection typically goes through `ctx.close({ consumeQuery: true })`, which removes that `/query` text from wherever it sits in the textarea. `ctx.caretPosition` gives the triggering word's start offset, for splicing a selection's result in at that same spot. A dismissed menu also reopens the moment its word returns to exactly the bare `triggerPrefix` — whether reached by typing it fresh, or by backspacing down to it after typing more and dismissing (e.g. `/sdf` → dismiss → Backspace ×3 → `/` reopens) — even though dismissing at any other query value keeps that same word's menu closed until the word stops matching and starts again. `onTextPaste(text)` receives the plain text of every paste that lands inline in the textarea (not one converted into an attachment), with line endings normalized to `\n`, just before the `onChange` that carries it — e.g. so a host can recognize trigger-prefixed words in pasted text.
 
 `menuOverlays` (on `ConversationInput` and `EditMessageInput`) adds host-injected entries to the `+` menu, alongside the built-in attach-file/tools/chat-settings items. On `EditMessageInput`, these render from its own external add-button (the edit surface hides `Input`'s built-in action bar), so they remain available even when `hideAttachFile` hides the attach-file entry. Each entry's `renderOverlay(onClose, caretPosition)` also receives the textarea's caret offset at the moment the overlay opened, so a selection made in it can splice text into `message` at that exact position (via `messageRevision`/`caretPositionOverride`) instead of always appending at the end.
 
@@ -324,9 +413,13 @@ import { ChatSettingsModal } from '@epam/ai-dial-conversation-input';
 }
 ```
 
+`colors.background` (`ChatSettingsModalColors`, default `--bg-layer-raised`) recolours the surface. `Popup` portals the modal, so the value travels on the popup overlay (`overlayStyle`). Inside `Input`, pass it as `chatSettings.modalColors`.
+
 ### BottomSheetShell
 
 Mobile bottom sheet drawn by the UI kit's `BottomSheet`: an optional header with the title, back and close buttons; Escape, backdrop and close-button dismissal; focus kept inside while open; and page scroll locked. `colors` (`BottomSheetShellColors`) themes the backdrop, panel, title and header divider, and `style` lands on the panel, so custom properties a consumer sets there reach the sheet content.
+
+The sheet portals to the end of `<body>`, so inside a host panel that creates its own stacking context it renders under that panel. Pass `portalId` to portal it into an element of the host's instead. `overlayClassName` and `overlayStyle` reach the backdrop, applied after the `colors` overrides. For host CSS, the panel and backdrop carry the UI kit's stable `dial-kit-bottom-sheet` and `dial-kit-bottom-sheet-overlay` classes.
 
 ```tsx
 import { BottomSheetShell } from '@epam/ai-dial-conversation-input';
@@ -336,6 +429,7 @@ import { BottomSheetShell } from '@epam/ai-dial-conversation-input';
   title="Select a model"
   closeLabel="Close"
   onClose={handleCloseSheet}
+  portalId="host-panel"
 >
   {sheetContent}
 </BottomSheetShell>;
@@ -405,10 +499,17 @@ The model-selector menu carries its own set:
 | `dial-ci-model-menu-item`          | Every deployment row, desktop and mobile        |
 | `dial-ci-model-menu-item-selected` | The selected row, **additive** to the row class |
 
+`UsageLimitBannerView` carries one:
+
+| Class                  | Element                       |
+| ---------------------- | ----------------------------- |
+| `dial-ci-usage-banner` | The usage-limit banner's root |
+
 `dial-ci-model-menu` lands on three different presentations, so scope your rule
 if you need to distinguish them: the desktop dropdown (a Floating UI portal), a
-host-supplied `modelPickerOverlay` dropdown, and the mobile bottom sheet (a
-`role="dialog"`). The portal renders outside the composer's DOM subtree, which
+host-supplied `modelPickerOverlay` dropdown (a `role="dialog"` named by
+`modelSelectorLabels.ariaLabel`, since the host panel is more than a menu), and
+the mobile bottom sheet (a `role="dialog"`). The portal renders outside the composer's DOM subtree, which
 is why the menu needs a class of its own rather than a descendant selector from
 `dial-ci-wrapper`.
 
@@ -493,6 +594,13 @@ ActionRowLayout.Stacked; // textarea on its own line, controls wrap below (defau
 ActionRowLayout.Inline; // add button, textarea and footer actions share one line
 ```
 
+```tsx
+import { UsageLimitBannerSeverity } from '@epam/ai-dial-conversation-input';
+
+UsageLimitBannerSeverity.Warning; // running low — filled warning icon
+UsageLimitBannerSeverity.Reached; // limit reached — filled error icon
+```
+
 ### Action row layout
 
 `actionRowLayout` chooses how `Input` and `ConversationInput` arrange the
@@ -525,7 +633,8 @@ whose composer is already wide below that width opts the narrower widths in with
 ```
 
 The flag affects the action row alone. The add menu and the model picker keep
-their bottom-sheet presentation below 1280px, so it does not turn an embed into
+their bottom-sheet presentation below 768px, independently of this flag, so it
+does not turn an embed into
 a desktop layout wholesale.
 
 Neither layout uses an `order-*` utility: each renders its children in the
@@ -544,3 +653,9 @@ npm exec nx build conversation-input
 ```sh
 npm exec nx test conversation-input
 ```
+
+## Responsive menu policy
+
+Attachment, tools, add-on and model menus switch from bottom sheets to anchored menus at 768px. Composer layout and Chat Settings destination presentation keep the existing 1280px layout boundary. ModelSelectorBottomSheet accepts optional `searchQuery` and `onSearchQueryChange` for a query shared across presentations; useModelSelector exposes those query controls. Omitting the new sheet inputs preserves local search state.
+
+`onModelPickerOpenChange(open)` reports picker opening and dismissal to the host. Use it to reset host-owned search on dismissal; presentation changes keep the picker open and retain its query.

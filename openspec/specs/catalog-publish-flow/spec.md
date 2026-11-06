@@ -12,8 +12,8 @@ State ownership: `@epam/ai-dial-publish-panel`'s `usePublishFlow` hook (relocate
 RTL/direction impact: the tree and search input SHALL use CSS logical properties only; `DialFoldersTree` renders its own RTL-correct chevrons and indentation internally, so no app- or lib-level directional icon mirroring is added for this requirement.
 
 #### Scenario: User selects a destination folder
-- **WHEN** the user clicks a folder node in the publish folder tree
-- **THEN** that folder's path becomes `selectedFolderPath`, the tree highlights it as selected, and any previously selected folder is deselected
+- **WHEN** the user opens the folder view from the destination row, clicks a folder node in the publish folder tree and presses Select
+- **THEN** that folder's path becomes `selectedFolderPath`, the tree had highlighted it as selected, and any previously selected folder is deselected
 
 #### Scenario: Expanding a folder loads its children lazily
 - **WHEN** the user expands a folder node that has not yet been loaded
@@ -68,9 +68,21 @@ Creating a new folder SHALL use `DialFoldersTree`'s built-in inline create-folde
 
 `onCreatePublishFolder` (`usePublishFolders` in `libs/chat-hooks`, surfaced to the app through `apps/chat/src/hooks/publish/usePublishFolders.ts`) SHALL NOT call the backend folder-creation endpoint. The folder exists only in the client-side tree until the user actually submits Publish, at which point the real publish request writes to the nested `folderPath`; DIAL Core storage creates any missing path segments implicitly, the same way writing a file to a new prefix does. This avoids leaving an orphaned empty folder on the backend when the user picks a new-folder name and then cancels or navigates away without publishing — unlike `useDialFileManager`'s "New folder" action (File Manager), which does create a real, immediately-persisted folder resource, since that flow's whole purpose is managing folders as first-class content.
 
+Pressing the inline row's "Cancel" button SHALL discard the new folder: `onCreatePublishFolder` is not called and nothing is added to the tree or selected. `DialFoldersTree`'s inline editor (`useEditableItem` in `@epam/ai-dial-ui-kit`) commits a press outside the editor, so the press on that button, and the blur raised when the editor is then removed, reach `onCreateFolderSave` before the button's click is handled. `PublishFoldersTree` therefore flags a pointer press on its own Cancel button with a capture-phase listener on `document` registered on mount, ahead of the editor's, and ignores `onCreateFolderSave` while the flag is set. The flag is cleared when the next creation starts. This is a host-side workaround for the editor's commit-on-outside-press behavior rather than a `DialFoldersTree` capability.
+
 #### Scenario: User creates a new folder under the selected parent
 - **WHEN** the user confirms a new folder name in the inline create row
 - **THEN** `onCreatePublishFolder(parentPath, name)` is called, no backend request is sent, the new folder appears in the tree immediately, and it becomes the selected folder
+
+#### Scenario: User cancels the inline create row with the Cancel button
+- **GIVEN** the inline create row is open and the user typed a valid name
+- **WHEN** the user presses the "Cancel" button next to "Create new folder"
+- **THEN** `onCreatePublishFolder` is NOT called, no folder is added to the tree, and the selection is unchanged
+
+#### Scenario: User creates a folder again after cancelling
+- **GIVEN** the user cancelled an inline create row with the Cancel button
+- **WHEN** the user opens the create row again and confirms a valid name
+- **THEN** `onCreatePublishFolder(parentPath, name)` is called
 
 #### Scenario: User cancels publish after creating a folder locally
 - **GIVEN** the user created a new folder in the destination picker and selected it
@@ -127,16 +139,23 @@ The catalog Header's Publish action SHALL only be shown (`isPublishVisible`) whe
 - **THEN** the Header renders the Publish action
 
 ### Requirement: The submit button label never embeds the destination name
-`PublishFooter`'s submit button SHALL read a fixed label (`'Publish'`, or `'Update version {version}'` when replacing an existing version) regardless of which folder or the root is selected. The destination name SHALL NOT be interpolated into the button label, since folder/entity names of arbitrary length would overflow the button.
+`PublishFooter`'s submit button SHALL read a fixed label (`'Publish'`, or `'Update version {version}'` when replacing an existing version is allowed) regardless of which folder or the root is selected. The destination name SHALL NOT be interpolated into the button label, since folder/entity names of arbitrary length would overflow the button.
 
 #### Scenario: A long destination folder name is selected
 - **WHEN** the user selects a destination folder or the root with an arbitrarily long name
-- **THEN** the submit button still reads `'Publish'` (or the update-version label), unaffected by the destination name's length
+- **THEN** the submit button still reads `'Publish'`, unaffected by the destination name's length
+
+### Requirement: An already-published version cannot be republished to the same folder
+DIAL Core cannot overwrite a published catalog resource: an `ADD` whose target exists fails with "Target resource already exists", a `DELETE` + `ADD` pair on the same target is rejected as duplicate target urls, and `ADD_IF_ABSENT` silently skips the copy. The catalog `DetailsPanel` (`libs/catalog/src/components/Details/DetailsPanel.tsx`) SHALL therefore pass `allowReplace: false` to `derivePublishState`, `PublishPanel` and `PublishFooter`, exactly as the conversation publish flow does ([GitHub issue #9427](https://github.com/epam/ai-dial-chat/issues/9427)).
+
+#### Scenario: The selected folder already holds this version
+- **WHEN** the selected folder's publish history already contains the entity's current version
+- **THEN** the panel shows `PublishCalloutKind.ReplaceWarning` with the host-supplied text from the `catalog.publish.versionAlreadyPublishedWarning` translation key, the submit button is disabled, and it reads `'Publish'` rather than an `'Update version {version}'` label
 
 ### Requirement: Publish submission and history use real backend data
 `CatalogView` SHALL call the real `onPublish`, `getPublishHistory`, and `hasPublishWriteAccess` implementations backed by `apps/chat/src/server-api` wrappers instead of mock data (`MOCK_PUBLISH_FOLDERS`, `MOCK_PUBLISH_HISTORY`, and the mock `handlePublish`), which SHALL be deleted once parity is confirmed.
 
-`getPublishHistory` (defined in `apps/chat/src/hooks/useCatalogPublishing/useCatalogPublishing.ts` and supplied by `CatalogView`) SHALL call `getCatalogPublishHistory` and map the response through `mapPublishHistoryEntryDto`. For an item whose id addresses the `public` bucket (`isPublicCatalogEntityId`) it SHALL instead synthesise a single entry from the id (`getPublicCatalogEntityFolderPath`) without calling the endpoint; a non-publishable type resolves to `[]`. The earlier stub that always resolved to `[]` (GitHub issue [#7897](https://github.com/epam/ai-dial-chat/issues/7897)) has been removed, and no temporary exception remains; the `503` it worked around was our own `getPublications` response-shape defect — since fixed in `publish/publication.util.ts`, along with the list scope and the metadata-only list response (see `catalog-publish-api`) — not a missing endpoint and not Core being unavailable.
+`getPublishHistory` (defined in `apps/chat/src/hooks/useCatalogPublishing/useCatalogPublishing.ts` and supplied by `CatalogView`) SHALL call `getCatalogPublishHistory` and map the response through `mapPublishHistoryEntryDto`. For an item whose id addresses the `public` bucket (`isPublicCatalogEntityId`) it SHALL NOT call `getCatalogPublishHistory`; instead it SHALL synthesise a single entry from the id (`getPublicCatalogEntityFolderPath`) **only when the caller may unpublish that copy** — immediately when `isAdmin` is `true`, otherwise when `getCatalogUnpublishAccess(entityType, item.id)` resolves `{ canUnpublish: true }` — and SHALL resolve `[]` when it resolves `{ canUnpublish: false }`. A rejected access lookup rejects `getPublishHistory`. A non-publishable type resolves to `[]` without any request. The synthesised entry exists only to give the Unpublish action its folder (see `catalog-unpublish-flow`); the publish panel never opens for a public item. The earlier stub that always resolved to `[]` (GitHub issue [#7897](https://github.com/epam/ai-dial-chat/issues/7897)) has been removed, and no temporary exception remains; the `503` it worked around was our own `getPublications` response-shape defect — since fixed in `publish/publication.util.ts`, along with the list scope and the metadata-only list response (see `catalog-publish-api`) — not a missing endpoint and not Core being unavailable.
 
 The fetch is load-bearing beyond the publish panel: it is the only source of the folder list the Unpublish action needs, and it is what makes that action visible at all (see `catalog-unpublish-flow`). While it returned a frozen `[]`, `Unpublish` could never appear for any catalog entity.
 
@@ -176,8 +195,28 @@ Accessibility: the submit-error callout SHALL use `role="alert"`.
 - **WHEN** `getPublishHistory` rejects
 - **THEN** the `Unpublish` menu entry stays hidden (see `catalog-unpublish-flow`)
 
+#### Scenario: A public copy's history for its publisher
+- **GIVEN** `isAdmin` is `false` and `getCatalogUnpublishAccess` resolves `{ canUnpublish: true }`
+- **WHEN** `getPublishHistory` runs for `applications/public/Org/my-app__1.0.0`
+- **THEN** it resolves one entry with `folderPath: ['Org']` and `getCatalogPublishHistory` is not called
+
+#### Scenario: A public copy's history for an unrelated user
+- **GIVEN** `isAdmin` is `false` and `getCatalogUnpublishAccess` resolves `{ canUnpublish: false }`
+- **WHEN** `getPublishHistory` runs for a public copy
+- **THEN** it resolves `[]`
+
+#### Scenario: A public copy's history for an administrator
+- **GIVEN** `isAdmin` is `true`
+- **WHEN** `getPublishHistory` runs for a public copy
+- **THEN** it resolves the synthesised entry and neither `getCatalogUnpublishAccess` nor `getCatalogPublishHistory` is called
+
+#### Scenario: The access lookup fails
+- **GIVEN** `isAdmin` is `false` and `getCatalogUnpublishAccess` rejects
+- **WHEN** `getPublishHistory` runs for a public copy
+- **THEN** it rejects, so the `Unpublish` entry stays hidden and is retried on the next menu open
+
 ### Requirement: Catalog entity summary is supplied to the shared publish panel as resource metadata
-`DetailsPanel` SHALL supply the publish summary to the shared `PublishPanel` (from `@epam/ai-dial-publish-panel`) as the `resource` prop — `{ title: item.name, version: item.version, type: item.type, iconUrl: item.iconUrl }` — plus the version-tag colors through `styles.colors` (`summaryVersionTagBorder`/`summaryVersionTagBackground`/`summaryVersionTagText`, from `detailsColors`), rather than passing a `CatalogItem` or a `renderSummary` slot. `DetailsPanel` SHALL remain the only place in `libs/catalog` that maps a `CatalogItem` to that summary; `PublishPanel` SHALL NOT receive a `CatalogItem`. Because `resource.type` is set, `PublishPanel` builds the entity-header row itself (`ResourceSummary` with type, name, version and icon) and ignores any `renderSummary`, which only replaces the title-only row used when `resource.type` is absent.
+`DetailsPanel` SHALL supply the publish summary to the shared `PublishPanel` (from `@epam/ai-dial-publish-panel`) as the `resource` prop — `{ title: item.name, version: item.version, type: item.type, iconUrl: item.iconUrl }`, rather than passing a `CatalogItem` or a `renderSummary` slot. `DetailsPanel` SHALL remain the only place in `libs/catalog` that maps a `CatalogItem` to that summary; `PublishPanel` SHALL NOT receive a `CatalogItem`. Because `resource.type` is set, `PublishPanel` builds the entity-header row itself (`ResourceSummary` with type, name, icon, and the version shown inline after the name rather than as a tag) and ignores any `renderSummary`, which only replaces the title-only row used when `resource.type` is absent.
 
 #### Scenario: Catalog publish sub-view still shows the entity header and version tag
 - **WHEN** the user opens the publish sub-view for a versioned catalog entity (Application, Toolset, or Model)
@@ -292,11 +331,13 @@ The catalog publish sub-view SHALL show the shared publish panel's credentials c
 
 - `item.type` is `CatalogEntityType.Toolset`;
 - `item.credentials?.authenticationType` is set and is not `ToolsetAuthenticationType.None`;
-- `item.credentials.userStatus` is `CredentialStatus.SignedIn` **or** `item.credentials.globalStatus` is `CredentialStatus.SignedIn`.
+- `item.credentials.globalStatus` is `CredentialStatus.SignedIn`.
 
 Both authentication types qualify — OAuth and API key. A shared team API key is the most common internal case, and nothing about the flag is OAuth-specific.
 
-Either credential level qualifies because publishing always acts on the publisher's own source item (`isPublishVisible` already requires `item.isMyApp`): on a personal item `globalStatus` is the owner's own credential, and `userStatus` covers a personal credential configured on top of it. Access the publisher does not hold cannot be passed on, so a toolset the publisher is signed out of SHALL offer no control.
+Only the global level qualifies, matching the legacy chat. Publishing always acts on the publisher's own source item (`isPublishVisible` already requires `item.isMyApp`), where `globalStatus` is the owner's own credential, and DIAL Core copies that global credential to the published copy on approval. A `userStatus` sign-in alone gives Core nothing to copy, so the copy would stay signed out and members would still be asked to authorise. Access the publisher does not hold at the global level cannot be passed on, so a toolset whose `globalStatus` is not `SignedIn` SHALL offer no control.
+
+The owner reaches that state from the catalog itself: the details header signs a private toolset in at `GLOBAL` level (`getDirectCredentialsLevel`, see `catalog-toolset-credentials`), so an owner who clicks "Log in" or adds an API key there is offered the control. A private toolset signed in at `USER` level only — a sign-in made before that rule — offers no control until the owner logs out and signs in again.
 
 The eligibility decision SHALL be made inside `libs/catalog` from `item.credentials`, which `DetailsPanel` already receives and already branches on for its credentials action (see `catalog-toolset-credentials`). No new fetch, no new loading state, and no new host prop are introduced for it, and `libs/publish-panel` SHALL remain unaware of toolsets and credential levels (see `publish-panel-library`).
 
@@ -324,9 +365,15 @@ The eligibility decision SHALL be made inside `libs/catalog` from `item.credenti
 
 #### Scenario: An API-key toolset the publisher is signed in to offers the option
 
-- **GIVEN** the publisher's own toolset has `authenticationType: ApiKey` and `userStatus: SignedIn`
+- **GIVEN** the publisher's own toolset has `authenticationType: ApiKey` and `globalStatus: SignedIn`
 - **WHEN** the publisher opens the publish sub-view
 - **THEN** the credentials checkbox is shown, cleared
+
+#### Scenario: A toolset signed in at the user level only offers no option
+
+- **GIVEN** the publisher's own toolset has `authenticationType: ApiKey`, `userStatus: SignedIn` and `globalStatus` not `SignedIn`
+- **WHEN** the publisher opens the publish sub-view
+- **THEN** no credentials checkbox is rendered, because DIAL Core copies only the global credential to the published copy
 
 #### Scenario: A toolset that needs no login offers no option
 
@@ -336,7 +383,7 @@ The eligibility decision SHALL be made inside `libs/catalog` from `item.credenti
 
 #### Scenario: A toolset the publisher is signed out of offers no option
 
-- **GIVEN** the item is a toolset with `authenticationType: OAuth` whose `userStatus` and `globalStatus` are both absent or not `SignedIn`
+- **GIVEN** the item is a toolset with `authenticationType: OAuth` whose `globalStatus` is absent or not `SignedIn`
 - **WHEN** the publisher opens the publish sub-view
 - **THEN** no credentials checkbox is rendered, because access the publisher does not hold cannot be passed on
 

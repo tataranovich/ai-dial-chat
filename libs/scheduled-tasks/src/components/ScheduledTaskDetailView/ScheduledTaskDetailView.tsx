@@ -7,12 +7,15 @@ import {
   ButtonVariant,
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
+  EllipsisTooltip,
   GhostButton,
   GhostIconButton,
   NeutralButton,
   Spinner,
   Switch,
   Tabs,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import type { TabItem } from '@epam/ai-dial-ui-kit';
 import {
@@ -35,6 +38,16 @@ import { ScheduledTaskConfigurationSection } from '../ScheduledTaskConfiguration
 import { ScheduledTaskDetailsSection } from '../ScheduledTaskDetailsSection/ScheduledTaskDetailsSection';
 import { ScheduledTaskHistorySection } from '../ScheduledTaskHistorySection/ScheduledTaskHistorySection';
 import styles from './ScheduledTaskDetailView.module.scss';
+
+/*
+ * Both title copies (the desktop header title and the mobile/tablet
+ * standalone row) share the same width contract: min-w-0 lets the flex child
+ * shrink below its nowrap min-content width so truncation engages, and the
+ * 600px max caps the readable line length — phones never reach the cap, so
+ * the title truncates at the row edge as before; tablets stop the single
+ * line from sprawling past 600px.
+ */
+const TITLE_WIDTH_CLASS_NAME = 'min-w-0 max-w-[600px]';
 
 /**
  * Presentational Scheduled Task detail page: a back-navigable header, a
@@ -69,12 +82,14 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
   onRetry,
   description,
   modelLabel,
+  renderModelName,
   repeatsLabel,
   activeWindowLabel,
   completedLabel,
   nextRunLabel,
   instructionsMarkdown,
   skillDisplayNames,
+  renderSkillName,
   renderInstructions,
   runs,
   runsIsLoading = false,
@@ -109,6 +124,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
     '--stdv-header-border': colors?.headerBorder,
     '--stdv-details-border': colors?.detailsColumnBorder,
     '--stdv-subtitle-text': colors?.subtitleText,
+    '--stdv-description-text': colors?.descriptionText,
     '--stdv-history-bg': colors?.historyCardBackground,
   });
 
@@ -158,6 +174,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
       }}
       description={description}
       modelLabel={modelLabel}
+      renderModelName={renderModelName}
       repeatsLabel={repeatsLabel}
       activeWindowLabel={activeWindowLabel}
       completedLabel={completedLabel}
@@ -171,6 +188,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
       instructionsLabel={labels.instructionsLabel}
       skillLabel={labels.skillLabel}
       skillDisplayNames={skillDisplayNames}
+      renderSkillName={renderSkillName}
       instructionsMarkdown={instructionsMarkdown}
       renderInstructions={renderInstructions}
       markdownLabels={{
@@ -192,6 +210,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
       labels={{
         historyTitle: labels.historyTitle,
         historyEmptyLabel: labels.historyEmptyLabel,
+        historyEmptyDescription: labels.historyEmptyDescription,
         historyErrorLabel: labels.historyErrorLabel,
         historyLoadMoreErrorLabel: labels.historyLoadMoreErrorLabel,
         historyRetryLabel: labels.historyRetryLabel,
@@ -199,6 +218,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
         historyShowMoreLabel: labels.historyShowMoreLabel,
         runStatusLabels: labels.runStatusLabels,
         unreadIndicatorLabel: labels.unreadIndicatorLabel,
+        openConversationLabel: labels.openConversationLabel,
       }}
       nextRunLabel={nextRunLabel}
       items={runs}
@@ -245,7 +265,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
     >
       <div
         className={mergeClasses(
-          'flex min-h-16 shrink-0 items-center justify-between gap-2 px-4 py-2 desktop:h-16 desktop:flex-nowrap desktop:px-8 desktop:py-0',
+          'flex min-h-16 shrink-0 items-start justify-between gap-2 px-4 py-2 desktop:h-16 desktop:flex-nowrap desktop:items-center desktop:px-8 desktop:py-0',
           styles.header,
         )}
       >
@@ -269,16 +289,20 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
           {/*
            * Hidden below the desktop breakpoint, where the standalone title
            * row after the header renders its own copy — exactly one copy of
-           * the title is visible at any width.
+           * the title is visible at any width. The h1 carries only the
+           * shared width contract (TITLE_WIDTH_CLASS_NAME); the text itself
+           * goes through the kit's EllipsisTooltip — the same mechanism as
+           * the card title — so a long title ellipsizes and reveals the
+           * full name in a tooltip only when actually clipped, instead of
+           * running to the action buttons.
            */}
           <h1
             className={mergeClasses(
-              'truncate',
+              TITLE_WIDTH_CLASS_NAME,
               styles.desktopTitle,
-              titleClassName,
             )}
           >
-            {displayName}
+            <EllipsisTooltip text={displayName} className={titleClassName} />
           </h1>
           {isDeleted && (
             <span
@@ -335,7 +359,8 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
               }
               onClick={onDelete}
               disabled={isDeleting}
-              className="min-h-11 shrink-0"
+              textClassName={styles.actionLabel}
+              className={mergeClasses('min-h-11 shrink-0', styles.actionButton)}
             />
           )}
 
@@ -351,7 +376,12 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
               }
               onClick={onEdit}
               disabled={isDeleting}
-              className="min-h-11 shrink-0"
+              textClassName={styles.actionLabel}
+              className={mergeClasses(
+                'min-h-11 shrink-0',
+                styles.actionButton,
+                styles.roundActionButton,
+              )}
             />
           )}
           {!isDeleted && onStartNow && labels.startNowButtonLabel && (
@@ -389,7 +419,12 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
                     ? { tooltip: startNowBusyReason }
                     : undefined
                 }
-                className="min-h-11 shrink-0"
+                textClassName={styles.actionLabel}
+                className={mergeClasses(
+                  'min-h-11 shrink-0',
+                  styles.actionButton,
+                  styles.roundActionButton,
+                )}
               />
             </div>
           )}
@@ -403,12 +438,15 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
        */}
       <div
         className={mergeClasses(
-          'min-w-0 items-center gap-2 px-8 py-3',
+          'min-w-0 items-center gap-2 px-4 py-3',
           styles.mobileTitleRow,
         )}
       >
-        <h1 className={mergeClasses('truncate', titleClassName)}>
-          {displayName}
+        {/* The shared width contract caps the line here too — see
+         * TITLE_WIDTH_CLASS_NAME; the Deleted badge stays adjacent since
+         * the h1 sizes to its content up to the cap. */}
+        <h1 className={TITLE_WIDTH_CLASS_NAME}>
+          <EllipsisTooltip text={displayName} className={titleClassName} />
         </h1>
         {isDeleted && (
           <span
@@ -424,19 +462,21 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
       </div>
 
       {labels.activeStatusAnnouncement != null && (
-        <span role="status" aria-live="polite" className="sr-only">
+        <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
           {labels.activeStatusAnnouncement}
-        </span>
+        </LiveRegion>
       )}
       {labels.startStatusAnnouncement != null && (
-        <span role="status" aria-live="polite" className="sr-only">
+        <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
           {labels.startStatusAnnouncement}
-        </span>
+        </LiveRegion>
       )}
 
       {isLoading && (
         <div className="flex flex-1 items-center justify-center">
-          <Spinner />
+          <Spinner
+            ariaLabel={labels.loadingAriaLabel ?? 'Loading scheduled task'}
+          />
         </div>
       )}
 
@@ -453,13 +493,19 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
         !error &&
         (isMobile ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <Tabs
-              ariaLabel={labels.tabsAriaLabel ?? 'Scheduled task sections'}
-              className="px-8"
-              tabs={detailTabs}
-              activeTabId={activeTabId}
-              onTabChange={setActiveTabId}
-            />
+            {/* Pinned to the top of the scroller so the section switch stays
+             * reachable while a long Configuration or History panel scrolls. */}
+            <div
+              className={mergeClasses('sticky top-0 z-10', styles.stickyTabs)}
+            >
+              <Tabs
+                ariaLabel={labels.tabsAriaLabel ?? 'Scheduled task sections'}
+                className="px-4"
+                tabs={detailTabs}
+                activeTabId={activeTabId}
+                onTabChange={setActiveTabId}
+              />
+            </div>
             {/*
              * One panel renders at a time. Its accessible name comes from the
              * active tab's label — the kit's tab elements expose no
@@ -468,7 +514,7 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
             <div
               role="tabpanel"
               aria-label={activeTabLabel}
-              className="flex flex-1 flex-col gap-5 px-8 py-6"
+              className="flex flex-1 flex-col gap-5 px-4 py-6"
             >
               {renderActiveTabPanel()}
             </div>
@@ -494,7 +540,11 @@ export const ScheduledTaskDetailView: FC<ScheduledTaskDetailViewProps> = ({
                 maxWidth: '100%',
               }}
               className={mergeClasses(
-                'flex min-h-0 w-full flex-col gap-5 overflow-y-auto border-e px-8 py-6',
+                /* min-w-0 lets the column shrink below its content's
+                 * min-content width, matching the Configuration column, so
+                 * a long unbreakable field value wraps instead of pushing
+                 * the three-column row past the viewport. */
+                'flex min-h-0 w-full min-w-0 flex-col gap-5 overflow-y-auto border-e px-8 py-6',
                 styles.detailsColumn,
               )}
             >

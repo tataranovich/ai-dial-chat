@@ -25,6 +25,7 @@ import DialFileManagerShell from '../../components/DialFileManagerShell/DialFile
 import { useDialFileManagerHostOptions } from '../../components/DialFileManagerShell/useDialFileManagerHostOptions';
 import { getFileDeleteConfirmTitle } from '../../components/FileDeleteConfirmContent/file-delete-confirm-title';
 import FileDeleteConfirmContent from '../../components/FileDeleteConfirmContent/FileDeleteConfirmContent';
+import { useFileUnshareConfirmation } from '../../components/FileUnshareConfirmation/useFileUnshareConfirmation';
 import {
   BasicI18nKeys,
   ButtonsI18nKeys,
@@ -32,8 +33,17 @@ import {
 } from '../../constants/translation-keys';
 import { useAppConfig } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
+import { useDialFilePreview } from '../../hooks/files/useDialFilePreview';
 import { useSearchPlaceholderByTab } from '../../hooks/files/useSearchPlaceholderByTab';
 import { useUploadQueueLabels } from '../../hooks/files/useUploadQueueLabels';
+
+/*
+ * The folders panel sits in the page's card, so it is divided from the grid by
+ * a line on its end edge instead of the file manager's default shadow. Width
+ * and height repeat that default.
+ */
+const TREE_PANEL_CLASS_NAME =
+  'h-full min-h-0 w-[360px] shrink-0 border-e border-tertiary bg-layer-raised';
 
 const DialFileManagerPage: FC = () => {
   const { t } = useTranslation();
@@ -89,6 +99,9 @@ const DialFileManagerPage: FC = () => {
     actionProfile: DialFileManagerActionProfile.Full,
     forbiddenSymbolsRegExp: NOT_ALLOWED_SYMBOLS_REGEXP,
   });
+
+  const { controller, unshareConfirmation } =
+    useFileUnshareConfirmation(hookResult);
 
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(
     () => new Set(),
@@ -178,7 +191,7 @@ const DialFileManagerPage: FC = () => {
       singleFileTitle: t(DialFileManagerI18nKeys.ConflictSingleTitle),
       multipleFilesTitle: t(DialFileManagerI18nKeys.ConflictMultipleTitle),
       actionLabels: {
-        replace: t(DialFileManagerI18nKeys.ConflictReplace),
+        replace: t(ButtonsI18nKeys.Replace),
         duplicate: t(ButtonsI18nKeys.Duplicate),
         cancel: t(ButtonsI18nKeys.Cancel),
       },
@@ -193,13 +206,19 @@ const DialFileManagerPage: FC = () => {
     [t],
   );
 
+  const { onPreview, onFileClick, previewExtensions } = useDialFilePreview(
+    controller.items,
+    bucket,
+    controller.searchResults,
+  );
+
   const uploadQueueLabels = useUploadQueueLabels();
   const searchPlaceholderByTab = useSearchPlaceholderByTab();
 
   const labels: DialFileManagerShellLabels = useMemo(
     () => ({
       errorMessage: t(DialFileManagerI18nKeys.Error),
-      retryLabel: t(DialFileManagerI18nKeys.Retry),
+      retryLabel: t(ButtonsI18nKeys.Retry),
       hiddenFilesLabel: t(DialFileManagerI18nKeys.HiddenFiles),
       showHiddenFilesLabel: t(DialFileManagerI18nKeys.ShowHiddenFiles),
       hideHiddenFilesLabel: t(DialFileManagerI18nKeys.HideHiddenFiles),
@@ -230,6 +249,7 @@ const DialFileManagerPage: FC = () => {
       moveSourceDisabledTooltip: t(
         DialFileManagerI18nKeys.MoveSourceDisabledTooltip,
       ),
+      movedIntoItselfTooltip: t(DialFileManagerI18nKeys.MovedIntoItselfTooltip),
       folderPickerLoadingTooltip: t(
         DialFileManagerI18nKeys.FolderPickerLoadingTooltip,
       ),
@@ -266,11 +286,12 @@ const DialFileManagerPage: FC = () => {
       treeHeaderByTab,
       renameValidationMessages,
       conflictResolutionPopupOptions,
-      unshareLabel: t(DialFileManagerI18nKeys.UnshareAction),
+      unshareLabel: t(ButtonsI18nKeys.RemoveFromMyList),
       unsharingLabel: t(DialFileManagerI18nKeys.UnsharingLabel),
       removeAccessLabel: t(DialFileManagerI18nKeys.RemoveAccessAction),
       removingAccessLabel: t(DialFileManagerI18nKeys.RemovingAccessLabel),
       infoLabel: t(DialFileManagerI18nKeys.InfoAction),
+      previewLabel: t(BasicI18nKeys.Preview),
       metadataHeader: t(DialFileManagerI18nKeys.MetadataHeader),
       metadataNameLabel: t(DialFileManagerI18nKeys.MetadataNameLabel),
       metadataPathLabel: t(DialFileManagerI18nKeys.MetadataPathLabel),
@@ -291,10 +312,12 @@ const DialFileManagerPage: FC = () => {
     ],
   );
 
-  return (
-    <div className="flex size-full min-h-0 flex-col">
+  /* The shell paints its surface with `--dfms-surface`; the page's card is the
+     surface at every width, so the shell goes transparent. */
+  const shell = (
+    <div className="contents [--dfms-surface:transparent]">
       <DialFileManagerShell
-        hookResult={hookResult}
+        hookResult={controller}
         labels={labels}
         activeTab={activeTab}
         tabs={tabs}
@@ -306,7 +329,31 @@ const DialFileManagerPage: FC = () => {
         autoSelectUploadedItems={false}
         maxSelectableFileSize={maxAttachmentFileSizeBytes}
         oversizedUploadMessage={oversizedUploadMessage}
+        onPreview={onPreview}
+        onTableFileClick={onFileClick}
+        previewExtensions={previewExtensions}
+        treeContainerClassName={TREE_PANEL_CLASS_NAME}
       />
+    </div>
+  );
+
+  /* The page is framed at every width: a title, then the manager in a raised
+     card. A phone repeats the desktop frame with tighter spacing (12px margins
+     and 8px card padding instead of 32px and 20px); the side padding sits inside
+     the manager so the grid's shadow is not clipped. */
+  return (
+    <div className="flex size-full min-h-0 flex-col">
+      <header className="flex min-h-12 items-center px-3 py-1 desktop:min-h-[72px] desktop:px-8 desktop:py-4">
+        <h1 className="dial-h1-text m-0 text-primary">
+          {t(DialFileManagerI18nKeys.PageTitle)}
+        </h1>
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col px-3 pb-3 desktop:px-8 desktop:pb-4">
+        <div className="flex min-h-0 flex-1 flex-col rounded-xl bg-layer-raised py-2 shadow-sm desktop:p-5">
+          {shell}
+        </div>
+      </div>
+      {unshareConfirmation}
     </div>
   );
 };

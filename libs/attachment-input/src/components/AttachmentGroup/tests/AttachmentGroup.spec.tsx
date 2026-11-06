@@ -68,7 +68,7 @@ describe('AttachmentGroup', () => {
       );
       const grid = screen.getByRole('list');
       expect(grid.className).toContain('grid');
-      expect(grid.className).toContain('grid-cols-[repeat(5,83px)]');
+      expect(grid.className).toContain('grid-cols-[repeat(5,100px)]');
       expect(
         screen.queryByRole('button', { name: /show \d+ more/i }),
       ).toBeNull();
@@ -102,7 +102,7 @@ describe('AttachmentGroup', () => {
 
       const rootClassName = container.firstElementChild?.className ?? '';
       expect(rootClassName).toContain('w-full');
-      expect(rootClassName).toContain('max-w-[492px]');
+      expect(rootClassName).toContain('max-w-[532px]');
       // Without min-w-0, a shrink-to-fit ancestor (the message bubble's own
       // `w-fit` wrapper) treats this group's grid content as its floor and
       // never actually narrows on a real mobile viewport.
@@ -139,6 +139,41 @@ describe('AttachmentGroup', () => {
       expect(buttons).toHaveLength(1);
       fireEvent.click(buttons[0]);
       expect(onDownloadAll).toHaveBeenCalledWith([file]);
+    });
+
+    it('hides the download button of a tile isAttachmentDownloadable rejects, and leaves it out of "download all" (#7663)', () => {
+      const onDownloadAll = vi.fn();
+      const file = makeFile('a');
+      const folder = makeFile('folder', { name: 'New folder' });
+      render(
+        <AttachmentGroup
+          attachments={[file, folder]}
+          onDownloadAll={onDownloadAll}
+          isAttachmentDownloadable={(attachment) => attachment.id !== 'folder'}
+        />,
+      );
+
+      expect(
+        screen.getAllByRole('button', { name: 'Download attachment' }),
+      ).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Download all' }));
+      expect(onDownloadAll).toHaveBeenCalledWith([file]);
+    });
+
+    it('hides "download all" when no attachment is downloadable', () => {
+      render(
+        <AttachmentGroup
+          attachments={[makeFile('a'), makeFile('b')]}
+          onDownloadAll={vi.fn()}
+          isAttachmentDownloadable={() => false}
+        />,
+      );
+
+      expect(screen.queryByRole('button', { name: 'Download all' })).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: 'Download attachment' }),
+      ).toBeNull();
     });
 
     it("names each file tile's download button by downloadLabel, not clickLabel", () => {

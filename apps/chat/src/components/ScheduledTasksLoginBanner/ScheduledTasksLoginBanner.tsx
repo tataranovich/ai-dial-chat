@@ -1,27 +1,6 @@
-import {
-  DIAL_ICON_SIZE,
-  DIAL_KIT_ICON_STROKE,
-  LinkButton,
-} from '@epam/ai-dial-ui-kit';
-import { IconAlertTriangleFilled, IconArrowRight } from '@tabler/icons-react';
+import { ScheduledTasksLoginBannerState } from '@epam/ai-dial-chat-hooks';
+import { ScheduledTasksLoginBanner as LoginBanner } from '@epam/ai-dial-scheduled-tasks';
 import { memo, type FC } from 'react';
-
-export enum ScheduledTasksLoginBannerState {
-  Shown = 'shown',
-  LoginInProgress = 'login-in-progress',
-  RetryPopupBlocked = 'retry-popup-blocked',
-  RetryCancelled = 'retry-cancelled',
-  RetryTimeout = 'retry-timeout',
-  RetryFailed = 'retry-failed',
-}
-
-/** Retry states — every state other than `Shown` and `LoginInProgress`. */
-const RETRY_STATES = new Set<ScheduledTasksLoginBannerState>([
-  ScheduledTasksLoginBannerState.RetryPopupBlocked,
-  ScheduledTasksLoginBannerState.RetryCancelled,
-  ScheduledTasksLoginBannerState.RetryTimeout,
-  ScheduledTasksLoginBannerState.RetryFailed,
-]);
 
 export interface Props {
   /** `undefined` renders nothing visible — covers the page's checking/hidden/error gate states. */
@@ -36,7 +15,7 @@ export interface Props {
   cancelledMessage: string;
   timeoutMessage: string;
   failedMessage: string;
-  /** Transient status announced through the aria-live region after the banner hides (e.g. a success confirmation), without any visible banner content. */
+  /** Transient status announced through the aria-live region — while the banner is visible (e.g. a disconnect success alongside the reappeared banner) and after it hides (e.g. a login success), without any visible banner content. */
   liveAnnouncement: string;
   /** Omitted when Core reports that no offline OAuth client is available. */
   onLogIn?: () => void;
@@ -66,27 +45,10 @@ const retryMessageFor = (
   }
 };
 
-const resolvePrimaryLabel = (
-  state: ScheduledTasksLoginBannerState,
-  props: Pick<
-    Props,
-    'loginButtonLabel' | 'retryButtonLabel' | 'loggingInLabel'
-  >,
-): string => {
-  if (state === ScheduledTasksLoginBannerState.LoginInProgress) {
-    return props.loggingInLabel;
-  }
-  if (RETRY_STATES.has(state)) {
-    return props.retryButtonLabel;
-  }
-  return props.loginButtonLabel;
-};
-
 /**
- * Non-blocking, non-dismissible inline banner shown on the Scheduled Tasks
- * list page when offline-credentials login is required. Takes no SDK/route
- * import — all state and callbacks are supplied by `ScheduledTasksPage` via
- * `useOfflineCredentialsGate`/`useOfflineCredentialsLogin`.
+ * Inline banner on the Scheduled Tasks pages when offline-credentials login is
+ * required: maps the page's banner state onto the lib banner's visibility,
+ * progress and retry message.
  */
 const ScheduledTasksLoginBanner: FC<Props> = ({
   state,
@@ -101,78 +63,26 @@ const ScheduledTasksLoginBanner: FC<Props> = ({
   failedMessage,
   liveAnnouncement,
   onLogIn,
-}) => {
-  const handleLogIn = () => onLogIn?.();
-
-  if (state === undefined) {
-    return (
-      <span role="status" aria-live="polite" className="sr-only">
-        {liveAnnouncement}
-      </span>
-    );
-  }
-
-  const isLoggingIn = state === ScheduledTasksLoginBannerState.LoginInProgress;
-  const isRetry = RETRY_STATES.has(state);
-  const retryMessage = retryMessageFor(state, {
-    popupBlockedMessage,
-    cancelledMessage,
-    timeoutMessage,
-    failedMessage,
-  });
-  const primaryLabel = resolvePrimaryLabel(state, {
-    loginButtonLabel,
-    retryButtonLabel,
-    loggingInLabel,
-  });
-
-  /*
-   * Hand-rolled rather than the ui-kit `Notification` component: the design
-   * reference pairs a neutral `bg-layer-sunken` surface with a warning
-   * triangle icon, a combination `Notification`'s variant system does not
-   * expose (each variant ties one fixed icon to one fixed background).
-   */
-  return (
-    <div
-      role="alert"
-      className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-layer-sunken p-3"
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <IconAlertTriangleFilled
-          aria-hidden
-          size={DIAL_ICON_SIZE.LG}
-          className="shrink-0 text-warning-icon"
-        />
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 text-primary">
-          <span className="dial-small-paragraph-semi-text min-w-0 break-words">
-            {title}
-          </span>
-          <span className="dial-small-paragraph-text min-w-0 break-words">
-            {body}
-          </span>
-        </div>
-      </div>
-      {onLogIn && (
-        <LinkButton
-          label={primaryLabel}
-          disabled={isLoggingIn}
-          iconAfter={
-            <IconArrowRight
-              size={DIAL_ICON_SIZE.SM}
-              stroke={DIAL_KIT_ICON_STROKE}
-              aria-hidden
-              className="rtl:scale-x-[-1]"
-            />
-          }
-          onClick={handleLogIn}
-          className="min-h-11 min-w-11 shrink-0"
-        />
-      )}
-      <span role="status" aria-live="polite" className="sr-only">
-        {isRetry ? retryMessage : ''}
-      </span>
-    </div>
-  );
-};
+}) => (
+  <LoginBanner
+    isVisible={state !== undefined}
+    isLoggingIn={state === ScheduledTasksLoginBannerState.LoginInProgress}
+    retryMessage={retryMessageFor(state, {
+      popupBlockedMessage,
+      cancelledMessage,
+      timeoutMessage,
+      failedMessage,
+    })}
+    liveAnnouncement={liveAnnouncement}
+    labels={{
+      title,
+      body,
+      logIn: loginButtonLabel,
+      retry: retryButtonLabel,
+      loggingIn: loggingInLabel,
+    }}
+    onLogIn={onLogIn}
+  />
+);
 
 export default memo(ScheduledTasksLoginBanner);

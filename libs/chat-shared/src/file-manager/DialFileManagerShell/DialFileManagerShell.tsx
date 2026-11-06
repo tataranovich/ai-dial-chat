@@ -8,10 +8,16 @@ import {
   type FileTreeOptions,
 } from '@epam/ai-dial-react-file-manager';
 import {
+  Button,
+  ButtonAppearance,
+  ButtonVariant,
+  ElementSize,
+  ErrorMessageNotification,
   NOT_ALLOWED_SYMBOLS_REGEXP,
-  PrimaryButton,
   Spinner,
   TransferQueue,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import {
   memo,
@@ -22,6 +28,7 @@ import {
   type FC,
 } from 'react';
 import type { FileManagerSelectableNode } from '../../types/file-manager-node';
+import { buildCssVars } from '../../utils/build-css-vars';
 import { mergeClasses } from '../../utils/merge-class';
 import type { FileManagerController } from '../file-manager-controller';
 import {
@@ -35,8 +42,15 @@ import type {
 } from '../labels';
 import { OperationLoaderModal } from '../OperationLoaderModal/OperationLoaderModal';
 import { getParentFolderPath } from '../path';
-import { toUploadQueueItems } from '../upload-queue';
+import type { DialFileManagerShellStyles } from '../shell-styles';
+import {
+  buildTransferQueueLabels,
+  parseTransferQueueRowId,
+  toTransferQueueItems,
+  TransferQueueRowKind,
+} from '../upload-queue';
 import { useGridEditingScroll } from '../useGridEditingScroll/useGridEditingScroll';
+import styles from './DialFileManagerShell.module.scss';
 
 type DestinationFolderPopupOptions =
   DialFileManagerDestinationFolderPopupOptions & {
@@ -47,7 +61,6 @@ type DestinationFolderPopupOptions =
   };
 
 interface OverlayFlags {
-  isDownloading: boolean;
   isDeleting: boolean;
   isRenaming: boolean;
   isMoving: boolean;
@@ -57,20 +70,15 @@ interface OverlayFlags {
 
 type OverlayLabels = Pick<
   DialFileManagerShellLabels,
-  | 'downloadingLabel'
-  | 'deletingLabel'
-  | 'renamingLabel'
-  | 'unsharingLabel'
-  | 'removingAccessLabel'
+  'deletingLabel' | 'renamingLabel' | 'unsharingLabel' | 'removingAccessLabel'
 >;
 
 const resolveOverlayAriaLabel = (
   flags: OverlayFlags,
   labels: OverlayLabels,
 ): string | undefined => {
-  if (flags.isDownloading) {
-    return labels.downloadingLabel;
-  } else if (flags.isDeleting) {
+  /* Downloads have no overlay: they run as transfer-queue rows. */
+  if (flags.isDeleting) {
     return labels.deletingLabel;
   } else if (flags.isRenaming && !flags.isMoving) {
     return labels.renamingLabel;
@@ -118,6 +126,20 @@ export interface DialFileManagerShellProps {
   getDisabledTooltip?: (row: FileManagerGridRow) => string | undefined;
   /** Tooltip shown on files with an unsupported type. */
   unsupportedFileTypeTooltip?: string;
+  /**
+   * Classes for the folders-tree panel. Replaces the panel's default classes
+   * (including its width), so include `shrink-0` and an explicit width.
+   * Omit to keep the variant's default.
+   */
+  treeContainerClassName?: string;
+  /** Called with the virtual path of the file the user chose to preview. */
+  onPreview?: (path?: string) => void;
+  /** Called with the grid row when the user clicks a file (folders open instead). */
+  onTableFileClick?: (row: FileManagerGridRow) => void;
+  /** Dotted extensions (e.g. `.md`) the Preview row action is offered for. The file manager matches them exactly as written, so list every spelling that should qualify. */
+  previewExtensions?: string[];
+  /** Color overrides, e.g. a different surface background. */
+  styles?: DialFileManagerShellStyles;
 }
 
 /**
@@ -142,6 +164,11 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
   isRowSelectable,
   getDisabledTooltip,
   unsupportedFileTypeTooltip,
+  treeContainerClassName,
+  onPreview,
+  onTableFileClick,
+  previewExtensions,
+  styles: shellStyles,
 }) => {
   const {
     items,
@@ -166,10 +193,13 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     cancelUpload,
     cancelUploadFile,
     clearUploadBatch,
+    downloadBatchState,
+    cancelDownloadFile,
+    cancelAllDownloads,
+    clearDownloadBatch,
     onCreateFolder,
     onCreateFolderValidate,
     onDownloadFiles,
-    isDownloading,
     onDeleteFiles,
     isDeleting,
     onMoveToFiles,
@@ -253,9 +283,19 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
   ]);
 
   const gridActionLabels = useMemo(() => {
-    if (!(DialFileManagerActions.Info in tabActionLabels)) return actionLabels;
-    return { ...actionLabels, [DialFileManagerActions.Info]: labels.infoLabel };
-  }, [actionLabels, tabActionLabels, labels.infoLabel]);
+    const withPreview =
+      labels.previewLabel != null
+        ? {
+            ...actionLabels,
+            [DialFileManagerActions.Preview]: labels.previewLabel,
+          }
+        : actionLabels;
+    if (!(DialFileManagerActions.Info in tabActionLabels)) return withPreview;
+    return {
+      ...withPreview,
+      [DialFileManagerActions.Info]: labels.infoLabel,
+    };
+  }, [actionLabels, tabActionLabels, labels.infoLabel, labels.previewLabel]);
 
   const allSelectedItemsSharedByMe = useMemo(() => {
     if (selectedPaths.size === 0) return false;
@@ -276,9 +316,20 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     return withoutRemoveAccess;
   }, [actionLabels, allSelectedItemsSharedByMe]);
 
+  const isAttachVariant = variant === DialFileManagerVariant.Attach;
+
   const gridOptions = useMemo(
     () => ({
       selectionMode: GridSelectionMode.MULTIPLE,
+      /* Column filters are redundant next to the search bar. */
+      filterable: false,
+      /* No vertical header borders in either variant. The standalone page draws
+         a flat table; the attach modal keeps the file manager's own card (rounded,
+         with its shadow) so the file list stands out from the dialog. */
+      withoutHeaderBorders: true,
+      containerClassName: isAttachVariant
+        ? undefined
+        : 'rounded-none shadow-none',
       visibleColumns,
       dateLocale,
       dateOptions,
@@ -297,19 +348,22 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
       dateOptions,
       gridActionLabels,
       isRowSelectable,
+      isAttachVariant,
     ],
   );
 
   const treeOptions = useMemo(
     () => ({
-      header:
-        variant === DialFileManagerVariant.Attach
-          ? null
-          : labels.treeHeaderByTab[activeTab],
+      /* No title above the tabs unless the host provides one; the tabs keep their name. */
+      header: labels.treeHeader ?? null,
       containerClassName:
-        variant === DialFileManagerVariant.Attach
-          ? 'min-h-0 h-full w-[360px] shrink-0 rounded-xl bg-layer-raised shadow-sm'
-          : undefined,
+        treeContainerClassName ??
+        (variant === DialFileManagerVariant.Attach
+          ? mergeClasses(
+              'relative z-1 min-h-0 h-full w-[360px] shrink-0 border-e',
+              styles.tree,
+            )
+          : undefined),
       tabsAriaLabel: labels.treeHeaderByTab[activeTab],
       tabs,
       activeTab,
@@ -321,7 +375,9 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
       actionLabels,
     }),
     [
+      labels.treeHeader,
       labels.treeHeaderByTab,
+      treeContainerClassName,
       variant,
       tabs,
       activeTab,
@@ -343,6 +399,8 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
   const toolbarOptions = useMemo(
     () => ({
       showHiddenFilesToggle: true,
+      /* The attach footer owns the primary action, so the "Add" button is neutral. */
+      ...(isAttachVariant ? { newButtonVariant: ButtonVariant.Neutral } : {}),
       hiddenFilesSwitcherLabel: labels.hiddenFilesLabel,
       showHiddenFilesLabel: labels.showHiddenFilesLabel,
       hideHiddenFilesLabel: labels.hideHiddenFilesLabel,
@@ -357,6 +415,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
       },
     }),
     [
+      isAttachVariant,
       labels.hiddenFilesLabel,
       labels.showHiddenFilesLabel,
       labels.hideHiddenFilesLabel,
@@ -369,12 +428,16 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     ],
   );
 
+  /* Attach is a file picker: bulk Download/Delete would act on files the user only meant to pick. */
   const bulkActionsToolbarOptions = useMemo(
-    () => ({
-      getSelectionLabel: labels.getSelectionLabel,
-      actionLabels: bulkActionLabels,
-    }),
-    [labels.getSelectionLabel, bulkActionLabels],
+    () =>
+      isAttachVariant
+        ? undefined
+        : {
+            getSelectionLabel: labels.getSelectionLabel,
+            actionLabels: bulkActionLabels,
+          },
+    [isAttachVariant, labels.getSelectionLabel, bulkActionLabels],
   );
 
   const deleteConfirmationOptions = useMemo(
@@ -426,6 +489,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
       disabledPathTooltip: isDestinationFolderLoading
         ? labels.folderPickerLoadingTooltip
         : labels.moveSourceDisabledTooltip,
+      movedIntoItselfTooltip: labels.movedIntoItselfTooltip,
       emptyStateTitle: labels.folderPickerEmptyStateTitle,
       emptyStateDescription: labels.folderPickerEmptyStateDescription,
       sourceFolder: disabledDestinationPath,
@@ -442,6 +506,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
       labels.getMoveHeader,
       labels.folderPickerLoadingTooltip,
       labels.moveSourceDisabledTooltip,
+      labels.movedIntoItselfTooltip,
       labels.folderPickerEmptyStateTitle,
       labels.folderPickerEmptyStateDescription,
       isDestinationFolderLoading,
@@ -451,14 +516,62 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
   );
 
   /* The queue confirms first when work is still running, so closing it aborts whatever is left. */
-  const handleUploadQueueClose = useCallback((): void => {
+  /* One queue for both kinds: closing it stops and clears uploads and downloads alike. */
+  const handleTransferQueueClose = useCallback((): void => {
     cancelUpload();
+    cancelAllDownloads();
     clearUploadBatch();
-  }, [cancelUpload, clearUploadBatch]);
+    clearDownloadBatch();
+  }, [cancelUpload, cancelAllDownloads, clearUploadBatch, clearDownloadBatch]);
 
-  const uploadQueueItems = useMemo(
-    () => toUploadQueueItems(uploadBatchState?.files ?? []),
-    [uploadBatchState],
+  const handleCancelTransferItem = useCallback(
+    (rowId: string): void => {
+      const row = parseTransferQueueRowId(rowId);
+      if (row?.kind === TransferQueueRowKind.Upload) {
+        cancelUploadFile(row.entryId);
+      } else if (row?.kind === TransferQueueRowKind.Download) {
+        cancelDownloadFile(row.entryId);
+      }
+    },
+    [cancelUploadFile, cancelDownloadFile],
+  );
+
+  const transferQueueItems = useMemo(
+    () =>
+      toTransferQueueItems(
+        uploadBatchState,
+        downloadBatchState,
+        labels.uploadFailureMessages,
+      ),
+    [uploadBatchState, downloadBatchState, labels.uploadFailureMessages],
+  );
+
+  const uploadCount = uploadBatchState?.files.length ?? 0;
+  const downloadCount = downloadBatchState?.files.length ?? 0;
+  const transferQueueTitle =
+    labels.getTransferQueueTitle?.({
+      uploads: uploadCount,
+      downloads: downloadCount,
+    }) ?? labels.getUploadQueueTitle(uploadCount + downloadCount);
+
+  const transferQueueLabels = useMemo(
+    () =>
+      buildTransferQueueLabels({
+        uploadLabels: labels.uploadQueueLabels,
+        downloadLabels: labels.downloadQueueLabels,
+        mixedProgressLabel: labels.transferQueueProgressAriaLabel,
+        uploadNames: new Set(uploadBatchState?.files.map((file) => file.name)),
+        downloadNames: new Set(
+          downloadBatchState?.files.map((file) => file.name),
+        ),
+      }),
+    [
+      labels.uploadQueueLabels,
+      labels.downloadQueueLabels,
+      labels.transferQueueProgressAriaLabel,
+      uploadBatchState,
+      downloadBatchState,
+    ],
   );
 
   const fileMetadataPopupOptions = useMemo(
@@ -488,7 +601,6 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
 
   const overlayLabel = resolveOverlayAriaLabel(
     {
-      isDownloading,
       isDeleting,
       isRenaming,
       isMoving,
@@ -498,53 +610,59 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
     labels,
   );
 
-  /* The standalone File storage page sits on the base layer; the attach
-     modal keeps the sunken surface behind its raised tree panel. */
-  const surfaceClassName =
-    variant === DialFileManagerVariant.Standalone
-      ? 'bg-layer-base'
-      : 'bg-layer-sunken';
-
+  /* Search-mode copy goes through `searchEmptyStateTitle`: in search mode
+     `DialFileManager` ignores `emptyStateTitle` and falls back to "No data". */
   const emptyStateCopy = useMemo((): EmptyStateCopy => {
-    if (searchResults != null && !isSearching) {
-      return { title: labels.searchEmptyStateTitle, description: '' };
-    }
     const isInSubfolder = path.split('/').filter(Boolean).length > 1;
     if (isInSubfolder) {
       return { title: labels.folderEmptyStateTitle, description: '' };
     }
     return labels.emptyStateByTab[gateTab];
-  }, [
-    searchResults,
-    isSearching,
-    path,
-    labels.searchEmptyStateTitle,
-    labels.folderEmptyStateTitle,
-    labels.emptyStateByTab,
-    gateTab,
-  ]);
+  }, [path, labels.folderEmptyStateTitle, labels.emptyStateByTab, gateTab]);
+
+  const surfaceCssVars = buildCssVars({
+    '--dfms-surface': shellStyles?.colors?.surface,
+    '--dfms-tree-bg': shellStyles?.colors?.treeBackground,
+    '--dfms-tree-border': shellStyles?.colors?.treeBorder,
+    '--dfms-tree-shadow': shellStyles?.colors?.treeShadow,
+    '--dfms-overlay-backdrop': shellStyles?.colors?.overlayBackdrop,
+  });
 
   return (
     <>
       {error != null ? (
-        <div role="alert" className="flex flex-col items-center gap-4 p-6">
-          <p>{labels.errorMessage}</p>
-          <PrimaryButton label={labels.retryLabel} onClick={retry} />
+        /* The kit error section message is an assertive `alert` live region,
+           with Retry in its `action` slot. */
+        <div className="p-6">
+          <ErrorMessageNotification
+            message={labels.errorMessage}
+            action={
+              <Button
+                variant={ButtonVariant.Neutral}
+                appearance={ButtonAppearance.Outlined}
+                size={ElementSize.Small}
+                label={labels.retryLabel}
+                onClick={retry}
+              />
+            }
+          />
         </div>
       ) : (
         <div
+          style={surfaceCssVars}
           className={mergeClasses(
             'relative flex min-h-0 w-full grow overflow-auto',
-            surfaceClassName,
+            styles.surface,
           )}
         >
           <DialFileManager
-            className={mergeClasses('min-h-0 w-full grow', surfaceClassName)}
-            contentClassName={
-              variant === DialFileManagerVariant.Attach
-                ? 'px-0 pb-0'
-                : undefined
-            }
+            /* Cancels the file manager's own compact-view root padding, which doubles attach's grid inset. */
+            className={mergeClasses(
+              'min-h-0 w-full grow',
+              styles.surface,
+              isAttachVariant && 'p-0',
+            )}
+            contentClassName={isAttachVariant ? 'px-0 pb-0' : undefined}
             gridClassName={
               variant === DialFileManagerVariant.Attach
                 ? 'size-full gap-6 px-6 py-4'
@@ -582,6 +700,7 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
             autoSelectUploadedItems={autoSelectUploadedItems}
             emptyStateTitle={emptyStateCopy.title}
             emptyStateDescription={emptyStateCopy.description}
+            searchEmptyStateTitle={labels.searchEmptyStateTitle}
             uploadEnabled={uploadEnabled}
             sharedWithMeIds={sharedWithMeIds}
             sharedByMePaths={sharedByMePaths}
@@ -589,6 +708,9 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
             onRemoveFilesAccess={onRemoveFilesAccess}
             fileMetadataPopupOptions={fileMetadataPopupOptions}
             onGetInfo={onGetInfo}
+            onPreview={onPreview}
+            onTableFileClick={onTableFileClick}
+            previewExtensions={previewExtensions}
             onUploadFiles={onUploadFiles}
             onUploadArchive={onUploadArchive}
             onValidateUpload={onValidateUpload}
@@ -611,10 +733,16 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
             getDisabledTooltip={getDisabledTooltip}
             unsupportedFileTypeTooltip={unsupportedFileTypeTooltip}
           />
+          {/* Always mounted so the polite region exists before the overlay appears. */}
+          <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
+            {overlayLabel ?? ''}
+          </LiveRegion>
           {overlayLabel != null && (
             <div
-              aria-live="polite"
-              className="absolute inset-0 z-[52] flex items-center justify-center bg-backdrop desktop:p-4"
+              className={mergeClasses(
+                'absolute inset-0 z-52 flex items-center justify-center desktop:p-4',
+                styles.overlay,
+              )}
             >
               <Spinner size={32} fullWidth={false} ariaLabel={overlayLabel} />
             </div>
@@ -622,13 +750,18 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
         </div>
       )}
 
-      <div className="fixed bottom-4 end-4 z-[70]">
+      {/*
+       * Above page content (sidebars sit at z-50) but below the kit's portalled
+       * overlays — popup 52, dropdown 53, tooltip 55 — so a row's error tooltip
+       * and the close confirmation open over the queue, not under it.
+       */}
+      <div className="fixed inset-e-4 bottom-4 z-51">
         <TransferQueue
-          title={labels.getUploadQueueTitle(uploadQueueItems.length)}
-          items={uploadQueueItems}
-          onClose={handleUploadQueueClose}
-          onCancelItem={cancelUploadFile}
-          labels={labels.uploadQueueLabels}
+          title={transferQueueTitle}
+          items={transferQueueItems}
+          onClose={handleTransferQueueClose}
+          onCancelItem={handleCancelTransferItem}
+          labels={transferQueueLabels}
         />
       </div>
 
@@ -642,6 +775,8 @@ export const DialFileManagerShell: FC<DialFileManagerShellProps> = ({
           text={isMoving ? labels.movingLabel : labels.copyingLabel}
           cancelLabel={labels.operationLoaderCancelLabel}
           onCancel={cancelCopyMove}
+          colors={shellStyles?.operationLoader}
+          textClassName={shellStyles?.operationLoaderTextClassName}
         />
       )}
     </>

@@ -1,3 +1,4 @@
+import { AttachmentCanvasProvider } from '@epam/ai-dial-attachment-canvas';
 import {
   DeploymentItemDto,
   DialToolsetDto,
@@ -60,6 +61,7 @@ vi.mock(
   }),
 );
 const mockOpenParametersPopup = vi.fn();
+const mockRecognizeMentionsInInsertion = vi.fn();
 /* Captured so a test can play the role of the prompt picker and hand text back
    through the route's own `onInsertText`. */
 let capturedOnInsertText: ((text: string) => void) | undefined;
@@ -96,6 +98,7 @@ vi.mock('../../components/SkillSelector/useSkillSelectorOverlay', () => ({
     isSkillUnsupported: false,
     resetSkillMentions: vi.fn(),
     seedSkillMentions: vi.fn(),
+    recognizeMentionsInInsertion: mockRecognizeMentionsInInsertion,
     selectSkillByUrl: vi.fn(),
     renderHistorySkillSegments: () => null,
     renderHistorySkills: () => null,
@@ -113,6 +116,13 @@ vi.mock('../../context/IsolatedModelViewContext', async (importOriginal) => {
     >();
   return { ...actual, useIsolatedModelView: vi.fn() };
 });
+vi.mock(
+  '../../context/SkillsContext',
+  async () => import('../../context/tests/skills-context-mock'),
+);
+vi.mock('../../context/ConversationsContext', () => ({
+  useConversations: () => ({ refreshConversations: vi.fn() }),
+}));
 vi.mock('../../context/auth/UserContext');
 vi.mock('../../context/NotificationContext');
 vi.mock('../../context/overlay/OverlayContext', async () => {
@@ -268,6 +278,7 @@ const renderRoute = () =>
     <MemoryRouter>
       <ConversationRoute />
     </MemoryRouter>,
+    { wrapper: AttachmentCanvasProvider },
   );
 
 const RouteStateDriver = ({ deploymentId }: { deploymentId: string }) => {
@@ -292,6 +303,7 @@ const renderRouteWithDeploymentState = (deploymentId: string) =>
       <RouteStateDriver deploymentId={deploymentId} />
       <ConversationRoute />
     </MemoryRouter>,
+    { wrapper: AttachmentCanvasProvider },
   );
 
 describe('ConversationRoute', () => {
@@ -427,6 +439,7 @@ describe('ConversationRoute', () => {
       >
         <ConversationRoute />
       </MemoryRouter>,
+      { wrapper: AttachmentCanvasProvider },
     );
 
     await waitFor(() => {
@@ -449,6 +462,7 @@ describe('ConversationRoute', () => {
         <LocationStateProbe />
         <ConversationRoute />
       </MemoryRouter>,
+      { wrapper: AttachmentCanvasProvider },
     );
 
     await waitFor(() => {
@@ -478,6 +492,7 @@ describe('ConversationRoute', () => {
           <ConversationRoute />
         </OverlayTestCtx.Provider>
       </MemoryRouter>,
+      { wrapper: AttachmentCanvasProvider },
     );
 
     await waitFor(() => {
@@ -509,6 +524,7 @@ describe('ConversationRoute', () => {
           <ConversationRoute />
         </OverlayDriver>
       </MemoryRouter>,
+      { wrapper: AttachmentCanvasProvider },
     );
 
     expect(overlayMocks.notifyConversationLoaded).not.toHaveBeenCalled();
@@ -1223,6 +1239,16 @@ describe('ConversationRoute', () => {
       expect(screen.getByLabelText('Input message').textContent).toBe('');
     });
 
+    it('hands the prompt to skill-mention recognition before inserting it (#9354)', async () => {
+      await renderAndWaitForPicker();
+
+      act(() => capturedOnInsertText?.('Run /report'));
+
+      expect(mockRecognizeMentionsInInsertion).toHaveBeenCalledWith(
+        'Run /report',
+      );
+    });
+
     it('re-inserts the same prompt when it is picked twice', async () => {
       await renderAndWaitForPicker();
 
@@ -1249,6 +1275,7 @@ describe('ConversationRoute', () => {
         >
           <ConversationRoute />
         </MemoryRouter>,
+        { wrapper: AttachmentCanvasProvider },
       );
 
       await waitFor(() => {
@@ -1276,6 +1303,7 @@ describe('ConversationRoute', () => {
         >
           <ConversationRoute />
         </MemoryRouter>,
+        { wrapper: AttachmentCanvasProvider },
       );
 
       await waitFor(() => {
@@ -1435,6 +1463,7 @@ describe('ConversationRoute', () => {
         >
           <ConversationRoute />
         </MemoryRouter>,
+        { wrapper: AttachmentCanvasProvider },
       );
 
       await waitFor(() => {

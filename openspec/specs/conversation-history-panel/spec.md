@@ -3,12 +3,20 @@
 ## Purpose
 
 The `conversation-panel` library: grouped, searchable, filterable conversation history with per-item actions, persistent on desktop and a drawer on mobile.
+
 ## Requirements
+
 ### Requirement: `libs/conversation-panel` library exposes `ConversationPanel`
 
-A library `@epam/ai-dial-conversation-panel` SHALL exist at `libs/conversation-panel/`. Its `src/index.ts` SHALL export `ConversationPanel`, `RenameConversationPopup`, `CONVERSATION_PANEL_CLASS`, and the types `ConversationMove`, `ConversationPanelProps`, `ConversationPanelStyles`, `ConversationColors`, `NewChatButtonColors`, `ConversationPanelTypography`, `ConversationPanelLabels`, `ConversationItem`, `FilterLabels`, `RenameConversationPopupProps`, `RenameConversationPopupLabels`, and `RenameConversationPopupStyles`. It SHALL NOT export `FilterTab`, which is owned by `@epam/ai-dial-chat-shared` — `ConversationItem.source` and `ConversationMove.targetGroupKey` are typed as `FilterTab`, and consumers import that enum from its own package alongside this one. The library SHALL declare `react`, `@epam/ai-dial-chat-shared`, and `@epam/ai-dial-ui-kit` as peer dependencies, and `@tabler/icons-react`, `react-window`, and `@epam/ai-dial-sidebar` as regular dependencies. It SHALL have `"license": "Apache-2.0"` in `package.json`.
+A library `@epam/ai-dial-conversation-panel` SHALL exist at `libs/conversation-panel/`. Its `src/index.ts` SHALL export:
 
-The library imports `SidebarPanel`, `SidebarOrientation`, `PanelEmpty`, and `PanelNoResults` from `@epam/ai-dial-sidebar` for the panel shell and empty states, and the 2.0 `Search` and `Skeleton` components from `@epam/ai-dial-ui-kit`.
+- **Components:** `ConversationPanel`, `ConversationList`, `ConversationListHeader`, `RenameConversationPopup`.
+- **Values:** `CONVERSATION_PANEL_CLASS` and the enum `ConversationRowVariant`.
+- **Types:** `ConversationMove`, `ConversationPanelProps`, `ConversationPanelStyles`, `ConversationColors`, `NewChatButtonColors`, `ConversationPanelTypography`, `ConversationPanelLabels`, `ConversationItem`, `FilterLabels`, `ConversationListProps`, `ConversationListLabels`, `ConversationListStyles`, `ConversationListColors`, `ConversationListHeaderProps`, `ConversationListHeaderLabels`, `ConversationListHeaderStyles`, `ConversationListHeaderColors`, `ConversationListHeaderTypography`, `ConversationListTypography`, `RenameConversationPopupProps`, `RenameConversationPopupLabels`, and `RenameConversationPopupStyles`.
+
+It SHALL NOT export `FilterTab`, which is owned by `@epam/ai-dial-chat-shared` — `ConversationItem.source` and `ConversationMove.targetGroupKey` are typed as `FilterTab`, and consumers import that enum from its own package alongside this one. The library SHALL declare `react`, `@epam/ai-dial-chat-shared`, and `@epam/ai-dial-ui-kit` as peer dependencies, and `@tabler/icons-react`, `react-window`, and `@epam/ai-dial-sidebar` as regular dependencies. It SHALL have `"license": "Apache-2.0"` in `package.json`.
+
+The library imports `SidebarPanel`, `SidebarOrientation`, `PanelEmpty`, and `PanelNoResults` from `@epam/ai-dial-sidebar` for the panel shell and empty states, and the 2.0 `Search`, `Skeleton`, `Dropdown`, and `GhostIconButton` components from `@epam/ai-dial-ui-kit`.
 
 #### Scenario: ConversationPanel is importable in apps/chat
 
@@ -21,7 +29,10 @@ The library imports `SidebarPanel`, `SidebarOrientation`, `PanelEmpty`, and `Pan
 - **THEN** it imports the enum from `@epam/ai-dial-chat-shared`, and importing it from
   `@epam/ai-dial-conversation-panel` does not resolve
 
----
+#### Scenario: The list and its header are importable without the panel
+
+- **WHEN** a host imports `ConversationList`, `ConversationListHeader` and `ConversationRowVariant` from `@epam/ai-dial-conversation-panel`
+- **THEN** TypeScript resolves them, and rendering them does not render `SidebarPanel`, the New chat button or the filter chips
 
 ### Requirement: Panel header contains the title prop; toggle button is in the app Header
 
@@ -58,7 +69,7 @@ Each section renders a disclosure button (chevron icon) as its header that toggl
 
 When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `undefined`, the deployment icon SHALL show a tooltip with that text on hover. The item SHALL call `onSelectConversation(id)` when activated. The active conversation (matching `activeConversationId`) SHALL receive `aria-current="page"`. Section headings via optional `labels.groupLabels?: { pinned?, myChats?, shared?, organization? }` (English defaults: `"Pinned"`, `"My chats"`, `"Shared"`, `"Organization"`).
 
-`useConversationPanelItems` (`libs/chat-hooks/src/conversation/useConversationPanelItems/useConversationPanelItems.ts`), which `ConversationPanelView` uses to build its rows, computes each row's `iconTooltip` through the host's `resolveIconTooltip` from the deployment its lookup finds for the id extracted by `getModelIdFromConversationId`. When no match is found (the deployment is unavailable, or the extracted id was contaminated by real conversation-folder path segments — see the `getModelIdFromConversationId` requirement above), `iconTooltip` SHALL fall back to only the **last** `/`-separated segment of the extracted id, percent-decoded — NOT the full extracted id/path — to avoid showing a misleading or unreadable full path as the tooltip.
+`useConversationPanelItems` (`libs/chat-hooks/src/conversation/useConversationPanelItems/useConversationPanelItems.ts`), which `ConversationPanelView` uses to build its rows, computes each row's `iconTooltip` through the host's `resolveIconTooltip` from the deployment its lookup finds for the candidates returned by `getModelIdCandidatesFromConversationId` (every `/`-separated suffix of the id extracted by `getModelIdFromConversationId`, tried longest first, so a conversation stored inside a folder still resolves its deployment). When no candidate matches (the deployment is unavailable), `iconTooltip` SHALL fall back to only the **last** `/`-separated segment of the extracted id, percent-decoded — NOT the full extracted id/path — to avoid showing a misleading or unreadable full path as the tooltip.
 
 #### Scenario: Renders pinned conversations in Pinned section
 
@@ -92,7 +103,7 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 #### Scenario: Fallback tooltip shows only the last path segment when no deployment matches
 
-- **GIVEN** `getModelIdFromConversationId` extracted `'YH folder01.1/YH folder01.2/YH folder01.3/dial-chathub-v2-gpt-5.5-2026-04-24'` for a row (contaminated by real conversation-folder segments) and no deployment in `deployments` has that `id` or `reference`
+- **GIVEN** `getModelIdFromConversationId` extracted `'YH folder01.1/YH folder01.2/YH folder01.3/dial-chathub-v2-gpt-5.5-2026-04-24'` for a row (contaminated by real conversation-folder segments) and no deployment in `deployments` has any of its suffixes as `id` or `reference`
 - **WHEN** `useConversationPanelItems` computes that row's `iconTooltip`
 - **THEN** `iconTooltip` is `'dial-chathub-v2-gpt-5.5-2026-04-24'` (the last segment, decoded), not the full extracted path
 
@@ -107,6 +118,37 @@ When `item.iconTooltip` is provided and `item.isIconLoading` is `false` or `unde
 
 - **WHEN** `conversations` is an empty array
 - **THEN** the `labels.emptyLabel` text is rendered instead of sections
+
+`ConversationList` SHALL follow the Patterns 2.0 empty-state rules. It SHALL show `labels.emptyLabel` / `labels.emptyDescription` ("No [entities] yet") when the list is empty with no search typed and both filters at `All`, and `labels.noResultsLabel` / `labels.noResultsDescription` ("No [entities] found") when a search query or a filter — `activeFilter` other than `FilterTab.All`, or `activeTypeFilter` other than `ConversationTypeFilter.All` — matches nothing. Under `FilterTab.Shared` with no search typed, the description SHALL be `labels.sharedEmptyDescription`, falling back to `labels.noResultsDescription`. When an entry for the active `FilterTab` exists in `labels.tabEmptyLabels` and that tab alone narrows the list (no search typed, `activeTypeFilter` at `ConversationTypeFilter.All`), its `label` and `description` SHALL replace the heading and description above, each falling back to them when omitted. The same title is announced through the list's `role="status"` region. `ConversationPanelView` passes `conversationPanel.sharedEmptyDescription` as `sharedEmptyDescription` (Issue #9476).
+
+#### Scenario: A filter that matches nothing reports no results
+
+- **GIVEN** the user has personal chats only and no search is typed
+- **WHEN** the Type filter is set to Task
+- **THEN** `labels.noResultsLabel` and `labels.noResultsDescription` are rendered, and `labels.noResultsLabel` is announced
+
+#### Scenario: The Shared filter says where shared chats come from
+
+- **GIVEN** no conversation is shared with the user and no search is typed
+- **WHEN** the Origin filter is set to Shared
+- **THEN** `labels.noResultsLabel` is rendered with `labels.sharedEmptyDescription` as its description
+
+#### Scenario: A tab entry in `tabEmptyLabels` replaces the no-results text
+
+- **GIVEN** `labels.tabEmptyLabels[FilterTab.Shared]` is set and no conversation is shared with the user
+- **WHEN** the Origin filter is Shared and no search is typed
+- **THEN** the entry's `label` and `description` are rendered, and its `label` is announced
+
+#### Scenario: A search or a type filter keeps the generic text
+
+- **GIVEN** `labels.tabEmptyLabels[FilterTab.Shared]` is set
+- **WHEN** the Origin filter is Shared and a search query is typed, or the Type filter is not `All`
+- **THEN** `labels.noResultsLabel` is rendered, not the tab entry
+
+#### Scenario: A search under the Shared filter keeps the search description
+
+- **WHEN** the Origin filter is Shared and a search query matches nothing
+- **THEN** `labels.noResultsLabel` is rendered with `labels.noResultsDescription`
 
 ---
 
@@ -260,22 +302,29 @@ Readonly conversations (readonly, shared-with-me, or published-with-me) SHALL re
 
 ### Requirement: Panel is responsive — persistent on desktop, drawer on mobile
 
-`ConversationPanel` SHALL render the same markup regardless of viewport. On desktop it is a persistent `w-[324px]` panel that pushes `<main>` via flex row. On mobile `ConversationPanelView` passes `className="fixed inset-y-0 start-0 z-50"`, `isOverlay`, and `onToggle={onClose}`, so the panel slides over the content as a drawer (instead of collapsing its width beside it) and `SidebarPanel` renders a close button inside the panel header; the parent manages `isOpen` state.
+`ConversationPanel` SHALL render the same markup regardless of viewport, and the host decides how it is placed:
+- **Persistent:** a host that mounts it in a desktop layout gets a `w-[324px]` panel that pushes `<main>` via flex row.
+- **Drawer:** a host that passes `className="fixed inset-y-0 start-0 z-50"`, `isOverlay` and `onToggle` gets a panel that slides over the content instead of collapsing its width beside it, with a close button inside the panel header and the host managing `isOpen`.
+
+`apps/chat` mounts no `ConversationPanel` at any width (see `navigation-sidebar`): `ConversationPanelView` renders `ConversationListSection` inside the sidebar, which is a column on desktop and a drawer on mobile.
 
 Mobile close is handled exclusively via the close button inside the panel header (via `onToggle` → `SidebarPanel.onClose`). There is no backdrop overlay.
 
 #### Scenario: Desktop renders a persistent panel
 
-- **WHEN** the app is rendered at a desktop viewport
+- **WHEN** a host mounts `ConversationPanel` in a desktop layout
 - **THEN** the panel occupies a persistent `w-[324px]` column beside `<main>` and renders no close button
 
 #### Scenario: Mobile renders a closable drawer
 
-- **WHEN** the app is rendered at a mobile viewport and the panel is open
+- **WHEN** a host renders `ConversationPanel` as a drawer and the panel is open
 - **THEN** the panel is positioned with `fixed inset-y-0 start-0 z-50` as an overlay drawer and its header carries a close button
 - **AND** no backdrop overlay is rendered
 
----
+#### Scenario: The app renders no desktop panel
+
+- **WHEN** `apps/chat` is rendered at any width
+- **THEN** no `ConversationPanel` renders, and the conversation list renders inside the sidebar
 
 ### Requirement: `ConversationPanel` has unit tests
 
@@ -312,13 +361,13 @@ The backend encodes each `/`-separated segment of the conversation path individu
 
 DIAL Scheduler additionally writes scheduled-task conversations under the reserved `conversations/{bucket}/.scheduler/{scheduleId}/{filename}` path shape (matching `apps/chat-api/src/conversations/utils/parse-scheduled-task-conversation-path.ts`'s `SCHEDULER_SEGMENT = '.scheduler'`). When the segment immediately after the bucket is the literal string `.scheduler`, the function MUST treat that segment and the one immediately following it (the schedule id) as a reserved path prefix and skip both before extracting the deployment id from the remaining segments — they are never part of the deployment id.
 
-The function MUST scan the remaining segments (after skipping bucket, and after skipping the `.scheduler`/scheduleId pair when present) **left-to-right** and stop at the **first** segment (after URL-decoding) that contains `__`. Segments before that one form the deployment ID path prefix. The part of the separator segment before `__` is the final piece of the deployment ID — except for a versioned application: when the first prefix segment is `applications` and the part after the first `__` is a version (dot-separated numeric parts, optionally followed by `-`/`+` metadata), the `__{version}` suffix is kept as part of the final piece. Segments after the separator segment are part of the title and MUST be ignored.
+The function MUST scan the remaining segments (after skipping bucket, and after skipping the `.scheduler`/scheduleId pair when present) **left-to-right** and stop at the **first** segment (after URL-decoding) that contains `__`. Segments before that one form the deployment ID path prefix. The part of the separator segment before `__` is the final piece of the deployment ID — except for a versioned application: when the prefix segment two places before the separator segment is `applications` and the part after the first `__` is a version (dot-separated numeric parts, optionally followed by `-`/`+` metadata), the `__{version}` suffix is kept as part of the final piece. Segments after the separator segment are part of the title and MUST be ignored.
 
 The function MUST return `undefined` when:
 - The input has fewer than 3 `/`-separated segments.
 - No segment (after any `.scheduler` prefix skip) contains `__`.
 
-Note: outside the specifically-reserved `.scheduler/{scheduleId}` prefix, this function cannot reliably distinguish a real, user-created conversation folder from a genuine multi-segment deployment id — both appear as plain `/`-separated path segments once encoded into the resource path, and no other reserved marker exists to disambiguate them. Consumers of this function's return value MUST NOT assume the result is always a valid deployment id (see the `ConversationPanelView` icon-tooltip fallback requirement below).
+Note: outside the specifically-reserved `.scheduler/{scheduleId}` prefix, this function cannot reliably distinguish a real, user-created conversation folder from a genuine multi-segment deployment id — both appear as plain `/`-separated path segments once encoded into the resource path, and no other reserved marker exists to disambiguate them. Consumers of this function's return value MUST NOT assume the result is always a valid deployment id (see the `ConversationPanelView` icon-tooltip fallback requirement below). To resolve a deployment from a conversation id, consumers SHALL use `getModelIdCandidatesFromConversationId` (every `/`-separated suffix of the extracted id, longest first) or `findDeploymentForConversationId(deployments, id)`, which returns the first candidate matched by `findDeploymentByIdOrReference` — so `conversations/bucket/qa-run/gpt-4o__title__uuid` resolves to the `gpt-4o` deployment, while a genuine multi-segment id such as `anthropic/claude-3` still wins over its own `claude-3` suffix.
 
 #### Scenario: Simple single-segment deployment
 
@@ -576,9 +625,9 @@ When `isUnread` is `false` or omitted, no dot renders, the title keeps its norma
 
 **Accessible name.** Since AAA requires status to not be conveyed by color or weight alone, the dot wrapper SHALL carry a visually-hidden (`sr-only`) label (i18n key `conversationPanel.unreadIndicatorLabel`, English default: `"Unread"`) so screen reader users hear the unread state; the visible dot element itself SHALL be `aria-hidden`. The dot color's contrast against the row background (default, hover, active) SHALL be at least 3:1 (non-text UI component).
 
-**App wiring (`ConversationPanelView` in `apps/chat`).** The app maps `ConversationListItemDto.isUnread` to `ConversationItem.isUnread` for scheduled-task items through `resolveTaskPresentation`.
+**App wiring (`ConversationPanelView` in `apps/chat`).** The app maps `ConversationListItemDto.isUnread` to `ConversationItem.isUnread` for scheduled-task items through `resolveTaskPresentation`, and for regular chats directly while mapping panel items (a regular chat stays a chat row; it never gains the task icon). The app SHALL NOT pass `isUnread: true` for the active conversation: a row is never unread while it is the open chat, so watching a chat that is generating shows no dot, and the dot appears as soon as the user navigates away from a chat whose answer they have not seen.
 
-**Mark-as-viewed on open.** When the user opens (clicks, or middle-clicks to open in a new tab) a row whose item has `isScheduledTask: true` and `isUnread: true`, the app SHALL optimistically clear the row's unread state in local state and call the mark-viewed action (`ConversationsContext.markConversationViewed(id)`, which calls `PATCH /api/v1/conversations/viewed?path=<path>`). If the call fails, the app SHALL roll back the local state to `isUnread: true` (same optimistic-update-with-rollback pattern already used for pinning). Opening a conversation directly via URL navigation or from a task's History (not via a history panel row click) SHALL also trigger the same mark-viewed call once the conversation is confirmed loaded — this relies on the context's full, uncollapsed list (see `scheduled-task-conversation-grouping`).
+**Mark-as-viewed on open.** When the user opens (clicks, or middle-clicks to open in a new tab) a row whose item has `isUnread: true`, a scheduled-task run is marked viewed through the panel's active-conversation sync, and a regular chat is marked viewed by the conversation page once it has loaded and no generation is running (see `regular-conversation-read-state`). For either kind, the app SHALL optimistically clear the row's unread state in local state and call the mark-viewed action (`ConversationsContext.markConversationViewed(id)`, which calls `PATCH /api/v1/conversations/viewed?path=<path>`). If the call fails, the app SHALL roll back the local state to `isUnread: true` (same optimistic-update-with-rollback pattern already used for pinning). Opening a conversation directly via URL navigation or from a task's History (not via a history panel row click) SHALL also trigger the same mark-viewed call once the conversation is confirmed loaded — this relies on the context's full, uncollapsed list (see `scheduled-task-conversation-grouping`).
 
 **RTL.** The dot SHALL be positioned with logical properties (`ms-*`/`me-*`, `end-*`) so it stays at the trailing edge in both LTR and RTL — the visual left side in RTL.
 
@@ -607,6 +656,18 @@ When `isUnread` is `false` or omitted, no dot renders, the title keeps its norma
 - **GIVEN** the user opens an unread task conversation and the optimistic clear has been applied
 - **WHEN** the `PATCH /api/v1/conversations/viewed` call fails
 - **THEN** the row's dot and heavier title weight are restored (rolled back to `isUnread: true`)
+
+#### Scenario: Open conversation never shows the dot
+
+- **GIVEN** a regular chat that is unread in the list and is the active conversation
+- **WHEN** the panel renders its row
+- **THEN** no dot renders and the title keeps its normal weight
+
+#### Scenario: Leaving a generating chat shows the dot
+
+- **GIVEN** the user sent a message and the answer is still generating
+- **WHEN** the user navigates to another page
+- **THEN** the chat's row shows the dot immediately, and it stays until the chat is opened again
 
 #### Scenario: Dot is decorative and has no click handler
 
@@ -736,3 +797,393 @@ The public API is unchanged: no prop is added, removed or retyped. This adds no 
 
 - **WHEN** `getActions` returns `[]` for an item
 - **THEN** that row renders no action trigger
+
+### Requirement: `ConversationList` renders the grouped list without the panel chrome
+
+`ConversationList` SHALL render the virtualized, grouped, collapsible conversation list. It SHALL keep:
+- the Pinned / My chats / Shared / Organization grouping;
+- `hiddenSources` exclusion;
+- drag-and-drop moves reported through `onMoveConversation`;
+- per-row actions;
+- the active-row `aria-current="page"` and scroll-into-view;
+- search highlighting;
+- the loading skeleton, empty and no-results states;
+- the polite live region announcing them.
+
+It SHALL NOT render a header, a New chat button, a search field or filter chips. Search text and the active filter SHALL arrive as controlled `searchQuery` and `activeFilter` props.
+
+`ConversationPanel` SHALL render through `ConversationList`, with no change to its props, its rendered output, its `dial-cp-*` classes, or the behaviour asserted by its existing tests.
+
+The root element SHALL carry the public class `dial-cp-list` and merge the host's `className`.
+
+#### Scenario: Controlled filtering
+
+- **WHEN** `ConversationList` renders with `activeFilter={FilterTab.Shared}` and `searchQuery="plot"`
+- **THEN** only shared conversations whose title matches "plot" are listed, with the match highlighted
+
+#### Scenario: ConversationPanel output is unchanged
+
+- **WHEN** the existing `ConversationPanel` test suite runs after the extraction
+- **THEN** every test passes without modification
+
+### Requirement: `ConversationListHeader` renders the "Chats and tasks" header row
+
+`ConversationListHeader` SHALL render a title button with `aria-expanded`, reporting its toggle through `onToggleExpanded`. It SHALL also render these optional controls, each present only when the host passes its props:
+- **Search toggle.** It swaps the row for the kit `Search`, with a separate Close search button. Escape also closes it. Closing calls `onSearchOpenChange(false)` and `onSearchChange('')` and returns focus to the toggle.
+- **Filter trigger.** It opens a `Dropdown` of two rows, each showing its current value and opening a single-select submenu with a check on the active option: **Type** (`All`, `Chat`, `Task`, from `activeTypeFilter`, present when `onTypeFilterChange` is passed) and **Origin** (`All`, `Personal`, `Shared`, `Organization`, from `activeFilter`, excluding `hiddenSources`, present when `onFilterChange` is passed). A conversation is a task when its `kind` is `ConversationKind.Task` and a chat otherwise; `ConversationList` shows only the kind the type filter selects. `ConversationListSection` exposes `isTypeFilterHidden` to drop the Type row, and `apps/chat` passes it while `scheduledTasksEnabled` is off.
+- **`actions` slot.**
+
+Every label SHALL be a prop. The root SHALL carry the public class `dial-cp-list-header`.
+
+**RTL:** the controls use logical alignment, and no icon in the row is mirrored.
+
+#### Scenario: Search toggle moves focus into the field
+
+- **WHEN** the user activates the search toggle
+- **THEN** the search field renders with focus, and the title and controls are replaced by it
+
+#### Scenario: Filter trigger omitted
+
+- **WHEN** the host passes no filter props
+- **THEN** no filter trigger renders
+
+### Requirement: Rows offer an indicator variant
+
+`ConversationRowVariant` SHALL have the members `Avatar = 'avatar'` (the default, today's rows) and `Indicator = 'indicator'`. `ConversationList` SHALL accept `rowVariant`. `ConversationPanel` SHALL always render `Avatar` rows.
+
+An `Indicator` row SHALL render:
+- a leading 7.11px dot, hollow when read (a 1.5px border in the `indicatorDot` color); when unread, a filled dot in the `unreadDot` color and the title in `dial-small-semi-text`;
+- no deployment avatar and no `leadingIcon`;
+- no trailing unread dot.
+
+It SHALL still announce the visually hidden `unreadIndicatorLabel` when unread. Row and group-header heights SHALL follow the variant.
+
+Per the Figma frame "Chat - Project - See all" (`ao2NXcmfF23QrZigbiHC8M`, node `17:14375`), an `Indicator` row SHALL have 8px inline padding on both sides (`ps-2`, and `pe-2` when it has no actions). The 24px dot slot therefore sits under the 8px-padded group label, and the title starts 34px from the row's inline start. While the actions trigger is shown, the end padding stays the `pe-9` that makes room for the trigger. `Avatar` rows keep `ps-3` and their current end padding. The other spacing of the sidebar already matches the design and SHALL stay as it is:
+
+- the 16px list gutter;
+- the 8px gap under the header;
+- the 8px section padding (`INDICATOR_FIRST_GROUP_HEADER_ROW_HEIGHT` 32, `INDICATOR_GROUP_HEADER_ROW_HEIGHT` 40);
+- the 24px group header with `px-2`, whose text is the `textSecondary` color falling back to `--text-secondary` (`Avatar` group headers keep `--text-tertiary`);
+- the 32px row with a 2px gap (`INDICATOR_ITEM_ROW_HEIGHT` 34).
+
+#### Scenario: Unread indicator row
+
+- **WHEN** an `isUnread` conversation with an `iconUrl` and a `leadingIcon` renders as an `Indicator` row
+- **THEN** it shows a filled leading dot and a semi-bold title, renders neither the avatar nor the leading icon, and announces the unread label
+
+#### Scenario: Default rows are unchanged
+
+- **WHEN** `ConversationList` renders without `rowVariant`
+- **THEN** rows render with the deployment avatar or `leadingIcon`, exactly as `ConversationPanel` rows do
+
+#### Scenario: Indicator row padding
+
+- **WHEN** an `Indicator` row without actions renders
+- **THEN** its button has `ps-2` and `pe-2`, so the dot slot starts 8px from the row's inline start
+
+### Requirement: ConversationListSection joins the header and the list
+
+`@epam/ai-dial-conversation-panel` SHALL export `ConversationListSection`, which renders `ConversationListHeader` and an indicator-row `ConversationList` inside a `section` named by `labels.title`, and owns the search text, the search-open flag, the list-expanded flag and the active filter. It SHALL adopt `requestedFilter` whenever it changes, report the user's choice through `onFilterChange`, drop the filter trigger under `isFilterHidden`, remove `hiddenSources` from the list, render `headerActions` at the end of the header, merge `listClassName` onto the list root and carry the public class `dial-cp-list-section`. It SHALL NOT read feature keys, routes, i18n or session state.
+
+#### Scenario: The section wires the header to the list
+
+- **WHEN** the user types in the section's search field or chooses a filter
+- **THEN** the list shows the matching rows, and `onFilterChange` receives the chosen tab
+
+#### Scenario: A requested filter is adopted
+
+- **WHEN** a host changes `requestedFilter`
+- **THEN** the section switches to that filter and the user can still choose another
+
+#### Scenario: The list collapses through the header title
+
+- **WHEN** the user activates the header title
+- **THEN** the list is hidden and inert but stays mounted, so its open groups and scroll position survive, and the title reports `aria-expanded="false"`
+
+#### Scenario: Searching expands a collapsed list
+
+- **WHEN** the list is collapsed and the user opens the search or types a query
+- **THEN** the list expands, so the filtered rows and the no-results state are visible
+
+### Requirement: Progressive conversation titles
+
+The app SHALL render the metadata list before resolving pending display titles. `ConversationsContext` in `apps/chat/src/context/ConversationsContext.tsx` SHALL own history state, and `useConversationTitleEnrichment` in `apps/chat/src/hooks/conversation/useConversationTitleEnrichment.ts` SHALL own snapshot-scoped attempts, title revisions and stream scheduling. No new global provider SHALL be introduced.
+
+The hook SHALL consume the finite title stream through `apps/chat/src/server-api/conversations.api.ts`, merge successful titles by exact stable identity without changing ordering or pin/unread state, and stop obsolete work when the list snapshot or authenticated identity changes or the provider unmounts. Valid title events SHALL be applied before unrelated slow reads finish, with rendering updates coalesced at most until the next animation frame or a 100 ms fallback timer. Deleted items SHALL not be recreated. Newer manual or opened-conversation titles, existing protection intervals, deletion tombstones and failed-delete rollback SHALL retain precedence over stale events.
+
+Requests SHALL respect both ID-count and serialized-byte limits and run one stream at a time per attempt. A size boundary or progress-making budget terminal SHALL continue with unattempted IDs. Failed/missing item outcomes SHALL retain existing fallback titles and SHALL not retry in that attempt. A fatal error, malformed protocol, missing terminal event or connection failure SHALL stop the attempt, preserve valid delivered titles and settle progress without an automatic retry loop. A later list refresh SHALL allow unresolved titles to be retried. An initial pre-stream 404/405 SHALL select the existing 25-ID JSON path for the identity session; other failures SHALL NOT trigger that fallback.
+
+The app adapter SHALL validate typed SSE frames across arbitrary UTF-8/network boundaries, CRLF and multi-line data, skip comments, cap each frame at 64 KiB, require truthful terminal counts, and cancel/release readers on exit. Non-requested or duplicate item IDs SHALL not mutate state. `isUpdatingTitles` SHALL describe active work, not whether every title was successfully resolved.
+
+The shared panel SHALL receive only updating state, translated labels and optional host-agnostic viewport callbacks; API calls, auth, scheduling and lifecycle state SHALL remain in the app. The behavior SHALL be identical in the desktop sidebar and mobile drawer and SHALL preserve RTL layout, focus and existing search retention/highlighting. A polite status message using the existing `conversationPanel.updatingTitles` translation SHALL be available to assistive technology without hiding the list or announcing every incoming title. No new user-visible strings or feature flag SHALL be introduced.
+
+#### Scenario: List is usable before titles finish
+
+- **WHEN** a title read remains unresolved after metadata has loaded
+- **THEN** conversations remain visible and interactive while independently resolved titles are applied and title progress is shown
+
+#### Scenario: Changed identity or newer edit
+
+- **WHEN** a prior stream delivers after the user changes identity, renames or deletes a conversation
+- **THEN** it cannot overwrite the new identity's list, replace the newer title or restore the deleted row
+
+#### Scenario: Background failure
+
+- **WHEN** a stream fails after delivering some valid titles
+- **THEN** existing rows and those valid titles remain usable, pending rendering updates are flushed, and progress settles without an infinite retry loop
+
+#### Scenario: Frames span network chunks
+
+- **WHEN** a UTF-8 character or event frame is split across reads, with comments and CRLF delimiters present
+- **THEN** the adapter produces the intended typed events exactly once and ignores comment payloads
+
+#### Scenario: Large history or budget continuation
+
+- **WHEN** the history exceeds a request limit or a progress-making stream ends with a budget terminal
+- **THEN** the next request contains remaining unattempted IDs only, and IDs with settled unavailable/error outcomes do not loop
+
+#### Scenario: Older backend fallback is bounded
+
+- **WHEN** the new endpoint returns HTTP 404/405 before opening SSE
+- **THEN** the attempt uses the existing JSON title batches and remembers that capability result for the current identity session
+- **AND** HTTP 401/403/5xx or mid-stream errors do not trigger an additional history-wide fallback
+
+### Requirement: Search remains stable while titles are updated
+
+While titles are pending, the panel SHALL distinguish a provisional empty search from a completed search with no results. An opened conversation that matched the active query SHALL remain visible through a background title correction until the query changes. Current titles SHALL still contribute new matches as they arrive. Highlighting SHALL continue to use the shared Highlight component.
+
+#### Scenario: Opened match gets a new title
+
+- **WHEN** an opened matching row receives a title that no longer contains the unchanged query
+- **THEN** the row remains accessible in the current results
+
+#### Scenario: Query changes after retention
+
+- **WHEN** the user changes the search query
+- **THEN** filtering is recalculated against current titles without retaining a match from the old query
+
+### Requirement: Visible conversation IDs guide initial enrichment priority
+
+`ConversationList` in `libs/conversation-panel/src/components/ConversationList/ConversationList.tsx` and its public `ConversationListSection`/`ConversationPanel` containers SHALL support optional `onVisibleConversationIdsChange(ids: string[]): void`. It SHALL report distinct conversation IDs in actual visible virtual-row order, excluding group headers and overscan-only rows, and report an empty set when no rows are visible. Stable callbacks and memoized ID sequences SHALL prevent notifications when the sequence is unchanged.
+
+`ConversationPanelView` SHALL register each mounted view's IDs through the existing app context and clear its registration on hide/unmount. The app SHALL merge active registrations and order pending work with visible IDs first, then remaining metadata order. It SHALL allow at most one animation frame or 100 ms for initial viewport reporting, proceeding with normal history order when no report exists. It SHALL resample before each new stream request; scrolling alone SHALL NOT restart accepted work. The library SHALL contain no API, auth, route, context, cache, telemetry or feature-flag integration.
+
+Hidden/collapsed/filtered-out conversations and older scheduled runs SHALL remain eligible for background enrichment so current search results can converge. Closing a mobile drawer SHALL clear viewport priority without discarding useful snapshot work. This callback SHALL introduce no directional layout or icon changes and SHALL work identically in LTR and RTL.
+
+#### Scenario: Viewport contains pinned rows and group headers
+
+- **WHEN** the virtual list reports a range containing group headers and pinned conversation rows
+- **THEN** the callback reports the actual visible conversation IDs only and the app schedules their pending titles before background items
+
+#### Scenario: Scroll changes the visible set
+
+- **WHEN** the visible ID sequence changes during an active stream
+- **THEN** the new sequence affects the next request's priority without aborting the current stream
+
+#### Scenario: No visible match or closed drawer
+
+- **WHEN** provisional search has no visible rows or the mobile drawer closes
+- **THEN** the app continues bounded background enrichment and does not wait indefinitely for a viewport report
+
+#### Scenario: Two views register priority
+
+- **WHEN** two mounted views register visible IDs and one is hidden or unmounted
+- **THEN** only that view's registration is removed and the other view's priority remains
+
+### Requirement: The Pinned section renders host-supplied project trees
+
+`ConversationList` and `ConversationListSection` SHALL accept an optional `pinnedProjects?: PinnedProjects` prop. `ConversationListSection` forwards it. `@epam/ai-dial-conversation-panel` SHALL export these types (`libs/conversation-panel/src/models/pinned-projects.ts`):
+
+```ts
+/** A pinned project and the chats the host chose to list under it. */
+interface PinnedProjectGroup {
+  /** Stable unique id. */
+  id: string;
+  /** Display name. */
+  name: string;
+  /** Browser-navigable URL of the project; when set, middle-click opens it in a new tab. */
+  href?: string;
+  /** Origin tab the project belongs to, for the Origin filter. Defaults to `FilterTab.MyChats`. */
+  source?: FilterTab;
+  /** The chats listed under the project, in display order. */
+  conversations: ConversationItem[];
+  /** Renders a See all row after `conversations`. */
+  hasMore: boolean;
+}
+
+/** The project trees of the Pinned section and their callbacks. */
+interface PinnedProjects {
+  /** Projects in display order, rendered before the pinned conversations. */
+  projects: PinnedProjectGroup[];
+  /** Called when a project row is activated. */
+  onSelectProject: (projectId: string) => void;
+  /** Called when a nested chat row is activated. */
+  onSelectConversation: (conversationId: string, projectId: string) => void;
+  /** Called when a See all row is activated. */
+  onSeeAll: (projectId: string) => void;
+  /** Builds the ⋮ actions of a project row; no trigger renders when absent or empty. */
+  getActions?: (project: PinnedProjectGroup) => DropdownItem[];
+  /** Called when the ⋮ menu of a project row opens; receives the trigger button. */
+  onActionMenuOpen?: (
+    project: PinnedProjectGroup,
+    trigger: HTMLButtonElement,
+  ) => void;
+  /** Id of the project the host currently shows; its row gets `aria-current="page"`. */
+  activeProjectId?: string;
+  /** Presentation of the chats nested under a project. Defaults to `ConversationRowVariant.Indicator`. */
+  conversationRowVariant?: ConversationRowVariant;
+}
+```
+
+**Rendering.** The lib SHALL NOT trim, sort or fetch: it renders exactly what the host passes. With `pinnedProjects` present, the Pinned group SHALL render each visible project, in order, before the pinned conversations, as these rows:
+
+1. **Project row.** It has the project icon (default Tabler `IconBriefcase`, 16px glyph in the 24px slot, `aria-hidden`, `DIAL_KIT_ICON_STROKE`, in the `textSecondary` color), the name truncated through `Highlight`, and the ⋮ trigger when `getActions` returns items.
+2. **One nested row per conversation.** By default it is an `Indicator` row (status point, title, `aria-current` when it matches `activeConversationId`) without a ⋮ trigger. With `conversationRowVariant: ConversationRowVariant.Avatar` it is the panel's own `Avatar` row instead — the deployment avatar or `leadingIcon`, the title, and the trailing unread dot — still without a ⋮ trigger or drag, and with the same indent and guide line.
+3. **A See all row, when `hasMore` is set.** Its visible text is `labels.seeAllLabel` (default `'See all'`) in the `textSecondary` color, and its accessible name is `labels.seeAllAriaLabel(name)` (default `` `See all chats in ${name}` ``). It is only a link to the project: it has no ⋮ trigger, whatever `getActions` returns.
+
+The Pinned header SHALL render when the section has at least one visible project or pinned conversation. Collapsing it hides the project rows too.
+
+**Layout**, per the Figma frame "Chat - Project - See all" (`ao2NXcmfF23QrZigbiHC8M`, node `17:14375`):
+
+- Every row is 32px high with a 2px gap: `INDICATOR_ITEM_ROW_HEIGHT` (34); a nested row in the `Avatar` variant is `ITEM_ROW_HEIGHT` (36).
+- The project row has the same 8px inline padding and 2px icon gap as an `Indicator` row.
+- Nested and See all rows are offset 28px from the list's inline start (`padding-inline-start`). The See all row has no icon slot, so its text starts at the 8px row padding; it is start-aligned (`text-start`), since the kit `Button` centres its content.
+- A 1px vertical guide line is drawn at `inset-inline-start: 20px`, the centre of the project icon. Each nested and See all row draws its segment, so the line is continuous across the virtualized rows. The first segment starts 5px below its row's top, and the last segment (See all, or the last chat when there is none) ends 5px above its row's bottom.
+- Its color is the new `ConversationListColors.projectGuideLine` (`--cp-project-guide-line`, fallback `var(--stroke-tertiary, #e0e6f0)`), set with `buildCssVars` and read in the row's `.module.scss`.
+- Titles use `itemTitleClassName` / `unreadItemTitleClassName`, so no new typography prop is added.
+- The rows are new members of `VirtualRowKind`: `Project = 'project'`, `ProjectConversation = 'project-conversation'` and `ProjectSeeAll = 'project-see-all'`.
+
+**Search and filters**
+
+- **Search.** While `searchQuery` is non-empty, a project whose name matches SHALL render with all its conversations and its See all row. Otherwise it renders when at least one conversation title matches, with only the matching conversations and no See all row. A project with no match is hidden. Matches in names and titles are highlighted with `Highlight`.
+- **Origin filter.** A project renders under `FilterTab.All` and under the tab equal to its `source`.
+- **Type filter.** `ConversationTypeFilter.Task` hides every project.
+- **`hiddenSources`.** A project whose `source` is listed there is excluded.
+- **Empty state.** A list whose only rows are projects is not empty.
+
+**Drag and drop.** Project, nested and See all rows SHALL NOT be draggable and SHALL NOT be drop targets. Dragging a pinned conversation over them reports no target, and the Pinned header stays the only Pinned drop zone. Pinned conversations still reorder among themselves.
+
+**Accessibility**
+
+- The list keeps `role="list"`. Every row stays a `listitem` and a single tab stop: its link, followed by its ⋮ trigger when shown.
+- Project rows SHALL carry `aria-level="1"`.
+- Nested and See all rows SHALL carry `aria-level="2"`, `aria-setsize` (conversations plus See all) and `aria-posinset`, so assistive technology hears the nesting and position without a roving-focus tree widget.
+- A project row matching `activeProjectId`, and a nested row matching `activeConversationId`, get `aria-current="page"`.
+- The visually hidden `unreadIndicatorLabel` is announced for an unread nested row.
+- Focus-visible styling matches hover on every new row.
+
+**RTL.** Indent, padding and guide line use logical properties only (`padding-inline-start`, `inset-inline-start`, `ps-*`). The briefcase icon is symmetric and is not mirrored.
+
+**Boundary.** The lib SHALL NOT know about DIAL projects, routes, pins or feature keys. Ids, names, `href` values, origin and `hasMore` come from the host, and behaviour goes through the callbacks.
+
+#### Scenario: A project with more chats than listed
+
+- **WHEN** `pinnedProjects.projects` holds P with 10 conversations and `hasMore: true`
+- **THEN** the Pinned section renders P's row, 10 nested rows at `aria-level="2"` with `aria-setsize="11"`, and a See all row at `aria-posinset="11"`
+
+#### Scenario: No See all without more chats
+
+- **WHEN** P has `hasMore: false`
+- **THEN** no See all row renders
+
+#### Scenario: Activating rows
+
+- **WHEN** the user activates P's row, a nested chat C and P's See all row in turn
+- **THEN** `onSelectProject(P)`, `onSelectConversation(C, P)` and `onSeeAll(P)` are called in that order, and `onSelectConversation` of the list is not called
+
+#### Scenario: Searching nested chats
+
+- **GIVEN** P is named "Support" and has chats "Weekly summary" and "Billing reply"
+- **WHEN** the query is "billing"
+- **THEN** P's row and only "Billing reply" render, with "Billing" highlighted, and no See all row renders
+
+#### Scenario: Searching by project name
+
+- **WHEN** the query is "supp"
+- **THEN** P's row renders highlighted with all its listed chats and its See all row
+
+#### Scenario: Task filter
+
+- **WHEN** the Type filter is `Task`
+- **THEN** no project row renders
+
+#### Scenario: Nested rows are not draggable
+
+- **WHEN** the user starts dragging a nested chat row
+- **THEN** no drag starts, and `onMoveConversation` is never called for it
+
+#### Scenario: RTL guide line
+
+- **WHEN** the list renders under `dir="rtl"`
+- **THEN** the nested rows are indented from the right edge, and the guide line sits 20px from the right edge
+
+#### Scenario: No pinned projects
+
+- **WHEN** `pinnedProjects` is absent
+- **THEN** the list renders the same rows as before this change, with no project, nested or See all row
+
+#### Scenario: Nested chats in the Avatar variant
+
+- **WHEN** `pinnedProjects.conversationRowVariant` is `ConversationRowVariant.Avatar`
+- **THEN** each nested chat renders as an `Avatar` row (avatar first, unread dot last) at `ITEM_ROW_HEIGHT`, while the project and See all rows keep `INDICATOR_ITEM_ROW_HEIGHT`
+
+### Requirement: `ConversationPanel` shows host-supplied pinned project trees
+
+`ConversationPanelProps` (`libs/conversation-panel/src/models/panel-props.ts`) SHALL accept an optional `pinnedProjects?: PinnedProjects`, the type exported from `@epam/ai-dial-conversation-panel` and defined by the requirement "The Pinned section renders host-supplied project trees". `ConversationPanel` SHALL forward the value to its inner `ConversationList` by reference, without copying, wrapping or filtering it. The list owns the rendering, so the project rows, nested chat rows and See all rows, their ordering inside the Pinned group, drag and drop rules, `aria-level`/`aria-setsize`/`aria-posinset` and RTL behaviour are exactly those the list defines; `ConversationPanel` adds none of its own.
+
+`ConversationPanel` SHALL also forward `labels.seeAllLabel` and `labels.seeAllAriaLabel` to the list. Both fields already belong to `ConversationPanelLabels` through `ConversationListLabels`; the panel SHALL include them in its memoized list labels object and in that object's dependency list, so the object keeps its identity while the values keep theirs. With either field omitted the list's defaults apply (`'See all'` and `` (name) => `See all chats in ${name}` ``).
+
+The panel's controlled inputs already reach the list, so these hold without panel-specific code:
+
+- **Search.** The panel's search text is the list's `searchQuery`: a project is matched by name or by the titles of its chats, as the list defines.
+- **Filter chips.** The active chip is the list's `activeFilter`, and `hiddenSources` is forwarded, so the Origin filter applies to a project's `source`.
+- **Chrome.** The header, New chat button, search field and filter chips render as without `pinnedProjects`.
+
+With `pinnedProjects` omitted or `undefined`, `ConversationPanel` SHALL render exactly as before. The prop has no state owner inside the panel: the host owns the trees and their callbacks, and the lib SHALL NOT know about DIAL projects, routes, pins or feature keys. The panel is already a `memo` component, so a host SHALL pass a referentially stable `pinnedProjects` (and a stable `seeAllAriaLabel`) to keep it from re-rendering; the lib adds no memoisation of its own beyond the labels object above.
+
+The change adds no user-visible strings (the See all text is host-translated through `labels`), is not gated by `ENABLED_FEATURES` or `ENABLED_FEATURES_ROLES`, adds no cache, and has no telemetry. It adds no direction-specific UI: the rows are the list's own.
+
+`libs/conversation-panel/README.md` SHALL document `pinnedProjects` and the See all labels for `ConversationPanel`.
+
+#### Scenario: A pinned project renders inside the panel
+
+- **GIVEN** `pinnedProjects.projects` holds P named "Support" with chats C1 and C2 and `hasMore: true`
+- **WHEN** `<ConversationPanel pinnedProjects={…} />` renders
+- **THEN** the Pinned group shows P's row, C1 and C2 as nested rows and a See all row, before any pinned conversation, below the panel's New chat button, search field and filter chips
+
+#### Scenario: Activating pinned project rows through the panel
+
+- **WHEN** the user activates P's row, C1 and P's See all row in turn
+- **THEN** `onSelectProject(P)`, `onSelectConversation(C1, P)` and `onSeeAll(P)` are called, and the panel's `onSelectConversation` is not called
+
+#### Scenario: The panel search filters project trees
+
+- **GIVEN** P is named "Support" and has chats "Weekly summary" and "Billing reply"
+- **WHEN** the user types "billing" into the panel's search field
+- **THEN** P's row and only "Billing reply" render, and no See all row renders
+
+#### Scenario: The panel filter chip applies to a project's source
+
+- **GIVEN** P has `source: FilterTab.Shared`
+- **WHEN** the user selects the "My chats" chip
+- **THEN** P does not render, and it renders again under the "All" and "Shared" chips
+
+#### Scenario: See all labels reach the list
+
+- **WHEN** `labels.seeAllLabel` is `'Show all'` and `labels.seeAllAriaLabel` returns `All chats of ${name}`
+- **THEN** P's See all row shows "Show all" and is named "All chats of Support"
+
+#### Scenario: Default See all labels
+
+- **WHEN** `labels` omits `seeAllLabel` and `seeAllAriaLabel`
+- **THEN** the See all row shows "See all" and is named "See all chats in Support"
+
+#### Scenario: No project trees without the prop
+
+- **WHEN** `pinnedProjects` is omitted
+- **THEN** the Pinned group holds only pinned conversations, and the rendered output matches the panel's output before this change
+
+#### Scenario: Labels keep their identity across unrelated renders
+
+- **WHEN** the panel re-renders with new `conversations` and the same `labels` field values
+- **THEN** the labels object handed to the list is the same reference, including the See all fields

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   escapeUnsupportedCitTags,
   injectCitationSentinels,
+  prepareCitationContent,
+  replaceCitTagsWithSourceNames,
   stripCitTagsWhileStreaming,
 } from '../citation-injection';
 import type { AnnotationGroup } from '../group-annotations-by-source';
@@ -140,6 +142,148 @@ describe('escapeUnsupportedCitTags', () => {
   it('escapes differently-cased cit markup instead of treating it as supported', () => {
     expect(escapeUnsupportedCitTags('<CIT data-id="e1"></CIT>')).toBe(
       '&lt;CIT data-id="e1"&gt;&lt;/CIT&gt;',
+    );
+  });
+});
+
+describe('prepareCitationContent', () => {
+  it('hides a complete element while streaming', () => {
+    expect(prepareCitationContent('a <cit data-id="x"></cit> b', true)).toBe(
+      'a  b',
+    );
+  });
+
+  it('keeps a partial element visible as escaped text while streaming', () => {
+    expect(prepareCitationContent('a <cit data-id="x', true)).toBe(
+      'a &lt;cit data-id="x',
+    );
+  });
+
+  it('keeps the supported element and escapes a malformed one when finished', () => {
+    expect(
+      prepareCitationContent(
+        '<cit data-id="x"></cit> and <cit data-id="y></cit>',
+        false,
+      ),
+    ).toBe('<cit data-id="x"></cit> and &lt;cit data-id="y&gt;&lt;/cit&gt;');
+  });
+
+  it('never injects sentinels', () => {
+    expect(
+      prepareCitationContent('a <cit data-id="x"></cit>', false),
+    ).not.toMatch(/⟦C\d+⟧/);
+  });
+
+  it.each([true, false])(
+    'returns content without citation markup unchanged (streaming: %s)',
+    (isStreaming) => {
+      expect(prepareCitationContent('plain text', isStreaming)).toBe(
+        'plain text',
+      );
+    },
+  );
+});
+
+describe('replaceCitTagsWithSourceNames', () => {
+  const withSourceName = (
+    group: AnnotationGroup,
+    sourceName: string,
+  ): AnnotationGroup => ({ ...group, sourceName });
+
+  it('replaces a resolved cit element in a table cell with its source name', () => {
+    const content = [
+      '| Title | Last Updated |',
+      '| --- | --- |',
+      '| <cit data-id="d1"></cit> | 2025-01-01 |',
+    ].join('\n');
+    const group = withSourceName(
+      makeCitGroup('d1'),
+      'sigma 5/2024 – Global economic and insurance market outlook 2025-26',
+    );
+
+    expect(replaceCitTagsWithSourceNames(content, [group])).toBe(
+      [
+        '| Title | Last Updated |',
+        '| --- | --- |',
+        '| sigma 5/2024 – Global economic and insurance market outlook 2025-26 | 2025-01-01 |',
+      ].join('\n'),
+    );
+  });
+
+  it('accepts a single-quoted data-id', () => {
+    expect(
+      replaceCitTagsWithSourceNames("See <cit data-id='e1'></cit>.", [
+        makeCitGroup('e1'),
+      ]),
+    ).toBe('See doc.pdf.');
+  });
+
+  it('escapes Markdown syntax in the source name so it cannot split a table cell', () => {
+    const group = withSourceName(makeCitGroup('e1'), 'A | B *draft*');
+    expect(
+      replaceCitTagsWithSourceNames('<cit data-id="e1"></cit>', [group]),
+    ).toBe(String.raw`A \| B \*draft\*`);
+  });
+
+  it('leaves an unresolved cit element untouched', () => {
+    const content = 'See <cit data-id="missing"></cit>.';
+    expect(replaceCitTagsWithSourceNames(content, [makeCitGroup('e1')])).toBe(
+      content,
+    );
+  });
+
+  it('resolves from fallback groups, preferring the message groups on a colliding id', () => {
+    const own = withSourceName(makeCitGroup('e1'), 'own.pdf');
+    const pooled = withSourceName(makeCitGroup('e1'), 'pooled.pdf');
+    const pooledOnly = withSourceName(makeCitGroup('e2'), 'other.pdf');
+
+    expect(
+      replaceCitTagsWithSourceNames(
+        '<cit data-id="e1"></cit> <cit data-id="e2"></cit>',
+        [own],
+        [pooled, pooledOnly],
+      ),
+    ).toBe('own.pdf other.pdf');
+  });
+
+  it('replaces a resolved cit element with the formatLabel output when provided', () => {
+    expect(
+      replaceCitTagsWithSourceNames(
+        '555 <cit data-id="e1"></cit>',
+        [makeCitGroup('e1')],
+        [],
+        (group) => `${group.sourceName}, p. 1`,
+      ),
+    ).toBe('555 doc.pdf, p. 1');
+  });
+
+  it('escapes Markdown syntax in the formatLabel output', () => {
+    expect(
+      replaceCitTagsWithSourceNames(
+        '<cit data-id="e1"></cit>',
+        [makeCitGroup('e1')],
+        [],
+        () => 'a|b_c.pdf, p. 1',
+      ),
+    ).toBe(String.raw`a\|b\_c.pdf, p. 1`);
+  });
+
+  it('leaves an unresolved cit element untouched when formatLabel is provided', () => {
+    const content = 'See <cit data-id="missing"></cit>.';
+    expect(
+      replaceCitTagsWithSourceNames(
+        content,
+        [makeCitGroup('e1')],
+        [],
+        () => 'unused',
+      ),
+    ).toBe(content);
+  });
+
+  it('ignores offset-based groups', () => {
+    const content = 'Text <cit data-id="e1"></cit>';
+    expect(replaceCitTagsWithSourceNames(content, [makeOffsetGroup(4)])).toBe(
+      content,
     );
   });
 });

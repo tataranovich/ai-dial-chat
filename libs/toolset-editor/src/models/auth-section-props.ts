@@ -45,6 +45,10 @@ export interface AuthSectionLabels {
   clientSecretLabel?: string;
   /** Placeholder for the OAuth client secret field. Defaults to `'Enter client secret'`. */
   clientSecretPlaceholder?: string;
+  /** Placeholder showing the saved client secret's hint while editing a saved toolset. Defaults to `` (hint) => `******${hint}` ``. */
+  clientSecretHintPlaceholder?: (hint: string) => string;
+  /** Description of the client secret field while the saved secret's hint is shown. Defaults to `'Leave empty to keep the saved secret.'`. */
+  clientSecretKeepCaption?: string;
   /** Accessible name of the client secret reveal toggle while the value is masked. Defaults to `'Show client secret'`. */
   showClientSecretLabel?: string;
   /** Accessible name of the client secret reveal toggle while the value is visible. Defaults to `'Hide client secret'`. */
@@ -61,6 +65,10 @@ export interface AuthSectionLabels {
   scopesLabel?: string;
   /** Placeholder for the OAuth scopes field. Defaults to `'Enter scopes'`. */
   scopesPlaceholder?: string;
+  /** Label for the OAuth resource indicator field. Defaults to `'Resource'`. */
+  resourceLabel?: string;
+  /** Placeholder for the OAuth resource indicator field. Defaults to `'Enter resource URI'`. */
+  resourcePlaceholder?: string;
   /** Label for the log-in action. Defaults to `'Log in'`. */
   logInLabel?: string;
   /** Label for the log-out action. Defaults to `'Log out'`. */
@@ -120,4 +128,8 @@ export interface AuthSectionProps {
   onEnsureSaved: () => Promise<string | false>;
   /** Pre-translated labels, all optional with English defaults. */
   labels?: AuthSectionLabels;
+  /** Typography class of the "Authentication" heading. Defaults to `'dial-h3-text'`. */
+  titleClassName?: string;
+  /** Typography class of the open-access ("None" auth) description. Defaults to `'dial-small-text'`. */
+  openAccessDescriptionClassName?: string;
 }

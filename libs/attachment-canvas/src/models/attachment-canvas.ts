@@ -5,7 +5,7 @@ import type {
 } from '@epam/ai-dial-chat-shared';
 import type { SidebarPanelStyles } from '@epam/ai-dial-sidebar';
 import type { InputHighlightData } from '@epam/pdf-highlighter-kit';
-import type { McpUiHostContext } from '@mcp-ui/client';
+import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type {
   CallToolResult,
   Implementation,
@@ -317,9 +317,9 @@ export type AttachmentCanvasContent =
 export interface AttachmentCanvasColors {
   /** Primary text color for the content body. */
   text?: string;
-  /** Status/summary line text color. Defaults to `--text-secondary`. */
+  /** Status/summary line, lazy-load retry message and MCP App error detail text color. Defaults to `--text-secondary`. */
   statusText?: string;
-  /** Error icon color. Defaults to `--text-error`. */
+  /** Error icon color, including the MCP App load-error icon. Defaults to `--text-error`. */
   errorIcon?: string;
   /** "Open in new tab" link color in the blocked-iframe panel. Defaults to `--text-accent`. */
   openInNewTabText?: string;
@@ -365,6 +365,16 @@ export interface AttachmentCanvasColors {
   mcpAppDividerColor?: string;
   /** MCP App version text color in the panel title. Defaults to `--text-secondary`. */
   mcpAppVersionColor?: string;
+  /** Bottom border color of the panel header. Defaults to `--stroke-tertiary`. */
+  headerBorder?: string;
+  /** Focus outline color of the XLSX formula value field. Defaults to `--stroke-focus`. */
+  focusOutline?: string;
+  /** Background color of the code viewer. Defaults to `--bg-layer-raised`, or `--bg-layer-base` on a light syntax theme. */
+  codeBackground?: string;
+  /** Background color of the overlay shown while an MCP App loads. Defaults to `--bg-layer-1`. */
+  mcpAppLoadingBackground?: string;
+  /** Text color of the MCP App loading and error message. Defaults to `--text-primary`. */
+  mcpAppStatusText?: string;
 }
 
 /** Themeable typography overrides for the AttachmentCanvas plain-text content body. */
@@ -386,10 +396,20 @@ export interface AttachmentCanvasTypography {
   fontClassName?: string;
   /** CSS utility class applied to the JSON tree viewer. Defaults to `'dial-code-text'`. */
   jsonClassName?: string;
+  /** CSS utility class applied to JSON object keys. Defaults to `'dial-code-semi-text'`; while only `jsonClassName` is set, keys inherit that class instead. */
+  jsonLabelClassName?: string;
   /** CSS utility class applied to the decorative XLSX `fx` label. Defaults to `'dial-italic-text'`. */
   xlsxFormulaLabelClassName?: string;
+  /** CSS utility class applied to the active XLSX cell content in the formula bar. Defaults to `'dial-code-text'`. */
+  xlsxFormulaValueClassName?: string;
   /** CSS utility class applied to the MCP App version text in the panel title. Defaults to `'dial-caption-text'`. */
   mcpAppVersionClassName?: string;
+  /** CSS utility class applied to source code (code files and HTML source view). Defaults to `'dial-code-text'`. */
+  codeClassName?: string;
+  /** CSS utility class applied to a collapsed JSON node's summary. Defaults to `'dial-caption-text'`. */
+  jsonCollapsedClassName?: string;
+  /** CSS utility class applied to the code/PDF load-error message above Retry. Defaults to `'dial-body-text'`. */
+  errorMessageClassName?: string;
 }
 
 /** Style override prop for `AttachmentCanvasBody`'s content-rendering area. */
@@ -427,6 +447,8 @@ export interface AttachmentCanvasLabels {
   unsupportedLabel?: string;
   /** Message shown in the canvas body when content type is `Error` with `errorType: LoadFailed`. Defaults to `'Failed to load file'`. */
   loadErrorLabel?: string;
+  /** Label of the retry action under an `Error` with `errorType: LoadFailed`, shown when `onRetry` is given. Defaults to `'Retry'`. */
+  loadErrorRetryLabel?: string;
   /** Message shown in the canvas body when content type is `Error` with `errorType: Forbidden`. Defaults to `"You don't have permission to access this file"`. */
   forbiddenErrorLabel?: string;
   /** Accessible label for the download button. Defaults to `'Download'`. */
@@ -497,6 +519,8 @@ export interface AttachmentCanvasLabels {
   ooxmlHighlightsLabel?: string;
   /** Status announced once navigation to the selected OOXML citation highlight completes. Defaults to `'Scrolled to the cited location'`. */
   ooxmlHighlightNavigatedLabel?: string;
+  /** Accessible name of the content loading spinners. Defaults to `'Loading…'`. */
+  loadingLabel?: string;
 }
 
 /** Props for the AttachmentCanvas component. */
@@ -507,6 +531,8 @@ export interface AttachmentCanvasProps {
   isLoading?: boolean;
   /** Called when the user activates the built-in close button. */
   onClose: () => void;
+  /** Called from the retry action of an `Error` with `errorType: LoadFailed`; the action is hidden when omitted. */
+  onRetry?: () => void;
   /** The attachment content to render inside the canvas. */
   content: AttachmentCanvasContent;
   /** File name displayed as the panel title. */
@@ -527,9 +553,11 @@ export interface AttachmentCanvasProps {
   tableDownloadFilename?: string;
   /** Whether the viewport is in mobile breakpoint — disables drag-to-resize. */
   isMobile?: boolean;
+  /** Opt into the bounded inline-end overlay while keeping legacy layout defaults. */
+  isBoundedOverlay?: boolean;
   /** Initial panel width in pixels (when resizable). Defaults to `min(maxWidth, 2/3 of viewport width)`. */
   defaultWidth?: number;
-  /** Minimum panel width in pixels (when resizable). Defaults to `320`. */
+  /** Minimum panel width in pixels (when resizable). Defaults to `600`. */
   minWidth?: number;
   /** Maximum panel width in pixels (when resizable). Defaults to `1500`. */
   maxWidth?: number;
@@ -566,6 +594,7 @@ export type AttachmentCanvasBodyLabels = Pick<
   AttachmentCanvasLabels,
   | 'unsupportedLabel'
   | 'loadErrorLabel'
+  | 'loadErrorRetryLabel'
   | 'forbiddenErrorLabel'
   | 'visualizerErrorLabel'
   | 'htmlFrameBlockedLabel'
@@ -591,6 +620,7 @@ export type AttachmentCanvasBodyLabels = Pick<
   | 'mathScrollRegionAriaLabel'
   | 'ooxmlHighlightsLabel'
   | 'ooxmlHighlightNavigatedLabel'
+  | 'loadingLabel'
 >;
 
 /** Props for the `AttachmentCanvasBody` component. */
@@ -616,6 +646,8 @@ export interface AttachmentCanvasBodyProps {
   codeBlockTheme?: CodeBlockTheme;
   /** Filename used when downloading a `MarkdownTable`'s content as CSV. Defaults to `'table.csv'`. Only relevant when content type is `MarkdownTable`. */
   tableDownloadFilename?: string;
+  /** Called from the retry action of an `Error` with `errorType: LoadFailed`; the action is hidden when omitted. */
+  onRetry?: () => void;
   /** Called once a mounted `McpApp` completes its `ui/initialize` handshake, with its declared name/version. Only relevant when content type is `McpApp`; omitted when the app didn't declare an `appInfo`. */
   onAppInfo?: (appInfo: Implementation) => void;
   /**

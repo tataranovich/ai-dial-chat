@@ -22,7 +22,7 @@ export interface FilterTabsProps {
 }
 
 /** Keys of `FilterLabels` that name a tab (i.e. all but the group's own label). */
-type FilterTabLabelKey = Exclude<keyof FilterLabels, 'groupAriaLabel'>;
+type FilterTabLabelKey = 'all' | 'myChats' | 'shared' | 'organization';
 
 const TABS: { value: FilterTab; labelKey: FilterTabLabelKey }[] = [
   { value: FilterTab.All, labelKey: 'all' },
@@ -64,7 +64,7 @@ export const FilterTabs: FC<FilterTabsProps> = memo(
         aria-label={labels.groupAriaLabel ?? 'Filter chats'}
         className="px-3 py-2"
         /* !px-2 overrides the chip's own px-3 to fit four tabs in the panel */
-        chipClassName={mergeClasses('!px-2', tabClassName)}
+        chipClassName={mergeClasses('px-2!', tabClassName)}
       />
     );
   },

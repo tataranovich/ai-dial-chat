@@ -3,6 +3,9 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
+  IsNumber,
+  Min,
   IsNotEmpty,
   IsObject,
   IsOptional,
@@ -23,11 +26,12 @@ import {
   LOCALE_CODE_PATTERN,
   LOCALE_CODE_VALIDATION_MESSAGE,
 } from '../../common/validators/locale-code.pattern';
-import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
 import {
-  SEMVER_VERSION_PATTERN,
-  SEMVER_VERSION_VALIDATION_MESSAGE,
-} from '../../common/validators/semver-version.pattern';
+  RESOURCE_FOLDER_PATH_PATTERN,
+  RESOURCE_FOLDER_PATH_VALIDATION_MESSAGE,
+} from '../../common/validators/resource-folder-path.pattern';
+import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
+import { IsValidFilePath } from '../../files/dto/file-path.validator';
 
 export class CreateApplicationBodyDto {
   @ApiProperty({ example: 'My App', maxLength: ENTITY_NAME_MAX_LENGTH })
@@ -69,11 +73,12 @@ export class CreateApplicationBodyDto {
   @IsValidResourceReference()
   iconUrl?: string;
 
-  @ApiPropertyOptional({ example: '1.0.0' })
+  @ApiPropertyOptional({ example: '1.0' })
   @IsString()
   @IsOptional()
-  @Matches(SEMVER_VERSION_PATTERN, {
-    message: SEMVER_VERSION_VALIDATION_MESSAGE,
+  @Matches(/^[a-zA-Z0-9._-]+$/, {
+    message:
+      'version must contain only letters, digits, dots, underscores, and dashes',
   })
   version?: string;
 
@@ -95,6 +100,62 @@ export class CreateApplicationBodyDto {
   @IsObject()
   @IsOptional()
   applicationProperties?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'Never overwrite an existing application: when the name/version path is taken, create at the next free path (name-2, name-3, ...), checked atomically by DIAL Core; 409 only when every candidate is taken.',
+  })
+  @IsBoolean()
+  @IsOptional()
+  createOnly?: boolean;
+
+  @ApiPropertyOptional({
+    example: 'Design/Audit Agents',
+    description:
+      "Plain-text personal folder to create the application in, relative to the caller's bucket. Omit or leave empty for the root. createOnly candidates stay in this folder.",
+  })
+  @IsString()
+  @IsOptional()
+  @IsValidFilePath()
+  @Matches(RESOURCE_FOLDER_PATH_PATTERN, {
+    message: RESOURCE_FOLDER_PATH_VALIDATION_MESSAGE,
+  })
+  folderPath?: string;
+
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'Store applicationProperties verbatim, including schema-specific features. Use top-level attachment fields for Core capabilities.',
+  })
+  @IsBoolean()
+  @IsOptional()
+  preserveApplicationProperties?: boolean;
+
+  @ApiPropertyOptional({
+    example: { tools_supported: true },
+    description:
+      'Top-level DIAL Core application features, stored as supplied. Takes precedence over features hoisted from applicationProperties and turns off the Quick App system_prompt_supported default.',
+  })
+  @IsObject()
+  @IsOptional()
+  features?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ example: ['image/png'], type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  @Matches(/^([a-zA-Z0-9!*\-.+]+|\*)\/([a-zA-Z0-9!*\-.+]+|\*)$/, {
+    each: true,
+    message: 'Attachment types must be MIME types, for example image/png',
+  })
+  @IsOptional()
+  inputAttachmentTypes?: string[];
+
+  @ApiPropertyOptional({ example: 5 })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  maxInputAttachments?: number;
 
   /*
    * Additional (non-primary) locale translations for `name`/`description`.

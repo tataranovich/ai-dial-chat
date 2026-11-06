@@ -2,9 +2,11 @@ import {
   SEMVER_VERSION_PATTERN,
   type DeploymentCreationFormValues,
 } from '@epam/ai-dial-builder-form';
+import { CatalogCreationType } from '@epam/ai-dial-chat-api-client';
 import type { TFunction } from 'i18next';
 import { AppsEditorI18nKeys } from '../../../constants/translation-keys';
 import type {
+  ApplicationCreateOptions,
   ApplicationEditorContext,
   ApplicationSetupErrors,
   SchemaApplicationSetup,
@@ -24,13 +26,16 @@ import {
   defineApplicationEditor,
   getMissingRequiredProperties,
   resolveSchemaNotificationTarget,
+  toFolderPathField,
 } from '../../../utils/application-editor';
 import SchemaAppSetup from '../setup/SchemaAppSetup';
 import {
-  SCHEMA_APP_EMPTY_METADATA,
+  SCHEMA_APP_DEFAULT_METADATA,
   getSchemaAppMetadataLabelOverrides,
   getSchemaAppTitle,
+  getSchemaAppTypeName,
   getSchemaId,
+  getVersionLockedInEditMode,
   toLocaleFields,
 } from './schemaDefinitionHelpers';
 
@@ -57,6 +62,7 @@ const create = (
   metadata: DeploymentCreationFormValues,
   setup: SchemaApplicationSetup,
   ctx: ApplicationEditorContext,
+  options?: ApplicationCreateOptions,
 ) =>
   createApplication({
     name: metadata.name.trim(),
@@ -67,6 +73,7 @@ const create = (
     topics: metadata.topics.length > 0 ? metadata.topics : undefined,
     applicationProperties: setup.properties ?? {},
     ...toLocaleFields(metadata),
+    ...toFolderPathField(options),
   });
 
 const update = (
@@ -88,6 +95,7 @@ const update = (
 export const schemaAppDefinition =
   defineApplicationEditor<SchemaApplicationSetup>({
     kind: ApplicationEditorKind.SchemaApp,
+    creationType: CatalogCreationType.SchemaApp,
     // Fallback only: `getNotificationTarget` always resolves the entity from the schema.
     notifiableEntity: NotifiableEntity.Agent,
     getNotificationTarget: resolveSchemaNotificationTarget,
@@ -108,11 +116,13 @@ export const schemaAppDefinition =
       validateVersionPattern: SEMVER_VERSION_PATTERN,
     },
     getMetadataLabelOverrides: getSchemaAppMetadataLabelOverrides,
-    defaultMetadata: SCHEMA_APP_EMPTY_METADATA,
+    defaultMetadata: SCHEMA_APP_DEFAULT_METADATA,
     defaultSetup: EMPTY_SETUP,
     loadSetup,
     validateSetup,
     Setup: SchemaAppSetup,
     create,
     update,
+    savePanel: { getTypeLabel: getSchemaAppTypeName },
+    getMetadataFieldState: getVersionLockedInEditMode,
   });

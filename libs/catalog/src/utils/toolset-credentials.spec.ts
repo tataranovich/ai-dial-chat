@@ -3,6 +3,7 @@ import type { CatalogItemCredentials } from '../models/catalog-item-credentials'
 import {
   CredentialsBadgeState,
   CredentialsBannerState,
+  CredentialsLevel,
   CredentialStatus,
   CredentialsUiState,
   ToolsetAuthenticationType,
@@ -12,6 +13,7 @@ import {
   getCredentialsBadgeState,
   getCredentialsBannerState,
   getCredentialsUiState,
+  getDirectCredentialsLevel,
 } from './toolset-credentials';
 
 const base = (
@@ -146,13 +148,24 @@ describe('canPublishCredentials', () => {
     ).toBe(true);
   });
 
-  it('is true for an API-key toolset signed in at the user level', () => {
+  it('is true for an API-key toolset signed in at the global level', () => {
+    expect(
+      canPublishCredentials({
+        authenticationType: ToolsetAuthenticationType.ApiKey,
+        globalStatus: CredentialStatus.SignedIn,
+      }),
+    ).toBe(true);
+  });
+
+  /* Core copies only the global credential, so a user-level one has nothing to pass on. */
+  it('is false when signed in at the user level only', () => {
     expect(
       canPublishCredentials({
         authenticationType: ToolsetAuthenticationType.ApiKey,
         userStatus: CredentialStatus.SignedIn,
+        globalStatus: CredentialStatus.SignedOut,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
@@ -239,5 +252,35 @@ describe('getCredentialsBannerState', () => {
     expect(
       getCredentialsBannerState(base({ isManageableByAdmin: true })),
     ).toBeUndefined();
+  });
+});
+
+describe('getDirectCredentialsLevel', () => {
+  it('returns Global for a private toolset signed out at every level', () => {
+    expect(getDirectCredentialsLevel(base())).toBe(CredentialsLevel.Global);
+  });
+
+  it('returns Global for a private toolset signed in at the global level', () => {
+    expect(
+      getDirectCredentialsLevel(
+        base({ globalStatus: CredentialStatus.SignedIn }),
+      ),
+    ).toBe(CredentialsLevel.Global);
+  });
+
+  it('keeps User for a private toolset already signed in at the user level', () => {
+    expect(
+      getDirectCredentialsLevel(
+        base({ userStatus: CredentialStatus.SignedIn }),
+      ),
+    ).toBe(CredentialsLevel.User);
+  });
+
+  it('returns User for a public toolset regardless of the global status', () => {
+    expect(
+      getDirectCredentialsLevel(
+        base({ isPublic: true, globalStatus: CredentialStatus.SignedIn }),
+      ),
+    ).toBe(CredentialsLevel.User);
   });
 });

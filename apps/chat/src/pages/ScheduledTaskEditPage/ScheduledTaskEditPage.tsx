@@ -2,20 +2,35 @@ import {
   TextRefinementPurpose,
   ScheduledTaskErrorCode,
 } from '@epam/ai-dial-chat-api-client';
-import type { ScheduledTaskDto } from '@epam/ai-dial-chat-api-client';
+import type {
+  ScheduledTaskDto,
+  UpdateScheduledTaskBodyDto,
+} from '@epam/ai-dial-chat-api-client';
 import {
-  getApiErrorDetails,
   getApiErrorStatus,
   mapScheduledTaskDtoToFormValues,
+  type ApiErrorDetails,
 } from '@epam/ai-dial-chat-hooks';
 import { prepareScheduledTaskUpdateBody } from '@epam/ai-dial-chat-hooks/scheduled-tasks';
 import { isSkillSelectionUnsupported } from '@epam/ai-dial-chat-shared';
 import {
+  hasScheduledTaskFormChanges,
   ScheduledTaskCreateForm,
   ScheduledTaskCreateFormErrors,
   ScheduledTaskCreateFormValues,
 } from '@epam/ai-dial-scheduled-tasks';
-import { EditorThemes, GhostButton } from '@epam/ai-dial-ui-kit';
+import {
+  Button,
+  ButtonAppearance,
+  ButtonVariant,
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  EditorThemes,
+  ElementSize,
+  GhostButton,
+  StateScreen,
+} from '@epam/ai-dial-ui-kit';
+import { IconAlertTriangle } from '@tabler/icons-react';
 import {
   memo,
   useCallback,
@@ -34,12 +49,17 @@ import { getScheduledTaskDetailRoute } from '../../constants/routes';
 import {
   ScheduledTasksI18nKeys,
   SkillSelectorI18nKeys,
+  ButtonsI18nKeys,
 } from '../../constants/translation-keys';
 import { useAppConfig, useFeatureFlag } from '../../context/AppConfigContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useScheduledTaskFormLabels } from '../../hooks/scheduled-tasks/useScheduledTaskFormLabels';
+import { useScheduledTaskModelPreview } from '../../hooks/scheduled-tasks/useScheduledTaskModelPreview';
 import { useScheduledTaskSkillSupport } from '../../hooks/scheduled-tasks/useScheduledTaskSkillSupport';
+import { useScheduledTaskSubmit } from '../../hooks/scheduled-tasks/useScheduledTaskSubmit';
+import { useScheduledTaskSkillDetails } from '../../hooks/scheduled-tasks/useUnavailableScheduledTaskSkills';
+import { useBuilderLeaveGuard } from '../../hooks/unsaved-changes/useBuilderLeaveGuard';
 import { useTextRefinementCallback } from '../../hooks/useTextRefinementCallback';
 import {
   getScheduledTask,
@@ -47,11 +67,9 @@ import {
 } from '../../server-api/scheduled-tasks.api';
 import { ThemeId } from '../../types/theme-id';
 import { UserConfigStatus } from '../../types/user-config-status';
-import { resolveScheduledTaskErrorMessage } from '../../utils/map-scheduled-task-dto';
 import {
   getLiveScheduledTaskFieldError,
   mapScheduledTaskValidationErrors,
-  mapScheduledTaskApiError,
 } from '../../utils/scheduled-task-form-validation';
 import NotFoundPage from '../NotFound/NotFound';
 
@@ -68,7 +86,7 @@ const ScheduledTaskEditPage: FC = () => {
   const isEnabled = useFeatureFlag('scheduledTasksEnabled');
   const navigate = useNavigate();
   const { scheduleId = '' } = useParams<{ scheduleId: string }>();
-  const { showSuccessNotification, showErrorNotification } = useNotification();
+  const { showSuccessNotification } = useNotification();
   const { currentTheme } = useTheme();
   const modelLabelId = useId();
 
@@ -85,8 +103,8 @@ const ScheduledTaskEditPage: FC = () => {
   const [values, setValues] = useState<ScheduledTaskCreateFormValues | null>(
     null,
   );
-  /* Values the form was hydrated with; the form compares against them to
-   * decide whether Back/Cancel needs a discard confirmation. */
+  /* Values the form was hydrated with; unsaved changes are measured against
+   * them, and none exist before the task has loaded. */
   const [initialValues, setInitialValues] =
     useState<ScheduledTaskCreateFormValues | null>(null);
   /* Activity-window boundaries the form was hydrated with. The past-date rule
@@ -97,8 +115,17 @@ const ScheduledTaskEditPage: FC = () => {
     endDate?: string;
   }>({});
   const [errors, setErrors] = useState<ScheduledTaskCreateFormErrors>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const isSkillsSupported = useScheduledTaskSkillSupport(values?.modelId);
+  const selectedSkills = useScheduledTaskSkillDetails(values?.skillUrls);
+  const hasUnavailableSkills = selectedSkills.some(
+    (skill) => skill.isUnavailable,
+  );
+  const modelPreview = useScheduledTaskModelPreview(values?.modelId);
+  const isCheckingAvailability =
+    Boolean(modelPreview.isLoading) ||
+    selectedSkills.some((skill) => skill.isLoading);
+  const hasUnavailableSelection =
+    hasUnavailableSkills || modelPreview.isUnavailable;
   /* A capability change invalidates a prior server rejection. Local validation
    * below continues to block a selected skill until support is confirmed. */
   useEffect(() => {
@@ -108,11 +135,16 @@ const ScheduledTaskEditPage: FC = () => {
   }, [isSkillsSupported]);
   const effectiveErrors = {
     ...errors,
-    skillUrls: values?.skillUrls?.some((url) =>
-      isSkillSelectionUnsupported(url, isSkillsSupported),
-    )
-      ? t(SkillSelectorI18nKeys.UnsupportedTooltipLabel)
-      : errors.skillUrls,
+    modelId: modelPreview.isUnavailable
+      ? t(ScheduledTasksI18nKeys.UnavailableModelTooltip)
+      : errors.modelId,
+    skillUrls: hasUnavailableSkills
+      ? t(SkillSelectorI18nKeys.UnavailableSkillTooltip)
+      : values?.skillUrls?.some((url) =>
+            isSkillSelectionUnsupported(url, isSkillsSupported),
+          )
+        ? t(SkillSelectorI18nKeys.UnsupportedTooltipLabel)
+        : errors.skillUrls,
   };
 
   const returnUrl = useMemo(
@@ -144,7 +176,10 @@ const ScheduledTaskEditPage: FC = () => {
           return;
         }
         setTask(result);
-        const hydratedValues = { minute: '0', ...mapped.values };
+        const hydratedValues = {
+          minute: '0',
+          ...mapped.values,
+        };
         setValues(hydratedValues);
         setInitialValues(hydratedValues);
         setOriginalWindowDates({
@@ -178,6 +213,15 @@ const ScheduledTaskEditPage: FC = () => {
   }, [isEnabled, scheduleId, taskFetchToken]);
 
   const labels = useScheduledTaskFormLabels('edit');
+
+  /* The page owns the unsaved-changes guard, so the form gets no
+   * `initialValues` and shows no dialog of its own. */
+  const { allowNextNavigation } = useBuilderLeaveGuard({
+    isDirty:
+      values != null &&
+      initialValues != null &&
+      hasScheduledTaskFormChanges(values, initialValues),
+  });
 
   const handleFieldChange = useCallback(
     <K extends keyof ScheduledTaskCreateFormValues>(
@@ -217,9 +261,17 @@ const ScheduledTaskEditPage: FC = () => {
     setTaskFetchToken((token) => token + 1);
   }, []);
 
-  const handleSubmit = useCallback(async () => {
-    if (!values) return;
+  /*
+   * The whole submit orchestration (in-flight state, failure branches,
+   * login-required toast, login-and-retry handshake) is the shared
+   * `useScheduledTaskSubmit` flow — the handlers below supply this page's
+   * own pieces, plus its not-found branch.
+   */
 
+  /** Prepares the update body from the current values; `null` while the form is not loaded yet or validation fails (field errors already applied). */
+  const prepareUpdateBody = useCallback(() => {
+    if (!values || isCheckingAvailability || hasUnavailableSelection)
+      return null;
     const prepared = prepareScheduledTaskUpdateBody(values, {
       now: new Date(),
       isSkillsSupported,
@@ -228,55 +280,74 @@ const ScheduledTaskEditPage: FC = () => {
     });
     if (!prepared.ok) {
       setErrors(mapScheduledTaskValidationErrors(prepared.errors, t));
-      return;
+      return null;
     }
-
-    setIsSubmitting(true);
-    try {
-      await updateScheduledTask(scheduleId, prepared.body);
-      showSuccessNotification({
-        message: t(ScheduledTasksI18nKeys.EditSuccessNotification),
-      });
-      navigate(returnUrl);
-    } catch (error) {
-      const details = await getApiErrorDetails(error);
-      const { code } = details;
-      const fieldErrors = mapScheduledTaskApiError(code, t);
-      if (fieldErrors) {
-        setErrors(fieldErrors);
-        setIsSubmitting(false);
-        return;
-      }
-      if (
-        getApiErrorStatus(error) === 404 &&
-        code !== ScheduledTaskErrorCode.ScheduledTaskDeploymentUnavailable
-      ) {
-        setIsNotFound(true);
-        setIsSubmitting(false);
-        return;
-      }
-
-      showErrorNotification({
-        message: resolveScheduledTaskErrorMessage(
-          details,
-          ScheduledTasksI18nKeys.EditErrorNotification,
-          t,
-        ),
-        requestId: details.traceId,
-      });
-      setIsSubmitting(false);
-    }
+    return prepared.body;
   }, [
     values,
     originalWindowDates,
     isSkillsSupported,
-    showSuccessNotification,
-    showErrorNotification,
     t,
-    navigate,
-    returnUrl,
-    scheduleId,
+    isCheckingAvailability,
+    hasUnavailableSelection,
   ]);
+
+  /** Performs the update request for this task. */
+  const saveTaskUpdate = useCallback(
+    (body: UpdateScheduledTaskBodyDto) => updateScheduledTask(scheduleId, body),
+    [scheduleId],
+  );
+
+  /** Runs the normal update success path (success toast + navigation back to the task detail). */
+  const handleUpdateSuccess = useCallback(() => {
+    showSuccessNotification({
+      message: t(ScheduledTasksI18nKeys.EditSuccessNotification),
+    });
+    allowNextNavigation();
+    navigate(returnUrl);
+  }, [showSuccessNotification, t, allowNextNavigation, navigate, returnUrl]);
+
+  /**
+   * Marks a bare 404 as the task's not-found state and reports it fully
+   * handled; a mapped deployment-unavailable code still takes the shared
+   * branches.
+   */
+  const handleTaskNotFoundError = useCallback(
+    (error: unknown, details: ApiErrorDetails) => {
+      if (
+        getApiErrorStatus(error) === 404 &&
+        details.code !==
+          ScheduledTaskErrorCode.ScheduledTaskDeploymentUnavailable
+      ) {
+        setIsNotFound(true);
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+
+  const { isSubmitting, handleSubmit } = useScheduledTaskSubmit({
+    prepare: prepareUpdateBody,
+    save: saveTaskUpdate,
+    onSuccess: handleUpdateSuccess,
+    onFieldErrors: setErrors,
+    errorKey: ScheduledTasksI18nKeys.EditErrorNotification,
+    handleExtraError: handleTaskNotFoundError,
+    /*
+     * The page owns the login-and-retry action's presentation (the kit's own
+     * retry-action doc example shape); the hook owns its behavior.
+     */
+    renderLoginAndRetryAction: (onAction) => (
+      <Button
+        variant={ButtonVariant.Neutral}
+        appearance={ButtonAppearance.Outlined}
+        size={ElementSize.Small}
+        label={t(ScheduledTasksI18nKeys.LoginAndRetryAction)}
+        onClick={onAction}
+      />
+    ),
+  });
 
   const handleSubmitVoid = useCallback(
     () => void handleSubmit(),
@@ -301,14 +372,22 @@ const ScheduledTaskEditPage: FC = () => {
 
   if (taskError) {
     return (
-      <div
-        role="alert"
-        className="flex size-full flex-col items-center justify-center gap-3"
-      >
-        <p>{t(ScheduledTasksI18nKeys.EditLoadErrorLabel)}</p>
-        <GhostButton
-          label={t(ScheduledTasksI18nKeys.ListRetryLabel)}
-          onClick={handleRetry}
+      <div className="size-full">
+        <StateScreen
+          icon={
+            <IconAlertTriangle
+              aria-hidden
+              size={DIAL_ICON_SIZE.LG}
+              stroke={DIAL_KIT_ICON_STROKE}
+            />
+          }
+          title={t(ScheduledTasksI18nKeys.EditLoadErrorLabel)}
+          action={
+            <GhostButton
+              label={t(ButtonsI18nKeys.Retry)}
+              onClick={handleRetry}
+            />
+          }
         />
       </div>
     );
@@ -316,14 +395,19 @@ const ScheduledTaskEditPage: FC = () => {
 
   if (isUnsupported || !values || !task) {
     return (
-      <div
-        role="alert"
-        className="flex size-full flex-col items-center justify-center gap-3"
-      >
-        <p>{t(ScheduledTasksI18nKeys.EditInvalidScheduleLabel)}</p>
-        <GhostButton
-          label={t(ScheduledTasksI18nKeys.CreateBackButtonLabel)}
-          onClick={handleBack}
+      <div className="size-full">
+        <StateScreen
+          icon={
+            <IconAlertTriangle
+              aria-hidden
+              size={DIAL_ICON_SIZE.LG}
+              stroke={DIAL_KIT_ICON_STROKE}
+            />
+          }
+          title={t(ScheduledTasksI18nKeys.EditInvalidScheduleLabel)}
+          action={
+            <GhostButton label={t(ButtonsI18nKeys.Back)} onClick={handleBack} />
+          }
         />
       </div>
     );
@@ -336,11 +420,11 @@ const ScheduledTaskEditPage: FC = () => {
       onRefineInstructions={onRefineInstructions}
       labels={labels}
       values={values}
-      initialValues={initialValues ?? undefined}
       errors={effectiveErrors}
       skillSelector={
         <ScheduledTaskSkillField
           fieldLabel={labels.skillLabel}
+          resolvedSkills={selectedSkills}
           value={values.skillUrls ?? []}
           onChange={(value) => handleFieldChange('skillUrls', value)}
           isSkillsSupported={isSkillsSupported}
@@ -355,7 +439,16 @@ const ScheduledTaskEditPage: FC = () => {
           placeholder={t(ScheduledTasksI18nKeys.CreateModelPlaceholder)}
           labelledById={modelLabelId}
           isDisabled={isSubmitting}
-          isInvalid={Boolean(errors.modelId)}
+          isInvalid={Boolean(effectiveErrors.modelId)}
+          selectedLabel={
+            modelPreview.modelDisplayName ??
+            (isCheckingAvailability ? '' : undefined)
+          }
+          labelTooltip={
+            modelPreview.isUnavailable
+              ? t(ScheduledTasksI18nKeys.UnavailableModelTooltip)
+              : undefined
+          }
           panelClassName="desktop:min-w-[320px] [--ds-search-inline:12px]"
         />
       }
@@ -365,6 +458,7 @@ const ScheduledTaskEditPage: FC = () => {
       onCancel={handleCancel}
       onSubmit={handleSubmitVoid}
       isSubmitting={isSubmitting}
+      isSubmitDisabled={isCheckingAvailability || hasUnavailableSelection}
       markdownEditorTheme={markdownEditorTheme}
     />
   );

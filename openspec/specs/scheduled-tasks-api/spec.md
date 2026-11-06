@@ -44,6 +44,7 @@ The endpoint SHALL accept optional query parameters, validated via `ListSchedule
 - `limit` — `@IsOptional() @IsInt() @Min(1) @Max(100)`. Forwarded to upstream as `limit` unchanged (the upstream `Pagination` dependency accepts `limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1)` with no upper bound of its own; 100 is a BFF-chosen sanity bound, not an upstream limit). Omitted → current single-page default behavior is preserved.
 - `offset` — `@IsOptional() @IsInt() @Min(0)`. Forwarded to upstream as `offset` unchanged (upstream: `offset: int = Query(default=0, ge=0)`). Omitted → `0`.
 - `search` — `@IsOptional() @IsString() @MaxLength(200)`, trimmed before use. Forwarded to upstream as the `name` query parameter (upstream performs a case-insensitive substring match against `display_name`). Omitted or empty after trimming → not sent upstream at all (no `name` parameter, not sent as an empty string).
+- `model` — `@IsOptional() @IsString() @MaxLength(1024)`, trimmed before use. Forwarded to upstream as the `model` query parameter unchanged, so only schedules whose stored `model` equals the value are returned (the value is compared in the encoding it is stored in, for example `applications/<hash>/<deployment>`; the BFF neither decodes nor re-encodes it beyond normal query-string encoding). Omitted or empty after trimming → not sent upstream at all. Filtering, paging and `next` are all computed by upstream, so the filter composes correctly with `limit`/`offset`.
 - `sort` — `@IsOptional() @IsEnum(ScheduledTasksSortKey)`, where `ScheduledTasksSortKey` is `firstToRun` | `lastToRun` | `newest` | `nameAZ` (mirroring the frontend's existing sort-option enum values exactly). Mapped to the upstream `order_by`/`order_dir` query parameters:
 
   | `sort` | upstream `order_by` | upstream `order_dir` |
@@ -55,7 +56,7 @@ The endpoint SHALL accept optional query parameters, validated via `ListSchedule
 
   Omitted → the service SHALL still send an explicit `order_by=next_run_time&order_dir=asc` upstream, as if `sort=firstToRun` had been supplied — the BFF never relies on upstream's own default (`created_at desc`) so the endpoint's documented default is always the one actually observed. When ordering by `next_run_time`, schedules with no next run time (paused/inactive schedules) SHALL sort last — this is upstream behavior, not something the BFF or its callers implement.
 
-Results MUST be cached per user and per normalized `{limit, offset, search, sort}` combination for 30 seconds under a key that includes the normalized query params (e.g. `` `scheduled-tasks:list:{userSub}:{normalizedParams}` ``), with defaults applied before serialization (an omitted `sort` and an explicit `sort=firstToRun` MUST normalize to the same cache key). Every cached variant for that user MUST be invalidated immediately after a successful `createScheduledTask` or `updateScheduledTask` call for that same user.
+Results MUST be cached per user and per normalized `{limit, offset, search, sort, model}` combination for 30 seconds under a key that includes the normalized query params (e.g. `` `scheduled-tasks:list:{userSub}:{normalizedParams}` ``), with defaults applied before serialization (an omitted `sort` and an explicit `sort=firstToRun` MUST normalize to the same cache key, and a list without `model` MUST keep the key it had before the filter existed while a `model` value adds a percent-encoded segment so different models never share an entry). Every cached variant for that user MUST be invalidated immediately after a successful `createScheduledTask` or `updateScheduledTask` call for that same user.
 
 The endpoint MUST respond with `Cache-Control: private, no-store` (not a `max-age` directive). Freshness is owned entirely by the server-side cache-manager invalidation above; a `max-age` response header would let the browser's own HTTP cache serve a stale list for up to that many seconds after a create/update, bypassing server-side invalidation entirely and making a just-created task invisible until a hard reload — this was an observed bug, not a hypothetical.
 
@@ -135,6 +136,21 @@ Example response (with `?limit=20&offset=0&search=daily&sort=firstToRun`):
 - **WHEN** `search` is omitted, an empty string, or a string that trims to empty
 - **THEN** the upstream request is made without a `name` parameter, equivalent to an unfiltered list request
 
+#### Scenario: A model filter is forwarded upstream and cached per model
+
+- **WHEN** `model=applications/hash/Daily%20plan__0.0.1` is supplied
+- **THEN** the upstream request carries `model=applications%2Fhash%2FDaily%2520plan__0.0.1` (the stored value, query-encoded once) and the result is cached separately from the unfiltered list and from other models
+
+#### Scenario: Empty model is not sent upstream
+
+- **WHEN** `model` is omitted, an empty string, or a string that trims to empty
+- **THEN** the upstream request is made without a `model` parameter
+
+#### Scenario: Oversized model is rejected
+
+- **WHEN** `model` exceeds 1024 characters
+- **THEN** the response is `400 Bad Request` and DIAL Core is never contacted
+
 ### Requirement: Create scheduled task with validated chat_completion/dial-oauth body
 
 `POST /api/v1/scheduled-tasks` SHALL accept `CreateScheduledTaskBodyDto`:
@@ -151,17 +167,16 @@ Example response (with `?limit=20&offset=0&search=daily&sort=firstToRun`):
 
 or with `"trigger": { "cron": { "fields": { "minute": "0", "hour": "*" } } }` in place of `date`. `displayName`, `trigger` (exactly one of `date` or `cron.fields`), `model`, and a string `prompt` are required; `displayName` is `@MaxLength(256)` and rejects control characters (`@Matches(/^[^\p{Cc}]*$/u)`), and `prompt` is `@MaxLength(50000)` (bounds from `apps/chat-api/src/common/validators/entity-field-limits.ts`, see `entity-field-limits`); `skillUrls` is an optional string array and rejects null, and empty/whitespace-only prompt is allowed only with an effective skill; `description` is optional (`@IsOptional() @IsString() @MaxLength(500)`) and, when omitted or empty, MUST NOT be sent to DIAL Scheduler. The DTO SHALL NOT accept a client-supplied `service_id` or `stream` field — both are fixed/derived server-side (see below) and are not client-controllable.
 
-The service SHALL build the upstream body server-side with `service_id` set from `SCHEDULER_SERVICE_ID` (read once at `ScheduledTasksService` construction; see the "SCHEDULER_APP_ID and SCHEDULER_SERVICE_ID environment configuration" requirement) and `properties`:
+The service SHALL build the upstream body server-side with `service_id` set from `SCHEDULER_SERVICE_ID` (read once at `SchedulerUpstreamClient` construction; see the "SCHEDULER_APP_ID and SCHEDULER_SERVICE_ID environment configuration" requirement) and `properties`:
 
 - `target_type: "chat_completion"`
 - `url`: built by `buildScheduledTaskChatCompletionUrl(DialClientService.baseUrl)` — the base URL (backed by `DIAL_CORE_URL`) with any trailing slash stripped, followed by `/openai` (no double slashes)
 - `api_version`: `DialClientService.dialApiVersion` (the same value `ChatService.sendCompletion` sends as `api-version`, backed by `DIAL_API_VERSION`, defaulting to `2024-10-21`)
 - `create_conversation: true` — required for the Scheduler run to create a conversation under the reserved `.scheduler/{scheduleId}/{runId}/` path
-- `stream: false` — fixed; background scheduled runs are always non-streaming, and this field is NOT nested inside `payload`
 - `extra_headers: {}` — fixed
 - `retry: null` — fixed
 - `timeout: null` — fixed
-- `payload: { messages: [{ role: "user", content: prompt, custom_content?: { skills: [{ url }] } }], model }` (the extension is present only with an effective skill) — no `stream` field inside `payload`
+- `payload: { stream: true, messages: [{ role: "user", content: prompt, custom_content?: { skills: [{ url }] } }], model }` (the extension is present only with an effective skill) — `stream` is fixed (not client-controllable) and appears only inside `properties.payload`
 
 and a top-level `description` field (mapped 1:1, never merged into `properties` or `properties.payload`) when provided. On success it SHALL call `POST {DIAL_CORE_URL}/v1/deployments/applications/{SCHEDULER_APP_ID}/route/v1/schedules/`, return **201** with `CreatedScheduledTaskDto` (at least `id`, `displayName`, `trigger`), and invalidate that user's list cache.
 
@@ -173,7 +188,7 @@ and a top-level `description` field (mapped 1:1, never merged into `properties` 
 #### Scenario: Upstream properties include the fixed Scheduler call fields
 
 - **WHEN** a valid create request is submitted
-- **THEN** the upstream request body's `properties` includes `create_conversation: true`, `stream: false`, `extra_headers: {}`, `retry: null`, and `timeout: null`, and `properties.payload` contains only `messages` and `model` (no `stream` key)
+- **THEN** the upstream request body's `properties` includes `create_conversation: true`, `extra_headers: {}`, `retry: null`, and `timeout: null`, and `properties.payload` contains `stream: true`, `messages`, and `model`; `properties` itself has no `stream` key
 
 #### Scenario: Upstream url is built from the normalized DIAL Core base URL
 
@@ -240,7 +255,7 @@ Skill-bearing requests SHALL additionally meet the server capability-validation 
 
 `GET /api/v1/scheduled-tasks/:scheduleId` SHALL validate `scheduleId` against the allowlist `^[A-Za-z0-9_-]{1,128}$` via `@Matches` before use, proxy `GET {DIAL_CORE_URL}/v1/deployments/applications/{SCHEDULER_APP_ID}/route/v1/schedules/{scheduleId}` with the session bearer token, and return `ScheduledTaskDto` (`id`, `displayName`, `trigger`, `description`, and any additional narrowly-typed fields confirmed against a live upstream response). This endpoint is NOT cached.
 
-`ScheduledTaskDto` SHALL additionally include optional `model` and `prompt` string fields, mapped from the upstream schedule's `properties.payload.model` and `properties.payload.messages[0].content` (the user message) respectively via `fromUpstreamSchedule` in `apps/chat-api/src/scheduled-tasks/scheduled-tasks.mapper.ts`. Both fields are additive and MUST NOT be required — mapping MUST NOT throw when `properties`, `properties.payload`, `properties.payload.model`, or `properties.payload.messages` is absent or empty (e.g. on a schedule created with a `target_type` other than `chat_completion`, or on list-endpoint responses that omit `properties.payload` entirely).
+`ScheduledTaskDto` SHALL additionally include optional `model` and `prompt` string fields, mapped from the upstream schedule's top-level `model` (present on list items, which carry no `properties`) falling back to `properties.payload.model` (GET/create/update responses), and `properties.payload.messages[0].content` (the user message) respectively via `fromUpstreamSchedule` in `apps/chat-api/src/scheduled-tasks/scheduled-tasks.mapper.ts`. Both fields are additive and MUST NOT be required — mapping MUST NOT throw when `properties`, `properties.payload`, `properties.payload.model`, or `properties.payload.messages` is absent or empty (e.g. on a schedule created with a `target_type` other than `chat_completion`, or on list-endpoint responses that omit `properties.payload` entirely — `model` still comes from the top-level list field when present).
 
 #### Scenario: Invalid scheduleId is rejected before any upstream call
 
@@ -257,9 +272,14 @@ Skill-bearing requests SHALL additionally meet the server capability-validation 
 - **WHEN** an upstream schedule response includes `properties.payload.model: "gpt-4.1-mini-2025-04-14"` and `properties.payload.messages: [{ role: "user", content: "Summarize my inbox" }]`
 - **THEN** the mapped `ScheduledTaskDto` includes `model: "gpt-4.1-mini-2025-04-14"` and `prompt: "Summarize my inbox"`
 
+#### Scenario: model is mapped from a top-level list item field
+
+- **WHEN** an upstream list item includes a top-level `model: "gpt-4.1-mini-2025-04-14"` and no `properties`
+- **THEN** the mapped `ScheduledTaskDto` includes `model: "gpt-4.1-mini-2025-04-14"`, and the top-level value takes precedence over `properties.payload.model` when both are present
+
 #### Scenario: Missing properties.payload does not throw
 
-- **WHEN** an upstream schedule response omits `properties`, `properties.payload`, `properties.payload.model`, and/or `properties.payload.messages`
+- **WHEN** an upstream schedule response omits the top-level `model`, `properties`, `properties.payload`, `properties.payload.model`, and/or `properties.payload.messages`
 - **THEN** the mapped `ScheduledTaskDto`'s `model`/`prompt` fields are `undefined`, and mapping does not throw
 
 ### Requirement: List scheduled task runs
@@ -402,7 +422,7 @@ Example request: `GET /api/v1/scheduled-tasks/sched_123/runs?limit=20&offset=40`
 
 ### Requirement: Update scheduled task
 
-`PUT /api/v1/scheduled-tasks/:scheduleId` SHALL accept the same `UpdateScheduledTaskBodyDto` shape as create (`displayName`, `trigger`, `model`, `prompt`, optional array `skillUrls?: string[]`, optional `description` (≤500 chars); no client-supplied `service_id` or `stream`), apply the same server-side `service_id` (from `SCHEDULER_SERVICE_ID`)/`target_type`/`url`/`api_version`/`create_conversation`/`stream`/`extra_headers`/`retry`/`timeout`/`payload`/`description` construction as create, proxy `PUT {DIAL_CORE_URL}/v1/deployments/applications/{SCHEDULER_APP_ID}/route/v1/schedules/{scheduleId}` with the session bearer token, return `200 OK` with the updated `ScheduledTaskDto`, and invalidate that user's list cache on success.
+`PUT /api/v1/scheduled-tasks/:scheduleId` SHALL accept the same `UpdateScheduledTaskBodyDto` shape as create (`displayName`, `trigger`, `model`, `prompt`, optional array `skillUrls?: string[]`, optional `description` (≤500 chars); no client-supplied `service_id` or `stream`), apply the same server-side `service_id` (from `SCHEDULER_SERVICE_ID`)/`target_type`/`url`/`api_version`/`create_conversation`/`extra_headers`/`retry`/`timeout`/`payload` (including `properties.payload.stream: true`)/`description` construction as create, proxy `PUT {DIAL_CORE_URL}/v1/deployments/applications/{SCHEDULER_APP_ID}/route/v1/schedules/{scheduleId}` with the session bearer token, return `200 OK` with the updated `ScheduledTaskDto`, and invalidate that user's list cache on success.
 
 #### Scenario: Valid update succeeds and invalidates list cache
 
@@ -412,7 +432,7 @@ Example request: `GET /api/v1/scheduled-tasks/sched_123/runs?limit=20&offset=40`
 #### Scenario: Update carries the same fixed Scheduler call properties as create
 
 - **WHEN** an authenticated, feature-enabled user submits a valid update body for an existing `scheduleId`
-- **THEN** the upstream `PUT` request body's `properties` includes `create_conversation: true`, `stream: false`, `extra_headers: {}`, `retry: null`, and `timeout: null`, matching the create request shape, and `service_id` equals the configured `SCHEDULER_SERVICE_ID` value
+- **THEN** the upstream `PUT` request body's `properties` includes `create_conversation: true`, `extra_headers: {}`, `retry: null`, and `timeout: null`, with `stream: true` only inside `properties.payload`, matching the create request shape, and `service_id` equals the configured `SCHEDULER_SERVICE_ID` value
 
 #### Scenario: Update of unknown schedule id returns 404
 
@@ -779,12 +799,12 @@ Both fields apply only to a `cron` (recurring) trigger and are optional; when un
 
 ### Requirement: Scheduled task completed-state field
 
-`ScheduledTaskDto` SHALL include an optional `isCompleted: boolean` field, computed by `ScheduledTasksService` (not by `fromUpstreamSchedule`, which cannot see run history) on both the list and get paths. `isCompleted: true` means the schedule can no longer produce a future automatic run from its trigger, via exactly two terminal shapes:
+`ScheduledTaskDto` SHALL include an optional `isCompleted: boolean` field, computed by `ScheduledTaskCompletionService` and returned by `ScheduledTasksService` (not by `fromUpstreamSchedule`, which cannot see run history) on both the list and get paths. `isCompleted: true` means the schedule can no longer produce a future automatic run from its trigger, via exactly two terminal shapes:
 
 - **Expired recurring schedule:** `triggerType === 'cron'` AND `nextRunTime` is null AND `trigger.cron.endDate` is in the past. Unambiguous from the schedule fields alone — no runs call is issued. A cron schedule with no `endDate`, or with one still in the future, is merely paused, not terminal. When the response carries no `trigger.cron.endDate` (a list shape without the nested trigger), this shape is not detected and the task keeps today's Paused display.
 - **Finished one-time schedule:** `triggerType === 'date'` AND (`nextRunTime` is null OR `trigger.date` is in the past) — the candidate gate, an OR so it is path-independent — AND the newest run (fetched via `GET schedules/{scheduleId}/runs?limit=1`, newest first per the endpoint's documented ordering) exists with status `Success` or `Error`. `InProgress`, `Missed`, and an empty run list all yield `isCompleted: false` for candidates.
 
-Non-terminal schedules yield `isCompleted: false` with no runs call. Derivation SHALL use the BFF's server clock for the date comparisons. A failed runs call MUST NOT fail the parent list/get response: the affected item SHALL carry `isCompleted: undefined` (mapped by the frontend identically to `false`) and the failure SHALL be logged at warn. The field is a documented assumption alongside `isActive` (no authoritative upstream state field is confirmed); when one is confirmed, both derivations MUST be replaced in this same service/mapper location, not duplicated elsewhere.
+Non-terminal schedules yield `isCompleted: false` with no runs call. Derivation SHALL use the BFF's server clock for the date comparisons. A failed runs call MUST NOT fail the parent list/get response: the affected item SHALL carry `isCompleted: undefined` (mapped by the frontend identically to `false`) and the failure SHALL be logged at warn. The field is a documented assumption alongside `isActive` (no authoritative upstream state field is confirmed); when one is confirmed, both derivations MUST be replaced where they live today — `isCompleted` in `ScheduledTaskCompletionService`, `isActive` in `scheduled-tasks.mapper.ts` — not duplicated elsewhere.
 
 #### Scenario: One-time task whose run finished maps to isCompleted true
 
@@ -925,7 +945,7 @@ No new endpoint, role, telemetry, or cache SHALL be introduced. Existing session
 - **AND** the 1024-character path limit is measured on the decoded path, so encoding expansion does not prevent later updates
 ### Requirement: Server validates the effective model and skill before persistence
 
-For each skill-bearing create/update, including a skill preserved by PUT omission, `ScheduledTasksService` SHALL resolve model/agent capability using session-scoped authoritative deployment data and require `features.skillsSupported === true`. A client capability claim or feature-hidden field SHALL NOT bypass validation. A false/missing support flag SHALL raise `BadRequestException` with typed code `scheduledTaskSkillUnsupported` and field `skillUrls`. Empty effective content SHALL use `scheduledTaskInstructionsOrSkillRequired` and field `prompt`. Unknown/inaccessible deployments SHALL retain typed 404/403 semantics, with `scheduledTaskDeploymentUnavailable` distinguishing a deployment from a missing schedule. Lookup upstream failure/timeout SHALL produce 502/503; no writes occur in any failure case.
+For each skill-bearing create/update, including a skill preserved by PUT omission, `ScheduledTaskPreconditionsService` SHALL resolve model/agent capability using session-scoped authoritative deployment data and require `features.skillsSupported === true`. A client capability claim or feature-hidden field SHALL NOT bypass validation. A false/missing support flag SHALL raise `BadRequestException` with typed code `scheduledTaskSkillUnsupported` and field `skillUrls`. Empty effective content SHALL use `scheduledTaskInstructionsOrSkillRequired` and field `prompt`. Unknown/inaccessible deployments SHALL retain typed 404/403 semantics, with `scheduledTaskDeploymentUnavailable` distinguishing a deployment from a missing schedule. Lookup upstream failure/timeout SHALL produce 502/503; no writes occur in any failure case.
 
 Concrete unsupported response:
 
@@ -1135,7 +1155,7 @@ New endpoints SHALL use `Cache-Control: private, no-store`; cache TTL SHALL be z
 
 The BFF SHALL expose `GET /api/v1/scheduled-tasks/:scheduleId/runs/:runId` with operationId/generated method `getScheduledTaskRun`, returning HTTP 200 and `ScheduledTaskRunDto`. A new `GetScheduledTaskRunDto` SHALL validate both path ids against `^[A-Za-z0-9_-]{1,128}$`. It SHALL proxy the matching Scheduler GET through the existing routed deployment and caller access token. Session/feature authorization, no-store behavior, error mapping, logging and normal generated-method consumption SHALL match the start operation; Swagger SHALL document 200, 400, 401, 403, 404, 429, 502 and 503. A run SHALL be read only within the given owned schedule; an unknown run or foreign schedule SHALL return 404.
 
-`ScheduledTaskRunDto` SHALL add optional `resultStage?: string`, preserving only the string `result.stage` when supplied. List/start/single-run mapping SHALL use the same `fromUpstreamRun` normalization; arbitrary result objects SHALL NOT be forwarded. Missing/null/non-string stage SHALL omit `resultStage`, preserving compatibility. Existing enum mapping, time/duration derivation and nullable conversation normalization SHALL remain unchanged.
+`ScheduledTaskRunDto` SHALL add optional `resultStage?: string`, preserving only the string `result.stage` when supplied. List/start/single-run mapping SHALL use the same `fromUpstreamRun` normalization; arbitrary result objects SHALL NOT be forwarded. Missing/null/non-string stage SHALL omit `resultStage`, preserving compatibility. The DTO SHALL likewise add optional `errorText?: string`, preserving only a non-blank string `result.error_text`, trimmed and capped at 1000 characters; because the Scheduler run list omits `result`, the list operation SHALL re-read Error runs through the single-run route to fill it in. That fan-out SHALL be bounded: a resolved value (including the absence of error text) SHALL be cached per run so repeated list calls do not re-read it, at most 10 uncached runs SHALL be re-read per list call (newest first), and a failed re-read SHALL NOT be cached. Existing enum mapping, time/duration derivation and nullable conversation normalization SHALL remain unchanged.
 
 For a rate-limited manual start or single-run read, BFF SHALL preserve a valid Scheduler `Retry-After` response header (delay seconds or an HTTP date), without changing the existing mapped error body or trace handling. Invalid header values SHALL be omitted.
 
@@ -1169,7 +1189,56 @@ Example HTTP 200 response for a credential-stage failure:
 - **WHEN** a listed or individually retrieved run omits result or has a null/non-string stage
 - **THEN** mapping succeeds without `resultStage` and all established run fields remain available
 
+#### Scenario: A failed run exposes its error text
+
+- **WHEN** Scheduler returns an error run whose `result.error_text` is a non-blank string
+- **THEN** the DTO includes it as `errorText` and still excludes the rest of the result (e.g. `credentials_response`)
+
+#### Scenario: Run history fills in error text for failed runs
+
+- **WHEN** the Scheduler run list (which omits `result`) contains Error runs
+- **THEN** the BFF re-reads up to 10 uncached ones through the single-run route and returns their `errorText` in the list items, and a failed re-read leaves that item without `errorText` instead of failing the list
+
+#### Scenario: Background refreshes do not repeat error-detail reads
+
+- **WHEN** the same History page is listed again after its failed runs were resolved
+- **THEN** their `errorText` (or its absence) is served from cache without another single-run read
+
 #### Scenario: Invalid or inaccessible run cannot be read
 
 - **WHEN** either path id is malformed, or the valid run does not belong to the requested owned schedule
 - **THEN** BFF returns 400 before upstream access for malformed ids, or the upstream 404 for inaccessible runs
+
+### Requirement: Scheduled tasks service is a facade over single-purpose collaborators
+
+`ScheduledTasksService` (`apps/chat-api/src/scheduled-tasks/scheduled-tasks.service.ts`) SHALL remain the only provider the controller and other modules use. It keeps its ten public methods and their signatures: `listScheduledTasks`, `createScheduledTask`, `getScheduledTask`, `listScheduledTaskRuns`, `getScheduledTaskRun`, `startScheduledTask`, `updateScheduledTask`, `pauseScheduledTask`, `resumeScheduledTask` and `deleteScheduledTask`. It SHALL own the order of each operation: consent check, configuration check, upstream call, then list cache invalidation. It SHALL delegate everything else to five injectable providers in the same folder, all registered in `ScheduledTasksModule`:
+
+- `SchedulerUpstreamClient` (`scheduler-upstream.client.ts`) owns the Scheduler configuration (`SCHEDULER_APP_ID`, `SCHEDULER_SERVICE_ID`, `SCHEDULER_SERVICE_TIMEOUT_MS`, read once at construction). It also owns every upstream URL and the `dialClient.fetchCore` request: the timeout, the status mapping, the 429 → `ScheduledTaskRateLimitException` conversion and the `upstreamMessage`/`upstreamCode` enrichment.
+- `ScheduledTasksListCacheService` (`scheduled-tasks-list-cache.service.ts`) owns the per-user epoch key `scheduled-tasks:list-epoch:<sub>`, its 24h TTL, and the list cache key `scheduled-tasks:list:<sub>:<epoch>:<limit>:<offset>:<search>:<sort>[:<model>]` with its 30s TTL. Every create, update, pause, resume and delete SHALL invalidate the list cache by bumping the epoch.
+- `ScheduledTaskCompletionService` (`scheduled-task-completion.service.ts`) owns the `isCompleted` derivation, including the newest-run lookup.
+- `ScheduledTaskRunsService` (`scheduled-task-runs.service.ts`) owns run listing, single-run reads, and the run error-text enrichment. That enrichment is capped at 10 detail reads per list call and cached per run under `scheduled-tasks:run-error-text:<scheduleId>:<runId>` for 24h.
+- `ScheduledTaskPreconditionsService` (`scheduled-task-preconditions.service.ts`) owns the DIAL_NATIVE consent check and the model/skill configuration check.
+
+The upstream response envelope helpers (`extractScheduleListItems`, `extractScheduleListPagination`) SHALL be pure functions in `scheduled-tasks.mapper.ts`.
+
+This structure SHALL change no observable behavior: endpoints, OpenAPI operations, DTOs, upstream URLs, headers and bodies, cache keys and TTLs, error bodies and status codes, log text, and the `scheduledTasksEnabled` feature gate all stay as specified by the other requirements of this capability. It introduces no user-visible strings, no UI (so no RTL or accessibility impact), and no telemetry.
+
+#### Scenario: The facade contains no upstream, cache or derivation logic
+
+- **WHEN** `scheduled-tasks.service.ts` is inspected
+- **THEN** it has fewer than 350 lines and calls no `fetchCore`, builds no Scheduler URL or cache key, and contains no completion predicate, run error-text lookup, consent lookup or deployment lookup
+
+#### Scenario: Consumers of the service are untouched
+
+- **WHEN** `scheduled-tasks.controller.ts`, `apps/chat-api/src/app/app.module.ts` and the controller spec are compared before and after the change
+- **THEN** they are identical, and `ScheduledTasksModule` still exports `ScheduledTasksService`
+
+#### Scenario: Behavior tests survive the move unchanged
+
+- **WHEN** the existing service tests run from their new files, `scheduled-task-completion.service.spec.ts`, `scheduled-task-preconditions.service.spec.ts`, `scheduler-upstream.client.spec.ts`, `scheduled-task-runs.service.spec.ts` and the remaining `scheduled-tasks.service.spec.ts`, through a service built by the shared `createScheduledTasksService` fixture
+- **THEN** every test passes with the assertions it had before the move
+
+#### Scenario: Mutations still invalidate the list cache through the facade
+
+- **WHEN** a schedule is created, updated, paused, resumed or deleted successfully
+- **THEN** `ScheduledTasksService` calls `ScheduledTasksListCacheService.invalidate` with the caller's `sub` before returning, so a following `listScheduledTasks` misses the old cache entries

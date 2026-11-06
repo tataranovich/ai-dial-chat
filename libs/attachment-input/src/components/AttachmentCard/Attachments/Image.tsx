@@ -8,16 +8,14 @@ import {
   DIAL_KIT_ICON_STROKE,
   Skeleton,
   SkeletonVariant,
+  Spinner,
 } from '@epam/ai-dial-ui-kit';
 import { IconPhoto } from '@tabler/icons-react';
+import { CSSProperties, type FC, useMemo } from 'react';
 import {
-  CSSProperties,
-  type FC,
-  type HTMLAttributes,
-  type KeyboardEvent,
-  useMemo,
-} from 'react';
-import { ATTACHMENT_TILE_BASE_CLASS } from '../../../constants/attachment-group';
+  ATTACHMENT_TILE_BASE_CLASS,
+  ATTACHMENT_TILE_FOCUS_RING_CLASS,
+} from '../../../constants/attachment-group';
 import { ATTACHMENT_INPUT_CLASS } from '../../../constants/public-class-names';
 import {
   LazyImageLoadStatus,
@@ -61,6 +59,7 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
     expandLabel = 'Expand pasted text',
     removeLabel = 'Remove attachment',
     downloadLabel = 'Download attachment',
+    uploadingLabel = 'Uploading',
   } = labels ?? {};
   const { className } = cardStyles ?? {};
   const { id, name } = attachment;
@@ -80,6 +79,10 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
    * is a plain element so it adds no unnamed, no-op Tab stop.
    */
   const hasAction = isExpandable || isClickable;
+  const canDownload = !!onDownload && !isLoading;
+  /* See FileAttachment: the tile ring stands for a lone action's focus. */
+  const isProxyFocus =
+    !hasAction && Number(!!onRemove) + Number(canDownload) === 1;
 
   const { imageRef, imageLoadStatus } = useLazyImageLoad({
     enabled: isImage,
@@ -94,57 +97,34 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
     }
   };
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    /*
-     * Only the tile itself activates on Enter/Space — see FileAttachment for
-     * why the corner action buttons must not have their activation cancelled
-     * by the preventDefault() below.
-     */
-    if (e.target !== e.currentTarget) return;
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      handleCardClick();
-    }
-  };
-
-  /*
-   * Role, Tab stop, name and handlers travel together, so the tile is either a
-   * complete button or a plain element — never a focusable no-op.
-   */
-  const interactiveProps: HTMLAttributes<HTMLDivElement> = hasAction
-    ? {
-        role: 'button',
-        tabIndex: 0,
-        'aria-label': isExpandable ? expandLabel : clickLabel,
-        onClick: handleCardClick,
-        onKeyDown: handleKeyDown,
-      }
-    : {};
-
   const cardClassName = mergeClasses(
     ATTACHMENT_TILE_BASE_CLASS,
     'group/attachment-tile',
     hasAction && 'cursor-pointer',
     styles.tile,
     isSelected && styles.selected,
+    isLoading && styles.loading,
+    isProxyFocus && styles.proxyFocus,
+    ATTACHMENT_TILE_FOCUS_RING_CLASS,
     className,
     ATTACHMENT_INPUT_CLASS.tile,
     isSelected && ATTACHMENT_INPUT_CLASS.tileSelected,
   );
 
   return (
-    <div className={cardClassName} {...interactiveProps} style={cssVars}>
+    <div className={cardClassName} aria-busy={isLoading} style={cssVars}>
       <div className="relative h-full w-full overflow-hidden">
-        <div className="absolute end-1 top-1 z-10 flex gap-1">
+        <div className="absolute inset-e-1 top-1 z-10 flex">
           {onRemove && (
             <RemoveAction
               ariaLabel={removeLabel}
               onClick={onRemove}
               id={id}
               className={styles.imageActionButton}
+              isAlwaysVisible={isLoading}
             />
           )}
-          {onDownload && (
+          {canDownload && (
             <DownloadAction
               ariaLabel={downloadLabel}
               onClick={onDownload}
@@ -162,7 +142,7 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
             overlay={
               <IconPhoto
                 size={DIAL_ICON_SIZE.LG}
-                className={styles.typeText}
+                className={styles.placeholderIcon}
                 aria-hidden
                 stroke={DIAL_KIT_ICON_STROKE}
               />
@@ -183,6 +163,38 @@ export const ImageAttachment: FC<ImageAttachmentProps> = ({
               : 'opacity-0',
           )}
         />
+        {/* A sibling of the corner actions rather than a role on the tile, so
+            no control is nested inside another (WCAG 4.1.2). The button exists
+            only when activating it does something. */}
+        {hasAction && (
+          <button
+            type="button"
+            aria-label={isExpandable ? expandLabel : clickLabel}
+            /* The selected state is a toggle only for an `onClick` tile, not an expandable pasted one. */
+            aria-pressed={isClickable ? isSelected : undefined}
+            onClick={handleCardClick}
+            className={mergeClasses(
+              'absolute inset-0 cursor-pointer rounded-xl',
+              styles.tileAction,
+            )}
+          />
+        )}
+        {isLoading && (
+          /* Same indeterminate progressbar as FileAttachment's upload overlay. */
+          <div
+            role="progressbar"
+            aria-label={uploadingLabel}
+            className={mergeClasses(
+              'absolute inset-0 flex items-center justify-center rounded-xl',
+              styles.track,
+            )}
+          >
+            {/* The progressbar already names the state; the kit Spinner would add its own English "Loading" status. */}
+            <span aria-hidden className="flex">
+              <Spinner size={32} />
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

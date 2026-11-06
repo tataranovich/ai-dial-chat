@@ -1,9 +1,10 @@
 import type { Annotation } from '@epam/ai-dial-chat-shared';
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { Dropdown } from '@epam/ai-dial-ui-kit';
+import { Dropdown, DropdownOverlayRole } from '@epam/ai-dial-ui-kit';
 import { FC, ReactNode, useCallback, useId, useMemo } from 'react';
 import { QUOTATIONS_CLASS } from '../../constants/public-class-names';
 import { useCitationCardContext } from '../../context/CitationCardContext';
+import { isWebLinkAnnotation } from '../../utils/citation-source-kind';
 import type { AnnotationGroup } from '../../utils/group-annotations-by-source';
 import {
   CitationCard,
@@ -31,8 +32,10 @@ export interface CitationDropdownProps {
   onOpenInBrowser: (annotation: Annotation) => void;
   /** Whether the card shows the "Download" button for a previewable file. Defaults to `true`. */
   isDownloadEnabled?: boolean;
-  /** Whether the host's preview panel is open; a marker click then previews the active annotation directly instead of showing the card. Defaults to `false`. */
+  /** Whether the host's preview panel is open; a marker click then previews a single-citation group's annotation directly instead of showing the card, while multi-citation groups keep the card. Defaults to `false`. */
   isPreviewOpen?: boolean;
+  /** Whether a marker click previews a single-citation file source directly instead of showing the card; web-link (HTML/XHTML) sources and multi-citation groups keep the card. Defaults to `false`. */
+  previewFilesOnMarkerClick?: boolean;
   /** Optional icon rendered before the marker's label. */
   icon?: ReactNode;
   /** Optional icon rendered in the card header. When absent, no header icon is shown. */
@@ -55,6 +58,7 @@ export const CitationDropdown: FC<CitationDropdownProps> = ({
   onOpenInBrowser,
   isDownloadEnabled = true,
   isPreviewOpen = false,
+  previewFilesOnMarkerClick = false,
   icon,
   headerIcon,
   cardLabels,
@@ -88,12 +92,29 @@ export const CitationDropdown: FC<CitationDropdownProps> = ({
   );
 
   const handleMarkerOpen = useCallback(() => {
-    if (isPreviewOpen && handlePreview) {
+    /* A multi-citation group keeps the card, even while the preview is open:
+       its switcher is the only way to reach the other citations, which may
+       point at different files. */
+    const isSingleCitation = group.annotations.length === 1;
+    const isSingleFileCitation =
+      isSingleCitation && !isWebLinkAnnotation(annotation);
+    const previewsDirectly =
+      (isPreviewOpen && isSingleCitation) ||
+      (previewFilesOnMarkerClick && isSingleFileCitation);
+    if (previewsDirectly && handlePreview) {
       handlePreview(annotation);
       return;
     }
     citationCard.openPopup(ownerKey);
-  }, [isPreviewOpen, handlePreview, annotation, citationCard, ownerKey]);
+  }, [
+    isPreviewOpen,
+    previewFilesOnMarkerClick,
+    group.annotations.length,
+    handlePreview,
+    annotation,
+    citationCard,
+    ownerKey,
+  ]);
 
   const renderCard = useCallback(
     () => (
@@ -131,17 +152,20 @@ export const CitationDropdown: FC<CitationDropdownProps> = ({
    * previewing directly — while the dropdown still handles outside-press and
    * Escape dismissal, focus return, and `bottom-end` alignment with the
    * marker. The panel surface is stripped because the card paints its own.
+   * `DropdownOverlayRole.None` because the card carries its own `dialog`
+   * role; the default `menu` would wrap a dialog in a menu.
    */
   return (
     <Dropdown
       open={isOpen}
       onOpenChange={handleOpenChange}
       trigger={[]}
+      overlayRole={DropdownOverlayRole.None}
       placement="bottom-end"
       matchReferenceWidth={false}
       className={mergeClasses('ms-1 inline-flex align-middle', styles.trigger)}
       listClassName={mergeClasses(
-        '!p-0 !bg-transparent !shadow-none !rounded-none',
+        'p-0! bg-transparent! shadow-none! rounded-none!',
         QUOTATIONS_CLASS.citationDropdown,
       )}
       renderOverlay={renderCard}

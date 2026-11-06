@@ -9,7 +9,7 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { StrictMode } from 'react';
+import { StrictMode, type ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -23,6 +23,7 @@ import {
 } from '../../../context/tests/app-config-context-mock';
 import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
 import ScheduledTaskDetailPage from '../ScheduledTaskDetailPage';
+
 vi.mock('../../../context/SkillsContext', () => ({
   useSkills: () => ({ skills: [], publicSkills: [], sharedWithMe: [] }),
 }));
@@ -102,14 +103,6 @@ vi.mock('../../../hooks/offlineCredentials/useOfflineCredentialsLogin', () => ({
 vi.mock(
   '../../../components/ScheduledTasksLoginBanner/ScheduledTasksLoginBanner',
   () => ({
-    ScheduledTasksLoginBannerState: {
-      Shown: 'shown',
-      LoginInProgress: 'login-in-progress',
-      RetryPopupBlocked: 'retry-popup-blocked',
-      RetryCancelled: 'retry-cancelled',
-      RetryTimeout: 'retry-timeout',
-      RetryFailed: 'retry-failed',
-    },
     default: ({
       state,
       title,
@@ -240,6 +233,7 @@ vi.mock('@epam/ai-dial-scheduled-tasks', () => ({
       codeBlockDownloadLabel?: string;
       tableScrollRegionAriaLabel?: string;
       mathScrollRegionAriaLabel?: string;
+      openConversationLabel?: string;
     };
     onBack: () => void;
     onEdit?: () => void;
@@ -294,6 +288,7 @@ vi.mock('@epam/ai-dial-scheduled-tasks', () => ({
       )}
       <span>nextRunLabel:{nextRunLabel}</span>
       <span>runs:{runs.length}</span>
+      <span>openConversationLabel:{labels.openConversationLabel}</span>
       <span>
         markdownLabels:
         {[
@@ -360,6 +355,26 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   NotificationVariant: { Success: 'success', Error: 'error' },
+  NotificationType: { Toast: 'toast', SectionMessage: 'section-message' },
+  /* The real error-variant Notification is an assertive live region; the
+   * mock keeps the same role so banner-presence queries work unchanged. */
+  Notification: ({ message }: { message?: ReactNode }) => (
+    <div role="alert">{message}</div>
+  ),
+  ButtonAppearance: { Outlined: 'outlined' },
+  ElementSize: { Small: 'small' },
+  ErrorMessageNotification: ({
+    message,
+    action,
+  }: {
+    message?: ReactNode;
+    action?: ReactNode;
+  }) => (
+    <div role="alert">
+      {message}
+      {action}
+    </div>
+  ),
   PrimaryButton: ({
     label,
     onClick,
@@ -497,6 +512,7 @@ describe('ScheduledTaskDetailPage', () => {
     useOfflineCredentialsGateMock.mockReturnValue({
       status: 'hidden',
       connect: undefined,
+      schedulerServiceConsent: 'signed_in',
       refetch: vi.fn(),
     });
     loginOfflineCredentialsMock.mockReset();
@@ -753,6 +769,192 @@ describe('ScheduledTaskDetailPage', () => {
     expect(startScheduledTaskMock).toHaveBeenCalledTimes(2);
   });
 
+  describe('scheduler service consent gating', () => {
+    const renderLoadedTask = () => {
+      getScheduledTaskMock.mockResolvedValue({
+        id: 'sched_123',
+        displayName: 'Daily summary',
+        trigger: {},
+      });
+      useScheduledTaskRunsMock.mockReturnValue({
+        items: [],
+        isLoading: false,
+        isLoadingMore: false,
+        error: null,
+        hasMore: false,
+        loadMore: vi.fn(),
+        refetch: vi.fn(),
+      });
+      renderDetailPage();
+    };
+
+    it('hides the Edit button only when the scheduler service consent is signed out', async () => {
+      useOfflineCredentialsGateMock.mockReturnValue({
+        status: 'hidden',
+        connect: undefined,
+        connected: true,
+        schedulerServiceConsent: 'signed_out',
+        refetch: vi.fn(),
+      });
+      renderLoadedTask();
+
+      /* Awaiting the Delete action proves the task loaded — only then is
+       * the Edit absence meaningful (an unloaded task renders neither). */
+      expect(
+        await screen.findByRole('button', { name: 'buttons.delete' }),
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole('button', {
+          name: 'buttons.edit',
+        }),
+      ).toBeNull();
+    });
+
+    it('renders no limited-access banner on the detail route under signed-out consent', () => {
+      useOfflineCredentialsGateMock.mockReturnValue({
+        status: 'available',
+        connect: {
+          clientId: 'offline-client',
+          authorizationEndpoint: 'https://dial.example.test/oauth',
+          scopes: ['openid'],
+        },
+        connected: false,
+        schedulerServiceConsent: 'signed_out',
+        refetch: vi.fn(),
+      });
+      getScheduledTaskMock.mockResolvedValue({
+        id: 'sched_123',
+        displayName: 'Daily summary',
+        trigger: {},
+      });
+      useScheduledTaskRunsMock.mockReturnValue({
+        items: [
+          {
+            id: 'run_credentials',
+            status: 'Error',
+            resultStage: 'credentials',
+            startTime: '2026-09-30T09:00:00Z',
+          },
+        ],
+        isLoading: false,
+        isLoadingMore: false,
+        error: null,
+        hasMore: false,
+        loadMore: vi.fn(),
+        refetch: vi.fn(),
+      });
+      renderDetailPage();
+
+      /* The limited-access banner is a list-page surface only: the detail
+       * route's banner behaviour is unchanged by the consent state. */
+      expect(
+        screen.queryByText('scheduledTasks.limitedAccessBanner.title'),
+      ).toBeNull();
+    });
+
+    it('keeps the Edit button when the consent read failed (unknown)', async () => {
+      useOfflineCredentialsGateMock.mockReturnValue({
+        status: 'hidden',
+        connect: undefined,
+        connected: true,
+        schedulerServiceConsent: 'unknown',
+        refetch: vi.fn(),
+      });
+      renderLoadedTask();
+
+      expect(
+        await screen.findByRole('button', {
+          name: 'buttons.edit',
+        }),
+      ).toBeTruthy();
+    });
+
+    const renderLoadedTaskWithActive = (isActive: boolean) => {
+      useOfflineCredentialsGateMock.mockReturnValue({
+        status: 'hidden',
+        connect: undefined,
+        connected: true,
+        schedulerServiceConsent: 'signed_out',
+        refetch: vi.fn(),
+      });
+      getScheduledTaskMock.mockResolvedValue({
+        id: 'sched_123',
+        displayName: 'Daily summary',
+        trigger: {},
+        isActive,
+      });
+      useScheduledTaskRunsMock.mockReturnValue({
+        items: [],
+        isLoading: false,
+        isLoadingMore: false,
+        error: null,
+        hasMore: false,
+        loadMore: vi.fn(),
+        refetch: vi.fn(),
+      });
+      renderDetailPage();
+    };
+
+    it('hides Start now and disables the paused Active switch with no reason under signed-out consent', async () => {
+      renderLoadedTaskWithActive(false);
+
+      const activeSwitch = await screen.findByRole('switch', {
+        name: 'scheduledTasks.detail.activeStatusLabel',
+      });
+      expect(activeSwitch).toHaveProperty('disabled', true);
+      /* Limited access disables the switch on its own — no reason label
+       * renders beside the disabled control. */
+      expect(screen.queryByText(/^disabledReason:/)).toBeNull();
+      expect(
+        screen.queryByRole('button', {
+          name: 'scheduledTasks.detail.startNow',
+        }),
+      ).toBeNull();
+    });
+
+    it('keeps the Active switch enabled for pausing an active task under signed-out consent', async () => {
+      renderLoadedTaskWithActive(true);
+
+      const activeSwitch = await screen.findByRole('switch', {
+        name: 'scheduledTasks.detail.activeStatusLabel',
+      });
+      expect(activeSwitch).toHaveProperty('disabled', false);
+      expect(screen.queryByText(/^disabledReason:/)).toBeNull();
+    });
+
+    it('keeps the Start now button when the consent read failed (unknown)', async () => {
+      useOfflineCredentialsGateMock.mockReturnValue({
+        status: 'hidden',
+        connect: undefined,
+        connected: true,
+        schedulerServiceConsent: 'unknown',
+        refetch: vi.fn(),
+      });
+      getScheduledTaskMock.mockResolvedValue({
+        id: 'sched_123',
+        displayName: 'Daily summary',
+        trigger: {},
+        isActive: false,
+      });
+      useScheduledTaskRunsMock.mockReturnValue({
+        items: [],
+        isLoading: false,
+        isLoadingMore: false,
+        error: null,
+        hasMore: false,
+        loadMore: vi.fn(),
+        refetch: vi.fn(),
+      });
+      renderDetailPage();
+
+      expect(
+        await screen.findByRole('button', {
+          name: 'scheduledTasks.detail.startNow',
+        }),
+      ).toBeTruthy();
+    });
+  });
+
   it('rechecks a previously connected credential gate when a new run fails at credentials', async () => {
     useFeatureFlagMock.mockReturnValue(true);
     getScheduledTaskMock.mockResolvedValue({
@@ -836,7 +1038,7 @@ describe('ScheduledTaskDetailPage', () => {
       'scheduledTasks.detail.historyError',
     );
     await userEvent.click(
-      screen.getByRole('button', { name: 'scheduledTasks.list.retryLabel' }),
+      screen.getByRole('button', { name: 'buttons.retry' }),
     );
     expect(refetch).toHaveBeenCalledTimes(1);
     expect(screen.getByText('runs:1')).toBeTruthy();
@@ -1072,7 +1274,7 @@ describe('ScheduledTaskDetailPage', () => {
 
     expect(
       await screen.findByRole('button', {
-        name: 'scheduledTasks.list.retryLabel',
+        name: 'buttons.retry',
       }),
     ).toBeTruthy();
 
@@ -1082,7 +1284,7 @@ describe('ScheduledTaskDetailPage', () => {
       trigger: {},
     });
     await userEvent.click(
-      screen.getByRole('button', { name: 'scheduledTasks.list.retryLabel' }),
+      screen.getByRole('button', { name: 'buttons.retry' }),
     );
 
     await waitFor(() => expect(getScheduledTaskMock).toHaveBeenCalledTimes(2));
@@ -1110,7 +1312,7 @@ describe('ScheduledTaskDetailPage', () => {
     expect(await screen.findByText('displayName:Daily summary')).toBeTruthy();
     await userEvent.click(
       screen.getByRole('button', {
-        name: 'scheduledTasks.list.retryLabel',
+        name: 'buttons.retry',
       }),
     );
 
@@ -1127,6 +1329,100 @@ describe('ScheduledTaskDetailPage', () => {
           fields: { hour: '9', minute: '0' },
           startDate: '2026-08-01T00:00:00.000Z',
           endDate: '2026-12-31T23:59:59.999Z',
+        },
+      },
+    });
+    renderDetailPage();
+
+    expect(await screen.findByText('displayName:Daily summary')).toBeTruthy();
+
+    expect(
+      screen.getByText(
+        'activeWindowLabel:scheduledTasks.detail.activeWindowValue',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('renders the weekly repeats label for a custom weekday list', async () => {
+    useFeatureFlagMock.mockReturnValue(true);
+    getScheduledTaskMock.mockResolvedValue({
+      id: 'sched_123',
+      displayName: 'Mon, Wed, Fri report',
+      trigger: {
+        cron: {
+          fields: { hour: '9', minute: '0', day_of_week: '0,2,4' },
+        },
+      },
+    });
+    renderDetailPage();
+
+    expect(
+      await screen.findByText(
+        'repeatsLabel:scheduledTasks.card.scheduleWeeklyAt',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('renders the generic repeats label for a week-step schedule', async () => {
+    useFeatureFlagMock.mockReturnValue(true);
+    getScheduledTaskMock.mockResolvedValue({
+      id: 'sched_123',
+      displayName: 'Biweekly report',
+      trigger: {
+        cron: {
+          fields: {
+            week: '*/2',
+            hour: '9',
+            minute: '0',
+            day_of_week: 'Tuesday',
+          },
+        },
+      },
+    });
+    renderDetailPage();
+
+    expect(
+      await screen.findByText(
+        'repeatsLabel:scheduledTasks.card.scheduleRecurringFallback',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('renders the activity-window label from the next run time when only the end date is set', async () => {
+    useFeatureFlagMock.mockReturnValue(true);
+    getScheduledTaskMock.mockResolvedValue({
+      id: 'sched_123',
+      displayName: 'Daily summary',
+      nextRunTime: '2026-10-07T09:00:00.000Z',
+      trigger: {
+        cron: {
+          fields: { hour: '9', minute: '0' },
+          endDate: '2026-10-08T23:59:59.999Z',
+        },
+      },
+    });
+    renderDetailPage();
+
+    expect(await screen.findByText('displayName:Daily summary')).toBeTruthy();
+
+    expect(
+      screen.getByText(
+        'activeWindowLabel:scheduledTasks.detail.activeWindowValue',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('renders the activity-window label from the cron fields when the server has no next run time', async () => {
+    useFeatureFlagMock.mockReturnValue(true);
+    getScheduledTaskMock.mockResolvedValue({
+      id: 'sched_123',
+      displayName: 'Daily summary',
+      nextRunTime: null,
+      trigger: {
+        cron: {
+          fields: { hour: '7', minute: '0' },
+          startDate: null,
+          endDate: '2999-10-10T21:59:59.999Z',
         },
       },
     });
@@ -1177,7 +1473,7 @@ describe('ScheduledTaskDetailPage', () => {
 
     expect(
       screen.queryByRole('button', {
-        name: 'scheduledTasks.card.editActionLabel',
+        name: 'buttons.edit',
       }),
     ).not.toBeTruthy();
   });
@@ -1190,13 +1486,13 @@ describe('ScheduledTaskDetailPage', () => {
 
     expect(
       await screen.findByRole('button', {
-        name: 'scheduledTasks.list.retryLabel',
+        name: 'buttons.retry',
       }),
     ).toBeTruthy();
 
     expect(
       screen.queryByRole('button', {
-        name: 'scheduledTasks.card.editActionLabel',
+        name: 'buttons.edit',
       }),
     ).not.toBeTruthy();
   });
@@ -1212,7 +1508,7 @@ describe('ScheduledTaskDetailPage', () => {
 
     expect(
       await screen.findByRole('button', {
-        name: 'scheduledTasks.card.editActionLabel',
+        name: 'buttons.edit',
       }),
     ).toBeTruthy();
   });
@@ -1229,7 +1525,7 @@ describe('ScheduledTaskDetailPage', () => {
     expect(await screen.findByText('displayName:Daily summary')).toBeTruthy();
     await userEvent.click(
       screen.getByRole('button', {
-        name: 'scheduledTasks.card.editActionLabel',
+        name: 'buttons.edit',
       }),
     );
 
@@ -1252,7 +1548,7 @@ describe('ScheduledTaskDetailPage', () => {
     expect(await screen.findByText('modelLabel:GPT-4.1 mini')).toBeTruthy();
   });
 
-  it('falls back to the raw model id when unresolved', async () => {
+  it('marks a model absent from the loaded catalog unavailable', async () => {
     useFeatureFlagMock.mockReturnValue(true);
     useDeploymentsMock.mockReturnValue({ items: [] });
     getScheduledTaskMock.mockResolvedValue({
@@ -1263,7 +1559,9 @@ describe('ScheduledTaskDetailPage', () => {
     });
     renderDetailPage();
 
-    expect(await screen.findByText('modelLabel:unknown-model')).toBeTruthy();
+    expect(
+      await screen.findByText('modelLabel:scheduledTasks.unavailableModelName'),
+    ).toBeTruthy();
   });
 
   it('formats nextRunTime into a localized "Next run" label', async () => {
@@ -1464,8 +1762,15 @@ describe('ScheduledTaskDetailPage', () => {
       unmount();
 
       // Resolving after unmount must not trigger a setState-on-unmounted-component warning/error.
+      const consoleError = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
       resolvePause({ ...activeTask, isActive: false });
       await Promise.resolve();
+
+      expect(pauseScheduledTaskMock).toHaveBeenCalledOnce();
+      expect(consoleError).not.toHaveBeenCalled();
+      consoleError.mockRestore();
     });
 
     it('renders the switch disabled for a completed one-time schedule, without calling pause or resume', async () => {
@@ -1737,7 +2042,7 @@ describe('ScheduledTaskDetailPage', () => {
       expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
       expect(
         screen.getByRole('button', {
-          name: 'scheduledTasks.card.editActionLabel',
+          name: 'buttons.edit',
         }),
       ).toHaveProperty('disabled', true);
 
@@ -1933,6 +2238,27 @@ describe('ScheduledTaskDetailPage', () => {
       expect(await screen.findByText('conversation view')).toBeTruthy();
     });
 
+    it('passes the translated open-conversation label for failed-run details', async () => {
+      useFeatureFlagMock.mockReturnValue(true);
+      getScheduledTaskMock.mockResolvedValue(loadedTask);
+      useScheduledTaskRunsMock.mockReturnValue({
+        items: [],
+        isLoading: false,
+        isLoadingMore: false,
+        error: null,
+        hasMore: false,
+        loadMore: vi.fn(),
+        refetch: vi.fn(),
+      });
+      renderDetailPage();
+
+      expect(
+        await screen.findByText(
+          'openConversationLabel:scheduledTasks.detail.historyOpenConversationLabel',
+        ),
+      ).toBeTruthy();
+    });
+
     it('does not navigate when a run has no conversationId', async () => {
       useFeatureFlagMock.mockReturnValue(true);
       getScheduledTaskMock.mockResolvedValue(loadedTask);
@@ -2059,7 +2385,7 @@ describe('ScheduledTaskDetailPage', () => {
       ).toBeNull();
       expect(
         screen.queryByRole('button', {
-          name: 'scheduledTasks.card.editActionLabel',
+          name: 'buttons.edit',
         }),
       ).toBeNull();
       expect(screen.queryByRole('switch')).toBeNull();

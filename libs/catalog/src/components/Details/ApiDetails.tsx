@@ -108,7 +108,7 @@ const SnippetBlock: FC<SnippetBlockProps> = ({
       {sectionLabel != null && (
         <p
           className={mergeClasses(
-            'mb-3 mt-0',
+            'mt-0 mb-3',
             sectionClassName,
             styles.sectionHeading,
           )}
@@ -127,6 +127,7 @@ const SnippetBlock: FC<SnippetBlockProps> = ({
         codeClassName={codeClassName}
         languageLabelClassName={codeTitleClassName}
         hideDownload
+        hasContentTopPadding={false}
         titleSlot={
           hasLanguageChoice ? (
             <InlineSelect
@@ -213,6 +214,7 @@ export const ApiDetails: FC<ApiDetailsProps> = ({
           codeClassName={codeClassName}
           languageLabelClassName={codeTitleClassName}
           hideDownload
+          hasContentTopPadding={false}
         />
       )}
 
@@ -220,7 +222,7 @@ export const ApiDetails: FC<ApiDetailsProps> = ({
         <section>
           <p
             className={mergeClasses(
-              'mb-3 mt-0',
+              'mt-0 mb-3',
               sectionClassName,
               styles.sectionHeading,
             )}
@@ -238,6 +240,7 @@ export const ApiDetails: FC<ApiDetailsProps> = ({
               codeClassName={codeClassName}
               languageLabelClassName={codeTitleClassName}
               hideDownload
+              hasContentTopPadding={false}
               titleSlot={
                 hasEndpointChoice ? (
                   <InlineSelect
@@ -285,7 +288,7 @@ export const ApiDetails: FC<ApiDetailsProps> = ({
         <section>
           <p
             className={mergeClasses(
-              'mb-3 mt-0',
+              'mt-0 mb-3',
               sectionClassName,
               styles.sectionHeading,
             )}
@@ -299,6 +302,7 @@ export const ApiDetails: FC<ApiDetailsProps> = ({
             copiedLabel={copiedStatusLabel}
             codeClassName={codeClassName}
             hideDownload
+            hasContentTopPadding={false}
           />
         </section>
       )}
@@ -307,7 +311,7 @@ export const ApiDetails: FC<ApiDetailsProps> = ({
         <section>
           <p
             className={mergeClasses(
-              'mb-3 mt-0',
+              'mt-0 mb-3',
               sectionClassName,
               styles.sectionHeading,
             )}
@@ -321,6 +325,7 @@ export const ApiDetails: FC<ApiDetailsProps> = ({
             copiedLabel={copiedStatusLabel}
             codeClassName={codeClassName}
             hideDownload
+            hasContentTopPadding={false}
           />
         </section>
       )}

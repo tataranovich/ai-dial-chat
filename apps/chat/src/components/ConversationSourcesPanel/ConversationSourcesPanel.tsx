@@ -1,5 +1,7 @@
-import { useOpenAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
-import { findDeploymentByIdOrReference } from '@epam/ai-dial-chat-hooks';
+import {
+  useLatestCanvasRequest,
+  useOpenAttachmentCanvas,
+} from '@epam/ai-dial-attachment-canvas';
 import {
   useAttachmentAction,
   isDownloadableAttachment,
@@ -11,6 +13,10 @@ import {
   isExternalSourcePreviewable,
   resolveExternalSourceContentType,
 } from '@epam/ai-dial-chat-hooks/file-manager';
+import {
+  ActiveScheduledTaskDetailState,
+  ActiveScheduledTaskStatus,
+} from '@epam/ai-dial-chat-hooks/scheduled-tasks';
 import { usePanelMaxWidth } from '@epam/ai-dial-chat-hooks/viewport-layout';
 import type {
   AttachmentDisplayResolvers,
@@ -18,63 +24,41 @@ import type {
   Message,
 } from '@epam/ai-dial-chat-shared';
 import {
-  MDMessageViewer,
   AttachmentType,
   MIMEType,
   RequestStatus,
+  useIsMobile,
+  useIsTablet,
 } from '@epam/ai-dial-chat-shared';
 import { parsePdfPageReference } from '@epam/ai-dial-quotations';
-import {
-  ScheduledTaskDetailsSummary,
-  ScheduledTaskRunHistoryList,
-  type ScheduledTaskRunItem,
-} from '@epam/ai-dial-scheduled-tasks';
 import { ConversationSourcesPanel } from '@epam/ai-dial-source-panel';
-import type { QuotationSource } from '@epam/ai-dial-source-panel';
-import { ButtonVariant, Accordion, GhostButton } from '@epam/ai-dial-ui-kit';
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type FC,
-} from 'react';
+import type {
+  ConversationSourcesPanelStyles,
+  QuotationSource,
+} from '@epam/ai-dial-source-panel';
+import { memo, useCallback, useMemo, type FC } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router';
 import { MIN_CONTENT_AREA_WIDTH } from '../../constants/layout';
-import { getConversationRoute } from '../../constants/routes';
 import {
   AttachmentsI18nKeys,
   BasicI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
-  ConversationPanelI18nKeys,
-  ScheduledTasksI18nKeys,
   SidebarI18nKeys,
 } from '../../constants/translation-keys';
 import { useActiveScheduledTask } from '../../context/ActiveScheduledTaskContext';
-import { useConversations } from '../../context/ConversationsContext';
-import { useDeployments } from '../../context/DeploymentsContext';
 import {
   useSourcesSidebar,
   useSourcesSidebarData,
 } from '../../context/SourcesSidebarContext';
 import { useAttachmentCanvasResolvers } from '../../hooks/attachment/useAttachmentCanvasResolvers';
-import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
-import { useLanguage } from '../../hooks/language/useLanguage';
-import { useScheduledTaskSkillDisplayNames } from '../../hooks/scheduled-tasks/useScheduledTaskSkillDisplayNames';
 import { useCloseSourcesSidebarOnSubjectChange } from '../../hooks/sources-sidebar/useCloseSourcesSidebarOnSubjectChange';
 import useLocalStorage from '../../hooks/useLocalStorage';
-import {
-  ActiveScheduledTaskDetailState,
-  ActiveScheduledTaskStatus,
-} from '../../types/active-scheduled-task';
 import { StorageKey } from '../../types/storage-key';
 import { resolveDialFileDownloadUrl } from '../../utils/dial-file';
 import { resolveCatalogIconUrl } from '../../utils/icon-path';
-import { resolveLocalizedText } from '../../utils/locale';
-import { mapScheduledTaskRunDtosToItems } from '../../utils/map-scheduled-task-run-dto';
+import TaskDetailsSection from './TaskDetailsSection/TaskDetailsSection';
+import TaskHistorySection from './TaskHistorySection/TaskHistorySection';
 
 /* Stable stand-in for the messages while the panel is closed. */
 const EMPTY_MESSAGES: Message[] = [];
@@ -90,11 +74,24 @@ const attachmentDisplayResolvers: AttachmentDisplayResolvers = {
   resolvePlayUrl: (dto) => dto.url && resolveDialFileDownloadUrl(dto.url),
 };
 
+/*
+ * Panel-wide style overrides, module-level so the memoized lib panel isn't
+ * defeated by a new object each render: section headings sit on the small
+ * semibold scale, and `sectionClassName` lines the files/sources sections up
+ * with the task accordions, which add the kit's own px-4 on top of the body
+ * padding.
+ */
+const panelStyles: ConversationSourcesPanelStyles = {
+  typography: {
+    sectionTitleClassName: 'dial-tiny-semi-text',
+  },
+  sectionClassName: 'px-4',
+};
+
 const ConversationSourcesPanelContainer: FC = () => {
   const { t } = useTranslation();
-  const { language } = useLanguage();
   const { handleClose, isOpen } = useSourcesSidebar();
-  const { messages, conversationModelId } = useSourcesSidebarData();
+  const { messages } = useSourcesSidebarData();
   /*
    * The panel mounts on every `/conversations/*` route even while closed, so
    * this is the one mount point where the sidebar's reset rule runs wherever
@@ -111,161 +108,10 @@ const ConversationSourcesPanelContainer: FC = () => {
   });
   const { resolvers, options } = useAttachmentCanvasResolvers();
   const { openAttachmentCanvas } = useOpenAttachmentCanvas(resolvers, options);
+  const startCanvasRequest = useLatestCanvasRequest();
   const activeScheduledTask = useActiveScheduledTask();
-  const skillDisplayNames = useScheduledTaskSkillDisplayNames(
-    activeScheduledTask.task?.skillUrls,
-  );
-  const { items: deploymentItems } = useDeployments();
-  const { conversations } = useConversations();
-  const navigate = useNavigate();
   const isTaskConversation =
     activeScheduledTask.status === ActiveScheduledTaskStatus.TaskConversation;
-
-  const [isHistoryExpanded, setIsHistoryExpanded] = useState(true);
-  const [isDetailsExpanded, setIsDetailsExpanded] = useState(false);
-
-  useEffect(() => {
-    setIsHistoryExpanded(true);
-    setIsDetailsExpanded(false);
-  }, [activeScheduledTask.scheduleId]);
-
-  const runItems = useMemo(
-    () =>
-      mapScheduledTaskRunDtosToItems(
-        activeScheduledTask.history.items,
-        t,
-        conversations,
-      ),
-    [activeScheduledTask.history.items, t, conversations],
-  );
-
-  const handleRunClick = useCallback(
-    (run: ScheduledTaskRunItem) => {
-      if (!run.conversationId) return;
-      navigate(getConversationRoute(run.conversationId));
-    },
-    [navigate],
-  );
-
-  /*
-   * The Details section describes this run, so its Model field must show the
-   * deployment the run actually used — the run conversation's own model id,
-   * already published to the sources sidebar with its messages — not the
-   * schedule's current `model`, which a later edit may have changed after
-   * this run fired.
-   */
-  const modelDisplayName = useMemo(() => {
-    if (!conversationModelId) return undefined;
-    const deployment = findDeploymentByIdOrReference(
-      deploymentItems,
-      conversationModelId,
-    );
-    return deployment
-      ? resolveLocalizedText(deployment.displayName, language) ||
-          conversationModelId
-      : conversationModelId;
-  }, [conversationModelId, deploymentItems, language]);
-
-  const historyLabels = useMemo(
-    () => ({
-      historyTitle: t(ScheduledTasksI18nKeys.DetailHistoryTitle),
-      emptyLabel: t(ScheduledTasksI18nKeys.DetailHistoryEmptyLabel),
-      errorLabel: t(ScheduledTasksI18nKeys.DetailHistoryErrorLabel),
-      retryLabel: t(ScheduledTasksI18nKeys.ListRetryLabel),
-      runStatusLabels: {
-        success: t(ScheduledTasksI18nKeys.DetailStatusSuccess),
-        error: t(ScheduledTasksI18nKeys.DetailStatusError),
-        inProgress: t(ScheduledTasksI18nKeys.DetailStatusInProgress),
-        missed: t(ScheduledTasksI18nKeys.DetailStatusMissed),
-      },
-      currentRunLabel: t(
-        ScheduledTasksI18nKeys.ConversationPanelCurrentRunLabel,
-      ),
-      unreadIndicatorLabel: t(ConversationPanelI18nKeys.UnreadIndicatorLabel),
-    }),
-    [t],
-  );
-
-  const historyFooter =
-    activeScheduledTask.history.hasMore &&
-    !activeScheduledTask.history.isLoading ? (
-      <li className="pt-2">
-        <GhostButton
-          variant={ButtonVariant.Primary}
-          label={t(ButtonsI18nKeys.ShowMore)}
-          onClick={activeScheduledTask.history.loadMore}
-          disabled={activeScheduledTask.history.isLoadingMore}
-        />
-      </li>
-    ) : undefined;
-
-  const detailsContent =
-    activeScheduledTask.taskState === ActiveScheduledTaskDetailState.Error ||
-    activeScheduledTask.taskState ===
-      ActiveScheduledTaskDetailState.Unavailable ? (
-      <div className="flex flex-col items-start gap-2">
-        <p role="alert" className="dial-body-text text-secondary">
-          {t(ScheduledTasksI18nKeys.ConversationBannerUnavailableLabel)}
-        </p>
-        {activeScheduledTask.taskState ===
-          ActiveScheduledTaskDetailState.Error && (
-          <GhostButton
-            label={t(ScheduledTasksI18nKeys.ListRetryLabel)}
-            onClick={activeScheduledTask.retryTask}
-          />
-        )}
-      </div>
-    ) : (
-      <ScheduledTaskDetailsSummary
-        modelLabel={t(ScheduledTasksI18nKeys.ConversationPanelModelLabel)}
-        instructionsLabel={t(ScheduledTasksI18nKeys.CreateInstructionsLabel)}
-        skillLabel={t(ScheduledTasksI18nKeys.CreateSkillLabel)}
-        skillDisplayNames={skillDisplayNames}
-        modelDisplayName={modelDisplayName}
-        instructionsMarkdown={activeScheduledTask.task?.prompt}
-        renderInstructions={(markdown) => (
-          <MDMessageViewer
-            content={markdown}
-            codeBlockCopyLabel={t(ButtonsI18nKeys.Copy)}
-            codeBlockCopiedLabel={t(ButtonsI18nKeys.Copied)}
-            codeBlockDownloadLabel={t(ButtonsI18nKeys.Download)}
-            tableScrollRegionAriaLabel={t(ChatI18nKeys.ScrollableTable)}
-            mathScrollRegionAriaLabel={t(ChatI18nKeys.ScrollableFormula)}
-          />
-        )}
-      />
-    );
-
-  const additionalSections = isTaskConversation ? (
-    <>
-      <Accordion
-        title={t(ScheduledTasksI18nKeys.DetailHistoryTitle)}
-        expanded={isHistoryExpanded}
-        onToggle={setIsHistoryExpanded}
-      >
-        <div inert={!isHistoryExpanded}>
-          <ScheduledTaskRunHistoryList
-            items={runItems}
-            isLoading={activeScheduledTask.history.isLoading}
-            isLoadingMore={activeScheduledTask.history.isLoadingMore}
-            error={activeScheduledTask.history.error}
-            onRetry={activeScheduledTask.history.refetch}
-            currentRunId={activeScheduledTask.runId}
-            onRunClick={handleRunClick}
-            labels={historyLabels}
-            footer={historyFooter}
-          />
-        </div>
-      </Accordion>
-      <Accordion
-        title={t(ScheduledTasksI18nKeys.CreateDetailsSectionTitle)}
-        expanded={isDetailsExpanded}
-        onToggle={setIsDetailsExpanded}
-      >
-        <div inert={!isDetailsExpanded}>{detailsContent}</div>
-      </Accordion>
-    </>
-  ) : undefined;
 
   let panelTitle: string | undefined;
   if (isTaskConversation) {
@@ -277,16 +123,44 @@ const ConversationSourcesPanelContainer: FC = () => {
 
   const handleAttachmentClick = useCallback(
     (attachment: DisplayAttachment) => {
-      void openAttachmentCanvas(attachment).then((opened) => {
-        if (opened) {
-          handleClose();
-        } else {
-          downloadAttachment(attachment);
-        }
-      });
+      const shouldCommit = startCanvasRequest();
+      void openAttachmentCanvas(attachment, undefined, shouldCommit).then(
+        (opened) => {
+          if (opened) {
+            handleClose();
+          } else if (shouldCommit()) {
+            downloadAttachment(attachment);
+          }
+        },
+      );
     },
-    [openAttachmentCanvas, downloadAttachment, handleClose],
+    [openAttachmentCanvas, startCanvasRequest, downloadAttachment, handleClose],
   );
+
+  /*
+   * Each section component owns its accordion state and presentation logic;
+   * the container is the single context consumer and passes each section its
+   * data slice.
+   */
+  const additionalSections = isTaskConversation ? (
+    <>
+      <TaskHistorySection
+        history={activeScheduledTask.history}
+        currentRunId={activeScheduledTask.runId}
+        scheduleId={activeScheduledTask.scheduleId}
+        isUnavailable={
+          activeScheduledTask.taskState ===
+          ActiveScheduledTaskDetailState.Unavailable
+        }
+      />
+      <TaskDetailsSection
+        task={activeScheduledTask.task}
+        taskState={activeScheduledTask.taskState}
+        onRetry={activeScheduledTask.retryTask}
+        scheduleId={activeScheduledTask.scheduleId}
+      />
+    </>
+  ) : undefined;
 
   const handleSourceClick = useCallback(
     async (source: QuotationSource) => {
@@ -299,8 +173,9 @@ const ConversationSourcesPanelContainer: FC = () => {
         return;
       }
       /* A `…pdf#page=N` source goes through the canvas's reference-PDF
-       * resolver (it only runs for `referenceUrl` with no `url`), which keeps
-       * the page; the generic PDF path strips the fragment and opens page 1. */
+       * resolver (it only runs for `referenceUrl` with no `url`), which keeps the
+       * page; the generic PDF path strips the fragment and opens page 1. */
+      const shouldCommit = startCanvasRequest();
       const pageReference = parsePdfPageReference(url);
       if (pageReference?.page != null) {
         const pageAttachment: DisplayAttachment = {
@@ -311,10 +186,13 @@ const ConversationSourcesPanelContainer: FC = () => {
           status: RequestStatus.Idle,
           referenceUrl: url,
         };
-        if (await openAttachmentCanvas(pageAttachment)) {
+        if (
+          await openAttachmentCanvas(pageAttachment, undefined, shouldCommit)
+        ) {
           handleClose();
           return;
         }
+        if (!shouldCommit()) return;
         if (isDialFileId(pageReference.baseUrl)) {
           downloadAttachment({
             ...pageAttachment,
@@ -340,18 +218,23 @@ const ConversationSourcesPanelContainer: FC = () => {
         status: RequestStatus.Idle,
         url,
       };
-      const opened = await openAttachmentCanvas(attachment);
+      const opened = await openAttachmentCanvas(
+        attachment,
+        undefined,
+        shouldCommit,
+      );
       if (opened) {
         handleClose();
         return;
       }
+      if (!shouldCommit()) return;
       if (!isDialFileId(url)) {
         window.open(url, '_blank', 'noopener,noreferrer');
       } else {
         downloadAttachment(attachment);
       }
     },
-    [openAttachmentCanvas, downloadAttachment, handleClose],
+    [openAttachmentCanvas, startCanvasRequest, downloadAttachment, handleClose],
   );
 
   const downloadableAttachments = useMemo(
@@ -369,7 +252,10 @@ const ConversationSourcesPanelContainer: FC = () => {
   }, [downloadableAttachments]);
 
   const isMobile = useIsMobile();
-  const maxPanelWidth = usePanelMaxWidth(MIN_CONTENT_AREA_WIDTH);
+  const isTablet = useIsTablet();
+  const maxPanelWidth = usePanelMaxWidth(
+    isTablet ? 32 : MIN_CONTENT_AREA_WIDTH,
+  );
   const [storedWidth, setStoredWidth] = useLocalStorage(
     StorageKey.ConversationSourcesWidth,
     DEFAULT_PANEL_WIDTH,
@@ -383,10 +269,13 @@ const ConversationSourcesPanelContainer: FC = () => {
     () => ({
       ariaLabel: t(SidebarI18nKeys.AriaLabel),
       closeLabel: t(ButtonsI18nKeys.Close),
+      resizeLabel: t(SidebarI18nKeys.ResizePanel),
       searchPlaceholder: t(BasicI18nKeys.SearchPlaceholder),
       searchClearLabel: t(BasicI18nKeys.ClearSearch),
-      noDataLabel: t(BasicI18nKeys.Empty),
-      noResultsLabel: t(BasicI18nKeys.NoResults),
+      noDataLabel: t(SidebarI18nKeys.SourcesEmptyTitle),
+      noDataDescription: t(SidebarI18nKeys.SourcesEmptyDescription),
+      noResultsLabel: t(SidebarI18nKeys.SourcesNoResultsTitle),
+      noResultsDescription: t(BasicI18nKeys.NoResultsDescription),
       downloadAllLabel: t(SidebarI18nKeys.DownloadAll),
       uploadedSectionTitle: t(SidebarI18nKeys.SectionUploadedFiles),
       generatedSectionTitle: t(SidebarI18nKeys.SectionGeneratedFiles),
@@ -416,6 +305,7 @@ const ConversationSourcesPanelContainer: FC = () => {
         downloadableAttachments.length > 0 ? handleDownloadAll : undefined
       }
       isMobile={isMobile}
+      isBoundedOverlay={isTablet}
       defaultWidth={defaultPanelWidth}
       minWidth={MIN_PANEL_WIDTH}
       maxWidth={maxPanelWidth}
@@ -423,6 +313,7 @@ const ConversationSourcesPanelContainer: FC = () => {
       labels={labels}
       title={panelTitle}
       additionalSections={additionalSections}
+      styles={panelStyles}
     />
   );
 };

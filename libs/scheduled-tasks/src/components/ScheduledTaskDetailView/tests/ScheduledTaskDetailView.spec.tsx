@@ -32,7 +32,47 @@ vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => {
 });
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  LiveRegionPoliteness: { Polite: 'polite', Assertive: 'assertive' },
+  LiveRegionElement: { Div: 'div', Span: 'span', P: 'p' },
+  LiveRegion: ({
+    politeness = 'polite',
+    visuallyHidden,
+    as: Tag = 'div',
+    atomic,
+    className,
+    children,
+    ...rest
+  }: {
+    politeness?: string;
+    visuallyHidden?: boolean;
+    as?: 'div' | 'span' | 'p';
+    atomic?: boolean;
+  } & React.HTMLAttributes<HTMLElement>) => (
+    <Tag
+      {...rest}
+      role={politeness === 'assertive' ? 'alert' : 'status'}
+      aria-live={politeness as 'polite' | 'assertive'}
+      aria-atomic={atomic}
+      className={visuallyHidden ? 'sr-only' : className}
+    >
+      {children}
+    </Tag>
+  ),
   DIAL_KIT_ICON_STROKE: 1.5,
+  NoDataContent: ({
+    title,
+    description,
+    live,
+  }: {
+    title: string;
+    description?: string;
+    live?: boolean;
+  }) => (
+    <div role={live ? 'status' : undefined}>
+      <span>{title}</span>
+      {description != null && <span>{description}</span>}
+    </div>
+  ),
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   ButtonVariant: { Primary: 'primary', Neutral: 'neutral', Danger: 'danger' },
   Switch: ({
@@ -59,11 +99,25 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       onChange={(e) => onChange?.(e.target.checked)}
     />
   ),
-  Spinner: () => <div role="progressbar" />,
+  Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
+    <div role="progressbar" aria-label={ariaLabel} />
+  ),
+  /* Mirrors the surface the view exercises: the span that carries the title
+   * text, truncation, and the overflow tooltip in the real kit. */
+  EllipsisTooltip: ({
+    text,
+    className,
+  }: {
+    text: ReactNode;
+    className?: string;
+  }) => <span className={className}>{text}</span>,
   Skeleton: (props: Record<string, unknown>) => (
     <div data-skeleton {...props} />
   ),
   SkeletonVariant: { Default: 'default', Rectangular: 'rectangular' },
+  LinkButton: ({ label, onClick }: { label: string; onClick?: () => void }) => (
+    <button onClick={onClick}>{label}</button>
+  ),
   GhostButton: ({
     label,
     iconBefore,
@@ -166,7 +220,8 @@ vi.mock('@tabler/icons-react', () => ({
       aria-hidden={ariaHidden}
     />
   ),
-  IconCircleCheck: () => <svg data-icon="success" />,
+  IconCheck: () => <svg data-icon="success" />,
+  IconChevronDown: () => <svg data-icon="chevron" />,
   IconCircleX: () => <svg data-icon="error" />,
   IconAlertTriangle: () => <svg data-icon="missed" />,
   IconClipboardX: () => <svg data-icon="empty" />,
@@ -276,6 +331,56 @@ describe('ScheduledTaskDetailView', () => {
       screen.getAllByRole('heading', { name: 'Daily summary' }),
     ).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy();
+  });
+
+  it('routes a long title through EllipsisTooltip so it ellipsizes and tooltips instead of stretching the header', () => {
+    const longTitle =
+      'A very long task title that would otherwise run from the back button to the action buttons';
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName={longTitle}
+        runs={[]}
+      />,
+    );
+
+    /* Both title copies (desktop header, mobile/tablet row) wrap their text
+     * in the kit's EllipsisTooltip — the same truncation + tooltip-on-clip
+     * mechanism as the card title — and carry the same width contract:
+     * min-w-0 to let the title shrink below its nowrap min-content width,
+     * and the 600px cap so a long line never sprawls (the desktop header
+     * copy keeps the action buttons in place, the tablet copy stops a
+     * single line from running the full row width). */
+    const titles = screen.getAllByRole('heading', { level: 1 });
+    expect(titles).toHaveLength(2);
+    for (const title of titles) {
+      expect(title.firstElementChild?.textContent).toBe(longTitle);
+      expect(title.className).toContain('min-w-0');
+      expect(title.className).toContain('max-w-[600px]');
+    }
+  });
+
+  it('sets the --stdv-description-text CSS variable from the descriptionText color override', () => {
+    const { container } = render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="Task"
+        description="Summarize the news"
+        runs={[]}
+        styles={{ colors: { descriptionText: '#ff0000' } }}
+      />,
+    );
+
+    /* CSS custom property on the view root, which carries no accessible
+     * role of its own; the Details section's stylesheet reads it as the
+     * description ink (default #161b2d). */
+    // eslint-disable-next-line testing-library/no-node-access -- asserting a CSS custom property on the root element
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.style.getPropertyValue('--stdv-description-text')).toBe(
+      '#ff0000',
+    );
   });
 
   it('calls onBack when the back control is activated', async () => {
@@ -473,7 +578,9 @@ describe('ScheduledTaskDetailView', () => {
       />,
     );
 
-    expect(screen.getByRole('progressbar')).toBeTruthy();
+    expect(
+      screen.getByRole('progressbar', { name: 'Loading scheduled task' }),
+    ).toBeTruthy();
     expect(screen.queryByText('Details')).toBeNull();
   });
 
@@ -512,6 +619,24 @@ describe('ScheduledTaskDetailView', () => {
     expect(screen.getByText('Summarizes unread inbox items')).toBeTruthy();
     expect(screen.getByText('GPT-4.1 mini')).toBeTruthy();
     expect(screen.getByText('Every Monday 12:00')).toBeTruthy();
+  });
+
+  it('lets the desktop details column shrink below its content width', () => {
+    render(
+      <ScheduledTaskDetailView
+        labels={labels}
+        onBack={vi.fn()}
+        displayName="Daily summary"
+        description="Summarizes unread inbox items"
+        runs={[]}
+      />,
+    );
+
+    /* A long unbreakable field value must wrap inside the column, not push
+     * the three-column row past the viewport. */
+    expect(screen.getByRole('group', { name: 'Details' }).className).toContain(
+      'min-w-0',
+    );
   });
 
   it('renders the activity-window field when provided', () => {
@@ -645,7 +770,11 @@ describe('ScheduledTaskDetailView', () => {
       />,
     );
 
-    expect(screen.getByText('Failed to load history')).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole('status')
+        .some((region) => region.textContent === 'Failed to load history'),
+    ).toBe(true);
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRunsRetry).toHaveBeenCalledOnce();
   });
@@ -1140,6 +1269,34 @@ describe('ScheduledTaskDetailView', () => {
     expect(onRunClick).toHaveBeenCalledWith(run);
   });
 
+  it('opens a failed run conversation through the host-labelled link in its expanded details', async () => {
+    const onRunClick = vi.fn();
+    const run = buildRun({
+      status: ScheduledTaskRunStatus.Error,
+      errorText: 'connection timeout',
+      conversationId: 'conversations/c1',
+    });
+    render(
+      <ScheduledTaskDetailView
+        labels={{ ...labels, openConversationLabel: 'Open chat' }}
+        onBack={vi.fn()}
+        displayName="Daily summary"
+        runs={[run]}
+        onRunClick={onRunClick}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Failed today at 9:01 AM (99s)' }),
+    );
+    expect(onRunClick).not.toHaveBeenCalled();
+    expect(screen.getByText('connection timeout')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open chat' }));
+    expect(onRunClick).toHaveBeenCalledOnce();
+    expect(onRunClick).toHaveBeenCalledWith(run);
+  });
+
   it('does not invoke onRunClick for a row whose run has no conversationId', async () => {
     const onRunClick = vi.fn();
     render(
@@ -1261,7 +1418,7 @@ describe('ScheduledTaskDetailView', () => {
       const details = screen.getByRole('group', { name: 'Details' });
       expect(details.classList).toContain('overflow-y-auto');
       /* The desktop body is a structural wrapper with no semantic role. */
-      // eslint-disable-next-line testing-library/no-node-access
+
       expect(details.parentElement?.classList).toContain(
         'desktop:overflow-hidden',
       );

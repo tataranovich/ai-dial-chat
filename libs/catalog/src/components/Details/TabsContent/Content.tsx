@@ -1,12 +1,16 @@
 import {
+  buildCssVars,
   MarkdownCodeBlock,
   MarkdownWithPlaceholders,
   mergeClasses,
 } from '@epam/ai-dial-chat-shared';
 import {
   Dropdown,
+  DropdownOverlayRole,
   ElementSize,
   InlineSelectTrigger,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import { FC, type ReactNode, useId } from 'react';
 import type {
@@ -78,8 +82,9 @@ export interface ContentTabProps {
 /**
  * Renders a catalog item's summary and its long-form body as read-only
  * markdown, with `{{placeholder}}` tokens highlighted. An item carrying more
- * than one file, at any depth, gets a hierarchical selector above the body to
- * switch between them.
+ * than one file, at any depth, gets a hierarchical selector between the
+ * description and body. The whole tab scrolls, with the selector pinned at
+ * its top edge once the description has scrolled away.
  */
 export const ContentTab: FC<ContentTabProps> = ({
   content,
@@ -183,9 +188,33 @@ export const ContentTab: FC<ContentTabProps> = ({
   };
 
   return (
-    <div className="flex h-full flex-col gap-4 pb-6">
+    <div
+      className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-y-auto pb-6"
+      style={buildCssVars({
+        '--cat-details-bg': detailsStyles?.colors?.background,
+      })}
+    >
+      {hasDescription && (
+        <>
+          <p
+            className={mergeClasses(
+              'm-0 shrink-0 px-6 wrap-break-word',
+              bodyClassName,
+            )}
+          >
+            {description}
+          </p>
+          <div className={mergeClasses('shrink-0', styles.divider)} />
+        </>
+      )}
+
       {hasFileChoice && (
-        <div className="flex shrink-0 items-center gap-3">
+        <div
+          className={mergeClasses(
+            'sticky top-0 z-10 flex min-h-10 shrink-0 items-center gap-3 px-6',
+            styles.fileSelector,
+          )}
+        >
           <Dropdown
             open={isFileSelectorOpen}
             onOpenChange={onFileSelectorOpenChange}
@@ -193,11 +222,22 @@ export const ContentTab: FC<ContentTabProps> = ({
             matchReferenceWidth={false}
             listClassName="w-[280px] shadow-md"
             placement="bottom-start"
+            /* The file tree is a `role="tree"` of its own, not menu items. */
+            overlayRole={DropdownOverlayRole.None}
             renderOverlay={() =>
               renderFileTree ? (
                 renderFileTree(fileTreeProps)
               ) : (
-                <ContentFileTree {...fileTreeProps} />
+                <ContentFileTree
+                  {...fileTreeProps}
+                  colors={{
+                    rowHoverBackground:
+                      detailsStyles?.colors?.contentFileTreeRowHoverBackground,
+                    rowSelectedBackground:
+                      detailsStyles?.colors
+                        ?.contentFileTreeRowSelectedBackground,
+                  }}
+                />
               )
             }
           >
@@ -221,13 +261,6 @@ export const ContentTab: FC<ContentTabProps> = ({
         </div>
       )}
 
-      {hasDescription && (
-        <>
-          <p className={mergeClasses('m-0', bodyClassName)}>{description}</p>
-          <div className={mergeClasses('shrink-0', styles.divider)} />
-        </>
-      )}
-
       {/*
        * With a selector, the body shows one of several files — name it after
        * the trigger, which already carries the selected file name, so the
@@ -237,19 +270,19 @@ export const ContentTab: FC<ContentTabProps> = ({
         role={hasFileChoice ? 'region' : undefined}
         aria-labelledby={hasFileChoice ? fileSelectorTriggerId : undefined}
         className={mergeClasses(
-          'min-h-0 flex-1 text-start',
-          filePreviewContent != null
-            ? 'overflow-hidden'
-            : 'overflow-auto break-words',
+          'min-w-0 shrink-0 px-6 text-start',
+          /* Viewport-based viewers still get a full tab-height surface, but
+           * it scrolls with the description instead of shrinking below it. */
+          filePreviewContent != null && 'min-h-full',
+          filePreviewContent == null && 'wrap-break-word',
           filePreviewContent == null && styles.body,
           filePreviewContent == null && bodyClassName,
         )}
       >
-        {isFileLoading && (
-          <span role="status" className="sr-only">
-            {fileLoadingLabel}
-          </span>
-        )}
+        {/* Always mounted so the region exists before the file starts loading. */}
+        <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
+          {isFileLoading ? fileLoadingLabel : ''}
+        </LiveRegion>
         {renderPreview()}
       </div>
     </div>

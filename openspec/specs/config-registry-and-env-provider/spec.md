@@ -3,7 +3,6 @@
 ## Purpose
 
 The backend configuration registry and the provider chain — env, static defaults, composite — that resolves every declared key.
-
 ## Requirements
 
 ### Requirement: ConfigDefinition registry declares all known keys
@@ -75,7 +74,6 @@ The registry SHALL include a `features.responsesBackgroundEnabled` entry: `type=
 - **WHEN** `AppConfigService.getClientConfig(context)` is called, in any state of `RESPONSES_API_ENABLED`
 - **THEN** the returned DTO's `features` map does not contain a `responsesApiEnabled` (or `features.responsesApiEnabled`) key
 
-
 #### Scenario: Registry contains the responsesBackgroundEnabled feature key with server-only visibility
 
 - **WHEN** the registry is imported
@@ -98,21 +96,24 @@ interface AppConfigEvalContext {
 }
 ```
 
-`AppConfigController` (`apps/chat-api/src/app-config/app-config.controller.ts`) builds the context from the validated `appId` query parameter, the optional session (`OptionalSessionGuard`): `userId` = the session user's `sub` and `roles` = the string entries of the session claims' `roles` array. The context carries no environment field: no provider reads one, and the controller does not read `process.env`. Context fields MUST NOT be serialized into the client response. Providers receive the full context and MAY ignore user-specific fields; `EnvConfigProvider` reads only `roles`, for definitions that declare `allowedRolesEnvVar`.
+`AppConfigController` (`apps/chat-api/src/app-config/app-config.controller.ts`) builds the context from the validated `appId` query parameter and the optional session (`OptionalSessionGuard`). `userId` is the session user's `sub`. `roles` is `UserRolesService.getRoles(sessionUser)` (see "Session roles are read through the provider's rolesClaim"), which honors the provider's `rolesClaim`. It is not taken from a hardcoded `claims['roles']`. With no session, `userId` and `roles` are left unset. The context carries no environment field: no provider reads one, and the controller does not read `process.env`. Context fields MUST NOT be serialized into the client response. Providers receive the full context and MAY ignore user-specific fields. `EnvConfigProvider` reads only `roles`, for definitions that declare `allowedRolesEnvVar`. `AppConfigService` also reads `roles` to compute `catalogCreationPermissions` (see `catalog-creation-role-restrictions`).
 
 **RTL impact:** None. **i18n impact:** None.
 
 #### Scenario: Context is built from appId
 
 - **WHEN** the controller receives `?appId=chat-ui`
-- **THEN** an `AppConfigEvalContext` with `appId='chat-ui'` and — when a session is present — the session user's `userId` and `roles` is constructed and passed to `AppConfigService`
+- **THEN** an `AppConfigEvalContext` with `appId='chat-ui'` is constructed and passed to `AppConfigService`. When a session is present, the context also carries the session user's `userId` and the roles returned by `UserRolesService.getRoles`
+
+#### Scenario: Roles follow the provider's rolesClaim
+
+- **WHEN** the session's provider has `rolesClaim='dial_roles'`, the session holds `claims.dial_roles = ["R"]`, and `ASR_ENABLED_ROLES=R` is set with an ASR model configured
+- **THEN** the context's `roles` is `["R"]` and `features.asrEnabled` is `true` for that user
 
 #### Scenario: Context does not appear in response
 
 - **WHEN** the client-config response is serialized
 - **THEN** it MUST NOT contain `userId` or `roles` fields
-
----
 
 ### Requirement: ConfigProvider interface is implemented by all providers
 
@@ -676,8 +677,11 @@ client-config mapping table, or it is `app.version`, which `AppConfigService` re
 through its documented special path. Every mapping-table entry SHALL name a key that
 exists in `CONFIG_DEFINITIONS` with `visibility: 'client'` and `type: 'config'`. No two
 mapping entries SHALL write the same response field. The mapped fields, together with
-`appVersion` and `aiTextRefinementAvailable`, SHALL cover every `ClientConfigDto`
-field.
+`appVersion`, `aiTextRefinementAvailable`, and `catalogCreationPermissions`, SHALL cover every
+`ClientConfigDto` field. `AppConfigService` computes `catalogCreationPermissions` itself, from
+the startup-normalized `CATALOG_CREATION_ROLES` map and the request's roles. It is not
+a registry key, because `CATALOG_CREATION_ROLES` is server-only and is never sent to
+the browser.
 
 The mapping table is `CLIENT_CONFIG_MAPPINGS` in `apps/chat-api/src/app-config/client-config.mapper.ts`. A unit test in `apps/chat-api/src/app-config/tests/` (`client-config.mapper.spec.ts`) SHALL enforce these properties
 against the real `CONFIG_DEFINITIONS`, so a new unmapped client key fails the test
@@ -713,3 +717,235 @@ provider priority, or provider fallback behavior.
 
 - **WHEN** the mapping table is inspected
 - **THEN** it has no entry for `utility.modelId` or for any `features.*` key
+
+#### Scenario: catalogCreationPermissions is assembled by the service
+
+- **WHEN** the mapping table and `CONFIG_DEFINITIONS` are inspected
+- **THEN** neither contains a `catalogCreationPermissions` entry or a `CATALOG_CREATION_ROLES` key, and the client-config response still carries `config.catalogCreationPermissions`
+
+### Requirement: UI_EVENT_ENABLED_BY_DEFAULT sets the operator default for the celebrations preference
+
+`UI_EVENT_ENABLED_BY_DEFAULT` SHALL be an optional boolean on `EnvironmentVariables`
+(`apps/chat-api/src/config/environment.config.ts`) that defaults to `true`. An absent value SHALL
+resolve to `true`. `false`, `0` and `no` (trimmed, case-insensitive) SHALL resolve to `false`;
+any other value SHALL resolve to `true`. It SHALL back the registry entry
+`ui.celebrationsEnabledByDefault` in `CONFIG_DEFINITIONS`
+(`apps/chat-api/src/app-config/config-registry/config-registry.constants.ts`) with
+`type: 'config'`, `valueType: 'boolean'`, `visibility: 'client'`, `defaultValue: true` and
+`critical: false`. `CLIENT_CONFIG_MAPPINGS` and `createDefaultClientConfig`
+(`apps/chat-api/src/app-config/client-config.mapper.ts`) SHALL expose it as
+`config.celebrationsEnabledByDefault: boolean` on the existing `GET /api/v1/client-config`. A
+non-boolean resolved value SHALL map to `true`.
+
+The value SHALL be honoured whether or not `UI_EVENT` is set; without an event it has no visible
+effect. It SHALL NOT be role-gated, SHALL NOT be an `ENABLED_FEATURES` key, and SHALL NOT appear
+under `features`. Existing endpoint authentication, status codes, configuration cache and refresh
+behaviour SHALL be retained.
+
+**Endpoint/client impact:** no new endpoint. `ClientConfigDto`
+(`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) gains a required
+`celebrationsEnabledByDefault: boolean` with `@ApiProperty`. The generated
+`AppConfigApi.getClientConfig` response model gains the field after `npm run openapi`. The frontend
+keeps calling the normal (non-`Raw`) method through `apps/chat/src/server-api/app-config.api.ts`.
+
+Example response excerpt:
+
+```json
+{ "config": { "activeEventId": "new-year", "celebrationsEnabledByDefault": true } }
+```
+
+**Cache:** none new. The field rides the existing client-config cache and refresh lifecycle.
+
+#### Scenario: Unset defaults to on
+
+- **WHEN** `UI_EVENT_ENABLED_BY_DEFAULT` is not set
+- **THEN** `GET /api/v1/client-config` returns `config.celebrationsEnabledByDefault: true`
+
+#### Scenario: An explicit false turns the default off
+
+- **WHEN** `UI_EVENT_ENABLED_BY_DEFAULT` is `false`, `0`, `no` or `FALSE`
+- **THEN** `config.celebrationsEnabledByDefault` is `false`
+
+#### Scenario: Any other value keeps it on
+
+- **WHEN** `UI_EVENT_ENABLED_BY_DEFAULT` is `true`, `1` or `yes`
+- **THEN** `config.celebrationsEnabledByDefault` is `true`
+
+#### Scenario: The field is not a feature flag
+
+- **WHEN** the client config is fetched
+- **THEN** `celebrationsEnabledByDefault` is present under `config` and absent from `features`
+
+### Requirement: Session roles are read through the provider's rolesClaim
+
+The auth domain (`apps/chat-api/src/auth/`) SHALL provide `UserRolesService`, registered in and exported from `AuthModule`. It SHALL be the only place in `apps/chat-api` that turns a `SessionUser` into a list of role names. `UserRolesService.getRoles(user: SessionUser | undefined): string[]` SHALL:
+
+1. Return `[]` for an `undefined` user, or for a user whose `providerId` the `ProviderRegistryService` does not know.
+2. Use the provider's `rolesClaim`, or `roles` when the provider has none.
+3. Read `user.claims[rolesClaim]` as a flat key first. This is how the OIDC callback (`AuthController.callback`) stores the value. When that key is absent, it SHALL resolve `rolesClaim` as a dot-separated path into `user.claims`. This is how a header-token session (`apps/chat-api/src/auth/strategies/header-token.strategy.ts`) keeps the full verified payload.
+4. Convert the value into a list. An array is converted with `map(String)`, preserving the existing `AdminRoleService` coercion, and a string becomes a one-element list. Anything else yields `[]`.
+
+The dot-path resolver that `AuthController` uses today SHALL move to a shared `claims.util.ts` helper in the auth utilities. `AuthController` and `UserRolesService` SHALL both import it, so the two cannot interpret a path differently. `AdminRoleService.isAdmin` SHALL get its roles from `UserRolesService.getRoles`. Its admin rule itself SHALL stay unchanged: the provider's `adminRoles` must intersect the user's roles.
+
+**RTL impact:** None. **i18n impact:** None.
+
+#### Scenario: Default dial_roles claim is honored
+
+- **WHEN** the provider's `rolesClaim` is `dial_roles` and a cookie session holds `claims.dial_roles = ["R"]`
+- **THEN** `getRoles` returns `["R"]`
+
+#### Scenario: Header-token session with a dotted claim
+
+- **WHEN** the provider's `rolesClaim` is `realm_access.roles` and a header-token session holds `claims.realm_access.roles = ["R"]`
+- **THEN** `getRoles` returns `["R"]`
+
+#### Scenario: Flat key wins over the nested path
+
+- **WHEN** `rolesClaim` is `realm_access.roles` and `claims` holds both the flat key `"realm_access.roles": ["A"]` and a nested `realm_access.roles = ["B"]`
+- **THEN** `getRoles` returns `["A"]`
+
+#### Scenario: Unknown provider or no session yields no roles
+
+- **WHEN** `getRoles` receives `undefined`, or a user whose `providerId` is not registered
+- **THEN** it returns `[]`
+
+#### Scenario: Admin detection shares the lookup
+
+- **WHEN** a provider's `adminRoles` is `["admin"]`, its `rolesClaim` is `realm_access.roles`, and a header-token user holds `realm_access.roles = ["admin"]`
+- **THEN** `AdminRoleService.isAdmin` returns `true`
+
+#### Scenario: Existing admin role-array coercion is retained
+
+- **WHEN** the configured claim contains `["R", 7]`
+- **THEN** the shared reader returns `["R", "7"]`, as the existing admin helper does
+
+### Requirement: Registry declares the project context limit keys
+
+`CONFIG_DEFINITIONS` (`apps/chat-api/src/app-config/config-registry/config-registry.constants.ts`) SHALL include three entries, each with `type='config'`, `visibility='client'`, `critical=false` and `owner='chat-team'`:
+
+| Key | `valueType` | `defaultValue` | `envVar` |
+| --- | --- | --- | --- |
+| `projects.contextFileMaxBytes` | `number` | `1048576` | `PROJECT_CONTEXT_FILE_MAX_BYTES` |
+| `projects.contextTotalMaxBytes` | `number` | `10485760` | `PROJECT_CONTEXT_TOTAL_MAX_BYTES` |
+| `projects.contextAllowedExtensions` | `json` | `['csv', 'pdf', 'xlsx']` | `PROJECT_CONTEXT_ALLOWED_EXTENSIONS` |
+
+The keys reuse the same environment variables that `ProjectsService.createProject` enforces, through the `EnvironmentVariables` fields declared in `project-create-api`. The browser's pre-upload checks and the BFF's enforcement can therefore never diverge.
+
+`CLIENT_CONFIG_MAPPINGS` (`apps/chat-api/src/app-config/client-config.mapper.ts`) SHALL map the three keys to these `ClientConfigDto` fields:
+
+- `projectContextFileMaxBytes` (`number`);
+- `projectContextTotalMaxBytes` (`number`);
+- `projectContextAllowedExtensions` (`string[]`).
+
+Each field has `@ApiProperty` and is always emitted, like every other mapped field (`MappedClientConfig` is `Required`), so the existing registry-coverage test stays green. The keys are not gated by `projectsEnabled`, because they are plain limits with no secret value. Like other client config values, they are boot-time constants, so there is no cache and no invalidation.
+
+**Feature flag:** none on the keys themselves. **RTL impact:** none. **i18n impact:** none.
+
+#### Scenario: Registry contains the three keys
+
+- **WHEN** the registry is imported
+- **THEN** it contains the three entries with exactly the `valueType`, `defaultValue` and `envVar` above
+
+#### Scenario: Operator-configured values are resolved
+
+- **WHEN** `PROJECT_CONTEXT_FILE_MAX_BYTES=2097152` and `PROJECT_CONTEXT_ALLOWED_EXTENSIONS=csv, PDF ,.md` are set
+- **THEN** `EnvConfigProvider` resolves `projects.contextFileMaxBytes` to `2097152` and `projects.contextAllowedExtensions` to `['csv', 'pdf', 'md']`
+
+#### Scenario: Unset values fall back to defaults
+
+- **WHEN** none of the three variables is set
+- **THEN** the client config response carries `projectContextFileMaxBytes: 1048576`, `projectContextTotalMaxBytes: 10485760` and `projectContextAllowedExtensions: ['csv', 'pdf', 'xlsx']`
+
+### Requirement: Registry declares the content.additionalLocales key
+
+`CONFIG_DEFINITIONS` (`apps/chat-api/src/app-config/config-registry/config-registry.constants.ts`) SHALL include an entry:
+
+- `key='content.additionalLocales'`
+- `type='config'`
+- `valueType='json'`
+- `visibility='client'`
+- `defaultValue=[]`
+- `critical=false`
+- `envVar='ADDITIONAL_CONTENT_LOCALES'`
+- `owner='chat-team'`
+- `description`: summarizes that this is the list of content locale codes, beyond the fixed primary locale, that authors may translate toolset and application Name/Description into, and that `AVAILABLE_LOCALES` is read as a deprecated fallback.
+
+The empty default is deliberate. With no locale configured, the "Add locale" control stays hidden, which is the behaviour before this key existed. Content locales are user-authored data, not UI languages, so this key SHALL NOT affect `SUPPORTED_LANGUAGES` or the primary locale.
+
+**Feature flag:** not gated, and no role gating (`allowedRolesEnvVar` is not set). **RTL impact:** none. **i18n impact:** none; values are locale codes.
+
+#### Scenario: Registry contains the content.additionalLocales key
+
+- **WHEN** the registry is imported
+- **THEN** it contains an entry with `key='content.additionalLocales'`, `type='config'`, `valueType='json'`, `visibility='client'`, `envVar='ADDITIONAL_CONTENT_LOCALES'`, and `defaultValue=[]`
+
+#### Scenario: Unconfigured deployment resolves to an empty list
+
+- **WHEN** neither `ADDITIONAL_CONTENT_LOCALES` nor `AVAILABLE_LOCALES` is set
+- **THEN** the key resolves to `[]`
+
+### Requirement: EnvConfigProvider resolves content locales with a deprecated legacy fallback
+
+`EnvConfigProvider` (`apps/chat-api/src/app-config/config-registry/env-config.provider.ts`) SHALL resolve `content.additionalLocales` through a dedicated branch, using this precedence:
+
+1. When `ADDITIONAL_CONTENT_LOCALES` is present in the environment, including as an empty string, its list SHALL be used and `AVAILABLE_LOCALES` SHALL be ignored. Present-but-empty is an explicit "no additional locales" and resolves to `[]`.
+2. Otherwise, when `AVAILABLE_LOCALES` is present, its list SHALL be used. This is the `development-0.x` variable, so `[`, `]`, `'` and `"` characters SHALL be stripped before splitting. This matches the former 0.x `resolveAvailableLocales`, so `["ar","en"]` and `ar,en` both parse.
+3. Otherwise the key resolves to `undefined`, and the registry default `[]` applies.
+
+Each list SHALL be split on commas and trimmed, with empty entries dropped. Every code SHALL be canonicalised with `Intl.getCanonicalLocales` (`de-de` → `de-DE`), and the list SHALL be deduplicated after canonicalisation, keeping the first occurrence. The provider SHALL NOT remove the primary locale; that filter belongs to the frontend (see `content-locale-configuration`), so the backend never encodes which locale is primary.
+
+When the legacy fallback is used, a single `Logger.warn` SHALL be emitted at provider initialisation, not per request. It names `AVAILABLE_LOCALES` as deprecated and `ADDITIONAL_CONTENT_LOCALES` as its replacement. It SHALL NOT be emitted when `ADDITIONAL_CONTENT_LOCALES` is present.
+
+**Observability:** the deprecation warning is the only new log line. No new metric.
+
+#### Scenario: New variable resolves to canonical, deduplicated codes
+
+- **WHEN** `ADDITIONAL_CONTENT_LOCALES=de, fr-fr ,de-DE,de` is set
+- **THEN** the resolved value is `['de', 'fr-FR', 'de-DE']`
+
+#### Scenario: Legacy variable is used when the new one is absent
+
+- **WHEN** `ADDITIONAL_CONTENT_LOCALES` is absent and `AVAILABLE_LOCALES=["ar","en"]` is set
+- **THEN** the resolved value is `['ar', 'en']` and one deprecation warning naming both variables is logged at startup
+
+#### Scenario: New variable wins over the legacy one even when empty
+
+- **WHEN** `ADDITIONAL_CONTENT_LOCALES=` (empty) and `AVAILABLE_LOCALES=ar,en` are both set
+- **THEN** the resolved value is `[]` and no deprecation warning is logged
+
+#### Scenario: Deprecation warning is not repeated per request
+
+- **WHEN** only `AVAILABLE_LOCALES` is set and `content.additionalLocales` is resolved for many requests
+- **THEN** the deprecation warning has been logged exactly once
+
+### Requirement: Content locale variables are validated as BCP-47 tags at boot
+
+`EnvironmentVariables` (`apps/chat-api/src/config/environment.config.ts`) SHALL declare `ADDITIONAL_CONTENT_LOCALES?: string[]` and `AVAILABLE_LOCALES?: string[]`. A `@Transform` SHALL keep an absent value `undefined`, which is what distinguishes "absent" from "present but empty", and SHALL split a present value into a trimmed, non-empty list (`[]` for an empty string). For `AVAILABLE_LOCALES` the transform SHALL also strip the legacy bracket and quote characters.
+
+Each entry SHALL pass, per item:
+
+- `@Matches(/^[A-Za-z0-9-]+$/)`, an allowlist, because the value reaches the browser and log lines;
+- `@MaxLength(35)`;
+- a custom constraint that accepts the entry only when `Intl.getCanonicalLocales(entry)` does not throw.
+
+A failing entry SHALL fail environment validation at startup, and the error SHALL name the variable and the rejected value. A region subtag SHALL NOT be required, so short codes such as `de` and `ar` (the 0.x convention) are valid.
+
+#### Scenario: Short and regional codes are accepted
+
+- **WHEN** `ADDITIONAL_CONTENT_LOCALES=de,ar,pt-BR,zh-Hant` is set
+- **THEN** environment validation passes
+
+#### Scenario: A malformed code fails startup
+
+- **WHEN** `ADDITIONAL_CONTENT_LOCALES=de,not a tag` is set
+- **THEN** environment validation fails at application startup and the error names `ADDITIONAL_CONTENT_LOCALES`
+
+#### Scenario: A malformed legacy code fails startup
+
+- **WHEN** `ADDITIONAL_CONTENT_LOCALES` is absent and `AVAILABLE_LOCALES=en,e$`
+- **THEN** environment validation fails at application startup and the error names `AVAILABLE_LOCALES`
+
+#### Scenario: Absent variables pass validation
+
+- **WHEN** neither variable is set
+- **THEN** environment validation passes and both properties are `undefined`

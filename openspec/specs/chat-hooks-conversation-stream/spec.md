@@ -41,9 +41,11 @@ joins the running generation" defines, and SHALL reach this conflict
 message only when that handover cannot resolve the generation.
 
 When the transport reports a `StreamUpstreamError` — DIAL Core sent an
-in-band `{ error: { message } }` SSE chunk — the hook SHALL write that
-error's `message` to `streamErrorMessage`, because it is upstream text
-intended for the user.
+in-band `{ error: { message, display_message? } }` SSE chunk — the hook
+SHALL write that error's `message` to `streamErrorMessage`, because it is
+upstream text intended for the user. The live value SHALL match what the
+backend persists for the same chunk, so a reload does not change the
+displayed error text.
 
 When the transport reports a `GenerationPersistenceError` — the backend
 sent an in-band error chunk with `error.type === 'conversation_save_failed'`
@@ -51,7 +53,12 @@ sent an in-band error chunk with `error.type === 'conversation_save_failed'`
 `generationPersistenceErrorMessage` parameter (defaulting to
 `DEFAULT_GENERATION_PERSISTENCE_ERROR_MESSAGE`) to `streamErrorMessage` and
 keep the received answer in the buffer, as
-`backend-owned-generation-persistence` defines.
+`backend-owned-generation-persistence` defines. The one exception is a
+`GenerationPersistenceError` whose `status` is `401` on a stream started by
+`startStream` when the transport implements `saveConversation`. There, the
+warning is deferred until the single recovery save fails, and never written
+if it succeeds, as "A credentials-rejected terminal save gets one client
+recovery save" defines.
 
 When the transport reports a `StreamInterruptedError` — the network
 connection carrying the stream was lost or stalled while the backend-owned
@@ -81,7 +88,10 @@ built-in `createChatStreamApi` transport SHALL raise `StreamUpstreamError`
 for every in-band SSE error chunk except one whose `error.type` is
 `conversation_save_failed` (raised as `GenerationPersistenceError`), and
 `StreamInterruptedError` for the network-level failures listed in
-`generation-stream-recovery`.
+`generation-stream-recovery`. A `StreamUpstreamError`'s `message` SHALL be
+the chunk's `error.display_message` when present, and its `error.message`
+otherwise — the same precedence the backend applies when persisting
+`streamErrorMessage`.
 
 #### Scenario: Conflict shows the host's message
 - **WHEN** `onError` receives a `GenerationConflictError` for a start that
@@ -116,7 +126,24 @@ for every in-band SSE error chunk except one whose `error.type` is
 - **WHEN** `createChatStreamApi`'s stream reader parses a
   `data: {"error":{"message":"Model overloaded"}}` line
 - **THEN** it calls `onError` with a `StreamUpstreamError` whose `message`
-  is `'Model overloaded'`
+  is `'Model overloaded'` once the stream ends, ignoring any chunk that
+  follows the error line
+
+#### Scenario: A persistence failure after an in-band error is the one reported
+- **WHEN** the stream carries an in-band error line and then a
+  `conversation_save_failed` line before it ends
+- **THEN** `onError` is called once, with the `GenerationPersistenceError`,
+  so the recovery save can run; the in-band text arrives as that error's
+  `terminalMarker.streamErrorMessage`
+
+#### Scenario: The built-in transport prefers an in-band error's display_message
+- **WHEN** `createChatStreamApi`'s stream reader parses an in-band error
+  chunk carrying both a raw `error.message` (e.g. `'Error code: 429 - …'`)
+  and an `error.display_message` (e.g. a token-limit notice with its reset
+  time)
+- **THEN** it calls `onError` with a `StreamUpstreamError` whose `message`
+  is the `display_message`, so the streaming view shows the same text the
+  conversation shows after a reload
 
 #### Scenario: The built-in transport leaves non-network failures untagged
 - **WHEN** the response is non-OK and not 409, or the body is missing
@@ -184,6 +211,31 @@ that entry still holds its id.
   it is accumulated in that path's live-message buffer and streaming continues
   to be tracked for the path
 
+### Requirement: Stop is sent once per generation and a 404 is reported only when the generation keeps running
+`handleStop` SHALL send at most one stop request per generation id while that request is outstanding or has been accepted, so repeated clicks while the backend is still saving the partial answer send nothing further. When the request fails with anything other than a `404`, the hook SHALL report the error through `onStopError` and SHALL allow Stop to be sent again for the same generation, because a stopped-state write that failed leaves the generation running and retryable.
+
+A `404` from the stop request (`StopCompletionError` with `status` `404`) means the backend had no active generation to stop — typically because it ended, or was already being stopped, as the click arrived, or because the stream was never sent. The hook SHALL NOT report it through `onStopError` when the generation has ended locally — the path's active generation id no longer holds this id and, for a resumed generation without a local id, the path is no longer streaming — or does so within 2 seconds of the response, checked every 100 ms. When the generation is still live after that window (for example, another backend instance runs it), the hook SHALL report the `404` through `onStopError` and allow Stop to be sent again.
+
+#### Scenario: Repeated Stop clicks send one request
+- **WHEN** `handleStop` is called twice for the same generation, then again after the first request resolved
+- **THEN** `transport.stopCompletion` is called once
+
+#### Scenario: Stop is retryable after a failure that is not a 404
+- **WHEN** the first stop request fails with `StopCompletionError` status `503` and `handleStop` is called again
+- **THEN** `onStopError` is called once, for the first failure, and `transport.stopCompletion` is called twice
+
+#### Scenario: A 404 after the generation completed is silent
+- **WHEN** the stop request fails with `StopCompletionError` status `404` and the generation has already completed locally
+- **THEN** `onStopError` is not called
+
+#### Scenario: A 404 that lands before the stream end is seen is silent when the stream then ends
+- **WHEN** the stop request fails with `404` while the generation is still tracked as live, and the stream completes within 2 seconds
+- **THEN** `onStopError` is not called
+
+#### Scenario: A 404 for a generation that keeps running is reported
+- **WHEN** the stop request fails with `404` and the generation is still live after 2 seconds
+- **THEN** `onStopError` is called with that error
+
 ### Requirement: Buffered live message can be restored after navigation
 The hook SHALL accumulate accepted chunks into a per-path assistant-message
 snapshot, including merged `custom_content.stages`, regardless of whether the
@@ -192,7 +244,8 @@ path is displayed. It SHALL expose
 conversation unchanged when no buffer exists and otherwise restores the
 buffered message at its recorded index. Completion and error callbacks SHALL
 clear the buffer because the backend's terminal save is then authoritative,
-except where the received answer must survive: a `GenerationPersistenceError`,
+except where the received answer must survive: a `GenerationPersistenceError`
+(until its single recovery save succeeds, when one applies),
 a terminal reload that still shows the unsaved placeholder, or a rejected
 terminal reload keep the buffer (see `backend-owned-generation-persistence`),
 and a reload that shows a pending background message hands it to the resume
@@ -294,6 +347,14 @@ outcome.
 - **WHEN** `resumeIfAwaitingGeneration` is called with a conversation
   whose last message is an empty, non-stopped assistant placeholder
 - **THEN** the conversation's path is added to the streaming-paths set
+
+#### Scenario: Load replay does not resume over its own active stream
+
+- **GIVEN** the hook owns a locally started completion for a conversation path, including the wait before its first token
+- **WHEN** a replayed load effect or return navigation calls `resumeIfAwaitingGeneration` for that same path
+- **THEN** no attach, watch, or reload is started, and the local buffer and Stop remain owned by the local completion
+- **AND** subsequent chunks and the completion's final reload still update the displayed answer
+- **AND** internal interruption and conflict recovery can still hand the stream over to attach
 
 #### Scenario: Attach succeeds and replays progressively
 
@@ -430,7 +491,7 @@ When a completion stream or an attach stream ends and the hook's reload via `tra
 
 ### Requirement: Stop is available for a resumed background generation
 
-While the hook is resuming a conversation that contains a message with `backgroundGeneration.status: "pending"` — after a page load, a refresh, or navigation back — `canStopStreaming` SHALL be `true` for that path, and `handleStop` SHALL call `transport.stopCompletion({ generationId, path, content })` with `generationId` taken from the message's `backgroundGeneration.generationId`. The resume SHALL then settle through its existing terminal handling (the attach `stopped` event or a watch update, followed by the reload). For a resumed message without `backgroundGeneration`, Stop availability SHALL stay as before this change.
+While the hook is resuming a conversation that contains a message with `backgroundGeneration.status: "pending"` — after a page load, a refresh, or navigation back — `canStopStreaming` SHALL be `true` for that path, and `handleStop` SHALL call `transport.stopCompletion({ generationId, path, content })` with `generationId` taken from the message's `backgroundGeneration.generationId`. The resume SHALL then settle through its existing terminal handling (the attach `stopped` event or a watch update, followed by the reload). For a resumed message without `backgroundGeneration`, Stop availability SHALL stay as before this change, except where "Stop is available for a resumed foreground generation" defines an attach-supplied id.
 
 The hook SHALL only read the id from the conversation it is given; it SHALL NOT decide eligibility or call DIAL Core. **UI / i18n / RTL / a11y impact:** none new — the existing Stop control, its label, and its keyboard behavior are reused.
 
@@ -442,7 +503,7 @@ The hook SHALL only read the id from the conversation it is given; it SHALL NOT 
 
 #### Scenario: Resumed non-background message keeps today's Stop behavior
 
-- **WHEN** the hook resumes a conversation whose last message has no `backgroundGeneration`
+- **WHEN** the hook resumes a conversation whose last message has no `backgroundGeneration` and the attach `snapshot` supplies no `generationId`
 - **THEN** `canStopStreaming` behaves exactly as before this change
 
 ### Requirement: A conflict on an opted-in start joins the running generation
@@ -566,3 +627,133 @@ continue.
 - **WHEN** the immediate re-check still returns an awaiting conversation
 - **THEN** the watch continues and resolves on a later qualifying
   `UPDATE` event, as before
+
+### Requirement: A credentials-rejected terminal save gets one client recovery save
+
+`useConversationStream` SHALL own this behavior; no new context is introduced. It applies only when both of these hold:
+
+- the generation was started by `startStream` in the mounted hook;
+- its completion stream reports a `GenerationPersistenceError` whose `status` is `401`.
+
+It SHALL NOT apply to:
+
+- a `GenerationPersistenceError` with any other `status` or with no `status`;
+- a generation joined through attach, replay, or resume;
+- the reload heuristic that keeps the warning when the stored copy still shows the unsaved placeholder.
+
+`ConversationStreamTransport` SHALL gain an optional `saveConversation(path, conversation)` method:
+
+- `path` is the same bucket-stripped conversation path that `streamCompletion` receives.
+- It resolves with the saved conversation and rejects on any failure.
+- The host implements it against its own client save. The library SHALL NOT construct an endpoint path, read credentials, or import a generated client for it.
+- In this repository the app adapter in `apps/chat/src/utils/conversation-stream-transport.ts` implements it with `saveConversation` from `apps/chat/src/server-api/conversations.api.ts`.
+
+When the conditions above hold and the transport implements `saveConversation`, the hook SHALL:
+
+1. Settle the generation as it does today: streaming and stop controls are released, and the received answer stays buffered and displayed. It SHALL NOT write the persistence warning yet.
+2. Make exactly one recovery attempt for that generation:
+   1. read the stored conversation through `transport.getConversation`;
+   2. restore the received answer at its recorded index, applying the error's `terminalMarker` (`streamErrorMessage` or `wasStoppedByUser`) when it carries one, so a stopped or failed answer is not stored as a placeholder that reads as a running generation after a reload; when the stored conversation does not end at that index in this turn's unsaved placeholder (the same check the terminal reload uses), treat the attempt as failed without saving;
+   3. save the result once through `transport.saveConversation`.
+3. Then, depending on the result:
+   - **On success**, release that generation's buffer and never show the persistence warning for it. While the conversation is still displayed and the generation was not superseded, it SHALL show the saved conversation.
+   - **On failure** (the read or the save rejects), write the persistence warning exactly as the immediate path does today: into the buffered message, and into the displayed message while the conversation is displayed and the generation was not superseded. It SHALL NOT try again.
+
+When the transport does not implement `saveConversation`, or the conditions above do not hold, the warning SHALL be written immediately, as today.
+
+The recovery SHALL NOT change displayed state for a superseded generation, for a buffer that a newer generation replaced, or for a conversation that is no longer displayed. It SHALL still save the received answer when the conversation is no longer displayed.
+
+`onStreamError` SHALL still receive the original `GenerationPersistenceError` once, when the stream reports it. The recovery outcome is not reported through it.
+
+No new user-visible strings (no i18n keys), no UI, no RTL impact, no feature flag, no metric or analytics event, no cache, and no new memoized callback are introduced.
+
+#### Scenario: A 401 terminal save failure is recovered without any warning
+
+- **GIVEN** a stream started in this tab has received an answer, and the transport implements `saveConversation`
+- **WHEN** the stream reports `conversation_save_failed` with `status: 401`, and the recovery read and save resolve
+- **THEN** the hook makes one read and one `saveConversation` call with the received answer at its index, and the persistence warning is never shown for that message
+
+#### Scenario: No warning is shown while the recovery is in flight
+
+- **WHEN** the stream reports `conversation_save_failed` with `status: 401` and the recovery save has not resolved yet
+- **THEN** the received answer is displayed without the persistence warning, and streaming and stop controls are already released
+
+#### Scenario: A failed recovery shows today's warning
+
+- **WHEN** the recovery read or save rejects
+- **THEN** the displayed message shows the persistence warning, the received answer stays buffered, and no further save is attempted for that generation
+
+#### Scenario: Any other persistence failure keeps today's behavior
+
+- **WHEN** the stream reports `conversation_save_failed` with a `status` other than `401`, or with no `status`
+- **THEN** the hook shows the persistence warning immediately and makes no recovery read or save
+
+#### Scenario: A host without saveConversation keeps today's behavior
+
+- **WHEN** the transport does not implement `saveConversation` and the stream reports `conversation_save_failed` with `status: 401`
+- **THEN** the hook shows the persistence warning immediately and makes no recovery read or save
+
+#### Scenario: A superseded generation never touches displayed state
+
+- **GIVEN** a recovery is in flight
+- **WHEN** the user starts a new generation on the same conversation, or navigates to another conversation, before it settles
+- **THEN** the recovery result, success or failure, does not change the displayed conversation or the newer generation's buffer
+
+#### Scenario: Attach subscribers do not save
+
+- **WHEN** a generation joined through attach or resume ends with an `error` event whose `errorType` is `conversation_save_failed`
+- **THEN** the hook keeps the replayed answer with the persistence warning and makes no recovery save
+
+### Requirement: Stop is available for a resumed foreground generation
+
+While the hook is resuming a non-background generation through `transport.attachToGeneration`, and the attach `snapshot` event carried a `generationId`, `canStopStreaming` SHALL be `true` for that path and `handleStop` SHALL call `transport.stopCompletion({ generationId, path, content })` with that id. This applies only to a resume started through the public `resumeIfAwaitingGeneration` entry point (a page load, a refresh, or navigation back). The resume the hook starts internally — the conflict handover of "A conflict on an opted-in start joins the running generation" and the recovery of `generation-stream-recovery` — SHALL NOT record or act on the attach-supplied id, so their Stop behavior stays exactly as those requirements define it (`canStopStreaming` is `false` throughout a conflict handover; it stays `true` throughout recovery because the local id is known).
+
+The attach-supplied id SHALL be used by `handleStop` only when the page instance has no local generation id for the path and the resumed conversation has no pending background message; a local id and a background message's `backgroundGeneration.generationId` keep precedence, in that order. Recording and forgetting the attach-supplied id SHALL NOT change the stoppable state of a path that has an active local generation. The hook SHALL only read the id from the attach stream; it SHALL NOT decide eligibility or call DIAL Core.
+
+The id SHALL be recorded for the path when the `snapshot` is applied and forgotten when the resume settles for any reason — a terminal event, the attach stream ending without one (the hook then continues on the watch fallback, where no id is known and Stop is unavailable), or a failed final reload. Stop SHALL then settle through the existing terminal handling: the attach `stopped` event is followed by the usual `transport.getConversation` reload, and `isStreaming` and `canStopStreaming` become `false`. After the user activates Stop for the id, replayed `chunk` events SHALL NOT be applied to the displayed message, as for a resumed background generation. A `404` from Stop keeps the handling of "Stop is sent once per generation and a 404 is reported only when the generation keeps running".
+
+For a `snapshot` without a `generationId`, or a resume that never attached, Stop availability SHALL stay as before this change. State ownership stays inside the hook; no new prop or context is introduced. **UI / i18n / RTL / a11y impact:** none new — the existing Stop control, its label, and its keyboard behavior are reused.
+
+#### Scenario: Stop after a refresh of a non-background generation
+
+- **GIVEN** the page was refreshed during a non-background generation and the hook resumed it through attach, whose `snapshot` carried `generationId` `G`
+- **WHEN** the user activates Stop
+- **THEN** `transport.stopCompletion` is called once with `generationId: G` and the conversation path, and after the attach `stopped` event the reloaded stopped partial is shown and `isStreaming` and `canStopStreaming` become `false`
+
+#### Scenario: Chunks replayed after Stop are not applied
+
+- **GIVEN** the user activated Stop for the attach-supplied id
+- **WHEN** further `chunk` events arrive before the terminal event
+- **THEN** the displayed message does not change until the reload applies the stopped partial
+
+#### Scenario: A snapshot without an id keeps Stop hidden
+
+- **WHEN** the resume attaches but the `snapshot` has no `generationId`
+- **THEN** `canStopStreaming` is `false` and no `stopCompletion` request can be sent for the resumed generation
+
+#### Scenario: The watch fallback has no id
+
+- **WHEN** the attach stream ends without a terminal event and the hook continues on `transport.watchConversation`
+- **THEN** the recorded id is dropped, `canStopStreaming` is `false`, and the input stays blocked until the watch resolves
+
+#### Scenario: A local id and a background marker keep precedence
+
+- **WHEN** the page instance started the generation itself, or the resumed conversation has a pending background message
+- **THEN** `handleStop` sends the local id, or the background message's `generationId`, respectively, never the attach-supplied one
+
+#### Scenario: A conflict handover keeps Stop hidden
+
+- **GIVEN** a start with `resumeOnConflict: true` was handed over to the resume flow after a `409`
+- **WHEN** the attach `snapshot` of the joined generation carries a `generationId`
+- **THEN** `canStopStreaming` stays `false`, exactly as "A conflict on an opted-in start joins the running generation" specifies
+
+#### Scenario: Recovery keeps its Stop behavior
+
+- **WHEN** a locally-started generation is recovered through attach and the `snapshot` carries a `generationId`
+- **THEN** `canStopStreaming` stays `true` throughout and Stop sends the original local `generationId`, as "Stop remains available during recovery" specifies, and the end of the attach does not clear it before the recovery settles
+
+#### Scenario: A local generation's Stop is never cleared by the attach id lifecycle
+
+- **GIVEN** the path has an active local generation
+- **WHEN** an attach-supplied id is recorded and later forgotten for that path
+- **THEN** the path's stoppable state for the local generation is unchanged

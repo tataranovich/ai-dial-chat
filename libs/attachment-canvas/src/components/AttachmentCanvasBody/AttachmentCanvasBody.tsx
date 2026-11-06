@@ -4,7 +4,11 @@ import {
   MarkdownRenderer,
   mergeClasses,
 } from '@epam/ai-dial-chat-shared';
-import { DIAL_KIT_ICON_STROKE, Spinner } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_KIT_ICON_STROKE,
+  GhostButton,
+  Spinner,
+} from '@epam/ai-dial-ui-kit';
 import { IconAlertTriangle, IconLock } from '@tabler/icons-react';
 import {
   type FC,
@@ -13,6 +17,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { defaultStyles, JsonView } from 'react-json-view-lite';
@@ -90,16 +95,6 @@ const ImageContent: FC<ImageContentProps> = ({
   );
 };
 
-/* Content types whose renderers read the `--ac-*` custom properties, so the
- * body root has to carry them. `buildCssVars` drops unset fields, so adding a
- * type here is safe; the remaining types still leave their `*Colors` fields
- * inert (see the JSON and status/error vars). */
-const THEMED_CONTENT_TYPES = new Set<AttachmentContentType>([
-  AttachmentContentType.PlainText,
-  AttachmentContentType.Code,
-  AttachmentContentType.Ooxml,
-]);
-
 const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
   content,
   isLoading = false,
@@ -108,6 +103,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
   labels: {
     unsupportedLabel = 'Preview is not supported for this file',
     loadErrorLabel = 'Failed to load file',
+    loadErrorRetryLabel = 'Retry',
     forbiddenErrorLabel = "You don't have permission to access this file",
     visualizerErrorLabel,
     htmlFrameBlockedLabel = 'This page cannot be displayed in preview',
@@ -133,6 +129,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
     mathScrollRegionAriaLabel,
     ooxmlHighlightsLabel,
     ooxmlHighlightNavigatedLabel,
+    loadingLabel = 'Loading…',
   } = {},
   styles: stylesProp,
   codeBlockTheme,
@@ -141,6 +138,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
   hidePdfToolbar = false,
   configurePdfWorker,
   onAppInfo,
+  onRetry,
   onVisualizerSendMessage,
 }) => {
   const {
@@ -160,6 +158,25 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
   const handleRetryPdf = useCallback(() => {
     setPdfRetryKey((key) => key + 1);
   }, []);
+
+  /*
+   * `DocumentPreview` only re-fetches when its URL changes, so reopening a PDF
+   * whose load failed (e.g. a citation for the document the Sources panel just
+   * failed to preview) would leave the stale error on screen. Every open
+   * replaces `content`, so a new object for the failed URL remounts the viewer.
+   */
+  const failedPdfUrlRef = useRef<string | undefined>(undefined);
+  const [pdfReloadKey, setPdfReloadKey] = useState(0);
+  const handlePdfLoadError = useCallback((url: string) => {
+    failedPdfUrlRef.current = url;
+  }, []);
+  useEffect(() => {
+    const failedUrl = failedPdfUrlRef.current;
+    if (failedUrl == null) return;
+    failedPdfUrlRef.current = undefined;
+    if (content.type === AttachmentContentType.Pdf && content.url === failedUrl)
+      setPdfReloadKey((key) => key + 1);
+  }, [content]);
 
   /* A `fontClassName` replaces the individual typography fields, so their vars
    * are skipped entirely when one is supplied. */
@@ -191,6 +208,10 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
         '--ac-ooxml-highlight-bg': colors?.ooxmlHighlightBackground,
         '--ac-json-collapsed-text': colors?.jsonCollapsedText,
         '--ac-json-collapsed-bg': colors?.jsonCollapsedBackground,
+        '--ac-focus-outline': colors?.focusOutline,
+        '--ac-code-bg': colors?.codeBackground,
+        '--ac-mcp-app-loading-bg': colors?.mcpAppLoadingBackground,
+        '--ac-mcp-app-status-text': colors?.mcpAppStatusText,
         '--ac-font-family': hasFontClassName
           ? undefined
           : typography?.fontFamily,
@@ -232,10 +253,13 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
        * A markdown document flows as tall as its content, so the body root is
        * the scroller. `MarkdownTable` is the opposite case — a single table
        * that fills the panel and scrolls inside its own wrapper — so it keeps
-       * the clipped flex column.
+       * the clipped flex column. The scroller carries no padding of its own:
+       * a code block's sticky header pins to the scroller's padding edge, so
+       * padding here would leave a strip above the pinned header where the
+       * scrolled code shows through. The inset sits on an inner wrapper.
        */
       case AttachmentContentType.Markdown:
-        return 'h-full overflow-auto p-4';
+        return 'h-full overflow-auto';
       case AttachmentContentType.MarkdownTable:
         return 'flex h-full min-h-0 flex-col overflow-hidden p-4';
       default:
@@ -249,7 +273,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
         return (
           <pre
             className={mergeClasses(
-              'whitespace-pre-wrap break-words',
+              'wrap-break-word whitespace-pre-wrap',
               styles.body,
               typography?.fontClassName,
             )}
@@ -282,17 +306,19 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
         );
       case AttachmentContentType.Markdown:
         return (
-          <MarkdownRenderer
-            content={content.text}
-            isStreaming={false}
-            codeBlockTheme={codeBlockTheme}
-            codeBlockCopyLabel={codeBlockCopyLabel}
-            codeBlockCopiedLabel={codeBlockCopiedLabel}
-            codeBlockDownloadLabel={codeBlockDownloadLabel}
-            tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
-            mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
-            classNames={DEFAULT_MARKDOWN_CLASS_NAMES}
-          />
+          <div className="p-4">
+            <MarkdownRenderer
+              content={content.text}
+              isStreaming={false}
+              codeBlockTheme={codeBlockTheme}
+              codeBlockCopyLabel={codeBlockCopyLabel}
+              codeBlockCopiedLabel={codeBlockCopiedLabel}
+              codeBlockDownloadLabel={codeBlockDownloadLabel}
+              tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
+              mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
+              classNames={DEFAULT_MARKDOWN_CLASS_NAMES}
+            />
+          </div>
         );
       case AttachmentContentType.MarkdownTable:
         return (
@@ -319,7 +345,11 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
             tableDownloadFilename={tableDownloadFilename}
           />
         );
-      case AttachmentContentType.Json:
+      case AttachmentContentType.Json: {
+        // A host `jsonClassName` alone also reaches the keys, which then inherit it.
+        const jsonLabelTypography =
+          typography?.jsonLabelClassName ??
+          (typography?.jsonClassName ? undefined : 'dial-code-semi-text');
         return (
           <div dir="ltr" className="h-full overflow-auto">
             <div
@@ -332,14 +362,19 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
                 data={content.value as object}
                 style={{
                   container: mergeClasses(
-                    'whitespace-pre-wrap break-words p-2',
+                    'whitespace-pre-wrap wrap-break-word p-2',
                     typography?.jsonClassName ?? 'dial-code-text',
                   ),
                   basicChildStyle: defaultStyles.basicChildStyle,
                   childFieldsContainer: 'm-0 ps-3',
-                  label: mergeClasses('me-1 font-semibold', styles.jsonLabel),
+                  label: mergeClasses(
+                    'me-1',
+                    jsonLabelTypography,
+                    styles.jsonLabel,
+                  ),
                   clickableLabel: mergeClasses(
-                    'me-1 cursor-pointer font-semibold hover:underline',
+                    'me-1 cursor-pointer hover:underline',
+                    jsonLabelTypography,
                     styles.jsonClickableLabel,
                   ),
                   nullValue: mergeClasses('italic', styles.jsonNullValue),
@@ -358,6 +393,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
                     styles.jsonExpandIcon,
                   ),
                   collapsedContent: mergeClasses(
+                    typography?.jsonCollapsedClassName ?? 'dial-caption-text',
                     'me-1 cursor-pointer rounded px-1',
                     styles.jsonCollapsedContent,
                   ),
@@ -366,11 +402,14 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
             </div>
           </div>
         );
+      }
       case AttachmentContentType.Code:
         return (
           <CodeContent
             content={content}
             codeBlockTheme={codeBlockTheme}
+            codeClassName={typography?.codeClassName}
+            errorLabelClassName={typography?.errorMessageClassName}
             labels={{
               loadingLabel: codeContentLoadingLabel,
               errorLabel: codeContentErrorLabel,
@@ -385,18 +424,21 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
             labels={{
               htmlFrameBlockedLabel,
               htmlOpenInNewTabLabel,
+              loadingLabel,
             }}
             isSourceView={isHtmlSourceView}
             title={fileName}
             codeBlockTheme={codeBlockTheme}
+            codeClassName={typography?.codeClassName}
           />
         );
       case AttachmentContentType.Pdf:
         return (
           <LazyContentBoundary
-            key={content.url}
+            key={`${content.url}#${pdfReloadKey}`}
             retryKey={pdfRetryKey}
             onRetry={handleRetryPdf}
+            errorLabelClassName={typography?.errorMessageClassName}
             labels={{
               loadingLabel: pdfContentLoadingLabel,
               errorLabel: pdfContentErrorLabel,
@@ -410,8 +452,10 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
               selectedHighlightId={content.selectedHighlightId}
               selectedPageNumber={content.page}
               loadPdf={loadPdf}
+              onLoadError={handlePdfLoadError}
               hideHeader={hidePdfToolbar}
               configurePdfWorker={configurePdfWorker}
+              errorLabelClassName={typography?.errorMessageClassName}
               labels={{
                 thumbnailsLabel: pdfThumbnailsLabel,
                 showThumbnailsLabel: pdfShowThumbnailsLabel,
@@ -434,8 +478,12 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
             formulaLabelClassName={
               typography?.xlsxFormulaLabelClassName ?? 'dial-italic-text'
             }
+            formulaValueClassName={
+              typography?.xlsxFormulaValueClassName ?? 'dial-code-text'
+            }
             highlightsLabel={ooxmlHighlightsLabel}
             highlightNavigatedLabel={ooxmlHighlightNavigatedLabel}
+            loadingLabel={loadingLabel}
           />
         );
       case AttachmentContentType.Visualizer:
@@ -448,7 +496,13 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
           />
         );
       case AttachmentContentType.McpApp:
-        return <McpAppCanvasRenderer content={content} onAppInfo={onAppInfo} />;
+        return (
+          <McpAppCanvasRenderer
+            content={content}
+            loadingLabel={loadingLabel}
+            onAppInfo={onAppInfo}
+          />
+        );
       case AttachmentContentType.Unsupported:
         return (
           <p className={mergeClasses('text-center', styles.statusLabel)}>
@@ -475,6 +529,9 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
             <p className={mergeClasses('text-center', styles.statusLabel)}>
               {isForbidden ? forbiddenErrorLabel : loadErrorLabel}
             </p>
+            {!isForbidden && onRetry != null && (
+              <GhostButton label={loadErrorRetryLabel} onClick={onRetry} />
+            )}
           </div>
         );
       }
@@ -483,11 +540,17 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
     content,
     typography?.fontClassName,
     typography?.jsonClassName,
+    typography?.jsonLabelClassName,
     typography?.xlsxFormulaLabelClassName,
+    typography?.xlsxFormulaValueClassName,
+    typography?.codeClassName,
+    typography?.jsonCollapsedClassName,
+    typography?.errorMessageClassName,
     fileName,
     codeBlockTheme,
     unsupportedLabel,
     loadErrorLabel,
+    loadErrorRetryLabel,
     forbiddenErrorLabel,
     visualizerErrorLabel,
     onVisualizerSendMessage,
@@ -499,6 +562,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
     hidePdfToolbar,
     configurePdfWorker,
     onAppInfo,
+    onRetry,
     pdfThumbnailsLabel,
     pdfShowThumbnailsLabel,
     pdfHideThumbnailsLabel,
@@ -513,6 +577,8 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
     PdfContent,
     pdfRetryKey,
     handleRetryPdf,
+    pdfReloadKey,
+    handlePdfLoadError,
     tableCopyLabel,
     tableCopiedLabel,
     tableDownloadCsvLabel,
@@ -523,15 +589,14 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
     mathScrollRegionAriaLabel,
     ooxmlHighlightsLabel,
     ooxmlHighlightNavigatedLabel,
+    loadingLabel,
   ]);
 
   return (
     <div
-      style={
-        !isLoading && THEMED_CONTENT_TYPES.has(content.type)
-          ? cssVars
-          : undefined
-      }
+      /* Every renderer reads `--ac-*` vars (status, error, JSON, code, MCP App), and
+       * `buildCssVars` drops unset fields, so the root carries them for all types. */
+      style={isLoading ? undefined : cssVars}
       className={mergeClasses(
         isLoading
           ? 'flex h-full items-center justify-center'
@@ -539,7 +604,7 @@ const AttachmentCanvasBodyBase: FC<AttachmentCanvasBodyProps> = ({
         bodyClassName,
       )}
     >
-      {isLoading ? <Spinner /> : renderedContent}
+      {isLoading ? <Spinner ariaLabel={loadingLabel} /> : renderedContent}
     </div>
   );
 };

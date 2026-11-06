@@ -4,6 +4,7 @@ import type {
   ListFilesItemDto,
 } from '@epam/ai-dial-chat-api-client';
 import { ListFilesItemDtoNodeTypeEnum } from '@epam/ai-dial-chat-api-client';
+import { FileUploadFailureReason } from '@epam/ai-dial-chat-shared';
 import type {
   FileUploadBatchState,
   FileUploadEntry,
@@ -14,6 +15,9 @@ import {
   DialFileManagerTabs,
   DialFileNodeType,
 } from '@epam/ai-dial-react-file-manager';
+import { getApiErrorDetails } from '../api-error/api-error';
+import { safeDecodeURI } from '../shared/string-utils';
+import { UploadNetworkError } from './create-upload-file-with-progress';
 import {
   buildSharedItemVirtualPath,
   dialCorePathToRelative,
@@ -165,13 +169,48 @@ export const updateEntry = (
   prev: FileUploadBatchState | null,
   id: string,
   patch:
-    FileUploadStatus | Partial<Pick<FileUploadEntry, 'status' | 'percent'>>,
+    | FileUploadStatus
+    | Partial<Pick<FileUploadEntry, 'status' | 'percent' | 'failureReason'>>,
 ): FileUploadBatchState | null => {
   if (!prev) return prev;
   const changes = typeof patch === 'string' ? { status: patch } : patch;
   const files = prev.files.map((f) => (f.id === id ? { ...f, ...changes } : f));
   return { ...prev, files };
 };
+
+const FAILURE_REASON_BY_STATUS: Record<number, FileUploadFailureReason> = {
+  403: FileUploadFailureReason.Forbidden,
+  409: FileUploadFailureReason.Conflict,
+  413: FileUploadFailureReason.TooLarge,
+  502: FileUploadFailureReason.Unavailable,
+  503: FileUploadFailureReason.Unavailable,
+};
+
+/*
+ * A request that never got a response: the XHR upload's own error, the
+ * generated client's `FetchError` (it wraps a rejected `fetch`), or a bare
+ * `fetch` `TypeError`. `FetchError` is matched by name so this file does not
+ * import the generated runtime.
+ */
+const isNoResponseError = (error: unknown): boolean =>
+  error instanceof UploadNetworkError ||
+  error instanceof TypeError ||
+  (error instanceof Error && error.name === 'FetchError');
+
+/** Resolves why an upload or download request failed from its rejection: the HTTP status when there is a response, `Network` when there was none. */
+export const resolveTransferFailureReason = async (
+  error: unknown,
+): Promise<FileUploadFailureReason> => {
+  if (isNoResponseError(error)) return FileUploadFailureReason.Network;
+  const { status } = await getApiErrorDetails(error);
+  return (
+    (status != null ? FAILURE_REASON_BY_STATUS[status] : undefined) ??
+    FileUploadFailureReason.Unknown
+  );
+};
+
+/** Upload-named alias of {@link resolveTransferFailureReason}, kept for existing callers. */
+export const resolveUploadFailureReason = resolveTransferFailureReason;
 
 export const fetchByTab = (
   filesApi: DialFilesApi,
@@ -280,10 +319,48 @@ export const fetchForSearch = async (
   return { items };
 };
 
+/**
+ * Where search results sit in the virtual tree. Shared items are listed flat
+ * (a file nested in the owner's bucket is still a root row), so their virtual
+ * path cannot be derived from the location inside the owner's bucket.
+ */
+export interface SearchPathScope {
+  /** Virtual path of the folder the search runs in, e.g. `/Shared with me`. */
+  virtualRoot: string;
+  /** Bucket-relative path of that folder; omitted when results are flat children of `virtualRoot`. */
+  apiRoot?: string;
+}
+
+/**
+ * Builds the scope for a search on the Shared tab so result rows get the same
+ * `path` as the rows `buildFromCache` produces for the same items.
+ */
+export const buildSharedSearchScope = (
+  rootLabel: string,
+  folderPath: string,
+  sharedRootMeta: Map<string, SharedRootMeta>,
+): SearchPathScope | undefined => {
+  if (folderPath === '') return { virtualRoot: `/${rootLabel}` };
+  const firstSlash = folderPath.indexOf('/');
+  const sharedRootName =
+    firstSlash === -1 ? folderPath : folderPath.slice(0, firstSlash);
+  const meta = sharedRootMeta.get(sharedRootName);
+  if (!meta) return undefined;
+  const subPath = firstSlash === -1 ? '' : folderPath.slice(firstSlash + 1);
+  return {
+    virtualRoot: `/${rootLabel}/${folderPath.replace(/\/$/, '')}`,
+    apiRoot: dialCorePathToRelative(meta.dialCorePath, meta.bucket) + subPath,
+  };
+};
+
+const toDecodedSegments = (path: string): string[] =>
+  path.split('/').filter(Boolean).map(safeDecodeURI);
+
 export const mapSearchItem = (
   item: ListFilesItemDto,
   fallbackBucket: string,
   rootLabel: string,
+  scope?: SearchPathScope,
 ): DialFile => {
   const isFolder = item.nodeType === ListFilesItemDtoNodeTypeEnum.Folder;
   // `name` arrives decoded from DIAL Core — see the note in `buildFromCache`.
@@ -300,11 +377,21 @@ export const mapSearchItem = (
    * segments have to be decoded to land in the same virtual-path space as the
    * rows `buildFromCache` produces.
    */
-  const virtualParentPath = buildSharedItemVirtualPath(
-    parentRelative,
-    rootLabel,
-    false,
-  );
+  let virtualParentPath: string;
+  if (scope) {
+    const parentSegments = scope.apiRoot
+      ? toDecodedSegments(parentRelative).slice(
+          toDecodedSegments(scope.apiRoot).length,
+        )
+      : [];
+    virtualParentPath = [scope.virtualRoot, ...parentSegments].join('/');
+  } else {
+    virtualParentPath = buildSharedItemVirtualPath(
+      parentRelative,
+      rootLabel,
+      false,
+    );
+  }
   const virtualPath = isFolder
     ? `${virtualParentPath}/${name}/`
     : `${virtualParentPath}/${name}`;

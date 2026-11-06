@@ -14,6 +14,7 @@ import {
   ConversationMessageRole,
 } from '../dto/conversation-message.dto';
 import { applyChunkToMessage } from '../utils/apply-chunk.server';
+import { LANG_HEADER } from '../utils/lang-header';
 import { TIMEZONE_HEADER } from '../utils/timezone-header';
 import { generationUnknownEventsTotal } from './generation-metrics';
 import {
@@ -160,7 +161,13 @@ export class ResponsesAdapter {
       (attachment) => Boolean(attachment.data || attachment.url),
     );
 
-    if (!validAttachments.length) {
+    /*
+     * Core rejects `input_text`/`input_image` parts on an assistant item
+     * ("Supported values are: 'output_text' and 'refusal'"), so an assistant
+     * turn is always replayed as plain text — its attachments (e.g. web-search
+     * results) are outputs, not inputs, and are not re-sent.
+     */
+    if (message.role === 'assistant' || !validAttachments.length) {
       return { role: message.role as string, content: message.content };
     }
 
@@ -191,6 +198,7 @@ export class ResponsesAdapter {
     initialAssembledMessage: ConversationMessageDto,
     clientChannelId?: string,
     timezone?: string,
+    lang?: string,
     timing?: GenerationRelayTiming,
     conversationId?: string,
     onChunkApplied?: (
@@ -205,6 +213,8 @@ export class ResponsesAdapter {
        * instead of issuing `createResponse`.
        */
       replayBody?: ReadableStream<Uint8Array>;
+      /** Added to the model call, e.g. `x-project-id` for a project conversation. */
+      extraHeaders?: Record<string, string>;
     },
   ): AsyncGenerator<string, GenerationRelayOutcome, void> {
     let assembledMessage = initialAssembledMessage;
@@ -230,8 +240,10 @@ export class ResponsesAdapter {
               ? { 'X-DIAL-CLIENT-CHANNEL-ID': clientChannelId }
               : {}),
             ...(timezone ? { [TIMEZONE_HEADER]: timezone } : {}),
+            ...(lang ? { [LANG_HEADER]: lang } : {}),
             ...buildConversationIdHeaders(conversationId),
             ...buildJobTitleHeaders(jobTitle),
+            ...options?.extraHeaders,
           },
           parseAs: 'stream',
           signal,
@@ -403,9 +415,7 @@ export class ResponsesAdapter {
             terminalSignal = {
               state: ResponsesTerminalState.StreamError,
               message:
-                (event as { error?: { message?: string } }).error?.message ??
-                (event as { message?: string }).message ??
-                'Responses stream error',
+                extractDialErrorMessage(event) ?? 'Responses stream error',
             };
             isDone = true;
             return;
@@ -532,6 +542,7 @@ export class ResponsesAdapter {
     initialAssembledMessage: ConversationMessageDto,
     clientChannelId?: string,
     timezone?: string,
+    lang?: string,
     timing?: GenerationRelayTiming,
     conversationId?: string,
   ): Promise<GenerationRelayOutcome> {
@@ -542,6 +553,7 @@ export class ResponsesAdapter {
       initialAssembledMessage,
       clientChannelId,
       timezone,
+      lang,
       timing,
       conversationId,
     );

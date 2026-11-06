@@ -115,9 +115,9 @@ export enum OverlayFeature {
   /** Enables the app header. */
   Header = 'header',
   /**
-   * Hides the header's hamburger button and the navigation sheet it opens â
-   * the mobile-breakpoint navigation surface carrying the nav items, profile,
-   * keyboard shortcuts, and log out.
+   * Hides the navigation part of the mobile sidebar drawer: its items, the
+   * user menu and the Usage link. The header toggle stays only while the
+   * conversation list is still reachable through it.
    */
   HideNavigationMenu = 'hide-navigation-menu',
   /** Makes the conversations sidebar section open by default. */
@@ -158,11 +158,17 @@ export enum OverlayFeature {
    * built on a schema are gated by `SchemaApps` instead.
    */
   CustomApps = 'custom-apps',
-  /** Hides the user avatar/menu button in the header. */
+  /** Hides the user menu in the sidebar and in the mobile drawer. */
   HideUserMenu = 'hide-user-menu',
-  /** Hides the settings entry in the user menu. */
+  /** Hides the identity row — avatar and name — at the top of the user menu's dropdown; Settings and Log out stay. */
+  HideUserMenuIdentity = 'hide-user-menu-identity',
+  /**
+   * Hides the user's preference controls — language, theme, keyboard
+   * shortcuts and the default agent — in the user menu and the Settings
+   * page. The Settings entry itself is gated by `HideSettingsPage`.
+   */
   HideUserSettings = 'hide-user-settings',
-  /** Hides the keyboard-shortcuts entry in the user menu and the mobile profile sheet. */
+  /** Hides the keyboard-shortcuts entry in the mobile drawer's user menu. */
   HideKeyboardShortcuts = 'hide-keyboard-shortcuts',
   /** Enables the `microphone` permission on the iframe's `allow` attribute for voice input. */
   VoiceInput = 'voice-input',
@@ -208,11 +214,21 @@ export enum OverlayFeature {
    */
   HideConversationExport = 'hide-conversation-export',
   /**
-   * Hides the Settings page: its entry in the desktop user menu and on the
-   * mobile navigation sheet's profile page. A direct `/settings` URL
-   * redirects to `/`.
+   * Hides conversation import: the conversations panel's "Import" entry.
+   * Export stays available.
+   */
+  HideConversationImport = 'hide-conversation-import',
+  /**
+   * Hides Settings: the Settings entry in the sidebar user menu, on desktop
+   * and in the mobile drawer. A direct `/settings` URL redirects to `/`. The
+   * Usage page is gated by `HideUsagePage` instead.
    */
   HideSettingsPage = 'hide-settings-page',
+  /**
+   * Hides the Usage page: the sidebar footer's Usage link and the usage-limits
+   * popover's "Full usage" link. A direct `/usage` URL redirects to `/`.
+   */
+  HideUsagePage = 'hide-usage-page',
   /**
    * Renders the theme logo in the desktop top bar, centered between the
    * conversation controls and the sources toggle. The mobile header shows the
@@ -220,6 +236,18 @@ export enum OverlayFeature {
    * the mobile header row carrying only the logo.
    */
   ShowHeaderLogo = 'show-header-logo',
+  /**
+   * Keeps the unsent text and skill mentions of each existing conversation's
+   * input for the tab session, restoring them when the conversation is opened
+   * again. Disabling it stops saving and restoring, and discards the drafts
+   * already stored. The New Chat screen never keeps a draft.
+   */
+  ConversationDrafts = 'conversation-drafts',
+  /**
+   * Hides the sparkles icon the UI kit renders by default on every
+   * conversation-starter pill, leaving a label-only button.
+   */
+  HideStarterIcon = 'hide-starter-icon',
 }
 
 /**

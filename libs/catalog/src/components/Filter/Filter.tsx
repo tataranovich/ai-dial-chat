@@ -8,6 +8,7 @@ import {
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   Dropdown,
+  DropdownOverlayRole,
   GhostButton,
   MenuItem,
   MenuItemMark,
@@ -24,7 +25,7 @@ import {
   useState,
 } from 'react';
 import { ToolbarTypography } from '../../models/toolbar-props';
-import { getFromLabel } from '../../utils/catalog-filter';
+import { getFromLabel, toggleTopic } from '../../utils/catalog-filter';
 import styles from './Filter.module.scss';
 
 /** Props for Filter. */
@@ -52,6 +53,8 @@ export interface FilterColors {
   overlayBackground?: string;
   /** Dropdown overlay border color. Fallback: `--stroke-tertiary`. */
   overlayBorder?: string;
+  /** Dropdown overlay shadow color. Fallback: `--shadow-lg`. */
+  overlayShadow?: string;
   /** Row label text color. Fallback: `--text-primary`. */
   rowLabel?: string;
   /** Section heading ("Topics") text color. Fallback: `--text-tertiary`. */
@@ -103,16 +106,6 @@ const getFilterButtonLabel = (
   return defaultLabel;
 };
 
-const toggleTopic = (topic: string, checked: Set<string>): Set<string> => {
-  const next = new Set(checked);
-  if (next.has(topic)) {
-    next.delete(topic);
-  } else {
-    next.add(topic);
-  }
-  return next;
-};
-
 /** Source-filter dropdown: checkbox list for topics and My Apps toggle, with buffered Clear/Apply controls. */
 export const Filter: FC<FilterProps> = ({
   checked,
@@ -145,6 +138,7 @@ export const Filter: FC<FilterProps> = ({
     '--cat-filter-btn-chevron': colors?.buttonChevron,
     '--cat-filter-overlay-bg': colors?.overlayBackground,
     '--cat-filter-overlay-border': colors?.overlayBorder,
+    '--cat-filter-overlay-shadow': colors?.overlayShadow,
     '--cat-filter-row-label': colors?.rowLabel,
     '--cat-filter-section-label': colors?.sectionLabel,
     '--cat-filter-divider': colors?.divider,
@@ -185,6 +179,7 @@ export const Filter: FC<FilterProps> = ({
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const footerRef = useRef<HTMLDivElement>(null);
 
   const focusRow = useCallback(
     (index: number) => {
@@ -218,20 +213,18 @@ export const Filter: FC<FilterProps> = ({
   };
 
   /*
-   * Arrow keys navigate checkbox rows; Escape closes. Footer buttons stop
-   * propagation of Arrow keys so they don't accidentally move row focus.
+   * Arrow keys navigate checkbox rows; the kit Dropdown handles Escape and
+   * focus return. Arrow keys pressed on the footer buttons are ignored so they
+   * don't accidentally move row focus.
    */
   const handleMenuKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'ArrowDown') {
+    const isInFooter = footerRef.current?.contains(e.target as Node) ?? false;
+    if (e.key === 'ArrowDown' && !isInFooter) {
       e.preventDefault();
       focusRow(focusedIndex + 1);
-    } else if (e.key === 'ArrowUp') {
+    } else if (e.key === 'ArrowUp' && !isInFooter) {
       e.preventDefault();
       focusRow(focusedIndex - 1);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setIsOpen(false);
-      triggerRef.current?.focus();
     }
   };
 
@@ -254,10 +247,14 @@ export const Filter: FC<FilterProps> = ({
       open={isOpen}
       onOpenChange={handleOpenChange}
       listClassName="!bg-transparent !shadow-none !p-0"
+      /* A dialog, not a menu: the panel holds the checkbox menu plus the
+         Clear/Apply footer, which are not menu items. The roving handler
+         below owns the arrow keys. */
+      overlayRole={DropdownOverlayRole.Dialog}
+      overlayAriaLabel={defaultLabel}
+      optionArrowNavigation={false}
       renderOverlay={() => (
         <div
-          role="menu"
-          aria-label={defaultLabel}
           tabIndex={-1}
           /*
            * Bound to the kit Dropdown's own live available-height var (set by
@@ -278,94 +275,96 @@ export const Filter: FC<FilterProps> = ({
           )}
           onKeyDown={handleMenuKeyDown}
         >
-          {/* My Apps row — the kit's own multiselect menu row, so its rest,
+          <div
+            role="menu"
+            aria-label={defaultLabel}
+            className="flex min-h-0 flex-col"
+          >
+            {/* My Apps row — the kit's own multiselect menu row, so its rest,
               hover, focus and checked states come from the Menu-item spec. */}
-          <MenuItem
-            role="menuitemcheckbox"
-            aria-checked={pendingMyApps}
-            mark={MenuItemMark.Checkbox}
-            selected={pendingMyApps}
-            label={myAppsLabel}
-            labelClassName={mergeClasses(
-              styles.rowLabel,
-              typography?.filterButtonClassName ?? 'dial-small-semi-text',
-            )}
-            /* Its height is a `height`, so as a flex child of the panel it
+            <MenuItem
+              role="menuitemcheckbox"
+              aria-checked={pendingMyApps}
+              mark={MenuItemMark.Checkbox}
+              selected={pendingMyApps}
+              label={myAppsLabel}
+              labelClassName={mergeClasses(
+                styles.rowLabel,
+                typography?.filterButtonClassName ?? 'dial-small-semi-text',
+              )}
+              /* Its height is a `height`, so as a flex child of the panel it
                would shrink instead of leaving the topics list to scroll. */
-            className="shrink-0"
-            tabIndex={focusedIndex === 0 ? 0 : -1}
-            ref={(el) => {
-              rowRefs.current[0] = el;
-            }}
-            onClick={() => setPendingMyApps(!pendingMyApps)}
-          />
+              className="shrink-0"
+              tabIndex={focusedIndex === 0 ? 0 : -1}
+              ref={(el) => {
+                rowRefs.current[0] = el;
+              }}
+              onClick={() => setPendingMyApps(!pendingMyApps)}
+            />
 
-          {topics.length > 0 && (
-            <>
-              <div
-                role="separator"
-                className={mergeClasses('my-1 h-px', styles.divider)}
-                aria-hidden
-              />
-              <div
-                className={mergeClasses(
-                  'px-[10px] pb-1 pt-[10px]',
-                  typography?.filterSectionLabelClassName ??
-                    'dial-tiny-lead-semi-text',
-                  styles.sectionLabel,
-                )}
-                aria-hidden
-              >
-                {topicsLabel}
-              </div>
-              {/* The options are their own scroll box at the design's maximum
+            {topics.length > 0 && (
+              <>
+                <div
+                  role="separator"
+                  className={mergeClasses('my-1 h-px', styles.divider)}
+                  aria-hidden
+                />
+                <div
+                  className={mergeClasses(
+                    'px-[10px] pt-[10px] pb-1',
+                    typography?.filterSectionLabelClassName ??
+                      'dial-tiny-lead-semi-text',
+                    styles.sectionLabel,
+                  )}
+                  aria-hidden
+                >
+                  {topicsLabel}
+                </div>
+                {/* The options are their own scroll box at the design's maximum
                   list length, so the My Apps row, the section heading and the
                   Clear/Apply footer stay put as the topics scroll. `min-h-0`
                   lets it give way when the panel's available height is under
                   that maximum, keeping it the only thing that scrolls. */}
-              <div
-                className={mergeClasses(
-                  SELECT_LIST_MAX_HEIGHT_CLASS_NAME,
-                  'flex min-h-0 flex-col gap-1 overflow-y-auto',
-                )}
-              >
-                {topics.map((topic, i) => {
-                  const isChecked = pendingChecked.has(topic);
-                  const idx = i + 1;
-                  const toggle = () =>
-                    setPendingChecked(toggleTopic(topic, pendingChecked));
-                  return (
-                    <MenuItem
-                      key={topic}
-                      role="menuitemcheckbox"
-                      aria-checked={isChecked}
-                      mark={MenuItemMark.Checkbox}
-                      selected={isChecked}
-                      label={topic}
-                      labelClassName={styles.rowLabel}
-                      className="shrink-0"
-                      tabIndex={focusedIndex === idx ? 0 : -1}
-                      ref={(el) => {
-                        rowRefs.current[idx] = el;
-                      }}
-                      onClick={toggle}
-                    />
-                  );
-                })}
-              </div>
-            </>
-          )}
+                <div
+                  className={mergeClasses(
+                    SELECT_LIST_MAX_HEIGHT_CLASS_NAME,
+                    'flex min-h-0 flex-col gap-1 overflow-y-auto',
+                  )}
+                >
+                  {topics.map((topic, i) => {
+                    const isChecked = pendingChecked.has(topic);
+                    const idx = i + 1;
+                    const toggle = () =>
+                      setPendingChecked(toggleTopic(topic, pendingChecked));
+                    return (
+                      <MenuItem
+                        key={topic}
+                        role="menuitemcheckbox"
+                        aria-checked={isChecked}
+                        mark={MenuItemMark.Checkbox}
+                        selected={isChecked}
+                        label={topic}
+                        labelClassName={styles.rowLabel}
+                        className="shrink-0"
+                        tabIndex={focusedIndex === idx ? 0 : -1}
+                        ref={(el) => {
+                          rowRefs.current[idx] = el;
+                        }}
+                        onClick={toggle}
+                      />
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
 
           <div
             className={mergeClasses(
               'mt-1 flex shrink-0 items-center px-1 py-3',
               styles.footer,
             )}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                e.stopPropagation();
-              }
-            }}
+            ref={footerRef}
           >
             <GhostButton label={clearLabel} onClick={handleClear} />
 
@@ -382,7 +381,6 @@ export const Filter: FC<FilterProps> = ({
           `--cat-filter-btn-*` custom properties keep theming the pill. */}
       <Button
         ref={triggerRef}
-        aria-haspopup="menu"
         aria-expanded={isOpen}
         onKeyDown={handleTriggerKeyDown}
         style={cssVars}
@@ -412,7 +410,7 @@ export const Filter: FC<FilterProps> = ({
           />
         }
         className={mergeClasses(
-          'h-12 shrink-0 gap-[7px] whitespace-nowrap !rounded-lg px-[18px]',
+          'h-12 shrink-0 gap-[7px] rounded-lg! px-[18px] whitespace-nowrap',
           styles.filterBtn,
           isActive && styles.filterBtnActive,
           isOpen && styles.filterBtnOpen,

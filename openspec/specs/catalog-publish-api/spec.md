@@ -216,14 +216,18 @@ A publication that already carries `resources` SHALL be matched without a round 
 
 The `getPublications` response SHALL be accepted both as the bare array the SDK types (`ListPublication = Publication[]`) and as the `{ publications: [...] }` envelope a live Core returns. Calling `.filter` straight on the envelope threw `TypeError: (result.data ?? []).filter is not a function`, which `handleDialFetchError` reported as "DIAL Core is currently unavailable" (503) — this, not a Core outage, is what [GH #7897](https://github.com/epam/ai-dial-chat/issues/7897) actually was, and what led to both frontend publish-history fetches being stubbed out. An unrecognised shape SHALL degrade to an empty list with a warning, never a throw.
 
-Resource-url comparison SHALL tolerate a percent-encoding difference between the url Core echoes and the url the service built, so an encoded `sourceUrl` cannot silently produce an empty history for a working publication. `entityId` SHALL be used as that resource url directly — for a Prompt just as for a Skill, since both are already full resource paths and neither goes through a bucket-qualification helper. Each entry's `folderPath` SHALL have Core's `public/` prefix and trailing slash stripped back off before being returned, so it matches the plain folder-path form the frontend sends when publishing and uses for `selectedFolderPath` comparisons. Each entry's `version` SHALL be recovered from `entityId`'s own `{name}__{version}` suffix (the same value for every entry in a single call, since `entityId` — and therefore its version — is fixed for the whole request), never from `Publication.name`; an unversioned Prompt or Skill yields an empty version.
+Resource-url comparison SHALL tolerate a percent-encoding difference between the url Core echoes and the url the service built, so an encoded `sourceUrl` cannot silently produce an empty history for a working publication. `entityId` SHALL be used as that resource url directly — for a Prompt just as for a Skill, since both are already full resource paths and neither goes through a bucket-qualification helper. Each entry's `folderPath` SHALL have Core's `public/` prefix and trailing slash stripped back off before being returned, so it matches the plain folder-path form the frontend sends when publishing and uses for `selectedFolderPath` comparisons. Each entry's `version` SHALL be recovered from the `{name}__{version}` suffix of the `targetUrl` that publication sent the entity to (`getPublicationSourceTargetUrl`), falling back to `entityId`'s own suffix when the publication carries no target — never from `Publication.name`; an unversioned Prompt or Skill yields an empty version. The target, not `entityId`, is authoritative because editing an application's or toolset's version keeps its original `{name}__{version}` path ([GitHub issue #9428](https://github.com/epam/ai-dial-chat/issues/9428)).
 
 A publication whose matching resource carries `action: 'DELETE'` SHALL never itself appear in the result. Such a publication is a removal request submitted by the unpublish endpoint (see `catalog-unpublish-api`), not a publication of the entity. Including it would list the same folder twice — once for the original `ADD`, once for the `DELETE` — and would read as a second publish to that folder.
 
 Whether the removal also cancels the `ADD` it targets depends on its status, and the two cases differ:
 
 - A removal Core has **not** positively approved leaves the `ADD` alone. Until an administrator approves it the entity genuinely is still published there, so the folder SHALL continue to appear exactly once, sourced from its `ADD`.
-- An **approved** removal SHALL cancel every `ADD` for the same target folder that is not newer than it, removing the folder from history. Offering Unpublish for a copy Core has already deleted is exactly the failure this cancellation prevents.
+- An **approved** removal SHALL cancel every `ADD` for the same target folder and published-copy `targetUrl` that is not newer than it, removing the folder from history. Offering Unpublish for a copy Core has already deleted is exactly the failure this cancellation prevents.
+
+A removal SHALL be paired with the `ADD` it removes by the published copy it targets — the same target folder and the same `targetUrl`, compared tolerating percent-encoding — and SHALL NOT be paired by `sourceUrl`. Catalog Unpublish acts on the published copy under `public/` (see `catalog-unpublish-flow`), so the removal's `sourceUrl` is that public path and never equals the entity's own resource url, which is what the original `ADD` carries as its `sourceUrl`. `targetUrl` is the one field publish and unpublish both derive from the same helper, and Core returns it when the publication is read back. A removal therefore need not reference the entity's own resource url to cancel its `ADD`: it is recognised by the published copy it removes. A removal that targets a different published copy — a different resource name in the same folder, or the same name in another folder — SHALL cancel nothing.
+
+This applies to a removal in the caller's own bucket, which is the only bucket history reads. A removal submitted by another account lands in that account's bucket and is out of scope of this requirement.
 
 The stricter test for a removal than for a detail candidate is deliberate: cancelling an `ADD` on an *assumed* approval is the more expensive mistake, because it both hides Unpublish for a live copy and offers a Publish that Core then rejects for an already-occupied target.
 
@@ -283,6 +287,31 @@ The endpoint is load-bearing beyond the publish panel: the Unpublish action's vi
 - **GIVEN** an approved `DELETE` for a folder, followed by a newer `ADD` for that same folder
 - **WHEN** history is requested
 - **THEN** the folder appears once, sourced from the newer `ADD`
+
+#### Scenario: An approved removal submitted from the public copy cancels the ADD
+- **GIVEN** an `APPROVED` `ADD` with `sourceUrl: prompts/{bucket}/{name}` and `targetUrl: prompts/public/{folder}/{name}`, and a newer `APPROVED` `DELETE` with `sourceUrl` and `targetUrl` both `prompts/public/{folder}/{name}` in the same target folder
+- **WHEN** history is requested for `prompts/{bucket}/{name}`
+- **THEN** the folder does not appear at all
+
+#### Scenario: A pending removal submitted from the public copy leaves the folder listed
+- **GIVEN** the same `ADD` and a `PENDING` `DELETE` whose `sourceUrl` and `targetUrl` are the public path
+- **WHEN** history is requested for `prompts/{bucket}/{name}`
+- **THEN** the folder appears exactly once, sourced from the `ADD`
+
+#### Scenario: A re-publish after a removal submitted from the public copy is listed again
+- **GIVEN** an approved `DELETE` of the public copy, followed by a newer `ADD` for the same folder and `targetUrl`
+- **WHEN** history is requested
+- **THEN** the folder appears once, sourced from the newer `ADD`
+
+#### Scenario: A removal of a different published copy cancels nothing
+- **GIVEN** an approved `ADD` for the entity in folder `A`, and an approved `DELETE` whose `targetUrl` is another resource name in folder `A`, or the same resource name in folder `B`
+- **WHEN** history is requested
+- **THEN** the folder `A` entry for the entity still appears
+
+#### Scenario: Removal pairing tolerates percent-encoding
+- **GIVEN** an `ADD` whose `targetUrl` is percent-encoded and an approved `DELETE` whose `targetUrl` is the same path in plain text, or the reverse
+- **WHEN** history is requested
+- **THEN** the removal cancels the `ADD`
 
 #### Scenario: An undateable approved removal cancels its folder and is logged
 - **GIVEN** an approved `DELETE` whose `createdAt` is missing or unusable
@@ -368,6 +397,15 @@ The app adapter SHALL omit `version` when `CatalogItem.version` is empty and exp
 
 - **WHEN** publish history is requested for a skill id without a `__{version}` suffix
 - **THEN** every `PublishHistoryEntryDto.version` is an empty string
+
+### Requirement: A new version is published under its own target name
+
+DIAL Core stores applications and toolsets as `{name}__{version}`, but updating an existing one's version (`updateToolset`, `updateApplication`) rewrites only the version inside the resource; its path keeps the version it was created with. `PublishService.publish` SHALL therefore build the `targetUrl` resource name with `getVersionedTargetResourceName` (`apps/chat-api/src/publish/publish-target.util.ts`): for an `applications/` or `toolsets/` source whose name has a `__` suffix, the suffix is replaced by the request's `version` when that version matches the DTO version charset (`TARGET_VERSION_PATTERN`: 1–64 letters, digits, `_`, `.`, `+`, `-`, not only dots; percent-encoded); every other case keeps the source's own resource name. A `version` outside that charset never reaches the path.
+
+#### Scenario: Publishing an edited toolset's new version to a folder holding the old one
+- **GIVEN** a toolset stored at `toolsets/{bucket}/my-tool__1.0.0` whose version was edited to `1.0.1`, and `my-tool__1.0.0` already published to `Team`
+- **WHEN** it is published to `Team` with `version: '1.0.1'`
+- **THEN** the `ADD` resource's `targetUrl` is `toolsets/public/Team/my-tool__1.0.1`, so DIAL Core no longer rejects it with "Target resource already exists"
 
 ### Requirement: Publish request accepts an optional publishCredentials flag
 
@@ -471,3 +509,48 @@ Response (200):
 
 - **WHEN** publish history is read for an entity with a mix of `ADD` and approved `DELETE` publications
 - **THEN** the set of entries returned, their order, and their folder paths are exactly what they were before this change — only the extra field is added to each entry
+
+### Requirement: Project publication uses the whole-project resource URL
+
+`CatalogEntityType` in `apps/chat-api/src/publish/dto/catalog-entity-params.dto.ts` SHALL gain `Project = 'project'`, so every `/api/v1/catalog/{entityType}/{entityId}/…` publish route accepts `entityType: project`.
+
+- **Resource URL.** A project SHALL be published as its whole `projects/{bucket}/{path}` resource URL, never as an individual file URL, exactly as a Skill is.
+- **Target.** The target is derived from the id's prefix by the existing `getResourceTypePrefix` / `getPublishedTargetUrl` (`apps/chat-api/src/publish/publish-target.util.ts`). Projects are not in `VERSIONED_RESOURCE_PREFIXES`.
+- **Version.** An omitted version and every project publish-history entry use an empty string.
+- **Core support.** DIAL Core's publication service accepts the `PROJECT` resource type.
+
+Validation, status codes, the history cache key `publish-history:{entityType}:{entityId}` (60 s TTL, invalidated on publish and unpublish) and authorization are unchanged.
+
+**Generated-client impact:** `PublishCatalogEntityEntityTypeEnum.Project = 'project'` after `npm run openapi`. `CatalogPublishEntityType` in `libs/chat-hooks/src/catalog/publish.ts` gains `'project'`.
+
+Example request:
+
+```http
+POST /api/v1/catalog/project/projects%2Fa1b2c3%2Fq4-launch/publish HTTP/1.1
+Content-Type: application/json
+
+{ "folderPath": "Marketing", "rules": [] }
+```
+
+Example `201` response:
+
+```json
+{
+  "entityId": "projects/a1b2c3/q4-launch",
+  "entityType": "project",
+  "folderPath": "Marketing",
+  "version": "",
+  "publishedAt": "2026-10-28T12:00:00.000Z",
+  "publishedBy": "jane.doe"
+}
+```
+
+#### Scenario: Owned project is published without version
+
+- **WHEN** an owner publishes `projects/a1b2c3/q4-launch` to `Marketing`
+- **THEN** the BFF calls Core for the whole project resource with target `projects/public/Marketing/q4-launch`, returns 201, and reports `version: ""`
+
+#### Scenario: Unknown entity type is still rejected
+
+- **WHEN** `entityType` is `folder`
+- **THEN** the response is 400

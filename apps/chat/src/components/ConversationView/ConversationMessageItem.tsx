@@ -1,47 +1,37 @@
 import {
   AttachmentContentType,
-  findVisualizerForApplication,
   groupedVisualizerCanvasKey,
-  InlineGroupedVisualizer,
-  partitionAttachmentsForApplicationVisualizer,
   useAttachmentCanvas,
 } from '@epam/ai-dial-attachment-canvas';
 import {
-  annotationToDisplayAttachment,
-  annotationToOoxmlCanvasContent,
-  annotationToPdfCanvasContent,
-  attachmentDtosToDisplayAttachments,
-  isDialFileId,
-  isExternalSourcePreviewable,
+  isMessageStreaming,
   mapStages,
   messageHasStages,
   openAnnotationAttachment,
-  referenceAttachmentToPdfCanvasContent,
-  resolveGroupedVisualizerCanvasContent,
-  useAttachmentAction,
 } from '@epam/ai-dial-chat-hooks';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
-  CodeBlockTheme,
-  COMPACT_MARKDOWN_CLASS_NAMES,
-  isStatusMessage,
-  mergeClasses,
-  MessageRole,
   type Annotation,
   type Attachment,
   type AttachmentErrorReason,
+  CodeBlockTheme,
   type DisplayAttachment,
-  type MessageRating,
+  isStatusMessage,
+  mergeClasses,
   type Message as MessageType,
-  type ResponseFormat,
+  type MessageRating,
+  MessageRole,
   type RequestSkill,
+  type ResponseFormat,
   type StarterOption,
+  type TextSegment,
   type UploadedAttachmentResult,
 } from '@epam/ai-dial-chat-shared';
 import type {
   CommandMenuConfig,
   HighlightedTextRange,
   MenuOverlayConfig,
+  SendOnEnter,
 } from '@epam/ai-dial-conversation-input';
 import {
   MessageBubble,
@@ -50,7 +40,6 @@ import {
 } from '@epam/ai-dial-conversation-messages';
 import { CollapsedGroup } from '@epam/ai-dial-conversation-stages';
 import {
-  McpAppInlinePreview,
   findMcpAppForMessage,
   mcpAppCanvasKey,
   resolveMcpAppToolCallSeed,
@@ -60,29 +49,11 @@ import {
 } from '@epam/ai-dial-mcp-apps';
 import {
   CitationCardProvider,
-  CitationDropdown,
-  getReferenceAttachmentGroups,
-  groupAnnotations,
-  isReferenceOnlyAttachment,
-  useAnnotations,
-  useCitationCard,
-  useCitationMarkdownComponents,
   type AnnotationGroup,
 } from '@epam/ai-dial-quotations';
 import {
-  Button,
-  ButtonAppearance,
-  ButtonVariant,
-  DIAL_KIT_ICON_STROKE,
-  ElementSize,
-  ErrorMessageNotification,
-} from '@epam/ai-dial-ui-kit';
-import { IconLink } from '@tabler/icons-react';
-import {
   FC,
-  lazy,
   memo,
-  Suspense,
   useCallback,
   useMemo,
   type ReactNode,
@@ -90,57 +61,40 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  AttachmentCanvasI18nKeys,
   AttachmentsI18nKeys,
-  BasicI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
-  CitationsI18nKeys,
   ConversationI18nKeys,
 } from '../../constants/translation-keys';
 import { useTheme } from '../../context/ThemeContext';
-import { useApplicationVisualizers } from '../../hooks/attachment/useApplicationVisualizers';
 import { useMcpAppHostAdapter } from '../../hooks/attachment/useMcpAppHostAdapter';
-import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
+import { useGroupedVisualizer } from '../../hooks/conversation/useGroupedVisualizer';
+import { useMessageAttachments } from '../../hooks/conversation/useMessageAttachments';
+import { useMessageCitations } from '../../hooks/conversation/useMessageCitations';
+import { useLanguage } from '../../hooks/language/useLanguage';
 import { useUiFeature } from '../../hooks/useUiFeature';
 import { ThemeId } from '../../types/theme-id';
+import { attachmentDisplayResolvers } from '../../utils/attachment-display-resolvers';
 import {
-  attachmentCanvasUrlResolvers,
-  attachmentDisplayResolvers,
-} from '../../utils/attachment-display-resolvers';
-import {
-  resolveAbsoluteDialUrl,
+  isAttachmentDownloadable,
   resolveDialFileDownloadUrl,
   resolveMarkdownUrl,
 } from '../../utils/dial-file';
+import MessageEditMode from './message/MessageEditMode';
+import MessageMcpAppPreview from './message/MessageMcpAppPreview';
+import MessageReferenceChips from './message/MessageReferenceChips';
+import MessageStreamError from './message/MessageStreamError';
+import MessageVisualizerSlot from './message/MessageVisualizerSlot';
 import { buildMessageActions } from './utils/build-message-actions';
 import {
   getMessageStarterProps,
   getStatusMessageProps,
-  isStreamingMessage,
 } from './utils/message-display';
-
-const EditMessageInput = lazy(async () => {
-  const module = await import('@epam/ai-dial-conversation-input');
-  return { default: module.EditMessageInput };
-});
 
 const preloadEditInput = () => void import('@epam/ai-dial-conversation-input');
 
 /* Fallback inline-frame height when the registry entry declares neither
    `height` nor `mobileHeight`. */
-const DEFAULT_VISUALIZER_HEIGHT = 400;
-
-const MESSAGE_TEXT_STYLES = {
-  typography: { fontClassName: 'dial-body-text' },
-};
-
-/* One type-scale step down for narrow viewports: the full-size body copy costs
-   too much vertical space on a phone. Desktop keeps the wider scale. */
-const COMPACT_MESSAGE_TEXT_STYLES = {
-  typography: { fontClassName: 'dial-small-paragraph-text' },
-};
-
 /*
  * Shared empty array for the default `fallbackCitationGroups`: a default
  * parameter's `[]` is a fresh array on every render, which would break
@@ -148,21 +102,14 @@ const COMPACT_MESSAGE_TEXT_STYLES = {
  */
 const EMPTY_FALLBACK_CITATION_GROUPS: AnnotationGroup[] = [];
 
-const isCitationPreviewable = (annotation: Annotation): boolean => {
-  const attachment = annotation.body?.source?.attachment;
-  return (
-    attachment != null &&
-    (isDialFileId(attachment.url) ||
-      isExternalSourcePreviewable(attachment.type, attachment.url))
-  );
-};
-
 interface Props {
   contentRef?: Ref<HTMLDivElement>;
   msg: MessageType;
   index: number;
   totalCount: number;
   isAssistantTyping: boolean;
+  /** Shows the message's relative send time at the start of its action row. */
+  hasTimestamp?: boolean;
   editingMessageIndexes?: Set<number>;
   onSelectStarter?: (
     starter: StarterOption,
@@ -299,6 +246,8 @@ interface Props {
   editCommandMenu?: CommandMenuConfig;
   /** Host-injected `+`-menu entries for adding a skill mid-edit. Forwarded to `EditMessageInput`'s `menuOverlays`. */
   editMenuOverlays?: MenuOverlayConfig[];
+  /** The user's send-key preference. Forwarded to `EditMessageInput`'s `sendOnEnter`. */
+  editSendOnEnter?: SendOnEnter;
   /**
    * Renders a user message's `content` and `custom_content.skills` as an
    * ordered array interleaving plain-text runs and `ChatSkill` elements at
@@ -309,7 +258,7 @@ interface Props {
   renderHistorySkillSegments?: (
     content: string,
     skills: RequestSkill[] | undefined,
-  ) => ReactNode[] | null;
+  ) => TextSegment[] | null;
   /**
    * Renders a message's `custom_content.skills` entries as a flat list of
    * `ChatSkill` history elements for the bubble's `beforeContent` slot (the
@@ -329,12 +278,15 @@ interface Props {
   fallbackCitationGroups?: AnnotationGroup[];
 }
 
+export type ConversationMessageItemProps = Props;
+
 const ConversationMessageItem: FC<Props> = ({
   msg,
   contentRef,
   index,
   totalCount,
   isAssistantTyping,
+  hasTimestamp = false,
   editingMessageIndexes,
   onSelectStarter,
   onVisualizerSendMessage,
@@ -395,14 +347,14 @@ const ConversationMessageItem: FC<Props> = ({
   onEditDraftChange,
   editCommandMenu,
   editMenuOverlays,
+  editSendOnEnter,
   renderHistorySkillSegments,
   renderHistorySkills,
   fallbackCitationGroups = EMPTY_FALLBACK_CITATION_GROUPS,
 }) => {
   const { t } = useTranslation();
+  const { language } = useLanguage();
   const { currentTheme } = useTheme();
-  const applicationVisualizers = useApplicationVisualizers();
-  const isMobile = useIsMobile();
   const { openCanvas, isOpen: isCanvasOpen } = useAttachmentCanvas();
   const isLikesEnabled = useUiFeature(OverlayFeature.Likes);
   const isEditUserMessageHidden = useUiFeature(
@@ -424,34 +376,23 @@ const ConversationMessageItem: FC<Props> = ({
       ),
     [openCanvas, t],
   );
-  const { handleAttachmentClick: handleDownload } = useAttachmentAction({
-    resolveDownloadUrl: resolveDialFileDownloadUrl,
+  const {
+    handleAttachmentClick,
+    attachmentClickLabel,
+    attachmentDownloadLabel,
+    handleDownloadAll,
+    referenceGroups,
+    allDisplayAttachments,
+    nonReferenceDisplayAttachments,
+    selectedAttachmentId,
+  } = useMessageAttachments({
+    msg,
+    index,
+    onAttachmentClick: onAttachmentClickProp,
+    selectedAttachmentKey,
   });
-  const handleIndexedAttachmentClick = useCallback(
-    (attachment: DisplayAttachment) =>
-      onAttachmentClickProp?.(attachment, index),
-    [onAttachmentClickProp, index],
-  );
-  const handleAttachmentClick = onAttachmentClickProp
-    ? handleIndexedAttachmentClick
-    : handleDownload;
-  /*
-   * A file tile and its corner download button are separate controls, so they
-   * need separate names. The tile only downloads when no host click handler
-   * is given; otherwise it opens the attachment in the canvas.
-   */
-  const attachmentClickLabel = onAttachmentClickProp
-    ? t(ButtonsI18nKeys.OpenInCanvas)
-    : t(AttachmentsI18nKeys.Download);
-  const attachmentDownloadLabel = t(AttachmentsI18nKeys.Download);
-  const handleDownloadAll = useCallback(
-    (attachmentsToDownload: DisplayAttachment[]) => {
-      attachmentsToDownload.forEach(handleDownload);
-    },
-    [handleDownload],
-  );
-  const isStreaming = isStreamingMessage(
-    msg.role,
+  const isStreaming = isMessageStreaming(
+    msg,
     index,
     totalCount,
     isAssistantTyping,
@@ -484,230 +425,32 @@ const ConversationMessageItem: FC<Props> = ({
     [executedLabel, stepsLabel, t],
   );
 
-  const annotations = useAnnotations(msg, isStreaming);
-  const citationGroups = useMemo(
-    () => groupAnnotations(annotations),
-    [annotations],
-  );
-  /*
-   * Union used only for Preview/Open-in-browser lookups (design D7), so
-   * `annotationToPdfCanvasContent`/`annotationToOoxmlCanvasContent` can find
-   * a pooled annotation's siblings. Never passed as the citation hook's
-   * `groups` — that stays message-scoped (design D6).
-   */
-  const citationGroupsWithFallback = useMemo(
-    () => [...citationGroups, ...fallbackCitationGroups],
-    [citationGroups, fallbackCitationGroups],
-  );
-  const annotationsWithFallback = useMemo(
-    () => [
-      ...annotations,
-      ...fallbackCitationGroups.flatMap((group) => group.annotations),
-    ],
-    [annotations, fallbackCitationGroups],
-  );
-  const citationCard = useCitationCard();
-  const messageTextStyles = isCompactTypography
-    ? COMPACT_MESSAGE_TEXT_STYLES
-    : MESSAGE_TEXT_STYLES;
-  const markdownClassNames = isCompactTypography
-    ? COMPACT_MARKDOWN_CLASS_NAMES
-    : undefined;
-  const handleCitationPreview = useCallback(
-    (annotation: Annotation) => {
-      const pdfContent = annotationToPdfCanvasContent(
-        annotation,
-        citationGroupsWithFallback,
-        attachmentCanvasUrlResolvers,
-      );
-      if (pdfContent != null) {
-        const attachment = annotation.body?.source?.attachment;
-        const rawSegment = attachment?.url?.split('/').pop() ?? '';
-        const fileName = attachment?.title ?? decodeURIComponent(rawSegment);
-        openCanvas(pdfContent, fileName);
-        return;
-      }
-      const ooxmlContent = annotationToOoxmlCanvasContent(
-        annotation,
-        annotationsWithFallback,
-        attachmentCanvasUrlResolvers,
-      );
-      if (ooxmlContent != null) {
-        const attachment = annotation.body?.source?.attachment;
-        const rawSegment = attachment?.url?.split('/').pop() ?? '';
-        const fileName = attachment?.title ?? decodeURIComponent(rawSegment);
-        openCanvas(ooxmlContent, fileName);
-        return;
-      }
-      const display = annotationToDisplayAttachment(annotation);
-      if (display) handleAttachmentClick(display);
-    },
-    [
-      citationGroupsWithFallback,
-      annotationsWithFallback,
-      openCanvas,
-      handleAttachmentClick,
-    ],
-  );
-  const handleCitationOpenInBrowser = useCallback((annotation: Annotation) => {
-    const attachment = annotation.body?.source?.attachment;
-    if (attachment)
-      openAnnotationAttachment(attachment, resolveDialFileDownloadUrl);
-  }, []);
-  const buildCitationLabels = useCallback(
-    (group: AnnotationGroup) => {
-      const cardLabels = {
-        ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
-          source: group.sourceName,
-        }),
-        previousCitation: t(CitationsI18nKeys.PopupPreviousCitation),
-        nextCitation: t(CitationsI18nKeys.PopupNextCitation),
-        formatSwitcherText: (current: number, total: number) =>
-          t(CitationsI18nKeys.PopupSwitcher, { current, total }),
-        preview: t(BasicI18nKeys.Preview),
-        openInBrowser: t(CitationsI18nKeys.PopupOpenInBrowser),
-        download: t(ButtonsI18nKeys.Download),
-        showMore: t(ButtonsI18nKeys.ShowMore),
-        showLess: t(ButtonsI18nKeys.ShowLess),
-        codeBlockCopyLabel: t(ButtonsI18nKeys.Copy),
-        codeBlockCopiedLabel: t(ButtonsI18nKeys.Copied),
-        codeBlockDownloadLabel: t(ButtonsI18nKeys.Download),
-        tableScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableTable),
-        mathScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableFormula),
-      };
-      const markerLabels = {
-        ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
-          source: group.sourceName,
-        }),
-        label: t(CitationsI18nKeys.MarkerLabel, { source: group.sourceName }),
-        labelWithOverflow: t(CitationsI18nKeys.MarkerLabelWithOverflow, {
-          source: group.sourceName,
-          count: group.annotations.length - 1,
-        }),
-      };
-      return { cardLabels, markerLabels };
-    },
-    [t],
-  );
-  const citationCallbacks = useMemo(
-    () => ({
-      onPreview: handleCitationPreview,
-      isPreviewable: isCitationPreviewable,
-      onOpenInBrowser: handleCitationOpenInBrowser,
-      isPreviewOpen: isCanvasOpen,
-      buildLabels: buildCitationLabels,
-    }),
-    [
-      handleCitationPreview,
-      handleCitationOpenInBrowser,
-      isCanvasOpen,
-      buildCitationLabels,
-    ],
-  );
-  const { processedContent, markdownComponents } =
-    useCitationMarkdownComponents(
-      msg.content,
-      citationGroups,
-      citationCallbacks,
-      isStreaming,
-      isCompactTypography,
-      fallbackCitationGroups,
-    );
-  const referenceGroups = useMemo(
-    () => getReferenceAttachmentGroups(msg.custom_content?.attachments),
-    [msg.custom_content?.attachments],
-  );
-  const allDisplayAttachments = useMemo(
-    () =>
-      attachmentDtosToDisplayAttachments(
-        msg.custom_content?.attachments,
-        attachmentDisplayResolvers,
-      ),
-    [msg.custom_content?.attachments],
-  );
-  const nonReferenceDisplayAttachments = useMemo(
-    () =>
-      attachmentDtosToDisplayAttachments(
-        msg.custom_content?.attachments?.filter(
-          (a) => !isReferenceOnlyAttachment(a),
-        ),
-        attachmentDisplayResolvers,
-      ),
-    [msg.custom_content?.attachments],
-  );
-  /*
-   * An application visualizer claims some or all of this message's
-   * attachments and renders them together in one iframe. Resolved in a single
-   * memo so the entry lookup, the partition, and the payload object all share
-   * one identity per render — `VisualizerCanvasRenderer` keys its iframe on
-   * the payload's `url`/`visualizerName`/`requestTimeout`, but a fresh
-   * `content` object on every parent render would still churn its props.
-   */
-  const groupedVisualizer = useMemo(() => {
-    const entry = findVisualizerForApplication(
-      effectiveDeploymentId,
-      applicationVisualizers,
-    );
-    if (entry == null) return null;
-
-    const { claimed } = partitionAttachmentsForApplicationVisualizer(
-      nonReferenceDisplayAttachments,
-      entry,
-    );
-    if (claimed.length === 0) return null;
-
-    const { content, resolved } = resolveGroupedVisualizerCanvasContent(
-      claimed,
-      resolveAbsoluteDialUrl,
-      entry,
-      currentTheme,
-    );
-    if (content == null) return null;
-
-    /* Derived from the full list rather than the partition's `unclaimed`, so a
-     * claimed attachment the host could not resolve a URL for falls back to an
-     * ordinary tile instead of disappearing from the message entirely. */
-    const resolvedSet = new Set(resolved);
-
-    return {
-      content,
-      unclaimed: nonReferenceDisplayAttachments.filter(
-        (attachment) => !resolvedSet.has(attachment),
-      ),
-      /* The registry carries both heights; picking between them is the host's
-       * job, so the lib never reads a breakpoint. A mobile viewport prefers
-       * `mobileHeight` but falls back to `height` when the entry declares
-       * only the desktop one. */
-      height:
-        (isMobile ? (entry.mobileHeight ?? entry.height) : entry.height) ??
-        DEFAULT_VISUALIZER_HEIGHT,
-      isBorderless: entry.borderless === true,
-      isTitleHidden: entry.withoutTitle === true,
-    };
-  }, [
+  const {
+    citationCard,
+    messageTextStyles,
+    markdownClassNames,
+    processedContent,
+    markdownComponents,
+    renderStageCitation,
+    displayStages,
+    copyContent,
+  } = useMessageCitations({
+    msg,
+    isStreaming,
+    stages,
+    fallbackCitationGroups,
+    isCompactTypography,
+    handleAttachmentClick,
+  });
+  const {
+    groupedVisualizer,
+    bubbleAttachments,
+    handleExpandGroupedVisualizer,
+  } = useGroupedVisualizer({
     effectiveDeploymentId,
-    applicationVisualizers,
+    index,
     nonReferenceDisplayAttachments,
-    currentTheme,
-    isMobile,
-  ]);
-
-  /* Claimed attachments are rendered by the visualizer, so they must not also
-   * appear as tray tiles. */
-  const bubbleAttachments =
-    groupedVisualizer?.unclaimed ?? nonReferenceDisplayAttachments;
-
-  /* Opens the canvas with the very object the inline frame was given, so
-   * expanding never rebuilds the grouped payload. */
-  const handleExpandGroupedVisualizer = useCallback(() => {
-    if (groupedVisualizer == null) return;
-    const panelTitle = groupedVisualizer.content.visualizerName.trim();
-    openCanvas(
-      groupedVisualizer.content,
-      panelTitle === '' ? undefined : panelTitle,
-      groupedVisualizerCanvasKey(index),
-    );
-  }, [groupedVisualizer, openCanvas, index]);
+  });
 
   const isStreamErrorRetryShown =
     onRegenerateMessage != null && !isRegenerateAssistantMessageHidden;
@@ -742,7 +485,7 @@ const ConversationMessageItem: FC<Props> = ({
       openAnnotationAttachment(attachment, resolveDialFileDownloadUrl);
   }, []);
 
-  const mcpAppMatch = findMcpAppForMessage(msg, mcpAppTools, isStreaming);
+  const mcpAppMatch = findMcpAppForMessage(msg, mcpAppTools);
   const mcpAppToolCallSeed = useMemo(
     () =>
       mcpAppMatch
@@ -752,87 +495,52 @@ const ConversationMessageItem: FC<Props> = ({
   );
   const mcpAppHostAdapter = useMcpAppHostAdapter('inline');
 
-  const selectedAttachmentKeyPrefix = `${index}:`;
-  const selectedAttachmentId = selectedAttachmentKey?.startsWith(
-    selectedAttachmentKeyPrefix,
-  )
-    ? selectedAttachmentKey.slice(selectedAttachmentKeyPrefix.length)
-    : undefined;
-
   if (isEditing) {
     return (
-      <div className="flex justify-end">
-        <Suspense
-          fallback={
-            <MessageBubble
-              role={msg.role}
-              text={msg.content}
-              textSegments={
-                renderHistorySkillSegments?.(
-                  msg.content,
-                  msg.custom_content?.skills,
-                ) ?? undefined
-              }
-              styles={{ ...messageTextStyles, className: 'justify-end' }}
-              attachments={allDisplayAttachments}
-              labels={{
-                showMoreLabel,
-                showLessLabel,
-                showMoreAriaLabel: showMoreUserMessageAriaLabel,
-                showLessAriaLabel: showLessUserMessageAriaLabel,
-                attachmentClickLabel,
-                attachmentDownloadLabel,
-                attachmentOpenInNewTabLabel: t(
-                  AttachmentsI18nKeys.OpenInNewTab,
-                ),
-              }}
-              onAttachmentClick={handleAttachmentClick}
-              onDownloadAll={handleDownloadAll}
-            />
-          }
-        >
-          <EditMessageInput
-            message={editMessage ?? msg.content}
-            messageRevision={editMessageRevision}
-            initialAttachments={allDisplayAttachments}
-            onCancel={() => onCancelEdit?.(index)}
-            onSave={(text, kept, added) =>
-              onEditMessage?.(index, text, kept, added)
-            }
-            onUploadAttachment={onUploadAttachment}
-            cancelLabel={cancelLabel}
-            removeLabel={t(AttachmentsI18nKeys.RemoveLabel)}
-            retryLabel={t(AttachmentsI18nKeys.RetryLabel)}
-            uploadingLabel={t(AttachmentsI18nKeys.UploadingLabel)}
-            expandLabel={t(AttachmentsI18nKeys.ExpandPastedText)}
-            clickLabel={attachmentClickLabel}
-            saveLabel={saveLabel}
-            ariaLabel={editMessageAriaLabel}
-            className="w-full max-w-[748px]"
-            pendingDropFiles={pendingDropFiles}
-            onDropFilesConsumed={onDropFilesConsumed}
-            validateAttachment={validateAttachment}
-            isAttachmentsEnabled={isAttachmentsEnabled}
-            isTextAttachmentsAllowed={isTextAttachmentsAllowed}
-            maximumAttachmentsAmount={maximumAttachmentsAmount}
-            onAttachmentsLimitExceeded={onAttachmentsLimitExceeded}
-            hideAttachFile={hideAttachFile}
-            fileAccept={fileAccept}
-            onDialFileSystemClick={onDialFileSystemClick}
-            dialFileSystemLabel={dialFileSystemLabel}
-            pendingAttachments={pendingAttachments}
-            onPendingAttachmentsConsumed={onPendingAttachmentsConsumed}
-            onAttachmentClick={handleAttachmentClick}
-            onMessageTooLong={onMessageTooLong}
-            activeMentions={editActiveMentions}
-            onBackspaceAtCaret={onEditBackspaceAtCaret}
-            caretPositionOverride={editCaretPositionOverride}
-            onChange={onEditDraftChange}
-            commandMenu={editCommandMenu}
-            menuOverlays={editMenuOverlays}
-          />
-        </Suspense>
-      </div>
+      <MessageEditMode
+        msg={msg}
+        index={index}
+        cancelLabel={cancelLabel}
+        saveLabel={saveLabel}
+        editMessageAriaLabel={editMessageAriaLabel}
+        showMoreLabel={showMoreLabel}
+        showLessLabel={showLessLabel}
+        showMoreUserMessageAriaLabel={showMoreUserMessageAriaLabel}
+        showLessUserMessageAriaLabel={showLessUserMessageAriaLabel}
+        renderHistorySkillSegments={renderHistorySkillSegments}
+        editMessage={editMessage}
+        editMessageRevision={editMessageRevision}
+        editActiveMentions={editActiveMentions}
+        onEditBackspaceAtCaret={onEditBackspaceAtCaret}
+        editCaretPositionOverride={editCaretPositionOverride}
+        onEditDraftChange={onEditDraftChange}
+        editCommandMenu={editCommandMenu}
+        editMenuOverlays={editMenuOverlays}
+        editSendOnEnter={editSendOnEnter}
+        onCancelEdit={onCancelEdit}
+        onEditMessage={onEditMessage}
+        onUploadAttachment={onUploadAttachment}
+        pendingDropFiles={pendingDropFiles}
+        onDropFilesConsumed={onDropFilesConsumed}
+        validateAttachment={validateAttachment}
+        isAttachmentsEnabled={isAttachmentsEnabled}
+        isTextAttachmentsAllowed={isTextAttachmentsAllowed}
+        maximumAttachmentsAmount={maximumAttachmentsAmount}
+        onAttachmentsLimitExceeded={onAttachmentsLimitExceeded}
+        hideAttachFile={hideAttachFile}
+        fileAccept={fileAccept}
+        onDialFileSystemClick={onDialFileSystemClick}
+        dialFileSystemLabel={dialFileSystemLabel}
+        pendingAttachments={pendingAttachments}
+        onPendingAttachmentsConsumed={onPendingAttachmentsConsumed}
+        onMessageTooLong={onMessageTooLong}
+        messageTextStyles={messageTextStyles}
+        allDisplayAttachments={allDisplayAttachments}
+        attachmentClickLabel={attachmentClickLabel}
+        attachmentDownloadLabel={attachmentDownloadLabel}
+        handleAttachmentClick={handleAttachmentClick}
+        handleDownloadAll={handleDownloadAll}
+      />
     );
   }
 
@@ -916,9 +624,7 @@ const ConversationMessageItem: FC<Props> = ({
         markdownComponents={
           msg.role === MessageRole.Assistant ? markdownComponents : undefined
         }
-        markdownUrlTransform={
-          msg.role === MessageRole.Assistant ? resolveMarkdownUrl : undefined
-        }
+        markdownUrlTransform={resolveMarkdownUrl}
         markdownClassNames={markdownClassNames}
         attachments={bubbleAttachments}
         isStreaming={isStreaming}
@@ -947,6 +653,7 @@ const ConversationMessageItem: FC<Props> = ({
             },
             tooltips,
             ariaLabels,
+            copyContent,
           ),
           /* Regenerate/copy/like/dislike stay mounted while a response streams,
              so they have to be disabled — otherwise a second generation or a
@@ -955,6 +662,8 @@ const ConversationMessageItem: FC<Props> = ({
              user toolbars stay enabled. */
           isDisabled: isAssistantTyping && msg.role !== MessageRole.User,
         }}
+        timestamp={hasTimestamp ? msg.timestamp : undefined}
+        locale={language}
         afterContent={
           referenceGroups.length > 0 ||
           hasStages ||
@@ -963,165 +672,52 @@ const ConversationMessageItem: FC<Props> = ({
           msg.streamErrorMessage != null ? (
             <>
               {referenceGroups.length > 0 && (
-                <div className="flex w-full flex-wrap gap-2">
-                  {referenceGroups.map((group) => {
-                    const isPdfPagePreviewable =
-                      group.primaryAnnotation.body?.source?.attachment !=
-                        null &&
-                      referenceAttachmentToPdfCanvasContent(
-                        group.primaryAnnotation.body.source.attachment,
-                        attachmentCanvasUrlResolvers,
-                      ) != null;
-                    return (
-                      <CitationDropdown
-                        key={group.groupKey}
-                        group={group}
-                        onPreview={
-                          isPdfPagePreviewable ? onPreviewReference : undefined
-                        }
-                        onOpenInBrowser={handleOpenReferenceInBrowser}
-                        isPreviewOpen={isCanvasOpen}
-                        icon={
-                          <IconLink
-                            size={14}
-                            aria-hidden
-                            stroke={DIAL_KIT_ICON_STROKE}
-                          />
-                        }
-                        cardLabels={{
-                          ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
-                            source: group.sourceName,
-                          }),
-                          previousCitation: t(
-                            CitationsI18nKeys.PopupPreviousCitation,
-                          ),
-                          nextCitation: t(CitationsI18nKeys.PopupNextCitation),
-                          formatSwitcherText: (current, total) =>
-                            t(CitationsI18nKeys.PopupSwitcher, {
-                              current,
-                              total,
-                            }),
-                          preview: t(BasicI18nKeys.Preview),
-                          openInBrowser: t(
-                            CitationsI18nKeys.PopupOpenInBrowser,
-                          ),
-                          download: t(ButtonsI18nKeys.Download),
-                          showMore: t(ButtonsI18nKeys.ShowMore),
-                          showLess: t(ButtonsI18nKeys.ShowLess),
-                          codeBlockCopyLabel: t(ButtonsI18nKeys.Copy),
-                          codeBlockCopiedLabel: t(ButtonsI18nKeys.Copied),
-                          codeBlockDownloadLabel: t(ButtonsI18nKeys.Download),
-                          tableScrollRegionAriaLabel: t(
-                            ChatI18nKeys.ScrollableTable,
-                          ),
-                          mathScrollRegionAriaLabel: t(
-                            ChatI18nKeys.ScrollableFormula,
-                          ),
-                        }}
-                        markerLabels={{
-                          ariaLabel: t(CitationsI18nKeys.MarkerAriaLabel, {
-                            source: group.sourceName,
-                          }),
-                          label: t(CitationsI18nKeys.MarkerLabel, {
-                            source: group.sourceName,
-                          }),
-                          labelWithOverflow: t(
-                            CitationsI18nKeys.MarkerLabelWithOverflow,
-                            {
-                              source: group.sourceName,
-                              count: group.annotations.length - 1,
-                            },
-                          ),
-                        }}
-                      />
-                    );
-                  })}
-                </div>
+                <MessageReferenceChips
+                  onPreviewReference={onPreviewReference}
+                  referenceGroups={referenceGroups}
+                  handleOpenReferenceInBrowser={handleOpenReferenceInBrowser}
+                  isCanvasOpen={isCanvasOpen}
+                />
               )}
               {hasStages && (
                 <CollapsedGroup
-                  stages={stages}
+                  stages={displayStages}
                   isStreaming={isStreaming}
                   labels={stageLabels}
                   onAttachmentClick={handleStageAttachmentClick}
+                  attachmentDisplayResolvers={attachmentDisplayResolvers}
+                  renderCitation={renderStageCitation}
                 />
               )}
-              {groupedVisualizer != null &&
-                (isGroupedVisualizerOpenedInCanvas ? (
-                  <div
-                    role="status"
-                    aria-live="polite"
-                    className="bg-layer-2 flex h-[120px] w-[280px] items-center justify-center rounded"
-                  >
-                    <span className="dial-body-text text-primary">
-                      {openedInCanvasLabel}
-                    </span>
-                  </div>
-                ) : (
-                  <InlineGroupedVisualizer
-                    content={groupedVisualizer.content}
-                    height={groupedVisualizer.height}
-                    isBorderless={groupedVisualizer.isBorderless}
-                    isTitleHidden={groupedVisualizer.isTitleHidden}
-                    onExpand={handleExpandGroupedVisualizer}
-                    expandAriaLabel={t(AttachmentCanvasI18nKeys.ExpandAppLabel)}
-                    actionsGroupAriaLabel={t(
-                      AttachmentCanvasI18nKeys.VisualizerActionsAriaLabel,
-                    )}
-                    loadingLabel={t(
-                      AttachmentCanvasI18nKeys.VisualizerLoadingLabel,
-                    )}
-                    errorLabel={t(
-                      AttachmentCanvasI18nKeys.VisualizerLoadErrorLabel,
-                    )}
-                    onVisualizerSendMessage={onVisualizerSendMessage}
-                  />
-                ))}
+              <MessageVisualizerSlot
+                openedInCanvasLabel={openedInCanvasLabel}
+                onVisualizerSendMessage={onVisualizerSendMessage}
+                groupedVisualizer={groupedVisualizer}
+                handleExpandGroupedVisualizer={handleExpandGroupedVisualizer}
+                isGroupedVisualizerOpenedInCanvas={
+                  isGroupedVisualizerOpenedInCanvas
+                }
+              />
               {mcpAppMatch && onOpenApp && (
-                <McpAppInlinePreview
-                  match={mcpAppMatch}
-                  toolCall={mcpAppToolCallSeed}
-                  cache={mcpAppCache}
-                  cacheKey={mcpAppCanvasKey(index)}
-                  hostAdapter={mcpAppHostAdapter}
-                  onExpand={() =>
-                    onOpenApp(mcpAppMatch, mcpAppKey, mcpAppToolCallSeed)
-                  }
-                  expandAriaLabel={t(AttachmentCanvasI18nKeys.ExpandAppLabel)}
-                  reloadAriaLabel={t(ButtonsI18nKeys.Reload)}
-                  loadErrorLabel={t(
-                    AttachmentCanvasI18nKeys.McpAppLoadErrorLabel,
-                  )}
-                  isOpenedInCanvas={isMcpAppOpenedInCanvas}
-                  openedInCanvasLabel={
-                    openedInCanvasLabel ?? 'Opened in canvas'
-                  }
+                <MessageMcpAppPreview
+                  index={index}
+                  mcpAppCache={mcpAppCache}
+                  openedInCanvasLabel={openedInCanvasLabel}
+                  mcpAppMatch={mcpAppMatch}
+                  onOpenApp={onOpenApp}
+                  mcpAppToolCallSeed={mcpAppToolCallSeed}
+                  mcpAppHostAdapter={mcpAppHostAdapter}
+                  mcpAppKey={mcpAppKey}
+                  isMcpAppOpenedInCanvas={isMcpAppOpenedInCanvas}
                 />
               )}
               {msg.streamErrorMessage != null && (
-                <div className="w-full">
-                  <ErrorMessageNotification
-                    title={t(ChatI18nKeys.StreamErrorTitle)}
-                    message={
-                      <span className="flex flex-wrap items-center justify-between gap-2 text-start">
-                        <span>
-                          {msg.streamErrorMessage ||
-                            t(ChatI18nKeys.StreamError)}
-                        </span>
-                        {isStreamErrorRetryShown && (
-                          <Button
-                            variant={ButtonVariant.Neutral}
-                            appearance={ButtonAppearance.Outlined}
-                            size={ElementSize.Small}
-                            label={t(ButtonsI18nKeys.TryAgain)}
-                            disabled={isAssistantTyping}
-                            onClick={handleStreamErrorRetry}
-                          />
-                        )}
-                      </span>
-                    }
-                  />
-                </div>
+                <MessageStreamError
+                  msg={msg}
+                  isAssistantTyping={isAssistantTyping}
+                  isStreamErrorRetryShown={isStreamErrorRetryShown}
+                  handleStreamErrorRetry={handleStreamErrorRetry}
+                />
               )}
             </>
           ) : undefined
@@ -1155,6 +751,7 @@ const ConversationMessageItem: FC<Props> = ({
         tableOnOpenInCanvas={handleTableOpenInCanvas}
         onAttachmentClick={handleAttachmentClick}
         onDownloadAll={handleDownloadAll}
+        isAttachmentDownloadable={isAttachmentDownloadable}
         selectedAttachmentId={selectedAttachmentId}
       />
     </CitationCardProvider>

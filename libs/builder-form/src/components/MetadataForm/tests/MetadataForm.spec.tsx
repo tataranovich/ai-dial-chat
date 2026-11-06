@@ -33,7 +33,10 @@ vi.mock('../../AvatarPickerModal/AvatarPickerModal', () => ({
 
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@epam/ai-dial-ui-kit')>()),
+  /* Mirrors the kit: the error renders with no role, is linked to the
+   * field through `aria-describedby`, and marks the field `aria-invalid`. */
   Input: ({
+    id,
     value,
     onChange,
     onBlur,
@@ -41,10 +44,15 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
     error,
     placeholder,
     inputRef,
+    readOnly,
+    tooltipText,
   }: {
+    id?: string;
     value?: string;
     onChange?: (v?: string) => void;
     onBlur?: () => void;
+    readOnly?: boolean;
+    tooltipText?: string;
     labelProps?: { label?: string };
     error?: string;
     placeholder?: string;
@@ -55,13 +63,18 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
         {labelProps?.label}
         <input
           ref={inputRef}
+          id={id}
           value={value ?? ''}
           placeholder={placeholder}
+          readOnly={readOnly}
+          title={tooltipText}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
           onChange={(e) => onChange?.(e.target.value)}
           onBlur={onBlur}
         />
       </label>
-      {error && <p role="alert">{error}</p>}
+      {error && <span id={`${id}-error`}>{error}</span>}
     </>
   ),
   Textarea: ({
@@ -196,7 +209,11 @@ describe('MetadataForm', () => {
 
   it('shows the name error supplied by the host', () => {
     renderForm({ errors: { name: 'Name is required' } });
-    expect(screen.getByRole('alert').textContent).toBe('Name is required');
+    const field = screen.getByRole('textbox', {
+      name: 'Name',
+      description: 'Name is required',
+    });
+    expect(field.getAttribute('aria-invalid')).toBe('true');
   });
 
   it('reports field edits and blur events to the host', () => {
@@ -214,6 +231,20 @@ describe('MetadataForm', () => {
     expect(onChange).toHaveBeenCalledWith({ name: 'Renamed' });
     expect(onNameBlur).toHaveBeenCalled();
     expect(onVersionBlur).toHaveBeenCalled();
+  });
+
+  it('forwards a read-only Version and its tooltip to the field', () => {
+    const onVersionBlur = vi.fn();
+    renderForm({
+      isVersionReadOnly: true,
+      versionReadOnlyTooltip: 'Locked while editing',
+      onVersionBlur,
+    });
+    const version = screen.getByLabelText('Version') as HTMLInputElement;
+    expect(version.readOnly).toBe(true);
+    expect(version.title).toBe('Locked while editing');
+    fireEvent.blur(version);
+    expect(onVersionBlur).not.toHaveBeenCalled();
   });
 
   it('stores the icon URL the host resolves for a picked file and closes the picker', async () => {

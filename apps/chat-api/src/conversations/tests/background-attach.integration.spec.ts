@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthSource } from '../../auth/auth-source.enum';
 import { resolvePrincipalKey } from '../../auth/session/principal-key';
 import type { DialClientService } from '../../dial/dial-client.service';
-import { ConversationGenerationService } from '../conversation-generation.service';
+import { ConversationGenerationController } from '../conversation-generation.controller';
 import { ConversationController } from '../conversation.controller';
 import { ConversationService } from '../conversation.service';
 import { BackgroundGenerationStatus } from '../dto/background-generation.dto';
@@ -21,6 +21,7 @@ import {
 } from '../dto/conversation-message.dto';
 import { BackgroundGenerationService } from '../generation/background-generation.service';
 import { neutralizeForeignPendingMessages } from '../generation/background-message';
+import { ConversationGenerationService } from '../generation/conversation-generation.service';
 import {
   CoreResponseResultKind,
   type CoreResponsesClient,
@@ -30,6 +31,7 @@ import {
   runConditionalUpdate,
   type ConversationPersistenceService,
 } from '../persistence/conversation-persistence.service';
+import { ConversationCompletionsResponder } from '../streaming/conversation-completions.responder';
 
 const TEST_USER = {
   sid: 'test-sid',
@@ -144,8 +146,9 @@ describe('POST /conversations/completions/attach — background generations', ()
       { complete: vi.fn(), beginFinalizing: vi.fn() } as never,
     );
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ConversationController],
+      controllers: [ConversationController, ConversationGenerationController],
       providers: [
+        ConversationCompletionsResponder,
         {
           provide: ConversationService,
           useValue: {
@@ -274,10 +277,12 @@ describe('POST /conversations/completions/attach — background generations', ()
       content: 'Hello world',
       backgroundGeneration: { status: BackgroundGenerationStatus.Completed },
     });
+    /* A top-level conversation sends no `x-project-id` on the replay. */
     expect(core.replayResponse).toHaveBeenCalledWith(
       RESPONSE_ID,
       'test-access-token',
       expect.any(AbortSignal),
+      {},
     );
   });
 

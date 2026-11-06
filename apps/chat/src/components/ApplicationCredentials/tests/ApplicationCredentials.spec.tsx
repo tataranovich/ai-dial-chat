@@ -1,3 +1,5 @@
+import type { ApplicationExternalServiceDto } from '@epam/ai-dial-chat-api-client';
+import { ExternalServiceLoginOutcomeType } from '@epam/ai-dial-chat-hooks';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,15 +8,11 @@ import {
   ButtonsI18nKeys,
   ToolsetSigninI18nKeys,
 } from '../../../constants/translation-keys';
-import { ExternalServiceLoginOutcomeType } from '../../../hooks/externalServices/useExternalServiceLogin';
 import {
   externalServicesApi,
   offlineCredentialsApi,
 } from '../../../server-api/api-client';
-import {
-  signOutExternalService,
-  type ApplicationExternalServiceDto,
-} from '../../../server-api/external-services';
+import { signOutExternalService } from '../../../server-api/external-services';
 import { ApplicationCredentials } from '../ApplicationCredentials';
 
 const login = vi.hoisted(() => vi.fn());
@@ -52,16 +50,16 @@ const oauthService: ApplicationExternalServiceDto = {
   authorizationEndpoint: 'https://provider.example/authorize',
 };
 
-beforeEach(() => {
-  vi.resetAllMocks();
-  vi.mocked(listExternalServices).mockResolvedValue([
-    apiKeyService,
-    oauthService,
-  ]);
-  login.mockResolvedValue({ type: ExternalServiceLoginOutcomeType.Success });
-});
-
 describe('ApplicationCredentials', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(listExternalServices).mockResolvedValue([
+      apiKeyService,
+      oauthService,
+    ]);
+    login.mockResolvedValue({ type: ExternalServiceLoginOutcomeType.Success });
+  });
+
   it('loads each authenticated service and omits services needing no credentials', async () => {
     vi.mocked(listExternalServices).mockResolvedValue([
       apiKeyService,
@@ -171,21 +169,6 @@ describe('ApplicationCredentials', () => {
     );
   });
 
-  it('shows the localized login error for an unknown outcome without refreshing credentials', async () => {
-    login.mockResolvedValue({ type: 'unknown-outcome' });
-    const user = userEvent.setup();
-    render(<ApplicationCredentials appId="agent" />);
-    const row = within(await screen.findByRole('group', { name: 'Git' }));
-
-    await user.click(row.getByRole('button', { name: ButtonsI18nKeys.LogIn }));
-
-    expect(await row.findByRole('alert')).toHaveProperty(
-      'textContent',
-      ToolsetSigninI18nKeys.ErrorLoginFailed,
-    );
-    expect(listExternalServices).toHaveBeenCalledTimes(1);
-  });
-
   it('requires confirmation before revoking only personal credentials', async () => {
     vi.mocked(listExternalServices).mockResolvedValue([
       {
@@ -218,9 +201,12 @@ describe('ApplicationCredentials', () => {
     vi.mocked(listExternalServices).mockRejectedValueOnce(new Error('offline'));
     const user = userEvent.setup();
     render(<ApplicationCredentials appId="agent" />);
-    expect(await screen.findByRole('alert')).toHaveProperty(
-      'textContent',
-      Labels.LoadError,
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('status')
+          .some((region) => region.textContent === Labels.LoadError),
+      ).toBe(true),
     );
     await user.click(
       screen.getByRole('button', { name: ButtonsI18nKeys.Retry }),
@@ -257,6 +243,7 @@ describe('ApplicationCredentials', () => {
     vi.mocked(getOfflineCredentials).mockResolvedValue({
       connected: true,
       available: true,
+      schedulerServiceConsent: 'signed_in',
     });
     render(<ApplicationCredentials appId="agent" />);
     const row = within(await screen.findByRole('group', { name: 'DIAL' }));
@@ -269,10 +256,25 @@ describe('ApplicationCredentials', () => {
   it('keeps an empty catalog surface but explains no-auth applications in settings', async () => {
     vi.mocked(listExternalServices).mockResolvedValue([]);
     const { rerender } = render(<ApplicationCredentials appId="agent" />);
-    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
-    rerender(<ApplicationCredentials appId="agent" showEmptyState />);
-    expect(screen.getByRole('status').textContent).toBe(
-      ToolsetSigninI18nKeys.NoCredentialsRequired,
+    await waitFor(() => expect(listExternalServices).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('status')
+          .every((region) => region.textContent === ''),
+      ).toBe(true),
     );
+    expect(
+      screen.queryByText(ToolsetSigninI18nKeys.NoCredentialsRequired),
+    ).toBeNull();
+    rerender(<ApplicationCredentials appId="agent" showEmptyState />);
+    expect(
+      screen
+        .getAllByRole('status')
+        .some(
+          (region) =>
+            region.textContent === ToolsetSigninI18nKeys.NoCredentialsRequired,
+        ),
+    ).toBe(true);
   });
 });

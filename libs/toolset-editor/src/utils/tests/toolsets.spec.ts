@@ -1,17 +1,13 @@
 import { ToolsetAuthTypes, WithLogin } from '@epam/ai-dial-chat-hooks';
 import { describe, expect, it } from 'vitest';
-import {
-  DEFAULT_TOOLSET_NAME,
-  DEFAULT_TOOLSET_VERSION,
-  ToolsetTransportType,
-} from '../../constants/toolsets';
+import { ToolsetTransportType } from '../../constants/toolsets';
 import type { ToolsetFormData } from '../../models/toolset-form';
 import {
   getDefaultToolsetForm,
-  getStorageSafeUniqueToolsetName,
   isToolsetAuthValid,
   isToolsetFormValid,
   isValidEndpointUrl,
+  isValidOAuthResource,
   normalizeReturnedEndpointUrl,
 } from '../toolsets';
 
@@ -32,31 +28,11 @@ const baseForm = (): ToolsetFormData => ({
   },
 });
 
-describe('getStorageSafeUniqueToolsetName', () => {
-  it('returns the default name when no collision exists', () => {
-    expect(
-      getStorageSafeUniqueToolsetName({
-        defaultName: 'New toolset',
-        existingNames: ['Other'],
-      }),
-    ).toBe('New toolset');
-  });
-
-  it('appends a numeric suffix when the default name is taken', () => {
-    expect(
-      getStorageSafeUniqueToolsetName({
-        defaultName: 'New toolset',
-        existingNames: ['New toolset', 'New toolset 1'],
-      }),
-    ).toBe('New toolset 2');
-  });
-});
-
 describe('getDefaultToolsetForm', () => {
-  it('returns the default create-mode form state', () => {
+  it('returns an empty name and version 1.0.0 with the default Setup fields', () => {
     expect(getDefaultToolsetForm()).toEqual({
-      name: DEFAULT_TOOLSET_NAME,
-      version: DEFAULT_TOOLSET_VERSION,
+      name: '',
+      version: '1.0.0',
       iconUrl: '',
       description: '',
       topics: [],
@@ -70,14 +46,6 @@ describe('getDefaultToolsetForm', () => {
         isLoggedIn: false,
       },
     });
-  });
-
-  it('derives a collision-free name from the existing toolset names', () => {
-    const form = getDefaultToolsetForm([
-      DEFAULT_TOOLSET_NAME,
-      `${DEFAULT_TOOLSET_NAME} 1`,
-    ]);
-    expect(form.name).toBe(`${DEFAULT_TOOLSET_NAME} 2`);
   });
 });
 
@@ -134,7 +102,56 @@ describe('normalizeReturnedEndpointUrl', () => {
   });
 });
 
+describe('isValidOAuthResource', () => {
+  it.each([
+    undefined,
+    '',
+    '   ',
+    'https://mcp.example.com/mcp',
+    '  https://mcp.example.com/mcp  ',
+    'urn:example:resource',
+  ])('accepts %j', (value) => {
+    expect(isValidOAuthResource(value)).toBe(true);
+  });
+
+  it.each([
+    'mcp.example.com/mcp',
+    '/mcp',
+    'https://mcp.example.com/mcp#tools',
+    'https://mcp.example.com/ mcp',
+    'foo:',
+    'mailto:',
+  ])('rejects %j', (value) => {
+    expect(isValidOAuthResource(value)).toBe(false);
+  });
+
+  it('accepts a resource of 2048 characters and rejects a longer one', () => {
+    const prefix = 'https://mcp.example.com/';
+    const atLimit = prefix + 'a'.repeat(2048 - prefix.length);
+
+    expect(isValidOAuthResource(atLimit)).toBe(true);
+    expect(isValidOAuthResource(`${atLimit}a`)).toBe(false);
+  });
+});
+
 describe('isToolsetAuthValid', () => {
+  it('rejects a static OAuth client whose resource is invalid and accepts a blank one', () => {
+    const auth = {
+      authenticationType: ToolsetAuthTypes.OAuth,
+      withLogin: WithLogin.WithConfig,
+      isLoggedIn: false,
+      clientId: 'client-id',
+      clientSecret: 'secret',
+      authorizationEndpoint: 'https://auth.example.com/authorize',
+      tokenEndpoint: 'https://auth.example.com/token',
+    };
+    expect(isToolsetAuthValid({ ...auth, resource: 'mcp/x' })).toBe(false);
+    expect(isToolsetAuthValid({ ...auth, resource: '' })).toBe(true);
+    expect(
+      isToolsetAuthValid({ ...auth, resource: 'https://mcp.example.com/mcp' }),
+    ).toBe(true);
+  });
+
   it('requires both API key header and value for API-key login', () => {
     expect(
       isToolsetAuthValid({
@@ -188,7 +205,7 @@ describe('isToolsetAuthValid', () => {
     ).toBe(true);
   });
 
-  it('rejects invalid OAuth endpoint URLs when configured OAuth is selected, but allows them to be omitted', () => {
+  it('requires valid authorization and token endpoint URLs when configured OAuth is selected', () => {
     expect(
       isToolsetAuthValid({
         authenticationType: ToolsetAuthTypes.OAuth,
@@ -197,7 +214,18 @@ describe('isToolsetAuthValid', () => {
         clientId: 'client-id',
         clientSecret: 'client-secret',
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      isToolsetAuthValid({
+        authenticationType: ToolsetAuthTypes.OAuth,
+        withLogin: WithLogin.WithConfig,
+        isLoggedIn: false,
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: '  ',
+      }),
+    ).toBe(false);
     expect(
       isToolsetAuthValid({
         authenticationType: ToolsetAuthTypes.OAuth,
@@ -230,6 +258,21 @@ describe('isToolsetAuthValid', () => {
         isLoggedIn: false,
         clientId: 'client-id',
         clientSecret: '',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/token',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not treat a saved client secret hint as a secret when creating a toolset', () => {
+    expect(
+      isToolsetAuthValid({
+        authenticationType: ToolsetAuthTypes.OAuth,
+        withLogin: WithLogin.WithConfig,
+        isLoggedIn: false,
+        clientId: 'client-id',
+        clientSecret: '',
+        clientSecretHint: 'd4c6',
         authorizationEndpoint: 'https://auth.example.com/authorize',
         tokenEndpoint: 'https://auth.example.com/token',
       }),
@@ -272,22 +315,6 @@ describe('isToolsetFormValid', () => {
     expect(isToolsetFormValid(form)).toBe(false);
   });
 
-  it('requires a SemVer 2.0.0 version, matching DIAL Admin', () => {
-    const form = baseForm();
-
-    form.version = 'abc';
-    expect(isToolsetFormValid(form)).toBe(false);
-
-    form.version = '1.2';
-    expect(isToolsetFormValid(form)).toBe(false);
-
-    form.version = '1.0.0+build';
-    expect(isToolsetFormValid(form)).toBe(true);
-
-    form.version = '1.0.0-beta';
-    expect(isToolsetFormValid(form)).toBe(true);
-  });
-
   it('requires API key fields when API-key login is selected', () => {
     const form = baseForm();
     form.auth = {
@@ -319,7 +346,7 @@ describe('isToolsetFormValid', () => {
     expect(isToolsetFormValid(form)).toBe(true);
   });
 
-  it('requires a client id and secret when configured OAuth is selected, but not the endpoints', () => {
+  it('requires a client id, a secret and both endpoints when configured OAuth is selected', () => {
     const form = baseForm();
     form.auth = {
       authenticationType: ToolsetAuthTypes.OAuth,
@@ -332,9 +359,11 @@ describe('isToolsetFormValid', () => {
     expect(isToolsetFormValid(form)).toBe(false);
 
     form.auth.clientSecret = 'client-secret';
-    expect(isToolsetFormValid(form)).toBe(true);
+    expect(isToolsetFormValid(form)).toBe(false);
 
     form.auth.authorizationEndpoint = 'https://auth.example.com/authorize';
+    expect(isToolsetFormValid(form)).toBe(false);
+
     form.auth.tokenEndpoint = 'https://auth.example.com/token';
     expect(isToolsetFormValid(form)).toBe(true);
   });

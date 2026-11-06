@@ -65,11 +65,20 @@ export class ShareService {
     itemId: string,
     accessToken: string,
     userSub: string,
+    sessionBucket: string,
   ): Promise<RevokeSharedAccessResponseDto> {
     return this.shareManagementService.revokeShared(
       itemId,
       accessToken,
       userSub,
+      sessionBucket,
+    );
+  }
+
+  withdrawInvitation(accessToken: string, invitationId: string): Promise<void> {
+    return this.shareInvitationService.withdrawInvitation(
+      accessToken,
+      invitationId,
     );
   }
 }

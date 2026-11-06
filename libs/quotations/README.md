@@ -116,7 +116,16 @@ Availability is checked again when the user switches annotations within a card.
 Pass `isPreviewOpen` while the host's preview panel is open: a marker click
 then calls `onPreview` for the active annotation directly, without showing the
 card, so the user can switch the previewed citation from badge to badge. A
-non-previewable annotation still opens the card.
+non-previewable annotation and a group with more than one annotation still
+open the card, whose Previous/Next switcher is the only way to reach the
+group's other citations.
+
+Pass `previewFilesOnMarkerClick` (defaults to `false`) to make a marker that
+holds a single previewable file citation call `onPreview` directly even while
+the preview panel is closed, with no card. A web-link source (`text/html` or
+`application/xhtml+xml`) and a group with more than one annotation still open
+the card: the card is where a link's quote and "Open in browser" live, and its
+switcher is the only way to reach a grouped marker's other citations.
 
 ```tsx
 import {
@@ -160,11 +169,17 @@ While `isStreaming` is `true`, `processedContent` hides only complete supported 
 The hook owns no PDF-detection, attachment-DTO, or canvas-opening logic — that belongs in the host's `onPreview` implementation.
 
 Its callbacks also accept optional `isPreviewable(annotation)`, forwarded to
-`CitationDropdown`, and an optional `isPreviewOpen` boolean with the same
-meaning as the `CitationDropdown` prop. The host supplies its source classification policy: DIAL Chat
+`CitationDropdown`, and optional `isPreviewOpen` and
+`previewFilesOnMarkerClick` booleans with the same meaning as the
+`CitationDropdown` props. The host supplies its source classification policy: DIAL Chat
 keeps Preview for DIAL files and supported external file sources, and hides it
 for ordinary external web pages such as `https://data.imf.org/en/datasets/IMF.RES:WEO`.
 The library does not interpret DIAL file paths or decide which viewers the host supports.
+
+A cited paragraph takes its type step from the optional `paragraphClassName`
+(default `'dial-body-paragraph-text'`) or, when the fifth
+`isCompactTypography` argument is `true`, `compactParagraphClassName`
+(default `'dial-small-paragraph-text'`).
 
 An optional trailing `fallbackGroups` parameter (default `[]`) is a pool of groups that do not belong to this message — supplied by the host for a `<cit data-id="…">` element the message's own `groups` do not resolve. It participates only in `data-id` lookup: it is never passed to sentinel injection, so it cannot shift a marker position in `processedContent`, and a colliding id always resolves from `groups` first.
 
@@ -202,6 +217,36 @@ const { processedContent, markdownComponents } = useCitationMarkdownComponents(
 );
 ```
 
+### `useCitationTagRenderer`
+
+Returns a memoized `(dataId, children) => ReactNode` that renders a `<cit data-id="…">` element as the group's `CitationDropdown`, or as the literal markup when no `html_tag` group claims the id. It takes the same `groups`, callbacks and optional `fallbackGroups` as `useCitationMarkdownComponents` (`groups` win a colliding id), and is meant for markdown surfaces other than the message body, such as stage content: it returns no `p`/`li` overrides, so the surface keeps its own typography, and it ignores offset-based groups, whose offsets point into the message text. Prepare the surface's markdown with `prepareCitationContent` and render the result inside the same `CitationCardProvider` as the message, so one card is open at a time across both.
+
+```tsx
+import { MarkdownRenderer } from '@epam/ai-dial-chat-shared/markdown';
+import {
+  prepareCitationContent,
+  useCitationTagRenderer,
+} from '@epam/ai-dial-quotations';
+import type { ReactNode } from 'react';
+import type { Components } from 'react-markdown';
+
+const renderCitation = useCitationTagRenderer(
+  citationGroups,
+  citationCallbacks,
+  fallbackCitationGroups,
+);
+
+<MarkdownRenderer
+  content={prepareCitationContent(stage.content, isStreaming)}
+  components={
+    {
+      cit: (props: { 'data-id'?: string; children?: ReactNode }) =>
+        renderCitation(props['data-id'], props.children),
+    } as Components
+  }
+/>;
+```
+
 ## Utilities
 
 Raw `html_tag` normalization preserves an optional `body.selector` (object or array)
@@ -218,9 +263,21 @@ are omitted so quote-only streaming deltas preserve an earlier page.
 - `annotationHighlightId(annotation, fallbackIndex)` — returns the base highlight id for one annotation: `annotation.index` when the wire supplied one, otherwise an id derived from the annotation's own identity (its `cit` tag id plus a digest of its selectors), falling back to `fallbackIndex` only for an annotation carrying none of those. The id is opaque — compare it, never parse it — and a position-derived id is unique only within the list it came from, which is why it is the last resort. A base id is not guaranteed unique — a wire payload may repeat an `index` — so build a list's ids with `annotationHighlightIds`
 - `annotationHighlightIds(annotations)` — returns one id per entry, unique within the list: each entry's `annotationHighlightId` when no earlier entry holds it (so unambiguous wire indices stay `"0"`, `"1"`, …), otherwise that id with a `-<n>` suffix no other entry uses. `annotationsToPdfHighlights` and `libs/chat-hooks`'s Office/PDF canvas mappers use it, so the id selected for a clicked annotation is the one its own highlight carries
 - `getAnnotationPdfPage(annotation)` — returns the page to open from its `pdf_bbox`/`pdf_region` body selectors: the first selector with valid geometry wins, so the page matches its highlight; otherwise the first one with a positive integer `page`, so a page-only selector such as `{ type: 'pdf_region', page: 2 }` still navigates (with no highlight); returns `undefined` when no valid page exists
+- `getCitationGroupPage(group)` — returns the 1-based PDF page a citation marker refers to: `getAnnotationPdfPage(group.primaryAnnotation)`, else the `#page=N` fragment of `group.sourceUrl`. Returns `undefined` when there is no page, or when `group.sourceName` already mentions one (`page 1`, `p. 3`, `pp. 3-5`, `pg 2`, `#page=4`, case-insensitive), so a source that writes the page into its title is not labelled twice. The lib returns only the number, and the host builds the label text:
+
+  ```ts
+  import { getCitationGroupPage } from '@epam/ai-dial-quotations';
+
+  const page = getCitationGroupPage(group);
+  const label =
+    page == null ? group.sourceName : `${group.sourceName}, p. ${page}`;
+  ```
+
 - `injectCitationSentinels(content, groups)` — inserts sentinel strings at character offsets in markdown, for offset-based (non-`html_tag`) groups only
 - `stripCitTagsWhileStreaming(content)` — hides supported paired citation elements while streaming and escapes every other `cit` shape for literal display
+- `prepareCitationContent(content, isStreaming)` — prepares markdown for a surface that renders `<cit>` elements but no offset markers: `stripCitTagsWhileStreaming` while streaming, otherwise escapes every unsupported `cit` shape; never injects sentinels and returns content without `<cit` unchanged
 - `replaceSentinelsInChildren(children, renderMarker)` — replaces sentinels with React nodes in a rendered tree
+- `replaceCitTagsWithSourceNames(content, groups, fallbackGroups?, formatLabel?)` — replaces each supported `<cit data-id="…"></cit>` element that resolves to a group (message `groups` first, then `fallbackGroups`) with the Markdown-escaped `formatLabel(group)`, leaving unresolved tags untouched. `formatLabel` defaults to `(group) => group.sourceName`; pass the same text the marker shows (e.g. with its page) so copied text matches the pill. Use it before serializing content outside the renderer (e.g. the message Copy action), where the `cit` override never runs and the element would otherwise copy as nothing
 - `getReferenceAttachmentGroups(dtos)` — maps reference-only attachments to synthetic annotation groups
 - `isReferenceOnlyAttachment(dto)` — returns true for RAG/grounding chunks without a direct URL
 - `parsePdfPageReference(url)` — parses a PDF URL with optional `#page=N` fragment
@@ -299,3 +356,34 @@ is in [`openspec/lib-styling-guide.md`](../../openspec/lib-styling-guide.md).
 
 Write host overrides with CSS logical properties (`margin-inline-start`,
 `inset-inline-end`) so they keep working under `dir="rtl"`.
+
+## Remaining controller extraction contracts
+
+The following adoption matrix tracks extract-remaining-chat-reuse-controllers.
+B1?B8 and compatibility options A2/D are implemented; Packed-artifact verification and downstream adoption are tracked separately. Existing app exports and defaults are preserved.
+
+| Audit | Contract                                                                | Public entry                     | Host responsibility                                           |
+| ----- | ----------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------- |
+| B1    | createGenerationRegistry (implemented)                                  | chat-hooks root and conversation | Provider lifetime and opaque paths                            |
+| B2    | resolveActiveScheduledTask, useActiveScheduledTaskDetails (implemented) | chat-hooks/scheduled-tasks       | Routes, matcher, flags, loading callback                      |
+| B3    | useConversationTitleEnrichmentController (implemented)                  | chat-hooks/conversation          | Identity, JSON/stream adapters, bounds, protection duration   |
+| B4    | useSkillFilePreviewSyncController (implemented)                         | chat-hooks/skill-editor          | Selection, resource key, canvas operations and request guards |
+| B5    | useExternalServiceLogin (implemented)                                   | chat-hooks/external-services     | Auth callbacks, callback path and reserved popup              |
+| B6    | useDeploymentChangeTracking (implemented)                               | chat-hooks/conversation          | Conversation identity, selected deployment and change sink    |
+| B7    | useHtmlTagAnnotationGroups (implemented)                                | quotations root                  | Extract persisted annotations                                 |
+| B8    | toConversationTransferQueueItems (implemented)                          | chat-shared root                 | Translated error/warning resolvers                            |
+| A2    | uploadMimeTypePolicy (implemented)                                      | Existing transcription API       | Preserve default; normalize opt-in                            |
+| D     | offsetPolicy (implemented)                                              | Existing reset-time formatter    | Current-offset default; reset-instant opt-in                  |
+
+Only B5 adds a subpath. B8 uses the existing shared root and leaves the
+file-manager mapper unchanged. A1 is already complete and outside this work.
+Downstream ExternalService callback dispatch must be adopted in the downstream
+repository; parent implementation does not prove downstream adoption or publish
+packages.
+
+### Defensive annotation grouping
+
+useHtmlTagAnnotationGroups accepts unknown annotation input, filters supported html-tag
+selectors and delegates to groupAnnotationsByCitId. Unchanged input preserves the result
+identity; inputs without usable groups share one empty array. Hosts extract annotations
+from their own persistence schema before calling this hook.

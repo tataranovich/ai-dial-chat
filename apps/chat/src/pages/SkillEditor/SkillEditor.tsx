@@ -1,9 +1,14 @@
 import { useAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
-import { TextRefinementPurpose } from '@epam/ai-dial-chat-api-client';
 import {
+  CatalogCreationType,
+  TextRefinementPurpose,
+} from '@epam/ai-dial-chat-api-client';
+import {
+  createSkillFolderLister,
   isValidSkillRelativePath,
   parseSkillResourceUrl,
   SkillEditorLoadState,
+  SKILL_FILE_UPLOAD_MAX_BYTES,
   SKILL_MANIFEST_FILE,
   useSkillEditorLoad,
   useSkillEditorSubmit,
@@ -12,32 +17,52 @@ import {
   type SkillEditorSubmitClient,
   type SkillEditorSubmitMessages,
   type SkillEditorSubmitNotification,
+  type ResourceSaveAdapter,
+  type ResourceSaveResult,
   type SkillFileActionsMessages,
 } from '@epam/ai-dial-chat-hooks';
 import {
+  CatalogEntityType,
+  formatFileSize,
   PUBLIC_BUCKET,
-  useUnsavedChangesGuard,
 } from '@epam/ai-dial-chat-shared';
 import {
   SkillEditor as SkillEditorForm,
   type SkillEditorLabels,
+  type SkillEditorValues,
 } from '@epam/ai-dial-skill-editor';
 import {
   ConfirmationPopup,
   ConfirmationPopupVariant,
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
   EditorThemes,
-  ErrorText,
   NotificationVariant,
   PrimaryButton,
+  StateScreen,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
+import { IconAlertTriangle } from '@tabler/icons-react';
 import type { FC } from 'react';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router';
+import RequireCatalogCreation from '../../components/RequireCatalogCreation/RequireCatalogCreation';
 import { SkillFilePreview } from '../../components/SkillFilePreview/SkillFilePreview';
 import SkillFileSystemModal from '../../components/SkillFileSystemModal/SkillFileSystemModal';
 import {
   ButtonsI18nKeys,
+  CatalogI18nKeys,
+  DialFileManagerI18nKeys,
   EditorI18nKeys,
   SkillEditorI18nKeys,
 } from '../../constants/translation-keys';
@@ -46,16 +71,21 @@ import { useNotification } from '../../context/NotificationContext';
 import { useSkills } from '../../context/SkillsContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useSkillFilePreviewSync } from '../../hooks/attachment/useSkillFilePreviewSync';
+import { useCatalogCreationDecision } from '../../hooks/catalog/useCatalogCreationDecision';
 import { useSkillFileSystemPicker } from '../../hooks/skills/useSkillFileSystemPicker';
+import { useBuilderLeaveGuard } from '../../hooks/unsaved-changes/useBuilderLeaveGuard';
 import { useTextRefinementCallback } from '../../hooks/useTextRefinementCallback';
 import { useTextRefinementLabels } from '../../hooks/useTextRefinementLabels';
+import { skillsApi } from '../../server-api/api-client';
 import {
   createSkill,
   downloadSkill,
   downloadSkillFile,
   listSkillFiles,
+  moveSkill,
   updateSkill,
 } from '../../server-api/skills.api';
+import { CatalogCreationDecision } from '../../types/catalog-creation';
 import { EditorQuery } from '../../types/editor-query';
 import {
   EntityOperation,
@@ -71,10 +101,22 @@ const skillEditorLoadClient: SkillEditorLoadClient = {
   listSkillFiles,
 };
 
-const skillEditorSubmitClient: SkillEditorSubmitClient = {
-  createSkill,
-  updateSkill,
-};
+/* Used while creation is not allowed: the reusable submit workflow (its
+ * retry included) then has no way to create, without knowing why. */
+const blockedCreateSkill: SkillEditorSubmitClient['createSkill'] = () =>
+  Promise.reject(new Error('Skill creation is not allowed'));
+
+/* Loaded on the first Save, so opening the editor fetches no folder listing. */
+const ResourceSavePanelContainer = lazy(
+  async () =>
+    import('../../components/ResourceSavePanelContainer/ResourceSavePanelContainer'),
+);
+
+/** What the Save panel needs for the save it was opened for. */
+interface SkillSaveRequest {
+  adapter: ResourceSaveAdapter;
+  name: string;
+}
 
 /* Stands in for the skill path while creating a skill that has none yet, so a
  * create-mode preview is still scoped to its own resource. */
@@ -119,6 +161,19 @@ const SkillEditorPage: FC = () => {
 
   const rawId = searchParams.get(EditorQuery.Id);
   const isEditMode = rawId != null && rawId !== '';
+  const creationDecision = useCatalogCreationDecision({
+    type: CatalogCreationType.Skill,
+  });
+  const isCreationAllowed =
+    creationDecision === CatalogCreationDecision.Allowed;
+  const skillEditorSubmitClient = useMemo<SkillEditorSubmitClient>(
+    () => ({
+      createSkill: isCreationAllowed ? createSkill : blockedCreateSkill,
+      updateSkill,
+      moveSkill,
+    }),
+    [isCreationAllowed],
+  );
   const skillResource = useMemo(() => {
     if (!isEditMode) {
       return personalBucket
@@ -168,12 +223,51 @@ const SkillEditorPage: FC = () => {
 
   const [selectedPath, setSelectedPath] = useState(SKILL_MANIFEST_FILE);
   const [isDirty, setIsDirty] = useState(false);
-  const {
-    guard: guardLeave,
-    isConfirmOpen: isLeaveConfirmOpen,
-    confirm: confirmLeave,
-    dismiss: dismissLeave,
-  } = useUnsavedChangesGuard(isDirty);
+  const { allowNextNavigation } = useBuilderLeaveGuard({ isDirty });
+  /* A successful save exits while `isDirty` may still read `true`. */
+  const handleSubmitNavigate = useCallback(
+    (url: string) => {
+      allowNextNavigation();
+      navigate(url);
+    },
+    [allowNextNavigation, navigate],
+  );
+  /*
+   * A new skill, or the user's own, saves through the Save panel, which picks
+   * the folder and may publish it; a skill shared with the user saves in
+   * place, because moving acts on the caller's own bucket.
+   */
+  const isSavePanelFlow =
+    !isEditMode ||
+    (personalBucket != null && skillResource?.bucket === personalBucket);
+  const [saveRequest, setSaveRequest] = useState<SkillSaveRequest>();
+  const [isSavePanelOpen, setIsSavePanelOpen] = useState(false);
+  const handleSaveRequest = useCallback(
+    (adapter: ResourceSaveAdapter, values: SkillEditorValues) => {
+      setSaveRequest({ adapter, name: values.name.trim() });
+      setIsSavePanelOpen(true);
+    },
+    [],
+  );
+  const handleSavePanelClose = useCallback(() => setIsSavePanelOpen(false), []);
+  const handleSavePanelSaved = useCallback(
+    (result: ResourceSaveResult) => {
+      setIsSavePanelOpen(false);
+      handleSubmitNavigate(
+        result.isCreated
+          ? `${ROUTES.Catalog}?${new URLSearchParams({ itemId: result.savedId }).toString()}`
+          : returnUrl,
+      );
+    },
+    [handleSubmitNavigate, returnUrl],
+  );
+  const listSkillFolders = useMemo(
+    () =>
+      personalBucket
+        ? createSkillFolderLister(skillsApi, personalBucket)
+        : undefined,
+    [personalBucket],
+  );
   const [pendingReload, setPendingReload] = useState(false);
   const [hasReturnedToManifest, setHasReturnedToManifest] = useState(false);
 
@@ -194,13 +288,6 @@ const SkillEditorPage: FC = () => {
           `${CANVAS_SCOPE_SEPARATOR}${selectedPath}`,
     [bucket, skillPath, isManifestSelected, selectedPath],
   );
-
-  const { state: previewState, retry: retryPreview } = useSkillFilePreviewSync({
-    selectedPath,
-    canvasAttachmentId,
-    files,
-    filesContentRef,
-  });
 
   const handleSelectedPathChange = useCallback((path: string) => {
     setSelectedPath(path);
@@ -234,20 +321,32 @@ const SkillEditorPage: FC = () => {
 
   const fileSystemPicker = useSkillFileSystemPicker(bucket);
 
-  const { fileActions, pendingManifestImport, resolveManifestImport } =
-    useSkillFileActions({
-      files,
-      setFiles,
-      filesContentRef,
-      frontmatterRef,
-      loadedValues,
-      setLoadedValues,
-      isEditMode,
-      isDirty,
-      setSelectedPath,
-      messages: fileActionsMessages,
-      pickFromFileSystem: fileSystemPicker.pickFromFileSystem,
-    });
+  const {
+    fileActions,
+    pendingManifestImport,
+    resolveManifestImport,
+    contentRevisions,
+  } = useSkillFileActions({
+    files,
+    setFiles,
+    filesContentRef,
+    frontmatterRef,
+    loadedValues,
+    setLoadedValues,
+    isEditMode,
+    isDirty,
+    setSelectedPath,
+    messages: fileActionsMessages,
+    pickFromFileSystem: fileSystemPicker.pickFromFileSystem,
+  });
+
+  const { state: previewState, retry: retryPreview } = useSkillFilePreviewSync({
+    selectedPath,
+    canvasAttachmentId,
+    files,
+    filesContentRef,
+    contentRevision: contentRevisions[selectedPath],
+  });
 
   const submitMessages = useMemo<SkillEditorSubmitMessages>(
     () => ({
@@ -293,6 +392,7 @@ const SkillEditorPage: FC = () => {
     isEditMode,
     files,
     filesContentRef,
+    contentRevisions,
     frontmatterRef,
     loadedPathRef,
     etagRef,
@@ -301,8 +401,9 @@ const SkillEditorPage: FC = () => {
     refetchSkills,
     client: skillEditorSubmitClient,
     messages: submitMessages,
-    onNavigate: navigate,
+    onNavigate: handleSubmitNavigate,
     onNotify: handleSubmitNotification,
+    onSaveRequest: isSavePanelFlow ? handleSaveRequest : undefined,
   });
 
   /*
@@ -334,15 +435,37 @@ const SkillEditorPage: FC = () => {
     navigate(returnUrl);
   }, [navigate, returnUrl]);
 
-  const handleCancel = useCallback(() => {
-    guardLeave(navigateAway);
-  }, [guardLeave, navigateAway]);
+  /* The form may have opened under a permission the current config no
+   * longer grants; nothing is created then. */
+  const handleFormSubmit = useCallback(
+    (values: SkillEditorValues) => {
+      if (!isEditMode && !isCreationAllowed) {
+        showErrorNotification({
+          message: t(
+            creationDecision === CatalogCreationDecision.Denied
+              ? CatalogI18nKeys.CreationDenied
+              : CatalogI18nKeys.CreationUnavailable,
+          ),
+        });
+        return;
+      }
+      return handleSubmit(values);
+    },
+    [
+      creationDecision,
+      handleSubmit,
+      isCreationAllowed,
+      isEditMode,
+      showErrorNotification,
+      t,
+    ],
+  );
 
   /*
    * Back is preview-aware: while a supporting file is selected it is a return
    * to the `SKILL.md` view inside the editor, not a navigation, so it neither
    * resolves `returnUrl` nor raises the unsaved-changes guard. From the
-   * manifest view it keeps today's exit behavior.
+   * manifest view it leaves, and the router-level guard intercepts that.
    */
   const handleBack = useCallback(() => {
     if (!isManifestSelected) {
@@ -350,8 +473,8 @@ const SkillEditorPage: FC = () => {
       setHasReturnedToManifest(true);
       return;
     }
-    handleCancel();
-  }, [isManifestSelected, handleCancel]);
+    navigateAway();
+  }, [isManifestSelected, navigateAway]);
 
   const handleReloadLatestClick = useCallback(() => {
     setPendingReload(true);
@@ -373,8 +496,6 @@ const SkillEditorPage: FC = () => {
       uploadFilesLabel: t(SkillEditorI18nKeys.UploadDialogTitle),
       uploadArchiveLabel: t(SkillEditorI18nKeys.UploadArchive),
       openFileSystemLabel: t(SkillEditorI18nKeys.OpenFileSystem),
-      addChildLabel: t(SkillEditorI18nKeys.AddChild),
-      addSiblingLabel: t(SkillEditorI18nKeys.AddSibling),
       deleteLabel: t(ButtonsI18nKeys.Delete),
       newFolderDefaultName: t(SkillEditorI18nKeys.NewFolderDefaultName),
       folderNameRequiredError: t(SkillEditorI18nKeys.FolderNameRequired),
@@ -394,12 +515,13 @@ const SkillEditorPage: FC = () => {
       nameLabel: t(SkillEditorI18nKeys.NameLabel),
       namePlaceholder: t(SkillEditorI18nKeys.NamePlaceholder),
       nameCaption: t(SkillEditorI18nKeys.NameCaption),
+      nameReadOnlyTooltip: t(SkillEditorI18nKeys.NameReadOnlyTooltip),
       descriptionLabel: t(SkillEditorI18nKeys.DescriptionLabel),
       descriptionPlaceholder: t(SkillEditorI18nKeys.DescriptionPlaceholder),
       instructionsLabel: t(SkillEditorI18nKeys.InstructionsLabel),
       instructionsPlaceholder: t(SkillEditorI18nKeys.InstructionsPlaceholder),
       createLabel: isEditMode
-        ? t(SkillEditorI18nKeys.SaveLabel)
+        ? t(ButtonsI18nKeys.Save)
         : t(ButtonsI18nKeys.Create),
       cancelLabel: t(ButtonsI18nKeys.Cancel),
       retryLabel: t(ButtonsI18nKeys.Retry),
@@ -409,12 +531,26 @@ const SkillEditorPage: FC = () => {
           : loadState === SkillEditorLoadState.NotFound
             ? t(SkillEditorI18nKeys.LoadErrorNotFound)
             : t(SkillEditorI18nKeys.LoadError),
-      savingStatusLabel: t(SkillEditorI18nKeys.SavingStatus),
+      savingStatusLabel: t(ButtonsI18nKeys.Saving),
       loadingAriaLabel: t(SkillEditorI18nKeys.LoadingAriaLabel),
       instructionsLoadingAriaLabel: t(
         SkillEditorI18nKeys.InstructionsLoadingAriaLabel,
       ),
       supportingFileNote: t(SkillEditorI18nKeys.SupportingFileNote),
+      folderPreviewRootLabel: t(SkillEditorI18nKeys.FolderPreviewRootLabel),
+      folderPreviewBreadcrumbAriaLabel: t(
+        SkillEditorI18nKeys.FolderPreviewBreadcrumbAriaLabel,
+      ),
+      folderPreviewOverflowAriaLabel: t(
+        SkillEditorI18nKeys.FolderPreviewOverflowAriaLabel,
+      ),
+      folderPreviewListAriaLabel: t(
+        SkillEditorI18nKeys.FolderPreviewListAriaLabel,
+      ),
+      folderEmptyTitle: t(SkillEditorI18nKeys.FolderEmptyTitle),
+      folderEmptyDescription: t(SkillEditorI18nKeys.FolderEmptyDescription),
+      folderItemCountLabel: (count: number) =>
+        t(SkillEditorI18nKeys.FolderItemCount, { count }),
       reloadLatestLabel: t(SkillEditorI18nKeys.ReloadLatestLabel),
       uploadDialogTitle: t(SkillEditorI18nKeys.UploadDialogTitle),
       uploadDialogCloseAriaLabel: t(ButtonsI18nKeys.Close),
@@ -433,128 +569,173 @@ const SkillEditorPage: FC = () => {
       ),
       dropOverlayTitle: t(SkillEditorI18nKeys.DropOverlayTitle),
       dropOverlaySubtitle: t(SkillEditorI18nKeys.DropOverlaySubtitle),
+      uploadDropZoneDescription: t(DialFileManagerI18nKeys.MaxSizeOnly, {
+        maxSize: formatFileSize(SKILL_FILE_UPLOAD_MAX_BYTES),
+      }),
+      uploadArchiveDropZoneDescription: t(
+        SkillEditorI18nKeys.UploadArchiveFormats,
+      ),
+      uploadConflictTitle: t(SkillEditorI18nKeys.UploadConflictTitle),
+      uploadConflictMessage: (path) =>
+        t(SkillEditorI18nKeys.UploadConflictMessage, { path }),
+      uploadConflictReplaceLabel: t(ButtonsI18nKeys.Replace),
+      uploadConflictDuplicateLabel: t(ButtonsI18nKeys.Duplicate),
+      uploadConflictConfirmLabel: t(ButtonsI18nKeys.Confirm),
+      uploadReplaceRowNote: t(SkillEditorI18nKeys.UploadReplaceRowNote),
+      createFolderNameLabel: t(SkillEditorI18nKeys.NameLabel),
+      createFolderNamePlaceholder: t(
+        SkillEditorI18nKeys.CreateFolderNamePlaceholder,
+      ),
+      createFolderCloseAriaLabel: t(ButtonsI18nKeys.Close),
+      createFolderConfirmLabel: t(ButtonsI18nKeys.Create),
     }),
     [t, isEditMode, loadState, refinementLabels],
   );
 
   if (!bucket) {
     return (
-      <div
-        role="alert"
-        className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center"
-      >
-        <h1 className="dial-h1-text">
-          {t(SkillEditorI18nKeys.BucketMissingTitle)}
-        </h1>
-        <ErrorText text={t(SkillEditorI18nKeys.BucketMissingMessage)} />
-        <PrimaryButton
-          label={t(ButtonsI18nKeys.Cancel)}
-          onClick={handleCancel}
+      <div className="h-full">
+        <StateScreen
+          icon={
+            <IconAlertTriangle
+              aria-hidden
+              size={DIAL_ICON_SIZE.LG}
+              stroke={DIAL_KIT_ICON_STROKE}
+            />
+          }
+          title={t(SkillEditorI18nKeys.BucketMissingTitle)}
+          description={t(SkillEditorI18nKeys.BucketMissingMessage)}
+          action={
+            <PrimaryButton
+              label={t(ButtonsI18nKeys.Cancel)}
+              onClick={navigateAway}
+            />
+          }
         />
       </div>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {/* Announces the return to the manifest view; the Back control keeps
+    <RequireCatalogCreation
+      isCreateMode={!isEditMode}
+      type={CatalogCreationType.Skill}
+    >
+      <div className="flex h-full min-h-0 flex-col">
+        {/* Announces the return to the manifest view; the Back control keeps
           focus across the transition, so nothing else signals the change. */}
-      <span role="status" aria-live="polite" className="sr-only">
-        {hasReturnedToManifest && isManifestSelected
-          ? t(SkillEditorI18nKeys.ReturnedToManifestStatus)
-          : ''}
-      </span>
+        <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
+          {hasReturnedToManifest && isManifestSelected
+            ? t(SkillEditorI18nKeys.ReturnedToManifestStatus)
+            : ''}
+        </LiveRegion>
 
-      <SkillEditorForm
-        key={`${bucket}/${skillPath ?? NEW_SKILL_CANVAS_SCOPE}`}
-        onRefineDescription={onRefineDescription}
-        onRefineInstructions={onRefineInstructions}
-        initialValues={loadedValues}
-        files={files}
-        selectedPath={selectedPath}
-        onSelectedPathChange={handleSelectedPathChange}
-        isLoading={loadState === SkillEditorLoadState.Loading}
-        hasLoadError={
-          loadState === SkillEditorLoadState.Error ||
-          loadState === SkillEditorLoadState.Forbidden ||
-          loadState === SkillEditorLoadState.NotFound
-        }
-        isSubmitting={phase === 'submitting'}
-        errors={errors}
-        submitError={submitError}
-        onRetrySubmit={isSubmitErrorRetryable ? retrySubmit : undefined}
-        conflict={conflict}
-        onReloadLatest={handleReloadLatestClick}
-        isNameReadOnly={isEditMode}
-        onDirtyChange={setIsDirty}
-        onValuesChange={handleValuesChange}
-        fileActions={fileActions}
-        supportingFileContent={
-          <SkillFilePreview state={previewState} onRetry={retryPreview} />
-        }
-        labels={labels}
-        onSubmit={handleSubmit}
-        onCancel={handleCancel}
-        onBack={handleBack}
-        onRetry={retryLoad}
-        backAriaLabel={
-          isManifestSelected
-            ? t(SkillEditorI18nKeys.BackAriaLabel)
-            : t(SkillEditorI18nKeys.BackToManifestAriaLabel)
-        }
-        title={
-          isEditMode
-            ? t(SkillEditorI18nKeys.EditTitle)
-            : t(SkillEditorI18nKeys.Title)
-        }
-        instructionsEditorTheme={
-          currentTheme === ThemeId.Dark ? EditorThemes.dark : EditorThemes.light
-        }
-      />
+        <SkillEditorForm
+          key={`${bucket}/${skillPath ?? NEW_SKILL_CANVAS_SCOPE}`}
+          onRefineDescription={onRefineDescription}
+          onRefineInstructions={onRefineInstructions}
+          initialValues={loadedValues}
+          files={files}
+          selectedPath={selectedPath}
+          onSelectedPathChange={handleSelectedPathChange}
+          isLoading={loadState === SkillEditorLoadState.Loading}
+          hasLoadError={
+            loadState === SkillEditorLoadState.Error ||
+            loadState === SkillEditorLoadState.Forbidden ||
+            loadState === SkillEditorLoadState.NotFound
+          }
+          isSubmitting={phase === 'submitting'}
+          errors={errors}
+          submitError={submitError}
+          onRetrySubmit={isSubmitErrorRetryable ? retrySubmit : undefined}
+          conflict={conflict}
+          onReloadLatest={handleReloadLatestClick}
+          isNameReadOnly={isEditMode}
+          onDirtyChange={setIsDirty}
+          onValuesChange={handleValuesChange}
+          fileActions={fileActions}
+          supportingFileContent={
+            <SkillFilePreview state={previewState} onRetry={retryPreview} />
+          }
+          labels={labels}
+          onSubmit={handleFormSubmit}
+          onCancel={navigateAway}
+          onBack={handleBack}
+          onRetry={retryLoad}
+          backAriaLabel={
+            isManifestSelected
+              ? t(ButtonsI18nKeys.Back)
+              : t(SkillEditorI18nKeys.BackToManifestAriaLabel)
+          }
+          title={
+            isEditMode
+              ? t(SkillEditorI18nKeys.EditTitle)
+              : t(SkillEditorI18nKeys.Title)
+          }
+          instructionsEditorTheme={
+            currentTheme === ThemeId.Dark
+              ? EditorThemes.dark
+              : EditorThemes.light
+          }
+        />
 
-      <ConfirmationPopup
-        open={isLeaveConfirmOpen}
-        header={t(SkillEditorI18nKeys.UnsavedChangesTitle)}
-        description={t(SkillEditorI18nKeys.UnsavedChangesMessage)}
-        confirmLabel={t(SkillEditorI18nKeys.UnsavedChangesConfirmLabel)}
-        cancelLabel={t(SkillEditorI18nKeys.UnsavedChangesCancelLabel)}
-        variant={ConfirmationPopupVariant.Danger}
-        onConfirm={confirmLeave}
-        onCancel={dismissLeave}
-        onClose={dismissLeave}
-      />
+        <ConfirmationPopup
+          open={pendingReload}
+          header={t(SkillEditorI18nKeys.ReloadConfirmTitle)}
+          description={t(SkillEditorI18nKeys.ReloadConfirmMessage)}
+          confirmLabel={t(ButtonsI18nKeys.Reload)}
+          cancelLabel={t(ButtonsI18nKeys.Cancel)}
+          variant={ConfirmationPopupVariant.Danger}
+          onConfirm={confirmReloadLatest}
+          onCancel={() => setPendingReload(false)}
+          onClose={() => setPendingReload(false)}
+        />
 
-      <ConfirmationPopup
-        open={pendingReload}
-        header={t(SkillEditorI18nKeys.ReloadConfirmTitle)}
-        description={t(SkillEditorI18nKeys.ReloadConfirmMessage)}
-        confirmLabel={t(SkillEditorI18nKeys.ReloadConfirmLabel)}
-        cancelLabel={t(SkillEditorI18nKeys.ReloadCancelLabel)}
-        variant={ConfirmationPopupVariant.Danger}
-        onConfirm={confirmReloadLatest}
-        onCancel={() => setPendingReload(false)}
-        onClose={() => setPendingReload(false)}
-      />
+        <SkillFileSystemModal
+          isOpen={fileSystemPicker.isOpen}
+          bucket={bucket}
+          onAttach={fileSystemPicker.handleAttach}
+          onClose={fileSystemPicker.handleClose}
+        />
 
-      <SkillFileSystemModal
-        isOpen={fileSystemPicker.isOpen}
-        bucket={bucket}
-        onAttach={fileSystemPicker.handleAttach}
-        onClose={fileSystemPicker.handleClose}
-      />
+        <ConfirmationPopup
+          open={pendingManifestImport}
+          header={t(SkillEditorI18nKeys.ManifestImportConfirmTitle)}
+          description={t(SkillEditorI18nKeys.ManifestImportConfirmMessage)}
+          confirmLabel={t(ButtonsI18nKeys.Replace)}
+          cancelLabel={t(ButtonsI18nKeys.Cancel)}
+          variant={ConfirmationPopupVariant.Danger}
+          onConfirm={() => resolveManifestImport(true)}
+          onCancel={() => resolveManifestImport(false)}
+          onClose={() => resolveManifestImport(false)}
+        />
 
-      <ConfirmationPopup
-        open={pendingManifestImport}
-        header={t(SkillEditorI18nKeys.ManifestImportConfirmTitle)}
-        description={t(SkillEditorI18nKeys.ManifestImportConfirmMessage)}
-        confirmLabel={t(ButtonsI18nKeys.Replace)}
-        cancelLabel={t(ButtonsI18nKeys.Cancel)}
-        variant={ConfirmationPopupVariant.Danger}
-        onConfirm={() => resolveManifestImport(true)}
-        onCancel={() => resolveManifestImport(false)}
-        onClose={() => resolveManifestImport(false)}
-      />
-    </div>
+        {saveRequest && listSkillFolders && (
+          <Suspense fallback={null}>
+            <ResourceSavePanelContainer
+              isOpen={isSavePanelOpen}
+              onClose={handleSavePanelClose}
+              adapter={saveRequest.adapter}
+              listPersonalFolders={listSkillFolders}
+              resourceId={
+                isEditMode && bucket && skillPath
+                  ? `skills/${bucket}/${skillPath}`
+                  : ''
+              }
+              currentFolderPath={
+                isEditMode && skillPath ? skillPath.split('/').slice(0, -1) : []
+              }
+              resourceName={saveRequest.name}
+              resourceType={CatalogEntityType.Skill}
+              typeLabel={t(CatalogI18nKeys.CreateSkill)}
+              notifiableEntity={NotifiableEntity.Skill}
+              canPublish
+              onSaved={handleSavePanelSaved}
+            />
+          </Suspense>
+        )}
+      </div>
+    </RequireCatalogCreation>
   );
 };
 

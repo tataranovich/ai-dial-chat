@@ -59,6 +59,8 @@ export enum PublicationResourceAction {
 interface PublicationResourceLike {
   action?: string;
   sourceUrl?: string;
+  /** The published copy's path under `public/`; the one url `publish` and `unpublish` both derive the same way. */
+  targetUrl?: string;
   /** Core's own flag: this resource was published together with the publisher's credential for it. */
   publishCredentials?: boolean;
 }
@@ -161,6 +163,13 @@ export const getPublicationSourceCredentials = (
 ): boolean =>
   findPublishingResource(publication, sourceUrl)?.publishCredentials === true;
 
+/** The published copy's path the publication sends `sourceUrl` to, or `undefined` when it does not publish it. */
+export const getPublicationSourceTargetUrl = (
+  publication: PublicationLike,
+  sourceUrl: string,
+): string | undefined =>
+  findPublishingResource(publication, sourceUrl)?.targetUrl;
+
 /**
  * Whether `publication` publishes `sourceUrl`.
  *
@@ -184,6 +193,10 @@ export const publishesSource = (
  * Whether `publication` requests the removal of `sourceUrl`.
  *
  * Says nothing about whether the removal has happened — that is `status`.
+ * Catalog Unpublish acts on the published copy, so its removal names the public
+ * path rather than the author's own url and is not recognised here; it is
+ * paired with its `ADD` by `targetUrl` instead (see
+ * `resolvePublicationsForSource`).
  */
 export const removesSource = (
   publication: PublicationLike,
@@ -242,6 +255,42 @@ const toTargetFolderKey = (targetFolder: string | undefined): string => {
   return decoded.endsWith('/') ? decoded.slice(0, -1) : decoded;
 };
 
+/*
+ * Identity of a published copy: its folder plus its `targetUrl`, both decoded
+ * so a percent-encoded value on one side still equals plain text on the other.
+ */
+const toPublishedCopyKey = (
+  targetFolder: string | undefined,
+  targetUrl: string,
+): string =>
+  `${toTargetFolderKey(targetFolder)}\n${safeDecodeURIComponent(targetUrl)}`;
+
+/*
+ * The published copy `publication` creates for `sourceUrl`, or `undefined` when
+ * it creates none or Core reported no `targetUrl` for it.
+ */
+const getAddedCopyKey = (
+  publication: PublicationLike,
+  sourceUrl: string,
+): string | undefined => {
+  const targetUrl = findPublishingResource(publication, sourceUrl)?.targetUrl;
+  return targetUrl
+    ? toPublishedCopyKey(publication.targetFolder, targetUrl)
+    : undefined;
+};
+
+/* The published copies `publication` asks to remove. */
+const getRemovedCopyKeys = (publication: PublicationLike): string[] =>
+  (publication.resources ?? [])
+    .filter(
+      (resource) =>
+        resource.action === PublicationResourceAction.Delete &&
+        resource.targetUrl,
+    )
+    .map((resource) =>
+      toPublishedCopyKey(publication.targetFolder, resource.targetUrl ?? ''),
+    );
+
 /**
  * Narrows a bucket-wide publication list to the publications the resource is
  * *currently* published by, re-fetching each candidate's full record.
@@ -275,6 +324,16 @@ const toTargetFolderKey = (targetFolder: string | undefined): string => {
  * anything — a `PENDING` one changes nothing, because the copy is live until it
  * is approved, and neither does one whose status Core did not report.
  *
+ * **A removal is paired with its `ADD` by the published copy it targets.**
+ * Catalog Unpublish runs on the public copy, so its `DELETE` carries the public
+ * path as both `sourceUrl` and `targetUrl` and never the author's own url that
+ * the `ADD` carries as `sourceUrl` — pairing by `sourceUrl` alone left the
+ * folder listed after an approved removal
+ * ([#9172](https://github.com/epam/ai-dial-chat/issues/9172)). So an approved
+ * `DELETE` also cancels every older `ADD` whose folder and `targetUrl` equal its
+ * own, and a removal of a different copy cancels nothing. The `sourceUrl`
+ * pairing above stays for removals that do name the entity's own url.
+ *
  * A publication that already carries `resources` is matched without a round
  * trip, so a Core (or SDK mock) that does embed them costs nothing extra.
  *
@@ -285,6 +344,182 @@ const toTargetFolderKey = (targetFolder: string | undefined): string => {
 export const resolvePublicationsForSource = async <T extends PublicationLike>(
   publications: T[],
   sourceUrl: string,
+  fetchPublication: (url: string) => Promise<T | null>,
+  logger?: Logger,
+  context?: string,
+): Promise<T[]> => {
+  const referencing = await resolvePublicationDetails(
+    publications,
+    fetchPublication,
+    logger,
+    context,
+  );
+
+  /*
+   * An undateable approved removal wins over everything in its folder
+   * (`+Infinity`) and an undateable `ADD` loses to any removal (`0`): a
+   * removal Core reports as approved is the more recent statement of what
+   * exists, and offering Unpublish for a copy Core has deleted is the failure
+   * this cancellation exists to prevent.
+   *
+   * The trade-off this makes deliberately: `+Infinity` also cancels an `ADD`
+   * created *after* the removal, so an undateable removal hides Unpublish for
+   * a genuine re-publish and offers a Publish that Core rejects because the
+   * target already exists. Both outcomes are one wrong menu entry, and this
+   * one is recoverable (the panel lists the folder, the error names the
+   * conflict) while the other leaves a request that can never succeed. Core
+   * stamps every publication, so the fallback only fires on a response that
+   * omitted `createdAt` — logged below rather than applied silently, and
+   * pinned by "cancels a later ADD when the approved removal cannot be dated"
+   * in `publication.util.spec.ts`.
+   */
+  const removedAtByFolder = new Map<string, number>();
+  const removedAtByCopy = new Map<string, number>();
+  const addedCopyKeys = new Set(
+    referencing
+      .filter((publication) => publishesSource(publication, sourceUrl))
+      .map((publication) => getAddedCopyKey(publication, sourceUrl))
+      .filter((key): key is string => key != null),
+  );
+  for (const publication of referencing) {
+    if (!isApprovedRemoval(publication.status)) {
+      continue;
+    }
+    const removesOwnUrl = removesSource(publication, sourceUrl);
+    const removedCopyKeys = getRemovedCopyKeys(publication).filter((key) =>
+      addedCopyKeys.has(key),
+    );
+    if (!removesOwnUrl && removedCopyKeys.length === 0) {
+      continue;
+    }
+    const folderKey = toTargetFolderKey(publication.targetFolder);
+    const removedAt = toPublicationTime(
+      publication.createdAt,
+      Number.POSITIVE_INFINITY,
+    );
+    if (!Number.isFinite(removedAt)) {
+      logger?.warn(
+        `Approved removal "${publication.url ?? '(no url)'}" carries no usable createdAt${
+          context ? ` for ${context}` : ''
+        } — cancelling every matching ADD in "${folderKey}", a re-publish included`,
+      );
+    }
+    if (removesOwnUrl) {
+      removedAtByFolder.set(
+        folderKey,
+        Math.max(
+          removedAtByFolder.get(folderKey) ?? Number.NEGATIVE_INFINITY,
+          removedAt,
+        ),
+      );
+    }
+    for (const copyKey of removedCopyKeys) {
+      removedAtByCopy.set(
+        copyKey,
+        Math.max(
+          removedAtByCopy.get(copyKey) ?? Number.NEGATIVE_INFINITY,
+          removedAt,
+        ),
+      );
+    }
+  }
+
+  if (removedAtByFolder.size + removedAtByCopy.size > 0) {
+    logger?.debug(
+      `Applying ${removedAtByFolder.size + removedAtByCopy.size} approved removal(s)${context ? ` for ${context}` : ''}`,
+    );
+  }
+
+  return referencing.filter((publication) => {
+    if (!publishesSource(publication, sourceUrl)) {
+      return false;
+    }
+    const addedAt = toPublicationTime(publication.createdAt, 0);
+    const copyKey = getAddedCopyKey(publication, sourceUrl);
+    return [
+      removedAtByFolder.get(toTargetFolderKey(publication.targetFolder)),
+      copyKey == null ? undefined : removedAtByCopy.get(copyKey),
+    ].every((removedAt) => removedAt == null || addedAt > removedAt);
+  });
+};
+
+/**
+ * Whether `publications` hold a live publication of the published copy at
+ * `copyUrl` — an `APPROVED` (or unlabelled) publishing resource whose
+ * `targetUrl` is that copy, not cancelled by an `APPROVED` removal of the same
+ * folder and `targetUrl` created at or after it.
+ *
+ * Read off the caller's own bucket, this is what makes the caller the copy's
+ * publisher. It matches by `targetUrl` because a public copy's id names the
+ * copy, never the author's source url the `ADD` carries as `sourceUrl`.
+ * Undateable records are ordered as in `resolvePublicationsForSource`: an
+ * undateable approved removal cancels every matching `ADD`.
+ */
+export const publishesCopy = (
+  publications: PublicationLike[],
+  copyUrl: string,
+): boolean => {
+  const addedAtByCopy = new Map<string, number>();
+  for (const publication of publications) {
+    if (!isDetailCandidate(publication.status)) {
+      continue;
+    }
+    for (const resource of publication.resources ?? []) {
+      if (
+        resource.action === PublicationResourceAction.Delete ||
+        !resource.targetUrl ||
+        !isSameResourceUrl(resource.targetUrl, copyUrl)
+      ) {
+        continue;
+      }
+      const copyKey = toPublishedCopyKey(
+        publication.targetFolder,
+        resource.targetUrl,
+      );
+      addedAtByCopy.set(
+        copyKey,
+        Math.max(
+          addedAtByCopy.get(copyKey) ?? Number.NEGATIVE_INFINITY,
+          toPublicationTime(publication.createdAt, 0),
+        ),
+      );
+    }
+  }
+
+  const removedAtByCopy = new Map<string, number>();
+  for (const publication of publications) {
+    if (!isApprovedRemoval(publication.status)) {
+      continue;
+    }
+    const removedAt = toPublicationTime(
+      publication.createdAt,
+      Number.POSITIVE_INFINITY,
+    );
+    for (const copyKey of getRemovedCopyKeys(publication)) {
+      removedAtByCopy.set(
+        copyKey,
+        Math.max(
+          removedAtByCopy.get(copyKey) ?? Number.NEGATIVE_INFINITY,
+          removedAt,
+        ),
+      );
+    }
+  }
+
+  return [...addedAtByCopy].some(([copyKey, addedAt]) => {
+    const removedAt = removedAtByCopy.get(copyKey);
+    return removedAt == null || addedAt > removedAt;
+  });
+};
+
+/**
+ * The publications whose full record — `resources` included — is known:
+ * those already carrying `resources`, plus every `APPROVED` (or unlabelled)
+ * one re-read through `fetchPublication`, in batches. A failed lookup drops
+ * that one publication.
+ */
+export const resolvePublicationDetails = async <T extends PublicationLike>(
+  publications: T[],
   fetchPublication: (url: string) => Promise<T | null>,
   logger?: Logger,
   context?: string,
@@ -329,73 +564,7 @@ export const resolvePublicationsForSource = async <T extends PublicationLike>(
     });
   }
 
-  const referencing = resolved.filter(
+  return resolved.filter(
     (publication): publication is T => publication != null,
   );
-
-  /*
-   * An undateable approved removal wins over everything in its folder
-   * (`+Infinity`) and an undateable `ADD` loses to any removal (`0`): a
-   * removal Core reports as approved is the more recent statement of what
-   * exists, and offering Unpublish for a copy Core has deleted is the failure
-   * this cancellation exists to prevent.
-   *
-   * The trade-off this makes deliberately: `+Infinity` also cancels an `ADD`
-   * created *after* the removal, so an undateable removal hides Unpublish for
-   * a genuine re-publish and offers a Publish that Core rejects because the
-   * target already exists. Both outcomes are one wrong menu entry, and this
-   * one is recoverable (the panel lists the folder, the error names the
-   * conflict) while the other leaves a request that can never succeed. Core
-   * stamps every publication, so the fallback only fires on a response that
-   * omitted `createdAt` — logged below rather than applied silently, and
-   * pinned by "cancels a later ADD when the approved removal cannot be dated"
-   * in `publication.util.spec.ts`.
-   */
-  const removedAtByFolder = new Map<string, number>();
-  for (const publication of referencing) {
-    if (
-      !removesSource(publication, sourceUrl) ||
-      !isApprovedRemoval(publication.status)
-    ) {
-      continue;
-    }
-    const folderKey = toTargetFolderKey(publication.targetFolder);
-    const removedAt = toPublicationTime(
-      publication.createdAt,
-      Number.POSITIVE_INFINITY,
-    );
-    if (!Number.isFinite(removedAt)) {
-      logger?.warn(
-        `Approved removal "${publication.url ?? '(no url)'}" carries no usable createdAt${
-          context ? ` for ${context}` : ''
-        } — cancelling every ADD in "${folderKey}", a re-publish included`,
-      );
-    }
-    removedAtByFolder.set(
-      folderKey,
-      Math.max(
-        removedAtByFolder.get(folderKey) ?? Number.NEGATIVE_INFINITY,
-        removedAt,
-      ),
-    );
-  }
-
-  if (removedAtByFolder.size > 0) {
-    logger?.debug(
-      `Applying ${removedAtByFolder.size} approved removal folder(s)${context ? ` for ${context}` : ''}`,
-    );
-  }
-
-  return referencing.filter((publication) => {
-    if (!publishesSource(publication, sourceUrl)) {
-      return false;
-    }
-    const removedAt = removedAtByFolder.get(
-      toTargetFolderKey(publication.targetFolder),
-    );
-    if (removedAt == null) {
-      return true;
-    }
-    return toPublicationTime(publication.createdAt, 0) > removedAt;
-  });
 };

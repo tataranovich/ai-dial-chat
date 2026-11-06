@@ -7,9 +7,33 @@ import {
 import {
   AttachmentCanvasProvider,
   useAttachmentCanvas,
+  useLatestCanvasRequest,
 } from '../AttachmentCanvasContext';
 
 describe('AttachmentCanvasProvider', () => {
+  it('shares ordering within a provider and isolates other providers', () => {
+    const view = renderHook(
+      () => ({
+        source: useLatestCanvasRequest(),
+        message: useLatestCanvasRequest(),
+      }),
+      { wrapper: AttachmentCanvasProvider },
+    );
+    const utils = renderHook(() => useLatestCanvasRequest(), {
+      wrapper: AttachmentCanvasProvider,
+    });
+    const message = view.result.current.message();
+    const independent = utils.result.current();
+    expect(message()).toBe(true);
+    const source = view.result.current.source();
+    expect(message()).toBe(false);
+    expect(source()).toBe(true);
+    expect(independent()).toBe(true);
+    view.unmount();
+    expect(source()).toBe(false);
+    expect(independent()).toBe(true);
+  });
+
   beforeEach(() => {
     URL.revokeObjectURL = vi.fn();
   });
@@ -18,6 +42,36 @@ describe('AttachmentCanvasProvider', () => {
     renderHook(() => useAttachmentCanvas(), {
       wrapper: AttachmentCanvasProvider,
     });
+
+  it('keeps the retry of opened content until the canvas closes or reloads', () => {
+    const { result } = renderCanvas();
+    const onRetry = vi.fn();
+
+    act(() => {
+      result.current.openCanvas(
+        { type: AttachmentContentType.PlainText, text: '' },
+        'a.txt',
+        'a',
+        onRetry,
+      );
+    });
+    result.current.retryCanvas?.();
+    expect(onRetry).toHaveBeenCalledOnce();
+
+    act(() => result.current.openCanvasLoading('a.txt', 'a'));
+    expect(result.current.retryCanvas).toBeUndefined();
+
+    act(() => {
+      result.current.openCanvas(
+        { type: AttachmentContentType.PlainText, text: '' },
+        'a.txt',
+        'a',
+        onRetry,
+      );
+    });
+    act(() => result.current.closeCanvas());
+    expect(result.current.retryCanvas).toBeUndefined();
+  });
 
   it('revokes the previous blob object URL when new content replaces it', () => {
     const { result } = renderCanvas();

@@ -9,7 +9,10 @@ import { handleDialSdkError } from '../../../common/dial/dial-error.mapper';
 import type { DialClientService } from '../../../dial/dial-client.service';
 import type { ConversationResponseDto } from '../../../openapi/openapi-response.dto';
 import { BackgroundGenerationStatus } from '../../dto/background-generation.dto';
+import { ConversationTitleCacheService } from '../../listing/conversation-title-cache.service';
 import { ConversationPersistenceService } from '../../persistence/conversation-persistence.service';
+import { ProjectConversationStore } from '../../persistence/project-conversation.store';
+import { ConversationErrorCode } from '../../types/conversation-error-code.enum';
 import { ConversationLifecycleService } from '../conversation-lifecycle.service';
 
 vi.mock('../../../common/dial/dial-error.mapper', () => ({
@@ -44,6 +47,16 @@ describe('ConversationLifecycleService', () => {
     maybeRenameAfterFirstReply: ReturnType<typeof vi.fn>;
   };
   let persistenceService: ConversationPersistenceService;
+  let mockDeploymentsService: {
+    resolveDeploymentItem: ReturnType<typeof vi.fn>;
+  };
+  let mockPublishedFolderAttachments: {
+    resolve: ReturnType<typeof vi.fn>;
+  };
+  let mockReadStateService: {
+    getReadBefore: ReturnType<typeof vi.fn>;
+    addViewed: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     mockDialClient = {
@@ -70,11 +83,27 @@ describe('ConversationLifecycleService', () => {
     persistenceService = new ConversationPersistenceService(
       mockDialClient,
       mockConversationNamingService as never,
+      new ConversationTitleCacheService(),
+      new ProjectConversationStore(mockDialClient),
     );
+    mockDeploymentsService = {
+      resolveDeploymentItem: vi.fn().mockResolvedValue(null),
+    };
+    mockPublishedFolderAttachments = {
+      resolve: vi.fn(async (conversation: unknown) => conversation),
+    };
+    mockReadStateService = {
+      getReadBefore: vi.fn().mockResolvedValue(null),
+      addViewed: vi.fn().mockResolvedValue(undefined),
+    };
     service = new ConversationLifecycleService(
       mockDialClient,
       mockUserConfigService as never,
       persistenceService,
+      mockDeploymentsService as never,
+      mockPublishedFolderAttachments as never,
+      new ConversationTitleCacheService(),
+      mockReadStateService as never,
     );
     vi.mocked(handleDialSdkError).mockReset();
     vi.spyOn(mockDialClient.client, 'saveConversation').mockResolvedValue({
@@ -317,6 +346,38 @@ describe('ConversationLifecycleService', () => {
       expect(pendingMessage.backgroundGeneration.status).toBe('pending');
     });
 
+    it('stores the folder attachments resolved for a conversation read from the public bucket', async () => {
+      mockGetConversation();
+      mockPublishedFolderAttachments.resolve.mockImplementation(
+        async (conversation: { messages: unknown[] }) => ({
+          ...conversation,
+          messages: [{ role: 'user', content: 'resolved' }],
+        }),
+      );
+      const saveSpy = vi
+        .spyOn(mockDialClient.client, 'saveConversation')
+        .mockResolvedValue({ data: {} } as never);
+
+      await service.duplicateConversation(
+        'public/Org/gpt-4o__New%20chat',
+        'test-token',
+        'test-bucket',
+      );
+
+      expect(mockPublishedFolderAttachments.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'New chat' }),
+        'public/Org/gpt-4o__New%20chat',
+        'test-token',
+        'test-bucket',
+      );
+      const body = (
+        saveSpy.mock.calls[0][2] as unknown as {
+          body: { messages: Array<Record<string, unknown>> };
+        }
+      ).body;
+      expect(body.messages).toEqual([{ role: 'user', content: 'resolved' }]);
+    });
+
     it('decodes the encoded filename so the title is not mangled (no "New20 chat")', async () => {
       mockGetConversation();
       const saveSpy = vi
@@ -441,6 +502,142 @@ describe('ConversationLifecycleService', () => {
           }),
         }),
       );
+    });
+
+    describe('scheduled-task runs', () => {
+      const RUN_UUID = 'c7aeee4c-c01f-41f2-b0db-b8a1a39943f5';
+      const runPath = `.scheduler/sched_abc/gpt-4o__Morning%20briefing__${RUN_UUID}`;
+      const runConversation = {
+        ...TEST_CONVERSATION,
+        name: 'Morning briefing',
+      };
+
+      const duplicate = async (sourcePath: string) => {
+        const getSpy = vi
+          .spyOn(mockDialClient.client, 'getConversation')
+          .mockResolvedValue({ data: { ...runConversation } } as never);
+        const saveSpy = vi
+          .spyOn(mockDialClient.client, 'saveConversation')
+          .mockResolvedValue({ data: {} } as never);
+        const result = await service.duplicateConversation(
+          sourcePath,
+          'test-token',
+          'test-bucket',
+        );
+        return { getSpy, saveSpy, result };
+      };
+
+      it('stores the copy of an own run at the bucket root', async () => {
+        const { getSpy, saveSpy, result } = await duplicate(
+          `test-bucket/${runPath}`,
+        );
+
+        expect(getSpy).toHaveBeenCalledWith(
+          'test-bucket',
+          runPath,
+          expect.any(Object),
+        );
+        expect(saveSpy).toHaveBeenCalledWith(
+          'test-bucket',
+          'gpt-4o__Morning%20briefing',
+          expect.objectContaining({
+            body: expect.objectContaining({
+              id: 'test-bucket/gpt-4o__Morning briefing',
+              folderId: 'test-bucket',
+              name: 'Morning briefing',
+            }),
+          }),
+        );
+        expect(result.newPath).toBe(
+          'conversations/test-bucket/gpt-4o__Morning%20briefing',
+        );
+      });
+
+      it('stores the copy of a run shared from another bucket in the session bucket', async () => {
+        const { saveSpy } = await duplicate(`owner-bucket/${runPath}`);
+
+        expect(saveSpy).toHaveBeenCalledWith(
+          'test-bucket',
+          'gpt-4o__Morning%20briefing',
+          expect.objectContaining({
+            body: expect.objectContaining({
+              id: 'test-bucket/gpt-4o__Morning briefing',
+              folderId: 'test-bucket',
+            }),
+          }),
+        );
+      });
+
+      it('checks the stripped path for a collision and keeps a collision UUID outside .scheduler', async () => {
+        const metadataSpy = vi
+          .spyOn(mockDialClient.client, 'getConversationMetadata')
+          .mockResolvedValue({
+            data: { name: 'gpt-4o__Morning briefing' },
+          } as never);
+
+        const { saveSpy } = await duplicate(`test-bucket/${runPath}`);
+
+        expect(metadataSpy).toHaveBeenCalledWith(
+          'test-bucket',
+          'gpt-4o__Morning%20briefing',
+          expect.any(Object),
+        );
+        expect(saveSpy).toHaveBeenCalledWith(
+          'test-bucket',
+          expect.stringMatching(/^gpt-4o__Morning%20briefing__[0-9a-f-]{36}$/),
+          expect.objectContaining({
+            body: expect.objectContaining({
+              id: expect.not.stringContaining('.scheduler'),
+              folderId: 'test-bucket',
+            }),
+          }),
+        );
+      });
+
+      it('keeps the application folder of an application run', async () => {
+        const { saveSpy } = await duplicate(
+          `test-bucket/.scheduler/sched_abc/applications/catalog/Team%2FApp%20One__0.0.1__Morning%20briefing__${RUN_UUID}`,
+        );
+
+        expect(saveSpy).toHaveBeenCalledWith(
+          'test-bucket',
+          'applications/catalog/Team%2FApp%20One__0.0.1__Morning%20briefing',
+          expect.objectContaining({
+            body: expect.objectContaining({
+              id: 'test-bucket/applications/catalog/Team/App One__0.0.1__Morning briefing',
+              folderId: 'test-bucket/applications/catalog',
+            }),
+          }),
+        );
+      });
+
+      it('leaves ordinary folders and a bare .scheduler folder unchanged', async () => {
+        const ordinary = await duplicate(
+          'test-bucket/folder/sub/gpt-4o__Morning%20briefing',
+        );
+        expect(ordinary.saveSpy).toHaveBeenCalledWith(
+          'test-bucket',
+          'folder/sub/gpt-4o__Morning%20briefing',
+          expect.objectContaining({
+            body: expect.objectContaining({
+              folderId: 'test-bucket/folder/sub',
+            }),
+          }),
+        );
+
+        const bare = await duplicate(
+          'test-bucket/.scheduler/gpt-4o__Morning%20briefing',
+        );
+        expect(bare.saveSpy).toHaveBeenLastCalledWith(
+          'test-bucket',
+          '.scheduler/gpt-4o__Morning%20briefing',
+          expect.objectContaining({
+            body: expect.objectContaining({
+              folderId: 'test-bucket/.scheduler',
+            }),
+          }),
+        );
+      });
     });
 
     it('appends a UUID segment when the destination path already exists', async () => {
@@ -594,9 +791,112 @@ describe('ConversationLifecycleService', () => {
       expect(savedBody.temperature).toBe(0.7);
       expect(savedBody.responseFormat).toBe('plain_text');
     });
+
+    describe('hidden model (Issue #9183)', () => {
+      it('refuses with conversationDuplicateModelHidden when the current model is hidden', async () => {
+        mockGetConversation();
+        mockDeploymentsService.resolveDeploymentItem.mockResolvedValue({
+          id: 'gpt-4o',
+          isHidden: true,
+        });
+        const saveSpy = vi.spyOn(mockDialClient.client, 'saveConversation');
+
+        const result = service.duplicateConversation(
+          'shared-bucket/gpt-4o__New%20chat',
+          'test-token',
+          'test-bucket',
+        );
+
+        await expect(result).rejects.toBeInstanceOf(ForbiddenException);
+        await expect(result).rejects.toMatchObject({
+          response: { code: ConversationErrorCode.DuplicateModelHidden },
+        });
+        expect(saveSpy).not.toHaveBeenCalled();
+      });
+
+      it('checks the model the conversation uses now, not the one in its path', async () => {
+        mockGetConversation({
+          ...SHARED_CONVERSATION,
+          model: { id: 'nova-lite' },
+          assistantModelId: 'nova-lite',
+        });
+        mockDeploymentsService.resolveDeploymentItem.mockImplementation(
+          async (id: string) => ({ id, isHidden: id === 'nova-lite' }),
+        );
+
+        await expect(
+          service.duplicateConversation(
+            'shared-bucket/gpt-4o__New%20chat',
+            'test-token',
+            'test-bucket',
+          ),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        expect(
+          mockDeploymentsService.resolveDeploymentItem,
+        ).toHaveBeenCalledWith('nova-lite', 'test-token', 'test-bucket');
+      });
+
+      it('falls back to model.id when assistantModelId is empty', async () => {
+        mockGetConversation({
+          ...SHARED_CONVERSATION,
+          model: { id: 'nova-lite' },
+          assistantModelId: '',
+        });
+
+        await service.duplicateConversation(
+          'shared-bucket/gpt-4o__New%20chat',
+          'test-token',
+          'test-bucket',
+        );
+
+        expect(
+          mockDeploymentsService.resolveDeploymentItem,
+        ).toHaveBeenCalledWith('nova-lite', 'test-token', 'test-bucket');
+      });
+
+      it('duplicates when the current model is visible', async () => {
+        mockGetConversation();
+        mockDeploymentsService.resolveDeploymentItem.mockResolvedValue({
+          id: 'gpt-4o',
+          isHidden: false,
+        });
+        const saveSpy = vi
+          .spyOn(mockDialClient.client, 'saveConversation')
+          .mockResolvedValue({ data: {} } as never);
+
+        await service.duplicateConversation(
+          'shared-bucket/gpt-4o__New%20chat',
+          'test-token',
+          'test-bucket',
+        );
+
+        expect(saveSpy).toHaveBeenCalledOnce();
+      });
+
+      it('duplicates when the model no longer resolves to a deployment', async () => {
+        mockGetConversation();
+        const saveSpy = vi
+          .spyOn(mockDialClient.client, 'saveConversation')
+          .mockResolvedValue({ data: {} } as never);
+
+        await service.duplicateConversation(
+          'shared-bucket/gpt-4o__New%20chat',
+          'test-token',
+          'test-bucket',
+        );
+
+        expect(saveSpy).toHaveBeenCalledOnce();
+      });
+    });
   });
   describe('deleteConversations', () => {
     let deleteConversationSpy: ReturnType<typeof vi.spyOn>;
+
+    /* Real SDK shape: the error body has no status; the status is on response. */
+    const coreError = (status: number) => ({
+      error: { message: 'DIAL Core error' },
+      response: new Response(null, { status }),
+    });
 
     beforeEach(() => {
       deleteConversationSpy = vi
@@ -640,9 +940,7 @@ describe('ConversationLifecycleService', () => {
     });
 
     it('counts DIAL Core 404 as alreadyAbsent: 1', async () => {
-      deleteConversationSpy.mockResolvedValueOnce({
-        error: { status: 404 },
-      } as never);
+      deleteConversationSpy.mockResolvedValueOnce(coreError(404) as never);
       const id = 'conversations/test-bucket/chat';
       const result = await service.deleteConversations(
         [id],
@@ -654,10 +952,34 @@ describe('ConversationLifecycleService', () => {
       expect(result.failed).toHaveLength(0);
     });
 
-    it('counts DIAL Core 500 as UPSTREAM_ERROR in failed', async () => {
+    it('counts DIAL Core 403 as FORBIDDEN in failed', async () => {
+      deleteConversationSpy.mockResolvedValueOnce(coreError(403) as never);
+      const id = 'conversations/test-bucket/chat';
+      const result = await service.deleteConversations(
+        [id],
+        'token',
+        'test-bucket',
+      );
+      expect(result.failed).toEqual([{ id, code: 'FORBIDDEN' }]);
+    });
+
+    it('treats an empty-body DIAL Core 404 (error undefined) as alreadyAbsent', async () => {
       deleteConversationSpy.mockResolvedValueOnce({
-        error: { status: 500 },
+        error: undefined,
+        response: new Response(null, { status: 404 }),
       } as never);
+      const id = 'conversations/test-bucket/chat';
+      const result = await service.deleteConversations(
+        [id],
+        'token',
+        'test-bucket',
+      );
+      expect(result.alreadyAbsent).toBe(1);
+      expect(result.deleted).toBe(0);
+    });
+
+    it('counts DIAL Core 500 as UPSTREAM_ERROR in failed', async () => {
+      deleteConversationSpy.mockResolvedValueOnce(coreError(500) as never);
       const id = 'conversations/test-bucket/chat';
       const result = await service.deleteConversations(
         [id],
@@ -676,8 +998,8 @@ describe('ConversationLifecycleService', () => {
       ];
       deleteConversationSpy
         .mockResolvedValueOnce({ data: {}, error: null } as never)
-        .mockResolvedValueOnce({ error: { status: 404 } } as never)
-        .mockResolvedValueOnce({ error: { status: 500 } } as never);
+        .mockResolvedValueOnce(coreError(404) as never)
+        .mockResolvedValueOnce(coreError(500) as never);
 
       const result = await service.deleteConversations(
         ids,
@@ -704,7 +1026,7 @@ describe('ConversationLifecycleService', () => {
       const absent = 'conversations/test-bucket/absent';
       deleteConversationSpy
         .mockResolvedValueOnce({ data: {}, error: null } as never)
-        .mockResolvedValueOnce({ error: { status: 404 } } as never);
+        .mockResolvedValueOnce(coreError(404) as never);
 
       await service.deleteConversations(
         [deleted, absent],
@@ -1141,6 +1463,119 @@ describe('ConversationLifecycleService', () => {
           'gpt-4o',
         ),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('renameConversation keeps the read state of a read chat', () => {
+    const chatPath = 'gpt-4o__Chat__11111111-1111-1111-1111-111111111111';
+    const chatUrl = `conversations/test-bucket/${chatPath}`;
+    const BASELINE = 1000;
+
+    const arrange = (opts: {
+      path?: string;
+      updatedAt?: number;
+      readState?: 'ok' | 'unavailable';
+    }) => {
+      const path = opts.path ?? chatPath;
+      vi.spyOn(mockDialClient.client, 'getConversation').mockResolvedValue({
+        data: { ...TEST_CONVERSATION, name: 'Old' },
+        response: new Response(null, { headers: { etag: '"v1"' } }),
+      } as never);
+      vi.spyOn(mockDialClient.client, 'saveConversation').mockResolvedValue({
+        data: {},
+      } as never);
+      vi.spyOn(
+        mockDialClient.client,
+        'getConversationMetadata',
+      ).mockResolvedValue({
+        data: { updatedAt: opts.updatedAt ?? 500 },
+      } as never);
+      mockReadStateService.getReadBefore.mockResolvedValue(
+        opts.readState === 'unavailable' ? null : BASELINE,
+      );
+      return () =>
+        service.renameConversation(
+          path,
+          'renamed',
+          'test-token',
+          'test-bucket',
+        );
+    };
+
+    it('adds a chat last updated before the baseline to the viewed ids', async () => {
+      const rename = arrange({ updatedAt: 500 });
+
+      await expect(rename()).resolves.toEqual({ name: 'renamed' });
+
+      expect(mockReadStateService.addViewed).toHaveBeenCalledExactlyOnceWith(
+        chatUrl,
+        'test-token',
+        'test-bucket',
+      );
+    });
+
+    it('leaves an unread chat unread', async () => {
+      const rename = arrange({ updatedAt: 2000 });
+
+      await rename();
+
+      expect(mockReadStateService.addViewed).not.toHaveBeenCalled();
+    });
+
+    it('renames without touching read state when it is unavailable', async () => {
+      const rename = arrange({ readState: 'unavailable' });
+
+      await expect(rename()).resolves.toEqual({ name: 'renamed' });
+
+      expect(mockReadStateService.addViewed).not.toHaveBeenCalled();
+    });
+
+    it('still renames when the viewed ids cannot be updated', async () => {
+      const rename = arrange({ updatedAt: 500 });
+      mockReadStateService.addViewed.mockRejectedValue(
+        new Error('DIAL Core 503'),
+      );
+
+      await expect(rename()).resolves.toEqual({ name: 'renamed' });
+    });
+
+    it('leaves read state alone when the chat metadata cannot be read', async () => {
+      const rename = arrange({});
+      vi.spyOn(
+        mockDialClient.client,
+        'getConversationMetadata',
+      ).mockResolvedValue({
+        data: null,
+        error: { status: 500 },
+        response: new Response(null, { status: 500 }),
+      } as never);
+
+      await expect(rename()).resolves.toEqual({ name: 'renamed' });
+
+      expect(mockReadStateService.addViewed).not.toHaveBeenCalled();
+    });
+
+    it('does not touch the regular read state when a scheduler run is renamed', async () => {
+      const rename = arrange({
+        path: '.scheduler/sched_abc/gpt-4o__Run__c7aeee4c-c01f-41f2-b0db-b8a1a39943f5',
+        updatedAt: 500,
+      });
+
+      await rename();
+
+      expect(mockReadStateService.getReadBefore).not.toHaveBeenCalled();
+      expect(mockReadStateService.addViewed).not.toHaveBeenCalled();
+    });
+
+    it('does not mark anything viewed when the rename fails', async () => {
+      const rename = arrange({ updatedAt: 500 });
+      vi.spyOn(mockDialClient.client, 'getConversation').mockRejectedValue({
+        error: { status: 404 },
+      } as never);
+
+      await expect(rename()).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(mockReadStateService.addViewed).not.toHaveBeenCalled();
     });
   });
 });

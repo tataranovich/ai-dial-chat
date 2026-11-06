@@ -30,6 +30,7 @@ const TEST_USER = {
 const createdLink: ShareLinkResponseDto = {
   url: 'https://example.com/marketplace/share/gpt-4o',
   expiresInDays: 3,
+  expiresInHours: 72,
   access: [ShareAccess.View],
 };
 
@@ -124,8 +125,12 @@ describe('ShareController (integration)', () => {
       );
     });
 
-    it('returns 201 without expiresInDays when the service could not determine the expiry', async () => {
-      const { expiresInDays: _omitted, ...linkWithoutExpiry } = createdLink;
+    it('returns 201 without the expiry when the service could not determine the expiry', async () => {
+      const {
+        expiresInDays: _omittedDays,
+        expiresInHours: _omittedHours,
+        ...linkWithoutExpiry
+      } = createdLink;
       service.createShareLink.mockResolvedValueOnce(linkWithoutExpiry);
 
       const res = await request(app.getHttpServer())
@@ -135,6 +140,7 @@ describe('ShareController (integration)', () => {
 
       expect(res.body).toEqual(linkWithoutExpiry);
       expect(res.body).not.toHaveProperty('expiresInDays');
+      expect(res.body).not.toHaveProperty('expiresInHours');
     });
 
     it('accepts a full prompts/{bucket}/{path} itemId', async () => {
@@ -153,6 +159,22 @@ describe('ShareController (integration)', () => {
           itemId: 'prompts/owner-bucket/Work/AI/summarize',
           access: [ShareAccess.View],
         },
+      );
+    });
+
+    it('accepts a conversation itemId whose model id contains a colon', async () => {
+      const itemId =
+        'conversations/owner-bucket/anthropic.claude-haiku-4-5-20251001-v1:0__hi__ace3d220-6bf9-4774-afe7-9d641a3de401';
+
+      await request(app.getHttpServer())
+        .post('/api/v1/share')
+        .send({ itemId, access: [ShareAccess.View] })
+        .expect(201);
+
+      expect(service.createShareLink).toHaveBeenCalledWith(
+        TEST_USER.at,
+        TEST_USER.bucket,
+        { itemId, access: [ShareAccess.View] },
       );
     });
 
@@ -477,6 +499,7 @@ describe('ShareController (integration)', () => {
         validBody.itemId,
         TEST_USER.at,
         TEST_USER.sub,
+        TEST_USER.bucket,
       );
     });
 
@@ -491,6 +514,7 @@ describe('ShareController (integration)', () => {
         'prompts/owner-bucket/Work/AI/summarize',
         TEST_USER.at,
         TEST_USER.sub,
+        TEST_USER.bucket,
       );
     });
 
@@ -565,6 +589,7 @@ describe('ShareController (integration)', () => {
         itemId,
         TEST_USER.at,
         TEST_USER.sub,
+        TEST_USER.bucket,
       );
     });
 
@@ -580,6 +605,7 @@ describe('ShareController (integration)', () => {
         itemId,
         TEST_USER.at,
         TEST_USER.sub,
+        TEST_USER.bucket,
       );
     });
 
@@ -595,6 +621,7 @@ describe('ShareController (integration)', () => {
         itemId,
         TEST_USER.at,
         TEST_USER.sub,
+        TEST_USER.bucket,
       );
     });
 

@@ -27,8 +27,8 @@ const HalloweenCandy: FC = () => {
   );
   const [plan, setPlan] = useState<CandyPlan | null>(null);
   const [ended, setEnded] = useState(false);
-  const stopped = useRef(false),
-    host = useRef<HTMLDivElement>(null);
+  const stopped = useRef(false);
+  const host = useRef<HTMLDivElement>(null);
   const stop = useCallback(() => {
     stopped.current = true;
     setEnded(true);
@@ -88,7 +88,7 @@ const HalloweenCandy: FC = () => {
   return (
     <div
       ref={host}
-      className="pointer-events-none absolute inset-0 select-none overflow-clip"
+      className="pointer-events-none absolute inset-0 overflow-clip select-none"
       aria-hidden="true"
       inert
       data-halloween-scene="candy"
@@ -186,4 +186,5 @@ const HalloweenCandy: FC = () => {
     </div>
   );
 };
+
 export default HalloweenCandy;

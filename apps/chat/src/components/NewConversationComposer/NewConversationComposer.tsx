@@ -1,4 +1,7 @@
-import { useOpenAttachmentCanvas } from '@epam/ai-dial-attachment-canvas';
+import {
+  useLatestCanvasRequest,
+  useOpenAttachmentCanvas,
+} from '@epam/ai-dial-attachment-canvas';
 import {
   FileDndOverlay,
   isMimeTypeAllowed,
@@ -6,7 +9,9 @@ import {
 import { CelebrationDecor, useCelebration } from '@epam/ai-dial-celebrations';
 import type { DeploymentItemDto } from '@epam/ai-dial-chat-api-client';
 import {
-  AttachmentValidationErrorReason,
+  type AttachmentValidationErrorEvent,
+  type ChatSettingsValues,
+  DEFAULT_CHAT_SETTINGS,
   getApiErrorDetails,
   getTimeOfDayGreeting,
   isQuickAppSchema,
@@ -17,13 +22,12 @@ import {
 import { usePageFileDrag } from '@epam/ai-dial-chat-hooks/viewport-layout';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
-  formatFileSize,
-  mergeClasses,
-  ResponseFormat,
   type Attachment,
   type DeploymentItem,
   type DisplayAttachment,
+  mergeClasses,
   type ToolMenuItem,
+  useIsMobile,
 } from '@epam/ai-dial-chat-shared';
 import type {
   CommandMenuConfig,
@@ -46,12 +50,10 @@ import {
   FileDndI18nKeys,
   VoiceRecordingI18nKeys,
 } from '../../constants/translation-keys';
-import { NETWORK_ERROR_DEBOUNCE_MS } from '../../constants/upload';
-import { useAppConfig } from '../../context/AppConfigContext';
+import { useAppConfig, useFeatureFlag } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useAttachmentCanvasResolvers } from '../../hooks/attachment/useAttachmentCanvasResolvers';
-import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
 import { useAudioTranscription } from '../../hooks/conversation/useAudioTranscription';
 import { useChatSettingsFormLabels } from '../../hooks/conversation/useChatSettingsFormLabels';
 import { useModelSelectorLabels } from '../../hooks/conversation/useModelSelectorLabels';
@@ -63,9 +65,11 @@ import { useUiFeature } from '../../hooks/useUiFeature';
 import { filesApi } from '../../server-api/api-client';
 import { ComposerLayout } from '../../types/conversation-composer';
 import { buildNetworkUploadErrorNotification } from '../../utils/attachment-network-error-notification';
+import { buildAttachmentValidationNotification } from '../../utils/attachment-validation-notification';
 import { resolveLocalizedText } from '../../utils/locale';
 import FileDeleteConfirmContent from '../FileDeleteConfirmContent/FileDeleteConfirmContent';
 import FooterMessage from '../FooterMessage/FooterMessage';
+import UsageLimitBanner from '../UsageLimitBanner/UsageLimitBanner';
 import UsageLimitsControl from '../UsageLimitsControl/UsageLimitsControl';
 
 const ConversationInput = lazy(async () => {
@@ -86,11 +90,7 @@ const AgentDescription = lazy(async () => {
 });
 
 /** Local (not-yet-persisted) chat settings collected before a conversation exists. */
-export interface NewConversationChatSettings {
-  responseFormat: ResponseFormat;
-  systemPrompt: string;
-  temperature: number;
-}
+export type NewConversationChatSettings = Required<ChatSettingsValues>;
 
 interface Props {
   /** Deployment list for the model selector menu. Pass a single fixed item to pin the model. */
@@ -100,6 +100,7 @@ interface Props {
   onDeploymentChange?: (id: string) => void;
   isModelSelectorDisabled?: boolean;
   modelPickerOverlay?: (onClose: () => void) => ReactNode;
+  onModelPickerOpenChange?: (open: boolean) => void;
   /** Backs attachment/audio-transcription validation and chat-settings feature gating. */
   selectedDeployment?: DeploymentItemDto;
   isModelSelectorLoading?: boolean;
@@ -181,6 +182,7 @@ const NewConversationComposer: FC<Props> = ({
   onDeploymentChange,
   isModelSelectorDisabled = false,
   modelPickerOverlay,
+  onModelPickerOpenChange,
   selectedDeployment,
   isModelSelectorLoading = false,
   modelSelectorError = null,
@@ -211,6 +213,11 @@ const NewConversationComposer: FC<Props> = ({
   const {
     config: { welcomeScreenDescription, maxAttachmentFileSizeBytes },
   } = useAppConfig();
+  const isUsageLimitsControlEnabled = useFeatureFlag('usageLimitsControl');
+  /* Exactly one usage surface is composed: the dial when the flag is on,
+     otherwise the banner above the input. */
+  const usageDeploymentId =
+    selectedDeployment?.id ?? selectedDeploymentId ?? undefined;
   const { showErrorNotification, showSuccessNotification } = useNotification();
   const { isEnabled: isCelebrationEnabled, consumeSecretPhrase } =
     useCelebration();
@@ -235,10 +242,13 @@ const NewConversationComposer: FC<Props> = ({
     [selectedDeployment, language],
   );
 
+  const isMobile = useIsMobile();
   const composerStyles: ConversationInputStyles = useMemo(
     () => ({
       ...inputStyles,
       typography: {
+        /* The greeting is light 36px by design; every kit `dial-display*-text`
+           step is semibold, so no scale class matches it. */
         welcomeClassName: 'font-light text-4xl',
         ...inputStyles?.typography,
       },
@@ -249,11 +259,7 @@ const NewConversationComposer: FC<Props> = ({
   const [isSending, setIsSending] = useState(false);
   const [attachmentsAmount, setAttachmentsAmount] = useState(0);
   const [chatSettingsValues, setChatSettingsValues] =
-    useState<NewConversationChatSettings>({
-      responseFormat: ResponseFormat.Markdown,
-      systemPrompt: '',
-      temperature: 0.5,
-    });
+    useState<NewConversationChatSettings>(DEFAULT_CHAT_SETTINGS);
 
   const {
     isOpen: isDialFileManagerOpen,
@@ -265,42 +271,8 @@ const NewConversationComposer: FC<Props> = ({
   } = useDialFileManagerState(bucket);
 
   const handleAttachmentValidationError = useCallback(
-    ({
-      reason,
-      formats,
-      maxFileSizeBytes,
-    }: {
-      reason: AttachmentValidationErrorReason;
-      formats?: string;
-      maxFileSizeBytes?: number;
-    }) => {
-      if (reason === AttachmentValidationErrorReason.FileTooLarge) {
-        showErrorNotification({
-          title: t(AttachmentsI18nKeys.FileTooLargeTitle),
-          message: t(AttachmentsI18nKeys.FileTooLargeMessage, {
-            maxSize:
-              maxFileSizeBytes != null ? formatFileSize(maxFileSizeBytes) : '',
-          }),
-        });
-        return;
-      }
-
-      const noTypesAllowed =
-        reason === AttachmentValidationErrorReason.NoTypesAllowed;
-      showErrorNotification({
-        title: t(
-          noTypesAllowed
-            ? AttachmentsI18nKeys.NoAttachmentsAllowedTitle
-            : AttachmentsI18nKeys.UnsupportedTypeTitle,
-        ),
-        message: t(
-          noTypesAllowed
-            ? AttachmentsI18nKeys.NoAttachmentsAllowedMessage
-            : AttachmentsI18nKeys.UnsupportedTypeMessage,
-          noTypesAllowed ? undefined : { formats },
-        ),
-      });
-    },
+    (event: AttachmentValidationErrorEvent) =>
+      showErrorNotification(buildAttachmentValidationNotification(event, t)),
     [showErrorNotification, t],
   );
 
@@ -342,7 +314,6 @@ const NewConversationComposer: FC<Props> = ({
     filesApi,
     bucket,
     onNetworkError: handleNetworkUploadError,
-    debounceMs: NETWORK_ERROR_DEBOUNCE_MS,
   });
 
   /*
@@ -387,7 +358,6 @@ const NewConversationComposer: FC<Props> = ({
     itemCount: deployments.length,
   });
 
-  const isMobile = useIsMobile();
   const { preference: sendOnEnter } = useKeyboardShortcutPreference();
   const isChatSettingsEnabled = useUiFeature(OverlayFeature.ChatSettings);
   const isEmptyChatSettingsEnabled = useUiFeature(
@@ -414,20 +384,24 @@ const NewConversationComposer: FC<Props> = ({
     OverlayFeature.ShowAgentDescription,
   );
   const isInlineLayout = layout === ComposerLayout.Inline;
+  const isEmbeddedLayout = layout === ComposerLayout.Embedded;
+  /* Only the welcome screen greets, describes the agent and celebrates. */
+  const isWelcomeLayout = layout === ComposerLayout.Welcome;
   const agentDescription =
-    isAgentDescriptionEnabled && !isInlineLayout
+    isAgentDescriptionEnabled && isWelcomeLayout
       ? resolvedSelectedDeployment?.description?.trim()
       : undefined;
   const { displayName } = useUserProfile();
   const firstName = displayName.split(' ')[0];
   const { resolvers, options } = useAttachmentCanvasResolvers();
   const { openAttachmentCanvas } = useOpenAttachmentCanvas(resolvers, options);
+  const startCanvasRequest = useLatestCanvasRequest();
 
   const handleAttachmentClick = useCallback(
     (attachment: DisplayAttachment) => {
-      void openAttachmentCanvas(attachment);
+      void openAttachmentCanvas(attachment, undefined, startCanvasRequest());
     },
-    [openAttachmentCanvas],
+    [openAttachmentCanvas, startCanvasRequest],
   );
 
   const handleAttachmentsChange = useCallback((attachments: Attachment[]) => {
@@ -496,7 +470,7 @@ const NewConversationComposer: FC<Props> = ({
     introText || children != null ? (
       <>
         {introText && (
-          <p className="dial-small-text mb-4 mt-4 max-w-3xl text-center text-secondary">
+          <p className="dial-small-text mt-4 mb-4 max-w-3xl text-center text-secondary">
             {introText}
           </p>
         )}
@@ -505,7 +479,13 @@ const NewConversationComposer: FC<Props> = ({
     ) : null;
 
   return (
-    <div className="flex flex-1 flex-col overflow-y-auto">
+    <div
+      className={
+        isEmbeddedLayout
+          ? 'flex flex-col'
+          : 'flex flex-1 flex-col overflow-y-auto'
+      }
+    >
       <FileDndOverlay
         isVisible={isDragging}
         isAttachmentsAllowed={isPageDropAllowed}
@@ -532,21 +512,26 @@ const NewConversationComposer: FC<Props> = ({
           ([#9036](https://github.com/epam/ai-dial-chat/issues/9036)). */}
       <div
         className={mergeClasses(
-          'relative flex flex-auto shrink-0 flex-col items-center overflow-hidden [container-type:inline-size]',
-          isInlineLayout
-            ? 'justify-end px-6'
-            : 'justify-center px-4 py-14 desktop:px-8 desktop:py-16',
+          '@container relative flex flex-auto shrink-0 flex-col items-center overflow-hidden',
+          isInlineLayout && 'justify-end px-6',
+          isWelcomeLayout &&
+            'justify-center px-4 py-14 desktop:px-8 desktop:py-16',
         )}
-        role="region"
-        aria-label={t(ChatI18nKeys.WelcomeScreen)}
+        /* Embedded in a host page (a project's Chats), the composer is part of the host's own region. */
+        role={isEmbeddedLayout ? undefined : 'region'}
+        aria-label={
+          isEmbeddedLayout ? undefined : t(ChatI18nKeys.WelcomeScreen)
+        }
       >
-        {isCelebrationEnabled && !isInlineLayout && <CelebrationDecor />}
+        {isCelebrationEnabled && isWelcomeLayout && <CelebrationDecor />}
         {agentDescription && (
           <Suspense fallback={null}>
             <AgentDescription content={agentDescription} />
           </Suspense>
         )}
         <ConversationInput
+          /* Embedded in a host page the host owns the gutters: no extra inline or block padding on mobile. */
+          className={isEmbeddedLayout ? 'px-0 py-0 desktop:p-5' : undefined}
           onSend={handleSend}
           onUploadAttachment={handleUploadAttachment}
           onAttachmentsChange={handleAttachmentsChange}
@@ -556,7 +541,7 @@ const NewConversationComposer: FC<Props> = ({
           /* `ConversationInput` renders the description only under a
              greeting, so `hide-greeting` removes both. */
           welcomeText={
-            isGreetingHidden || isInlineLayout
+            isGreetingHidden || !isWelcomeLayout
               ? undefined
               : getTimeOfDayGreeting(
                   new Date().getHours(),
@@ -582,7 +567,9 @@ const NewConversationComposer: FC<Props> = ({
                 )
           }
           descriptionText={
-            isInlineLayout ? undefined : (welcomeScreenDescription ?? undefined)
+            isWelcomeLayout
+              ? (welcomeScreenDescription ?? undefined)
+              : undefined
           }
           belowWelcomeSlot={isStartersBelowGreeting ? startersBlock : undefined}
           placeholder={placeholder}
@@ -601,7 +588,7 @@ const NewConversationComposer: FC<Props> = ({
           isModelSelectorDisabled={isModelSelectorDisabled}
           isSendDisabled={isDisabledSendEnabled || isSkillUnsupported}
           modelSelectorLabels={modelSelectorLabels}
-          addMenuTitle={t(ConversationI18nKeys.AddMenuTitle)}
+          addMenuTitle={t(ButtonsI18nKeys.Add)}
           sendLabel={t(ChatI18nKeys.SendMessage)}
           sendTooltip={t(ChatI18nKeys.SendMessage)}
           stopLabel={t(ChatI18nKeys.StopStreaming)}
@@ -645,6 +632,7 @@ const NewConversationComposer: FC<Props> = ({
           onAttachmentClick={handleAttachmentClick}
           onMessageTooLong={handleMessageTooLong}
           modelPickerOverlay={modelPickerOverlay}
+          onModelPickerOpenChange={onModelPickerOpenChange}
           onChange={onChange}
           menuOverlays={menuOverlays}
           activeMentions={activeMentions}
@@ -657,16 +645,20 @@ const NewConversationComposer: FC<Props> = ({
           toolsMenuTitle={toolsMenuTitle}
           toolsChipLabels={toolsChipLabels}
           usageLimitsSlot={
-            <UsageLimitsControl
-              deploymentId={
-                selectedDeployment?.id ?? selectedDeploymentId ?? undefined
-              }
-            />
+            isUsageLimitsControlEnabled ? (
+              <UsageLimitsControl deploymentId={usageDeploymentId} />
+            ) : undefined
+          }
+          aboveInputSlot={
+            isUsageLimitsControlEnabled ? undefined : (
+              <UsageLimitBanner deploymentId={usageDeploymentId} />
+            )
           }
         />
         {!isStartersBelowGreeting && startersBlock}
       </div>
-      <FooterMessage />
+      {/* The page footer (operator message, app version) belongs to a full-page chat, not a composer embedded in another page. */}
+      {!isEmbeddedLayout && <FooterMessage />}
       {isDialFileManagerOpen && (
         <DialFileManagerModal
           isOpen={isDialFileManagerOpen}
@@ -683,7 +675,7 @@ const NewConversationComposer: FC<Props> = ({
           emptyTitle={t(DialFileManagerI18nKeys.Empty)}
           emptyDescription=""
           errorMessage={t(DialFileManagerI18nKeys.Error)}
-          retryLabel={t(DialFileManagerI18nKeys.Retry)}
+          retryLabel={t(ButtonsI18nKeys.Retry)}
           hiddenFilesLabel={t(DialFileManagerI18nKeys.HiddenFiles)}
           showHiddenFilesLabel={t(DialFileManagerI18nKeys.ShowHiddenFiles)}
           hideHiddenFilesLabel={t(DialFileManagerI18nKeys.HideHiddenFiles)}

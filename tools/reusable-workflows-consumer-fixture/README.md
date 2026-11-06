@@ -6,6 +6,16 @@ A single script (`scripts/run.mjs`) that proves `@epam/ai-dial-skills`'s and
 Decision 5. The client application adoption map built on it is
 [`docs/reusable-chat-workflows.md`](../../docs/reusable-chat-workflows.md).
 
+## Reusable controller coverage
+
+The fixture also packs `chat-hooks` and `attachment-canvas`, explicitly
+re-exporting all new controller functions and reachable option/result types
+from their documented subpaths and package root, plus `useLatestCanvasRequest`. The existing
+real typecheck, production bundle, stylesheet and lazy engine checks remain.
+`REUSABLE_CONTROLLER_EXPORTS` in `libs/chat-hooks/e2e-fixtures/fixtures.mjs`
+is shared with the per-entry fixture runner. This proves artifact readiness
+only when installation and all checks pass; it never proves client adoption.
+
 ## Why this exists
 
 Every in-repo consumer of `@epam/ai-dial-skills`/`@epam/ai-dial-prompts`
@@ -102,17 +112,20 @@ Beyond typecheck/bundle success, `scripts/run.mjs` asserts:
   `--fp-header-text` for `@epam/ai-dial-prompts`), proving each package's
   `./styles.css` actually reached the build rather than resolving to an empty
   or wrong file.
-- The bundle's main chunk contains no `ag-grid-community` — the string
-  literal AG Grid's own compiled source carries verbatim, so it survives
-  minification. `usePromptSelectorOverlay` renders `PromptParametersPopup`
-  (which reaches `@epam/ai-dial-catalog`'s AG-Grid-backed `ListView`) behind a
-  `React.lazy()`/`Suspense` boundary; a regression that inlines it back into
-  `usePromptSelectorOverlay`'s eager import graph would put AG Grid in every
-  consumer's initial chunk even when the parameters popup never opens.
-- At least one _other_ emitted chunk **does** contain `ag-grid-community` —
-  proving the split actually happened, rather than the marker being absent
-  for an unrelated reason (e.g. the entry never reaching
-  `usePromptSelectorOverlay` at all).
+- No eagerly loaded chunk — the main chunk plus every chunk it reaches
+  through static imports, including shared chunks such as the one carrying
+  `@epam/ai-dial-catalog` — contains `ag-grid-community`. A regression that
+  pulls a grid-backed component (e.g. `@epam/ai-dial-catalog`'s `ListView`)
+  into the eager import graph would put AG Grid in every consumer's initial
+  load.
+- The main chunk reaches a chunk exporting `PromptParametersPopup` only
+  through a dynamic `import()`, and that chunk is outside the static-import
+  closure — proving `LazyPromptParametersPopup`'s `React.lazy()`/`Suspense`
+  split actually survives into a consumer's build. The check does not
+  require AG Grid in the lazy chunk: the popup uses only `AppIdentity`,
+  `ContentTab` and `DeploymentSize` from `@epam/ai-dial-catalog`, so a
+  bundler that tree-shakes the unused `ListView` correctly emits no AG Grid
+  at all.
 
 ## Running it
 
@@ -137,3 +150,11 @@ npm test
 Set `KEEP_FIXTURES=1` when running `node scripts/run.mjs` directly to skip the
 final cleanup and inspect the isolated fixture's `node_modules`/typecheck/
 bundle output by hand.
+
+## Remaining reuse contracts
+
+The fixture additionally packs quotations and chat-shared roots, imports the external-services
+subpath, executes public contract smoke tests and two-instance JSON/incremental title tests
+against installed artifacts. Vitest, jsdom and Testing Library are fixture-only dependencies
+pinned from the workspace lockfile. No source aliases or package overrides are used in the
+isolated install. Publication and downstream application verification are not performed.

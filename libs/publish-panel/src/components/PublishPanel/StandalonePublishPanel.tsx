@@ -7,7 +7,9 @@ import {
   PublishResourceSummary,
 } from '../../models/publish';
 import type { PublishPanelStyles } from '../../models/publish-panel-styles';
+import { PublishPanelView } from '../../types/publish-panel';
 import { derivePublishState } from '../../utils/publish-state';
+import { usePublishFolderView } from '../../utils/use-publish-folder-view';
 import { PublishFooter, PublishFooterLabels } from './PublishFooter';
 import { PublishPanel, PublishPanelLabels } from './PublishPanel';
 import styles from './StandalonePublishPanel.module.scss';
@@ -16,6 +18,10 @@ import styles from './StandalonePublishPanel.module.scss';
 export interface StandalonePublishPanelLabels {
   /** Header title. Default: `'Publish'`. */
   title?: string;
+  /** Header title in the folder view. Default: `'Change folder'`. */
+  changeFolderTitle?: string;
+  /** Accessible label for the header's Back button in the folder view. Default: `'Back'`. */
+  backAriaLabel?: string;
   /** Accessible label for the panel's `role="dialog"`. Default: `'Publish'`. */
   ariaLabel?: string;
   /** Accessible label for the header's Close button. Default: `'Close'`. */
@@ -41,7 +47,7 @@ export interface StandalonePublishPanelProps {
   folderItems: PublishFolderNode[];
   /** Currently selected destination folder path. `undefined` means nothing selected; `[]` means the bucket root. */
   selectedFolderPath?: string[];
-  /** Called when the user selects a destination folder or the root; `undefined` when deselected. */
+  /** Called when the user confirms a destination folder or the root with Select in the folder view. */
   onSelectedFolderPathChange: (path: string[] | undefined) => void;
   /** Called when the user confirms a new folder name. */
   onCreateFolder: (parentPath: string[], name: string) => Promise<void>;
@@ -61,7 +67,8 @@ export interface StandalonePublishPanelProps {
   hasSubmitError?: boolean;
   /**
    * Whether resubmitting when `hasExistingPublicationInFolder` is true is
-   * allowed (catalog default) or blocked (conversations). Default `true`.
+   * allowed or blocked — see `PublishDerivationInput.allowReplace`.
+   * Default `true`.
    */
   allowReplace?: boolean;
   /**
@@ -91,6 +98,12 @@ export interface StandalonePublishPanelProps {
   panelLabels?: PublishPanelLabels;
   /** Style overrides for the panel body. */
   panelStyles?: PublishPanelStyles;
+  /** Typography class forwarded to the panel body's `summaryTitleClassName`. Default: `'dial-body-semi-text'`. */
+  panelSummaryTitleClassName?: string;
+  /** Typography class forwarded to the panel body's `headingClassName`. Default: `'dial-body-semi-text'`. */
+  panelHeadingClassName?: string;
+  /** Typography class forwarded to the panel body's `calloutFolderNameClassName`. Default: `'dial-small-paragraph-semi-text'`. */
+  panelCalloutFolderNameClassName?: string;
   /** Text overrides for the pinned footer. */
   footerLabels?: PublishFooterLabels;
   /** Text overrides for the header/shell. */
@@ -117,7 +130,7 @@ export interface StandalonePublishPanelColors {
   titleText?: string;
 }
 
-/** Standalone end-edge slide-in panel for the Publish flow: full-screen backdrop, entity summary, folder picker, and pinned footer. */
+/** Standalone end-edge slide-in panel for the Publish flow: full-screen backdrop, entity summary, destination row with a drill-in folder view, and pinned footer. */
 export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
   isOpen,
   resource,
@@ -146,6 +159,9 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
   onSubmit,
   panelLabels,
   panelStyles,
+  panelSummaryTitleClassName,
+  panelHeadingClassName,
+  panelCalloutFolderNameClassName,
   footerLabels,
   labels = {},
   titleClassName = 'dial-body-semi-text',
@@ -169,9 +185,18 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
   );
   const {
     title = 'Publish',
+    changeFolderTitle = 'Change folder',
+    backAriaLabel = 'Back',
     ariaLabel = 'Publish',
     closeAriaLabel = 'Close',
   } = labels;
+
+  const folderView = usePublishFolderView({
+    isOpen,
+    selectedFolderPath,
+    onSelectedFolderPathChange,
+  });
+  const isFolderView = folderView.view === PublishPanelView.ChangeFolder;
 
   const derived = useMemo(
     () =>
@@ -254,15 +279,21 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
             styles.title,
           )}
         >
-          {title}
+          {isFolderView ? changeFolderTitle : title}
         </span>
       }
       ariaLabel={ariaLabel}
+      onBack={isFolderView ? folderView.backToMain : undefined}
+      backAriaLabel={backAriaLabel}
+      backDisabled={isSubmitting}
       closeAriaLabel={closeAriaLabel}
       closeDisabled={isSubmitting}
       style={cssVars}
       overlayStyle={cssVars}
-      className={styles.panel}
+      className={mergeClasses(
+        styles.panel,
+        'tablet:w-[540px]! tablet:max-w-[calc(100%-32px)]!',
+      )}
       overlayClassName={styles.backdrop}
       headerClassName={mergeClasses('px-[22px]', styles.divider)}
       bodyClassName="flex flex-col overflow-hidden"
@@ -278,9 +309,12 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
           <PublishPanel
             resource={resource}
             renderSummary={renderSummary}
+            view={folderView.view}
+            onChangeFolderClick={folderView.openFolderView}
             folderItems={folderItems}
             selectedFolderPath={selectedFolderPath}
-            onSelectedFolderPathChange={onSelectedFolderPathChange}
+            pendingFolderPath={folderView.pendingFolderPath}
+            onPendingFolderPathChange={folderView.setPendingFolderPath}
             onCreateFolder={onCreateFolder}
             expandedPaths={expandedPaths}
             onExpandedPathsChange={onExpandedPathsChange}
@@ -299,6 +333,9 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
             hasRulesLoadError={hasRulesLoadError}
             labels={panelLabels}
             styles={panelStyles}
+            summaryTitleClassName={panelSummaryTitleClassName}
+            headingClassName={panelHeadingClassName}
+            calloutFolderNameClassName={panelCalloutFolderNameClassName}
           />
         </div>
       </div>
@@ -306,10 +343,14 @@ export const StandalonePublishPanel: FC<StandalonePublishPanelProps> = ({
       <PublishFooter
         version={resource?.version}
         hasExistingPublicationInFolder={hasExistingPublicationInFolder}
+        allowReplace={allowReplace}
         isSubmitDisabled={derived.isSubmitDisabled}
         isSubmitLoading={derived.isSubmitLoading}
-        onCancel={onClose}
+        onCancel={isFolderView ? folderView.backToMain : onClose}
         onSubmit={onSubmit}
+        view={folderView.view}
+        onSelectFolder={folderView.selectFolder}
+        isSelectFolderDisabled={folderView.pendingFolderPath == null}
         labels={footerLabels}
       />
     </SideDrawer>

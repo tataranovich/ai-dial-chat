@@ -8,11 +8,17 @@ import {
   useAvailableHeightCap,
   TextRefinementField,
   useTextRefinement,
+  useIsMobile,
   useUnsavedChangesGuard,
   type TextRefinementCallback,
+  useControlErrorAssociation,
 } from '@epam/ai-dial-chat-shared';
 import {
+  Button,
+  ButtonAppearance,
+  ButtonVariant,
   ConfirmationPopupVariant,
+  ErrorText,
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   Input,
@@ -24,6 +30,7 @@ import {
   NumberInput,
   Spinner,
   Select,
+  LiveRegionPoliteness,
 } from '@epam/ai-dial-ui-kit';
 import { LazyMarkdownEditor } from '@epam/ai-dial-ui-kit/editors';
 import { IconArrowNarrowLeft } from '@tabler/icons-react';
@@ -49,14 +56,14 @@ import { SCHEDULED_TASKS_CLASS } from '../../constants/public-class-names';
 import { DESCRIPTION_MAX_LENGTH } from '../../constants/scheduled-task-create-form';
 import { ScheduledTaskCreateFormProps } from '../../models/scheduled-task-create-form-props';
 import { ScheduledTaskRepeat } from '../../types/scheduled-task-schedule';
+import { findElementLabelledBy } from '../../utils/aria';
 import {
-  calendarValueToDateValue,
   calendarValueToDayOfWeek,
-  dateValueToCalendarValue,
   dayOfWeekToCalendarValue,
   TIME_OF_DAY_PATTERN,
 } from '../../utils/calendar-value';
 import { hasScheduledTaskFormChanges } from '../../utils/scheduled-task-form-values';
+import { ScheduledTaskBoundaryField } from '../ScheduledTaskBoundaryField/ScheduledTaskBoundaryField';
 import { ScheduledTaskRunAtField } from '../ScheduledTaskRunAtField/ScheduledTaskRunAtField';
 import styles from './ScheduledTaskCreateForm.module.scss';
 
@@ -89,6 +96,7 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
   onCancel,
   onSubmit,
   isSubmitting = false,
+  isSubmitDisabled = false,
   onRefineDescription,
   onRefineInstructions,
   markdownEditorTheme,
@@ -98,6 +106,12 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
 }) => {
   const descriptionId = useId();
   const instructionsEditorId = useId();
+  const daysOfWeekLabelId = useId();
+  const modelErrorId = useId();
+  const dayOfWeekErrorId = useId();
+  const daysOfWeekErrorId = useId();
+  const timeErrorId = useId();
+  const promptErrorId = useId();
   const refinementLock = useRef<AbortSignal | undefined>(undefined);
   const guardRefinement = (
     callback?: TextRefinementCallback,
@@ -137,6 +151,7 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
     initialValues && hasScheduledTaskFormChanges(values, initialValues),
   );
   const leaveGuard = useUnsavedChangesGuard(isDirty);
+  const isMobile = useIsMobile();
   const handleBack = () =>
     leaveGuard.guard(() => {
       resetRefinement();
@@ -165,7 +180,7 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
   const instructionsLabelClassName =
     typography?.instructionsLabelClassName ?? 'dial-body-semi-text mb-1';
   const instructionsErrorClassName =
-    typography?.instructionsErrorClassName ?? 'dial-small-text';
+    typography?.instructionsErrorClassName ?? 'dial-tiny-text';
   const cssVars = buildCssVars({
     '--stcf-details-border': colors?.detailsColumnBorder,
     '--stcf-subtitle-text': colors?.sectionSubtitleText,
@@ -202,9 +217,20 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
     onFieldChange('time', typeof value === 'string' ? value : '');
   };
 
+  /* Every recurring repeat renders the same date-only boundary pickers, so a
+   * repeat switch keeps both window boundaries. */
+  const handleRepeatChange = (next: string | string[]) => {
+    onFieldChange('repeat', next as ScheduledTaskRepeat);
+  };
+
   const isTimeFieldShown =
     values.repeat !== ScheduledTaskRepeat.OneTime &&
     values.repeat !== ScheduledTaskRepeat.Hourly;
+
+  const isCustomRepeat = values.repeat === ScheduledTaskRepeat.Custom;
+  /* Custom blocks Save until a weekday is selected, like the other
+   * required fields. */
+  const isCustomDayMissing = isCustomRepeat && !values.daysOfWeek?.length;
 
   /*
    * A blur error describes the time field's visible draft. When a repeat
@@ -222,18 +248,58 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
     ? (timeBlurError ?? errors.time)
     : undefined;
 
+  /* The model selector is host-composed; its contract is to carry `modelLabelId` in `aria-labelledby`. */
+  useControlErrorAssociation(
+    () => findElementLabelledBy(modelLabelId),
+    modelErrorId,
+    Boolean(errors.modelId),
+  );
+  useControlErrorAssociation(
+    () => document.getElementById(instructionsEditorId),
+    promptErrorId,
+    Boolean(errors.prompt),
+  );
+
   const handleRunAtChange = (value: string) => onFieldChange('runAt', value);
 
+  /* The Custom day row is a required multi-select: activating a day toggles
+   * it, except the only selected day, which stays selected. The list stays
+   * sorted Monday first so equal selections compare equal. */
+  const handleCustomDayToggle = (day: string) => {
+    const selectedDays = values.daysOfWeek ?? [];
+    if (selectedDays.includes(day)) {
+      if (selectedDays.length > 1) {
+        onFieldChange(
+          'daysOfWeek',
+          selectedDays.filter((selectedDay) => selectedDay !== day),
+        );
+      }
+      return;
+    }
+    onFieldChange(
+      'daysOfWeek',
+      [...selectedDays, day].sort((a, b) => Number(a) - Number(b)),
+    );
+  };
+
   const isCreateDisabled =
+    isSubmitDisabled ||
+    Boolean(errors.modelId) ||
     isSubmitting ||
     isRefining ||
     !values.displayName.trim() ||
     !values.modelId ||
     (!values.prompt.trim() && !values.skillUrls?.length) ||
     Boolean(errors.skillUrls) ||
+    /* An empty shown run-at blocks Save immediately, like the other required
+     * fields — and a submit-time run-at error keeps it blocked until the host
+     * clears the error on the next run-at change. */
+    (values.repeat === ScheduledTaskRepeat.OneTime &&
+      (!values.runAt || Boolean(errors.runAt))) ||
     /* An empty shown time blocks Save immediately, like the other required
      * fields — the blur error alone would only catch it on blur or submit. */
     (isTimeFieldShown && !values.time) ||
+    isCustomDayMissing ||
     Boolean(timeError);
 
   return (
@@ -289,7 +355,10 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
             role="group"
             aria-label={labels.detailsSectionTitle}
             className={mergeClasses(
-              'flex flex-1 flex-col gap-5 border-e py-6',
+              /* The column divider only makes sense side by side; below the
+               * desktop breakpoint the columns stack and it would draw a
+               * stray vertical line down the Details section. */
+              'flex flex-1 flex-col gap-5 py-6 desktop:border-e',
               styles.detailsColumn,
               styles.formColumn,
             )}
@@ -324,6 +393,7 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
               labels={labels}
               refinement={descriptionRefinement}
               disabled={isSubmitting || isRefining}
+              caption={`${(values.description ?? '').length}/${DESCRIPTION_MAX_LENGTH}`}
               {...refinementStyles}
             >
               <Textarea
@@ -341,11 +411,6 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
                 maxLength={DESCRIPTION_MAX_LENGTH}
                 invalid={Boolean(errors.description)}
                 error={errors.description}
-                caption={
-                  values.description
-                    ? `${values.description.length}/${DESCRIPTION_MAX_LENGTH}`
-                    : undefined
-                }
               />
             </TextRefinementField>
 
@@ -357,14 +422,14 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
               />
               {modelSelector}
               {errors.modelId && (
-                <p
+                <ErrorText
+                  id={modelErrorId}
                   className={mergeClasses(
                     instructionsErrorClassName,
                     styles.instructionsError,
                   )}
-                >
-                  {errors.modelId}
-                </p>
+                  text={errors.modelId}
+                />
               )}
             </div>
 
@@ -372,9 +437,7 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
               <Select
                 labelProps={{ label: labels.repeatLabel }}
                 value={values.repeat}
-                onChange={(next) =>
-                  onFieldChange('repeat', next as ScheduledTaskRepeat)
-                }
+                onChange={handleRepeatChange}
                 options={labels.repeatOptions.map((option) => ({
                   value: option.key,
                   label: option.label,
@@ -384,40 +447,17 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
               {values.repeat === ScheduledTaskRepeat.OneTime && (
                 <ScheduledTaskRunAtField
                   label={labels.runAtLabel}
+                  placeholder={labels.runAtPlaceholder}
                   value={values.runAt ?? ''}
                   onChange={handleRunAtChange}
                   error={errors.runAt}
                   errorClassName={instructionsErrorClassName}
+                  disabled={isSubmitting}
                 />
               )}
 
               {values.repeat !== ScheduledTaskRepeat.OneTime && (
                 <>
-                  {isTimeFieldShown && (
-                    <div className="flex flex-col gap-1">
-                      <Calendar
-                        id="scheduled-task-time"
-                        mode={CalendarMode.Time}
-                        value={values.time}
-                        onChange={handleTimeChange}
-                        onBlur={handleTimeBlur}
-                        labelProps={{ label: labels.timeLabel, required: true }}
-                        invalid={Boolean(timeError)}
-                        disabled={isSubmitting}
-                        showTimezone
-                      />
-                      {timeError && (
-                        <p
-                          className={mergeClasses(
-                            instructionsErrorClassName,
-                            styles.instructionsError,
-                          )}
-                        >
-                          {timeError}
-                        </p>
-                      )}
-                    </div>
-                  )}
                   {values.repeat === ScheduledTaskRepeat.Weekly && (
                     <div className="flex flex-col gap-1">
                       <Calendar
@@ -435,19 +475,111 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
                           required: true,
                         }}
                         invalid={Boolean(errors.dayOfWeek)}
+                        ariaDescribedBy={
+                          errors.dayOfWeek ? dayOfWeekErrorId : undefined
+                        }
                       />
                       {errors.dayOfWeek && (
-                        <p
+                        <ErrorText
+                          id={dayOfWeekErrorId}
                           className={mergeClasses(
                             instructionsErrorClassName,
                             styles.instructionsError,
                           )}
-                        >
-                          {errors.dayOfWeek}
-                        </p>
+                          text={errors.dayOfWeek}
+                        />
                       )}
                     </div>
                   )}
+
+                  {isTimeFieldShown && (
+                    <div className="flex flex-col gap-1">
+                      <Calendar
+                        id="scheduled-task-time"
+                        mode={CalendarMode.Time}
+                        value={values.time}
+                        onChange={handleTimeChange}
+                        onBlur={handleTimeBlur}
+                        labelProps={{ label: labels.timeLabel, required: true }}
+                        invalid={Boolean(timeError)}
+                        ariaDescribedBy={timeError ? timeErrorId : undefined}
+                        disabled={isSubmitting}
+                        showTimezone
+                      />
+                      {timeError && (
+                        <ErrorText
+                          id={timeErrorId}
+                          className={mergeClasses(
+                            instructionsErrorClassName,
+                            styles.instructionsError,
+                          )}
+                          text={timeError}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {isCustomRepeat && (
+                    <div className="flex flex-col gap-1">
+                      {/* The visible "Days" label doubles as the button row's
+                       * accessible name, mirroring the Model or Agent field's
+                       * Label id + aria-labelledby linkage. */}
+                      <Label
+                        id={daysOfWeekLabelId}
+                        label={labels.daysOfWeekLabel}
+                        required
+                      />
+                      <div
+                        role="group"
+                        aria-labelledby={daysOfWeekLabelId}
+                        className="flex gap-0.5"
+                      >
+                        {/* Circular multi-select day row: Neutral Solid when
+                         * unselected, Primary Solid when selected. */}
+                        {labels.customDayOptions.map((day) => {
+                          const isSelected = Boolean(
+                            values.daysOfWeek?.includes(day.value),
+                          );
+                          return (
+                            <Button
+                              key={day.value}
+                              aria-label={day.fullName}
+                              aria-pressed={isSelected}
+                              aria-describedby={
+                                errors.daysOfWeek
+                                  ? daysOfWeekErrorId
+                                  : undefined
+                              }
+                              variant={
+                                isSelected
+                                  ? ButtonVariant.Primary
+                                  : ButtonVariant.Neutral
+                              }
+                              appearance={ButtonAppearance.Solid}
+                              /* 40x40px circular: the kit's Standard size
+                               * already gives a 40px height; the fixed
+                               * width makes the row a circle run. */
+                              className="w-10 rounded-full"
+                              label={day.shortLabel}
+                              onClick={() => handleCustomDayToggle(day.value)}
+                              disabled={isSubmitting}
+                            />
+                          );
+                        })}
+                      </div>
+                      {errors.daysOfWeek && (
+                        <ErrorText
+                          id={daysOfWeekErrorId}
+                          className={mergeClasses(
+                            instructionsErrorClassName,
+                            styles.instructionsError,
+                          )}
+                          text={errors.daysOfWeek}
+                        />
+                      )}
+                    </div>
+                  )}
+
                   {values.repeat === ScheduledTaskRepeat.Monthly && (
                     <NumberInput
                       id="scheduled-task-day-of-month"
@@ -475,6 +607,10 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
                       integer
                       min={0}
                       max={59}
+                      /* Fixed design width on the field box — `className`
+                       * would land on the inner input element, which is
+                       * `w-full` inside the box and ignores it. */
+                      wrapperClassName="w-[142px]"
                       value={values.minute ?? ''}
                       onChange={(value) =>
                         onFieldChange(
@@ -490,63 +626,31 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
                       error={errors.minute}
                     />
                   )}
-                  {/* The two date fields always share one row. */}
+                  {/* The two boundary fields share one row. */}
                   <div className="flex flex-row gap-3">
-                    <div className="flex flex-1 flex-col gap-1">
-                      <Calendar
-                        id="scheduled-task-start-date"
-                        mode={CalendarMode.Date}
-                        value={dateValueToCalendarValue(values.startDate)}
-                        onChange={(value) =>
-                          onFieldChange(
-                            'startDate',
-                            calendarValueToDateValue(value),
-                          )
-                        }
-                        minDate={minDate}
-                        labelProps={{ label: labels.startDateLabel }}
-                        placeholder={labels.startDatePlaceholder}
-                        invalid={Boolean(errors.startDate)}
-                      />
-                      {errors.startDate && (
-                        <p
-                          className={mergeClasses(
-                            instructionsErrorClassName,
-                            styles.instructionsError,
-                          )}
-                        >
-                          {errors.startDate}
-                        </p>
-                      )}
-                    </div>
+                    <ScheduledTaskBoundaryField
+                      id="scheduled-task-start-date"
+                      label={labels.startDateLabel}
+                      placeholder={labels.startDatePlaceholder}
+                      value={values.startDate}
+                      onChange={(value) => onFieldChange('startDate', value)}
+                      minDate={minDate}
+                      error={errors.startDate}
+                      errorClassName={instructionsErrorClassName}
+                      disabled={isSubmitting}
+                    />
 
-                    <div className="flex flex-1 flex-col gap-1">
-                      <Calendar
-                        id="scheduled-task-end-date"
-                        mode={CalendarMode.Date}
-                        value={dateValueToCalendarValue(values.endDate)}
-                        onChange={(value) =>
-                          onFieldChange(
-                            'endDate',
-                            calendarValueToDateValue(value),
-                          )
-                        }
-                        minDate={minDate}
-                        labelProps={{ label: labels.endDateLabel }}
-                        placeholder={labels.endDatePlaceholder}
-                        invalid={Boolean(errors.endDate)}
-                      />
-                      {errors.endDate && (
-                        <p
-                          className={mergeClasses(
-                            instructionsErrorClassName,
-                            styles.instructionsError,
-                          )}
-                        >
-                          {errors.endDate}
-                        </p>
-                      )}
-                    </div>
+                    <ScheduledTaskBoundaryField
+                      id="scheduled-task-end-date"
+                      label={labels.endDateLabel}
+                      placeholder={labels.endDatePlaceholder}
+                      value={values.endDate}
+                      onChange={(value) => onFieldChange('endDate', value)}
+                      minDate={minDate}
+                      error={errors.endDate}
+                      errorClassName={instructionsErrorClassName}
+                      disabled={isSubmitting}
+                    />
                   </div>
                 </>
               )}
@@ -566,38 +670,28 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
             <h2 className={sectionTitleClassName}>
               {labels.configurationSectionTitle}
             </h2>
-            <p
-              className={mergeClasses(
-                sectionSubtitleClassName,
-                styles.sectionSubtitle,
-              )}
-            >
-              {labels.configurationSectionSubtitle}
-            </p>
           </div>
 
           {skillSelector != null ? (
-            <div className="w-full min-w-0 max-w-[996px]">{skillSelector}</div>
+            <div className="w-full max-w-[996px] min-w-0">{skillSelector}</div>
           ) : (
-            errors.skillUrls && (
-              <div aria-live="polite">
-                <p
-                  className={mergeClasses(
-                    instructionsErrorClassName,
-                    styles.instructionsError,
-                  )}
-                >
-                  {errors.skillUrls}
-                </p>
-              </div>
-            )
+            /* Always mounted so the polite region exists before the error
+               arrives; the kit region takes no space while empty. */
+            <ErrorText
+              announce={LiveRegionPoliteness.Polite}
+              className={mergeClasses(
+                instructionsErrorClassName,
+                styles.instructionsError,
+              )}
+              text={errors.skillUrls ?? ''}
+            />
           )}
           {/*
            * Cap the whole group, not just the editor: the Refine action sits at the
            * end of the label row, so an uncapped row lets it drift past the editor
            * whenever the column is wider than the cap (e.g. at browser zoom-out).
            */}
-          <div className="flex w-full min-w-0 max-w-[996px] flex-col">
+          <div className="flex w-full max-w-[996px] min-w-0 flex-col">
             <TextRefinementField
               isEnabled={Boolean(onRefineInstructions)}
               fieldId={instructionsEditorId}
@@ -631,7 +725,15 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
                     MARKDOWN_EDITOR_PREVIEW_LIST_CLASS_NAME,
                   )}
                 >
-                  <Suspense fallback={<Spinner />}>
+                  <Suspense
+                    fallback={
+                      <Spinner
+                        ariaLabel={
+                          labels.editorLoadingAriaLabel ?? 'Loading editor'
+                        }
+                      />
+                    }
+                  >
                     <MarkdownEditor
                       id={instructionsEditorId}
                       value={values.prompt}
@@ -646,14 +748,14 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
                   </Suspense>
                 </div>
                 {errors.prompt && (
-                  <p
+                  <ErrorText
+                    id={promptErrorId}
                     className={mergeClasses(
                       instructionsErrorClassName,
                       styles.instructionsError,
                     )}
-                  >
-                    {errors.prompt}
-                  </p>
+                    text={errors.prompt}
+                  />
                 )}
               </div>
             </TextRefinementField>
@@ -668,7 +770,11 @@ export const ScheduledTaskCreateForm: FC<ScheduledTaskCreateFormProps> = ({
             labels.discardMessage ??
             'You have unsaved changes. Leaving now will discard them.'
           }
-          confirmLabel={labels.discardConfirmLabel ?? 'Discard changes'}
+          confirmLabel={
+            isMobile
+              ? (labels.discardConfirmMobileLabel ?? 'Discard')
+              : (labels.discardConfirmLabel ?? 'Discard changes')
+          }
           cancelLabel={labels.discardCancelLabel ?? 'Keep editing'}
           variant={ConfirmationPopupVariant.Danger}
           onConfirm={leaveGuard.confirm}

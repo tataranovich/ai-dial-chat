@@ -16,7 +16,7 @@ import { CredentialsRow } from '../CredentialsRow/CredentialsRow';
 import styles from './CredentialsManagementPanel.module.scss';
 
 /** Props for {@link CredentialsManagementPanel}. */
-interface CredentialsManagementPanelProps {
+export interface CredentialsManagementPanelProps {
   /** Item whose personal and organization credentials are managed. */
   item: CatalogItem;
   /** Called when a login action (OAuth or API-key add) is submitted for either level. May return a promise; the submitting row shows a spinner in place of its action label until it resolves. */
@@ -35,7 +35,7 @@ interface CredentialsManagementPanelProps {
    * applied as CSS custom properties on the `DetailsPanel` root and cascade in.
    */
   detailsStyles?: ItemDetailsStyles;
-  /** CSS class applied to the "Delete" action on a configured API key. Defaults to `'text-error'`. */
+  /** CSS class merged onto the "Delete" action on a configured API key; its color comes from `detailsStyles.colors.credentialsDeleteActionText`. */
   deleteActionClassName?: string;
 }
 
@@ -56,8 +56,12 @@ export const CredentialsManagementPanel: FC<
   onRequestDeleteApiKey,
   texts,
   detailsStyles,
-  deleteActionClassName = 'text-error',
+  deleteActionClassName,
 }) => {
+  const deleteActionClasses = mergeClasses(
+    styles.deleteAction,
+    deleteActionClassName,
+  );
   const {
     credentialsDescriptionClassName = 'dial-body-paragraph-text',
     credentialsRowLabelClassName = 'dial-small-semi-text',
@@ -141,7 +145,7 @@ export const CredentialsManagementPanel: FC<
             errorClassName={credentialsErrorClassName}
             keyCardTitleClassName={credentialsKeyCardTitleClassName}
             keyCardDescriptionClassName={credentialsKeyCardDescriptionClassName}
-            deleteActionClassName={deleteActionClassName}
+            deleteActionClassName={deleteActionClasses}
           />
           <CredentialsRow
             label={
@@ -179,7 +183,7 @@ export const CredentialsManagementPanel: FC<
             errorClassName={credentialsErrorClassName}
             keyCardTitleClassName={credentialsKeyCardTitleClassName}
             keyCardDescriptionClassName={credentialsKeyCardDescriptionClassName}
-            deleteActionClassName={deleteActionClassName}
+            deleteActionClassName={deleteActionClasses}
           />
         </div>
       </div>

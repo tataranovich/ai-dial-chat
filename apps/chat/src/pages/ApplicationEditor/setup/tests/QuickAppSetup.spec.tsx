@@ -15,10 +15,12 @@ import type { TriggerSaveGeneralPayload } from '../../../../types/apps-editor';
 import QuickAppSetup from '../QuickAppSetup';
 
 interface IframeStubProps {
+  onLoadStart?: () => void;
   onSaveSuccess?: (hasChanges: boolean) => void;
   onSaveError?: (error: string) => void;
   onReadyChange?: (isReady: boolean) => void;
   onLoggedOutChange?: (isLoggedOut: boolean) => void;
+  onUnresponsiveChange?: (isUnresponsive: boolean) => void;
 }
 
 /* Records every render of the embedded-editor stub, so tests can play the iframe's messages. */
@@ -91,6 +93,12 @@ const mountSetup = ({
     </MemoryRouter>,
   );
   return ref;
+};
+
+const advanceTime = async (milliseconds: number) => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+  });
 };
 
 describe('QuickAppSetup', () => {
@@ -224,27 +232,33 @@ describe('QuickAppSetup', () => {
     });
   });
 
-  it('forwards the trimmed Metadata to the embedded editor and reasserts on save', async () => {
-    const handle = mountSetup({ appId: 'app' });
+  it.each([
+    ['save', (handle: ApplicationSetupHandle) => handle.save(METADATA)],
+    [
+      'startPreview',
+      (handle: ApplicationSetupHandle) => handle.startPreview?.(METADATA),
+    ],
+  ])(
+    'forwards the trimmed Metadata as general to the embedded editor on %s and makes no follow-up update',
+    async (_name, run) => {
+      const handle = mountSetup({ appId: 'app' });
 
-    let savePromise: Promise<void> | undefined;
-    act(() => {
-      savePromise = handle.current?.save(METADATA);
-    });
-    expect(mockTriggerSave).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'My App', display_version: '1.2' }),
-    );
+      let promise: Promise<void> | undefined;
+      act(() => {
+        promise = run(handle.current as ApplicationSetupHandle);
+      });
+      expect(mockTriggerSave).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'My App', display_version: '1.2' }),
+      );
 
-    await act(async () => {
-      getIframeProps()?.onSaveSuccess?.(false);
-      await savePromise;
-    });
+      await act(async () => {
+        getIframeProps()?.onSaveSuccess?.(false);
+        await promise;
+      });
 
-    expect(updateApplication).toHaveBeenCalledWith(
-      'app',
-      expect.objectContaining({ name: 'My App' }),
-    );
-  });
+      expect(updateApplication).not.toHaveBeenCalled();
+    },
+  );
 
   it('times out a save that never gets a response and shows the timeout error', async () => {
     vi.useFakeTimers();
@@ -278,6 +292,120 @@ describe('QuickAppSetup', () => {
     ).toBeTruthy();
   });
 
+  it('clears the not-ready error when readiness arrives late and keeps it cleared', async () => {
+    vi.useFakeTimers();
+    mountSetup({ appId: 'app' });
+    await advanceTime(60000);
+    expect(
+      screen.getByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeTruthy();
+
+    act(() => getIframeProps()?.onReadyChange?.(true));
+
+    expect(mockOnReadyChange).toHaveBeenLastCalledWith(true);
+    expect(
+      screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeNull();
+
+    await advanceTime(60000);
+
+    expect(
+      screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeNull();
+  });
+
+  it('clears the previous not-ready error and gives a reloaded editor a full readiness timeout', async () => {
+    vi.useFakeTimers();
+    mountSetup({ appId: 'app' });
+    await advanceTime(60000);
+    expect(
+      screen.getByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeTruthy();
+
+    act(() => getIframeProps()?.onLoadStart?.());
+
+    expect(mockOnReadyChange).toHaveBeenLastCalledWith(false);
+    expect(
+      screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeNull();
+
+    await advanceTime(59999);
+
+    expect(
+      screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeNull();
+
+    await advanceTime(1);
+
+    expect(
+      screen.getByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeTruthy();
+  });
+
+  it('cancels the previous readiness deadline when reloading an editor that is still not ready', async () => {
+    vi.useFakeTimers();
+    mountSetup({ appId: 'app' });
+    await advanceTime(30000);
+
+    act(() => getIframeProps()?.onLoadStart?.());
+    await advanceTime(30000);
+
+    expect(
+      screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeNull();
+
+    await advanceTime(29999);
+
+    expect(
+      screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeNull();
+
+    await advanceTime(1);
+
+    expect(
+      screen.getByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeTruthy();
+  });
+
+  it.each([
+    'The save request failed',
+    AppsEditorI18nKeys.ErrorSettingsNotReady,
+  ])(
+    'preserves the save error through reload, readiness, and explained states: %s',
+    async (message) => {
+      vi.useFakeTimers();
+      const handle = mountSetup({ appId: 'app' });
+      act(() => getIframeProps()?.onReadyChange?.(true));
+
+      let saveResult: Promise<unknown> | undefined;
+      act(() => {
+        saveResult = handle.current
+          ?.save(METADATA)
+          .catch((error: unknown) => error);
+      });
+      await act(async () => {
+        getIframeProps()?.onSaveError?.(message);
+        expect(await saveResult).toEqual(new Error(message));
+      });
+      expect(screen.getByText(message)).toBeTruthy();
+
+      act(() => getIframeProps()?.onLoadStart?.());
+      expect(screen.getByText(message)).toBeTruthy();
+
+      await advanceTime(60000);
+      expect(screen.getByText(message)).toBeTruthy();
+
+      act(() => getIframeProps()?.onReadyChange?.(true));
+      expect(screen.getByText(message)).toBeTruthy();
+
+      act(() => getIframeProps()?.onLoggedOutChange?.(true));
+      expect(screen.getByText(message)).toBeTruthy();
+
+      act(() => getIframeProps()?.onUnresponsiveChange?.(true));
+      expect(screen.getByText(message)).toBeTruthy();
+    },
+  );
+
   it('does not surface the not-ready error once the editor reports the user is logged out', async () => {
     vi.useFakeTimers();
     mountSetup({ appId: 'app' });
@@ -286,6 +414,37 @@ describe('QuickAppSetup', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60000);
     });
+
+    expect(
+      screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeNull();
+  });
+
+  it('does not surface the not-ready error once the editor is reported unresponsive', async () => {
+    vi.useFakeTimers();
+    mountSetup({ appId: 'app' });
+
+    act(() => getIframeProps()?.onUnresponsiveChange?.(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
+
+    expect(
+      screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeNull();
+  });
+
+  it('clears an already-shown not-ready error once the editor is reported unresponsive', async () => {
+    vi.useFakeTimers();
+    mountSetup({ appId: 'app' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
+    expect(
+      screen.getByText(AppsEditorI18nKeys.ErrorSettingsNotReady),
+    ).toBeTruthy();
+
+    act(() => getIframeProps()?.onUnresponsiveChange?.(true));
 
     expect(
       screen.queryByText(AppsEditorI18nKeys.ErrorSettingsNotReady),

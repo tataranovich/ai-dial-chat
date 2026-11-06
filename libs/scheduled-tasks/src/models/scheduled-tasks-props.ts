@@ -32,12 +32,18 @@ export interface ScheduledTasksLabels {
   sortOptions: SelectOption[];
   /** Message shown when the fetched task list is empty. */
   emptyStateLabel: string;
+  /** Secondary line under `emptyStateLabel`. Omitted when not set. */
+  emptyStateDescription?: string;
   /** Message shown when `searchQuery` filters every task out. */
   noResultsLabel: string;
+  /** Secondary line under `noResultsLabel`. Omitted when not set. */
+  noResultsDescription?: string;
   /** Message shown alongside the retry action when `error` is set. */
   errorLabel: string;
   /** Label for the retry action shown when `error` is set. */
   retryLabel: string;
+  /** Accessible label of the first-page loading spinner shown while `isLoading` is `true`. Defaults to `'Loading scheduled tasks'`. */
+  loadingAriaLabel?: string;
   /** Announced via `aria-live` while a load-more fetch is in flight (`isLoadingMore`). Optional — no announcement is made when omitted. */
   loadingMoreLabel?: string;
   loadMoreErrorLabel?: string;
@@ -80,8 +86,8 @@ export interface ScheduledTasksStyles {
 export interface ScheduledTasksProps {
   /** Localized labels. */
   labels: ScheduledTasksLabels;
-  /** Called when the user activates the primary "create task" action. */
-  onCreateClick: () => void;
+  /** Called when the user activates the primary "create task" action. Omit it to render no create button (the host withdraws the affordance without the lib knowing why). */
+  onCreateClick?: () => void;
   /** Current value of the toolbar search input. */
   searchQuery: string;
   /** Called when the toolbar search input value changes. */

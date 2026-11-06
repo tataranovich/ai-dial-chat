@@ -1,4 +1,6 @@
+import type { DeploymentSelectorExtraOption } from '@epam/ai-dial-catalog';
 import { findDeploymentByIdOrReference } from '@epam/ai-dial-chat-hooks';
+import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
   lazy,
   Suspense,
@@ -11,8 +13,8 @@ import { useTranslation } from 'react-i18next';
 import { useDeployments } from '../../context/DeploymentsContext';
 import { useFavoriteApplications } from '../../context/FavoriteApplicationsContext';
 import { useLanguage } from '../../hooks/language/useLanguage';
+import { useUiFeature } from '../../hooks/useUiFeature';
 import { mapDeploymentToCatalogItem } from '../../utils/map-deployment-to-catalog-item';
-import type { DeploymentSelectorExtraOption } from './DeploymentSelectorPanel';
 
 const DeploymentSelectorOverlay = lazy(
   () => import('./DeploymentSelectorOverlay'),
@@ -26,6 +28,8 @@ const CatalogModal = lazy(async () => {
 interface UseDeploymentSelectorFieldOverlayResult {
   /** Render at the position where the dropdown overlay content should appear. */
   renderOverlay: (onClose: () => void) => ReactNode;
+  /** Clear the query on dismissal, retaining it across presentation changes. */
+  onOpenChange: (open: boolean) => void;
   /** Render this element at a stable level outside the popover (e.g. next to the trigger). */
   catalogModal: ReactNode;
   /** True while the deployment list is being fetched. */
@@ -57,11 +61,16 @@ export function useDeploymentSelectorFieldOverlay(
   panelClassName?: string,
 ): UseDeploymentSelectorFieldOverlayResult {
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const onOpenChange = useCallback((open: boolean) => {
+    if (!open) setSearchQuery('');
+  }, []);
 
   const { t } = useTranslation();
   const { items, isLoading, error } = useDeployments();
   const { favoriteIds, toggleFavorite } = useFavoriteApplications();
   const { language } = useLanguage();
+  const isToolsetsEnabled = useUiFeature(OverlayFeature.Toolsets);
 
   const favoriteCatalogItems = useMemo(
     () =>
@@ -72,9 +81,10 @@ export function useDeploymentSelectorFieldOverlay(
             favoriteIds,
             t,
             activeLocale: language,
+            isToolsetTabEnabled: isToolsetsEnabled,
           }),
         ),
-    [items, favoriteIds, t, language],
+    [items, favoriteIds, t, language, isToolsetsEnabled],
   );
 
   const selectedDeployment = useMemo(
@@ -89,9 +99,10 @@ export function useDeploymentSelectorFieldOverlay(
             favoriteIds,
             t,
             activeLocale: language,
+            isToolsetTabEnabled: isToolsetsEnabled,
           })
         : undefined,
-    [selectedDeployment, favoriteIds, t, language],
+    [selectedDeployment, favoriteIds, t, language, isToolsetsEnabled],
   );
 
   const resolvedLabel = useMemo(() => {
@@ -105,6 +116,8 @@ export function useDeploymentSelectorFieldOverlay(
     (onClose: () => void): ReactNode => (
       <Suspense fallback={null}>
         <DeploymentSelectorOverlay
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
           favorites={favoriteCatalogItems}
           extraOptions={extraOptions}
           selectedId={selectedId}
@@ -118,6 +131,7 @@ export function useDeploymentSelectorFieldOverlay(
       </Suspense>
     ),
     [
+      searchQuery,
       favoriteCatalogItems,
       extraOptions,
       selectedId,
@@ -138,5 +152,12 @@ export function useDeploymentSelectorFieldOverlay(
     </Suspense>
   );
 
-  return { renderOverlay, catalogModal, isLoading, error, resolvedLabel };
+  return {
+    onOpenChange,
+    renderOverlay,
+    catalogModal,
+    isLoading,
+    error,
+    resolvedLabel,
+  };
 }

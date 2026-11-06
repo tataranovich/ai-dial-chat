@@ -42,6 +42,15 @@ export class UserProfileDto {
       "Whether the user's roles claim intersects the provider's configured adminRoles",
   })
   isAdmin!: boolean;
+
+  @ApiPropertyOptional({
+    example: '/api/v1/auth/me/picture',
+    description:
+      "URL of the user's profile picture: the IdP's absolute http(s) " +
+      '`picture` claim, or the same-origin `GET /auth/me/picture` path when ' +
+      'the IdP supplied the image inline. Omitted when there is no picture.',
+  })
+  pictureUrl?: string;
 }
 
 export class DialModelFeaturesDto {
@@ -342,6 +351,13 @@ export class DialToolsetAuthSettingsDto {
   @ApiPropertyOptional({ example: 'my-client-id' })
   clientId?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Last characters of the stored OAuth client secret, as returned by DIAL Core. Never the secret itself.',
+    example: 'd4c6',
+  })
+  clientSecretHint?: string;
+
   @ApiPropertyOptional({ example: '' })
   redirectUri?: string;
 
@@ -359,6 +375,13 @@ export class DialToolsetAuthSettingsDto {
 
   @ApiPropertyOptional({ type: [String], example: ['scope1', 'scope2'] })
   scopesSupported?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'RFC 8707 resource indicator DIAL Core sends on the token exchange; the client puts the same value on the authorization URL.',
+    example: 'https://mcp.example.com/mcp',
+  })
+  resource?: string;
 
   @ApiPropertyOptional({
     example: 'SIGNED_OUT',

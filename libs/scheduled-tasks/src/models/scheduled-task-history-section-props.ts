@@ -8,6 +8,8 @@ export interface ScheduledTaskHistorySectionLabels {
   historyTitle: string;
   /** Message shown when the task has no runs yet. */
   historyEmptyLabel: string;
+  /** Secondary line under `historyEmptyLabel`. Omitted when not set. */
+  historyEmptyDescription?: string;
   /** Message shown alongside the retry action when `error` is set. */
   historyErrorLabel: string;
   /** Next-page failure message; falls back to historyErrorLabel. */
@@ -22,11 +24,13 @@ export interface ScheduledTaskHistorySectionLabels {
   runStatusLabels: Record<ScheduledTaskRunStatus, string>;
   /** `sr-only` label announced alongside the unread-dot indicator on a run row whose `isUnread` is `true`. Defaults to `'Unread'`. */
   unreadIndicatorLabel?: string;
+  /** Label of the link inside an expanded failed run's details that opens its conversation. Defaults to `'Open conversation'`. */
+  openConversationLabel?: string;
 }
 
 /** Status-icon and unread-dot color overrides forwarded to the run list. */
 export interface ScheduledTaskHistorySectionColors {
-  /** Success status icon color. Fallback: `--text-success`. */
+  /** Success status icon color. Fallback: `--text-secondary`. */
   successIconColor?: string;
   /** Error status icon color. Fallback: `--text-error`. */
   errorIconColor?: string;
@@ -34,6 +38,10 @@ export interface ScheduledTaskHistorySectionColors {
   missedIconColor?: string;
   /** Unread-dot indicator fill color. Fallback: `--text-accent`. */
   unreadDotColor?: string;
+  /** Error text color inside an expanded failed run's details. Fallback: `--text-secondary`. */
+  errorDetailsTextColor?: string;
+  /** Expand/collapse chevron color on a failed run's row. Fallback: `--text-secondary`. */
+  chevronIconColor?: string;
 }
 
 export interface ScheduledTaskHistorySectionStyles {
@@ -42,12 +50,14 @@ export interface ScheduledTaskHistorySectionStyles {
   maxHeight?: string;
   /** Minimum row height. Fallback: `32px`. */
   rowMinHeight?: string;
-  /** Background of an interactive run row on hover. Defaults to `--bg-control-accent-alpha`. */
+  /** Background of an interactive run row on hover. Defaults to `--bg-control-accent-alpha-hover-subtle`. */
   rowHoverBackground?: string;
   /** Background of an interactive run row on keyboard focus. Defaults to `rowHoverBackground`. */
   rowFocusBackground?: string;
   /** Outline color of an interactive run row on keyboard focus. Defaults to `--text-accent`. */
   rowFocusOutline?: string;
+  /** Header background of an expanded failed run row. Defaults to `--bg-control-accent-alpha-active`. */
+  rowExpandedBackground?: string;
 }
 
 /** Props for the {@link ScheduledTaskHistorySection} component. */
@@ -78,10 +88,14 @@ export interface ScheduledTaskHistorySectionProps {
   hasMore?: boolean;
   /** Called when the user activates the "Show more" button, rendered while `hasMore` is `true`. Omit to hide the button entirely. */
   onLoadMore?: () => void;
-  /** Called with the run when the user clicks a row whose `conversationId` is set. Rows without a `conversationId` never invoke this, regardless of whether it is supplied. */
+  /** Called with the run when the user clicks a row whose `conversationId` is set, or the "Open conversation" link in an expanded failed run that has one. Rows without a `conversationId` never invoke this, regardless of whether it is supplied. */
   onRunClick?: (run: ScheduledTaskRunItem) => void;
   /** CSS class applied to the "Next run" label. Defaults to `'dial-small-text'`. */
   runTimestampClassName?: string;
+  /** CSS class applied to each not-yet-viewed run row's timestamp, one step up from `runTimestampClassName`'s weight on the same 14/20 scale. Defaults to `'dial-small-semi-text'`. */
+  runTimestampUnreadClassName?: string;
+  /** CSS class applied to the error text inside an expanded failed run's details. Defaults to `'dial-tiny-text'`. */
+  errorDetailsClassName?: string;
   /** CSS class applied to the section title in the card variant. Defaults to `'dial-body-semi-text'`. */
   sectionTitleClassName?: string;
   /** Status-icon and unread-dot color overrides forwarded to the run list. */

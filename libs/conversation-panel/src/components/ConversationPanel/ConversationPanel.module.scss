@@ -8,7 +8,11 @@
    */
   border-radius: var(--cp-row-radius, 0.75rem);
 
-  &:hover {
+  /* A row with an `href` is focused through the link around it, so
+     focus-visible on that link tints the row the way hover does. */
+  &:hover,
+  &:focus-visible,
+  :focus-visible > & {
     background: var(--cp-item-hover, var(--bg-control-accent-alpha, #2764d90f));
   }
 
@@ -21,13 +25,30 @@
   }
 }
 
+/*
+ * `Indicator` rows are pills. `--cp-row-radius` still wins, so a host that
+ * sets it keeps its own radius under either variant.
+ */
+.itemIndicator {
+  border-radius: var(--cp-row-radius, 9999px);
+}
+
+.indicatorDot {
+  border: 1.5px solid var(--cp-indicator-dot, var(--stroke-secondary, #d1dbea));
+}
+
 .groupHeader {
   color: var(--cp-text-secondary, var(--text-tertiary, #848e9c));
 }
 
+/* The sidebar's headers take the secondary tone; declared after `.groupHeader` so it wins. */
+.groupHeaderIndicator {
+  color: var(--cp-text-secondary, var(--text-secondary, #57647a));
+}
+
 .dropZoneActive {
-  @apply ring-1 ring-inset;
-  --tw-ring-color: var(--cp-drop-zone-ring, var(--stroke-accent, #1d4ed8));
+  box-shadow: inset 0 0 0 1px
+    var(--cp-drop-zone-ring, var(--stroke-accent, #1d4ed8));
 }
 
 .triggerActive {
@@ -64,4 +85,8 @@
     --cp-skeleton-color,
     var(--bg-control-disable-primary, #dce0e8)
   );
+}
+
+.list {
+  font-family: var(--cp-list-font-family, inherit);
 }

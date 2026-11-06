@@ -13,7 +13,7 @@ start.
 
 ### Requirement: Backend retains in-flight assistant message content per active generation
 
-`ConversationGenerationService`'s registry entry (`apps/chat-api/src/conversations/conversation-generation.service.ts`) SHALL retain the current assembled assistant `ConversationMessageDto` for each active generation, updated every time `ConversationStreamingService.streamCompletion`'s relay loop (`relayModelCompletion` or `ResponsesAdapter.stream`) applies a chunk via `applyChunkToMessage`. This retained content SHALL include merged `custom_content.stages`, matching exactly what the assembled message would contain if inspected at that instant.
+`ConversationGenerationService`'s registry entry (`apps/chat-api/src/conversations/generation/conversation-generation.service.ts`) SHALL retain the current assembled assistant `ConversationMessageDto` for each active generation, updated every time `ConversationStreamingService.streamCompletion`'s relay loop (`ChatCompletionsAdapter.stream` or `ResponsesAdapter.stream`) applies a chunk via `applyChunkToMessage`. This retained content SHALL include merged `custom_content.stages`, matching exactly what the assembled message would contain if inspected at that instant.
 
 #### Scenario: Assembled message reflects the latest chunk
 
@@ -24,7 +24,7 @@ start.
 
 `POST /api/v1/conversations/completions/attach` SHALL accept `{ path }` for the caller's authenticated principal — resolved per `generation-principal-ownership`, so the endpoint is reachable under both `AuthSource.Cookie` and `AuthSource.Header` and SHALL NOT require a cookie session — and, when an active generation exists for that `ownerKey`+`path` (the same key `ConversationGenerationService.abort` uses), SHALL open an SSE stream that:
 
-1. Emits one `{ type: "snapshot", message: <ConversationMessageDto> }` event carrying the registry entry's current assembled message, synchronously captured before any subsequent chunk can be missed.
+1. Emits one `{ type: "snapshot", message: <ConversationMessageDto>, generationId?: <uuid> }` event — `generationId` as "A registry-served attach tells the client the generation id" defines — carrying the registry entry's current assembled message, synchronously captured before any subsequent chunk can be missed.
 2. Emits one `{ type: "chunk", chunk: <delta> }` event — whose `chunk` is the parsed delta in the same shape as a live `/completions` chunk — for every chunk produced by the generation after the snapshot was captured.
 3. Emits exactly one terminal event — `{ type: "done" }`, `{ type: "error", message?: string, errorType?: string }`, or `{ type: "stopped" }` — matching the generation's actual outcome, including terminal persistence failure, then ends the response.
 
@@ -64,7 +64,17 @@ The endpoint SHALL support more than one concurrent subscriber for the same acti
 
 ### Requirement: No active generation for the path returns 404
 
-`POST /api/v1/conversations/completions/attach` SHALL respond `404` when no active generation exists in the registry for the caller's `ownerKey`+`path` — including when a generation existed but already finalized before the attach request arrived, and including when an active generation exists for that path under a different principal — **unless** the caller's conversation at that path contains a background message with `status: "pending"`, in which case the endpoint SHALL behave as `background-responses-generation` "Any instance recovers a pending background message on attach" and "A start interrupted before responseId was saved is marked failed after 2 minutes" define. The background recovery SHALL read the conversation from the caller's own bucket, so another principal's conversation is never read.
+`POST /api/v1/conversations/completions/attach` SHALL respond `404` when no active generation exists in the registry for the caller's `ownerKey`+`path`. That includes:
+
+- a generation that existed but already finalized before the attach request arrived;
+- an active generation for that path under a different principal;
+- a non-background entry this instance retains for the path whose subscribers were already released while an operation it is waiting on is still pending. The finalization bound releases them while the terminal write is pending. The preparation deadline (`generation-registry`, "Generation preparation is bounded, and an abandoned preparation retains ownership until it settles") releases them while an abandoned preparation step is pending.
+
+The exception is a conversation at that path that contains a background message with `status: "pending"`. There the endpoint SHALL behave as `background-responses-generation` "Any instance recovers a pending background message on attach" and "A start interrupted before responseId was saved is marked failed after 2 minutes" define. The background recovery SHALL read the conversation from the caller's own bucket, so another principal's conversation is never read.
+
+For both retained cases, `ConversationGenerationController.attachToGeneration` (`apps/chat-api/src/conversations/conversation-generation.controller.ts`) SHALL keep routing the request to the registry without reading the conversation, as it does for any local non-background entry. It SHALL respond `404` before any SSE header is sent: it SHALL start no keepalive timer, add no emitter listener, and add no `dial_chat_sse_active{kind="generation_attach"}` contribution. Repeated attaches SHALL receive the same `404`.
+
+The status code, the error message, the OpenAPI document and the generated client (`operationId` `attachToGeneration`) are unchanged. Every client of this endpoint treats `404` as "fall back to the `watch`-based terminal check", and so observes the eventual save through `POST /api/v1/conversations/watch`. If no save ever arrives, that check ends at its own bound. Not gated behind `ENABLED_FEATURES` / `ENABLED_FEATURES_ROLES`. No i18n, RTL or accessibility impact, and no new telemetry.
 
 #### Scenario: Attach after the generation already finished
 
@@ -85,6 +95,24 @@ The endpoint SHALL support more than one concurrent subscriber for the same acti
 
 - **WHEN** the attach request arrives on an instance with no registry entry for the path and the caller's conversation contains a `pending` background message that has a `responseId`
 - **THEN** the endpoint opens an SSE stream recovered through DIAL Core instead of responding `404`
+
+#### Scenario: Attach to a retained entry after the finalization bound
+
+- **GIVEN** this instance runs a non-background generation for the caller's principal and path whose finalization bound has elapsed while its terminal write is still pending
+- **WHEN** the caller attaches to that path, once or several times
+- **THEN** each request responds `404` with no SSE headers sent, the conversation is not read, no keepalive timer or emitter listener remains, the SSE-active gauge is unchanged, and a new completion for that path still receives `409`
+
+#### Scenario: Attach to a retained entry after its preparation was abandoned
+
+- **GIVEN** this instance retains a non-background entry for the caller's principal and path whose preparation was abandoned at `GENERATION_PREPARATION_TIMEOUT_MS` while a preparation step is still pending
+- **WHEN** the caller attaches to that path, once or several times
+- **THEN** each request responds `404` with no SSE headers sent, the conversation is not read, no keepalive timer or emitter listener remains, the SSE-active gauge is unchanged, and a new completion for that path still receives `409`
+
+#### Scenario: Existing subscribers are unaffected by a refused late attach
+
+- **GIVEN** a subscriber attached before the finalization bound or the preparation deadline elapsed
+- **WHEN** that bound elapses and a later attach for the same path is refused with `404`
+- **THEN** the earlier subscriber received exactly one terminal event, its keepalive was cleared and its response was released, independently of the refused request
 
 ### Requirement: Attach subscribers are cleaned up on client disconnect
 
@@ -169,3 +197,42 @@ The attach/watch terminal reconciliation SHALL distinguish a rejected conversati
 
 - **WHEN** a newer generation replaces the resumed buffer while its retry is pending
 - **THEN** the late result or failure cannot overwrite the newer answer or attach a stale notification
+
+### Requirement: A registry-served attach tells the client the generation id
+
+When `POST /api/v1/conversations/completions/attach` is served from the in-memory registry (this instance runs a non-background generation for the caller's principal and path), the `snapshot` event SHALL carry an additional optional `generationId` field: the generation id the registry holds for that generation, which is the client-supplied id of the request that started it. This is the id `POST /api/v1/conversations/completions/stop` accepts for the same principal and path, so a client that attaches after a refresh can stop the generation it joined. The field SHALL be present on every registry-served `snapshot` and SHALL NOT change the `message` it carries, the `chunk` events, or the terminal events.
+
+Attach for a conversation with a pending background message is unchanged: its `snapshot` is the stored pending message, whose `backgroundGeneration.generationId` already identifies the generation, and it need not carry the top-level field.
+
+The field is additive and optional on the wire. A client that does not know it ignores it; a client that receives a `snapshot` without it SHALL behave as before (no id is known). No new route is introduced and the endpoint's status codes are unchanged. The attach operation description in the OpenAPI document SHALL mention the field; the SSE stream is not a typed generated model, so no generated-client signature changes (`operationId` stays `attachToGeneration`). The id is disclosed only to the principal that could already stop the generation — attach is principal-scoped — so no new exposure is created. Not gated behind `ENABLED_FEATURES` / `ENABLED_FEATURES_ROLES`; no i18n, RTL or accessibility impact; no new telemetry.
+
+Example `snapshot` event for a registry-served attach:
+
+```json
+{
+  "type": "snapshot",
+  "message": { "role": "assistant", "content": "The Crusades, a series of" },
+  "generationId": "2d0b6c8e-5f7a-4c1b-9e3d-1a2b3c4d5e6f"
+}
+```
+
+#### Scenario: Snapshot carries the generation id
+
+- **WHEN** a client attaches to an active non-background generation served from the registry
+- **THEN** the first event is a `snapshot` whose `generationId` equals the id the generation was registered with
+
+#### Scenario: The announced id is accepted by Stop
+
+- **WHEN** the client posts that `generationId` with the same `path` to `POST /api/v1/conversations/completions/stop` while the generation is active
+- **THEN** the endpoint stops the generation and returns 204, and the attached subscriber receives the terminal `stopped` event
+
+#### Scenario: A background attach is unchanged
+
+- **WHEN** attach is served for a conversation with a pending background message
+- **THEN** the `snapshot` is the stored pending message as `background-responses-generation` defines, and the registry-served `generationId` rule does not apply
+
+#### Scenario: Older clients ignore the field
+
+- **WHEN** a client that does not read `generationId` consumes the `snapshot`
+- **THEN** it renders the message and subsequent events exactly as before
+

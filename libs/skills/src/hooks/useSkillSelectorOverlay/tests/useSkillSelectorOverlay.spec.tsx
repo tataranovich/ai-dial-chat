@@ -1,3 +1,4 @@
+import type { InlineTextSegment } from '@epam/ai-dial-chat-shared';
 import { act, renderHook } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -165,6 +166,55 @@ describe('useSkillSelectorOverlay', () => {
     expect(historyChip[0].props.detailsTrigger).toBeUndefined();
   });
 
+  it('keeps the history typography off active mention chips so they inherit the input font', () => {
+    const { result } = renderHook(() =>
+      useSkillSelectorOverlay({
+        ...baseOptions,
+        historyChipLabelClassName: 'dial-small-paragraph-text',
+      }),
+    );
+
+    act(() => {
+      result.current.seedSkillMentions('/abc', [{ url: abcSkill.url }]);
+    });
+
+    const activeChip = assertDefined(
+      result.current.activeMentions[0].render,
+    )() as ReactElement<ChatSkillProps>;
+    const historyChips = result.current.renderHistorySkills([
+      { url: abcSkill.url },
+    ]) as ReactElement<ChatSkillProps>[];
+
+    expect(activeChip.props.labelClassName).toBe('');
+    expect(historyChips[0].props.labelClassName).toBe(
+      'dial-small-paragraph-text',
+    );
+  });
+
+  it('forwards chipColors to active mention and history chips', () => {
+    const { result } = renderHook(() =>
+      useSkillSelectorOverlay({
+        ...baseOptions,
+        chipColors: { label: '#123456' },
+      }),
+    );
+
+    act(() => {
+      result.current.seedSkillMentions('/abc', [{ url: abcSkill.url }]);
+    });
+
+    const activeChip = assertDefined(
+      result.current.activeMentions[0].render,
+    )() as ReactElement<ChatSkillProps>;
+
+    const historyChips = result.current.renderHistorySkills([
+      { url: abcSkill.url },
+    ]) as ReactElement<ChatSkillProps>[];
+
+    expect(activeChip.props.colors).toEqual({ label: '#123456' });
+    expect(historyChips[0].props.colors).toEqual({ label: '#123456' });
+  });
+
   it('forwards the history trigger only to history chips', () => {
     const { result } = renderHook(() =>
       useSkillSelectorOverlay({
@@ -183,13 +233,12 @@ describe('useSkillSelectorOverlay', () => {
     const historyChips = result.current.renderHistorySkills([
       { url: abcSkill.url },
     ]) as ReactElement<ChatSkillProps>[];
-    const segmentChip = assertDefined(
+    const segment = assertDefined(
       result.current.renderHistorySkillSegments('/abc', [
         { url: abcSkill.url },
       ]),
-    ).find(
-      (segment) => typeof segment !== 'string',
-    ) as ReactElement<ChatSkillProps>;
+    ).find((segment) => typeof segment !== 'string') as InlineTextSegment;
+    const segmentChip = segment.node as ReactElement<ChatSkillProps>;
 
     expect(activeChip.props.detailsTrigger).toBeUndefined();
     expect(historyChips[0].props).toMatchObject({ detailsTrigger: 'click' });
@@ -357,6 +406,30 @@ describe('useSkillSelectorOverlay', () => {
     ]);
   });
 
+  it('seeds a single listed skill mention via selectSkillByUrl', () => {
+    const { result } = renderHook(() => useSkillSelectorOverlay(baseOptions));
+
+    act(() => {
+      result.current.selectSkillByUrl(abcSkill.url);
+    });
+
+    expect(result.current.message).toBe(`/${abcSkill.name} `);
+    expect(result.current.selectedSkills).toEqual([{ url: abcSkill.url }]);
+  });
+
+  it('names an unlisted skill after its url in selectSkillByUrl', () => {
+    const { result } = renderHook(() => useSkillSelectorOverlay(baseOptions));
+
+    act(() => {
+      result.current.selectSkillByUrl('skills/bucket/folder/missing-skill');
+    });
+
+    expect(result.current.message).toBe('/missing-skill ');
+    expect(result.current.selectedSkills).toEqual([
+      { url: 'skills/bucket/folder/missing-skill' },
+    ]);
+  });
+
   it('folds an unsupported deployment into isSkillUnsupported only once a mention exists', () => {
     const { result, rerender } = renderHook(
       (props: UseSkillSelectorOverlayOptions) => useSkillSelectorOverlay(props),
@@ -403,7 +476,8 @@ describe('useSkillSelectorOverlay', () => {
 
       expect(historySegments).not.toBeNull();
       expect(historySegments).toHaveLength(4);
-      expect(historySegments?.[0]).not.toBe(undefined);
+      expect(historySegments?.[0]).toMatchObject({ text: '/abc' });
+      expect(historySegments?.[2]).toMatchObject({ text: '/csd' });
       expect(typeof historySegments?.[1]).toBe('string');
       expect(
         (historySegments?.[1] as string).startsWith(' please summarize'),
@@ -429,7 +503,10 @@ describe('useSkillSelectorOverlay', () => {
         [{ url: 'skills/bucket/gone' }],
       );
 
-      expect((historySegments?.[0] as ReactElement).props).toMatchObject({
+      expect(
+        ((historySegments?.[0] as InlineTextSegment).node as ReactElement)
+          .props,
+      ).toMatchObject({
         unresolvedReason: SkillUnresolvedReason.Deleted,
       });
     });
@@ -443,7 +520,10 @@ describe('useSkillSelectorOverlay', () => {
         [{ url: 'skills/other-bucket/foreign' }],
       );
 
-      expect((historySegments?.[0] as ReactElement).props).toMatchObject({
+      expect(
+        ((historySegments?.[0] as InlineTextSegment).node as ReactElement)
+          .props,
+      ).toMatchObject({
         unresolvedReason: SkillUnresolvedReason.NotShared,
       });
     });
@@ -458,7 +538,8 @@ describe('useSkillSelectorOverlay', () => {
       );
 
       expect(
-        (historySegments?.[0] as ReactElement).props as {
+        ((historySegments?.[0] as InlineTextSegment).node as ReactElement)
+          .props as {
           unresolvedReason?: string;
         },
       ).toHaveProperty('unresolvedReason', undefined);
@@ -539,6 +620,68 @@ describe('useSkillSelectorOverlay', () => {
       rerender({ ...baseOptions });
 
       expect(result.current.seedSkillMentions).toBe(firstSeed);
+    });
+  });
+
+  describe('recognizeMentionsInInsertion (issue #9354)', () => {
+    it('turns a listed /name in inserted text into a mention', () => {
+      const { result } = renderHook(() => useSkillSelectorOverlay(baseOptions));
+
+      act(() => {
+        result.current.recognizeMentionsInInsertion('Please /csd this');
+      });
+      act(() => {
+        result.current.onDraftChange('Please /csd this');
+      });
+
+      expect(result.current.selectedSkills).toEqual([{ url: csdSkill.url }]);
+      expect(result.current.activeMentions).toMatchObject([
+        { start: 7, length: 4 },
+      ]);
+    });
+
+    it('leaves inserted text plain on a deployment without skills support', () => {
+      const { result } = renderHook(() =>
+        useSkillSelectorOverlay({ ...baseOptions, isSkillsSupported: false }),
+      );
+
+      act(() => {
+        result.current.recognizeMentionsInInsertion('Please /csd this');
+      });
+      act(() => {
+        result.current.onDraftChange('Please /csd this');
+      });
+
+      expect(result.current.selectedSkills).toBeUndefined();
+    });
+
+    it('keeps /name plain when it is typed rather than inserted', () => {
+      const { result } = renderHook(() => useSkillSelectorOverlay(baseOptions));
+
+      act(() => {
+        result.current.onDraftChange('Please /csd this');
+      });
+
+      expect(result.current.selectedSkills).toBeUndefined();
+    });
+
+    it('turns a listed /name in pasted text into a mention via commandMenu.onTextPaste', () => {
+      const { result } = renderHook(() => useSkillSelectorOverlay(baseOptions));
+
+      act(() => {
+        result.current.onDraftChange('Hi ');
+      });
+      act(() => {
+        result.current.commandMenu?.onTextPaste?.('/csd now');
+      });
+      act(() => {
+        result.current.onDraftChange('Hi /csd now');
+      });
+
+      expect(result.current.selectedSkills).toEqual([{ url: csdSkill.url }]);
+      expect(result.current.activeMentions).toMatchObject([
+        { start: 3, length: 4 },
+      ]);
     });
   });
 });

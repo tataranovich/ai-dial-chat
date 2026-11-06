@@ -1,5 +1,11 @@
 import type { components } from '@epam/ai-dial-typescript-sdk';
-import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   handleDialFetchError,
@@ -15,6 +21,10 @@ import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
 import { safeDecodeURIComponent } from '../../common/utils/uri';
 import { EnvironmentVariables } from '../../config/environment.config';
 import { resolveConversationLocation } from '../../conversations/utils/conversation.utils';
+import {
+  assertModelNotHidden,
+  getConversationModelId,
+} from '../../conversations/utils/hidden-model';
 import { DeploymentsService } from '../../deployments/deployments.service';
 import { DialClientService } from '../../dial/dial-client.service';
 import { isPromptResourceUrl } from '../../prompts/utils/prompt-mapper.util';
@@ -24,13 +34,18 @@ import { ToolsetsService } from '../../toolsets/toolsets.service';
 import { AcceptInvitationResponseDto } from '../dto/accept-invitation-response.dto';
 import { CreateShareLinkDto, ShareAccess } from '../dto/create-share-link.dto';
 import { ShareLinkResponseDto } from '../dto/share-link-response.dto';
+import { ShareInvitationErrorCode } from '../types/share-invitation-error-code.enum';
 import {
   CONVERSATION_RESOURCE_PREFIX,
   FILE_RESOURCE_PREFIX,
+  collectApplicationIconResourceUrl,
   collectApplicationPromptResourceUrls,
   collectConversationResourceUrls,
-  deriveExpiresInDays,
+  deriveInvitationExpiry,
   getInvitationRoutePath,
+  type InvitationExpiry,
+  getSharedConversationTitle,
+  isAcceptedUsersLimitError,
   isAlreadyOwnedError,
   toPublicItemId,
   toShareResourceUrl,
@@ -92,13 +107,13 @@ export class ShareInvitationService {
    * the sharer's own invitation).
    *
    * Best-effort: the link itself was already created, so any failure here
-   * resolves to `undefined` and the caller omits `expiresInDays` rather than
+   * resolves to `undefined` and the caller omits the expiry fields rather than
    * failing the share or showing a guessed number.
    */
   private async peekInvitationExpiry(
     accessToken: string,
     invitationId: string,
-  ): Promise<number | undefined> {
+  ): Promise<InvitationExpiry | undefined> {
     let result;
     try {
       result = await this.dialClient.client.getInvitation(invitationId, {
@@ -106,7 +121,7 @@ export class ShareInvitationService {
       });
     } catch (err) {
       this.logger.warn(
-        `Failed to peek invitation expiry for invitationId=${invitationId}; omitting expiresInDays`,
+        `Failed to peek invitation expiry for invitationId=${invitationId}; omitting the expiry`,
         err instanceof Error ? err.stack : undefined,
       );
       return undefined;
@@ -118,18 +133,18 @@ export class ShareInvitationService {
           result.error != null
             ? `an error (status ${result.response?.status})`
             : 'an empty body'
-        } when peeking invitationId=${invitationId}; omitting expiresInDays`,
+        } when peeking invitationId=${invitationId}; omitting the expiry`,
       );
       return undefined;
     }
 
-    const expiresInDays = deriveExpiresInDays(result.data, Date.now());
-    if (expiresInDays == null) {
+    const expiry = deriveInvitationExpiry(result.data, Date.now());
+    if (expiry == null) {
       this.logger.warn(
-        `DIAL Core invitation invitationId=${invitationId} has no usable future expireAt; omitting expiresInDays`,
+        `DIAL Core invitation invitationId=${invitationId} has no usable future expireAt; omitting the expiry`,
       );
     }
-    return expiresInDays;
+    return expiry;
   }
 
   private async getRelatedResourceUrls(
@@ -195,6 +210,16 @@ export class ShareInvitationService {
       throw new BadGatewayException('DIAL Core returned an empty conversation');
     }
 
+    /* A share link would let every recipient keep using a hidden model (#9183). */
+    await assertModelNotHidden(
+      this.deploymentsService,
+      getConversationModelId(result.data),
+      accessToken,
+      sessionBucket,
+      this.logger,
+      `share "${resourceUrl}"`,
+    );
+
     /* See openspec/specs/conversation-share/spec.md — "Related file resources outside the conversation's own bucket are dropped". */
     return collectConversationResourceUrls(result.data).filter(
       (url) => getResourceBucket(url) === bucket,
@@ -202,11 +227,12 @@ export class ShareInvitationService {
   }
 
   /*
-   * Loads a quick app's `application_properties` and returns the prompt
-   * resource urls it references via `skills[]` (`type: 'dial-prompt'`), so the
-   * attached prompts are granted alongside the app itself — otherwise the
-   * recipient hits "Access denied to the prompt" when they open the shared
-   * app ([#8529](https://github.com/epam/ai-dial-chat/issues/8529)). Reuses the same `applications/{bucket}/{path}` →
+   * Loads a quick app and returns the prompt resource urls it references via
+   * `application_properties.skills[]` (`type: 'dial-prompt'`), plus its
+   * uploaded `files/...` icon, so both are granted alongside the app itself —
+   * otherwise the recipient hits "Access denied to the prompt" when they open
+   * the shared app ([#8529](https://github.com/epam/ai-dial-chat/issues/8529))
+   * and sees no icon ([#9317](https://github.com/epam/ai-dial-chat/issues/9317)). Reuses the same `applications/{bucket}/{path}` →
    * `getCustomApplication` resolution `buildApplicationDetails` uses.
    *
    * Best-effort: the pre-read MUST NOT block sharing the application itself.
@@ -221,8 +247,8 @@ export class ShareInvitationService {
    *
    * Same cross-bucket rule as conversations: DIAL Core rejects a single share
    * request mixing more than one owning bucket, and the caller cannot grant
-   * access to a prompt in another user's private bucket, so a referenced
-   * prompt whose bucket is not the app's own is silently dropped rather than
+   * access to a prompt or icon in another user's private bucket, so a related
+   * resource whose bucket is not the app's own is silently dropped rather than
    * failing the whole share. See openspec/specs/conversation-share/spec.md.
    */
   private async getApplicationRelatedResourceUrls(
@@ -258,7 +284,13 @@ export class ShareInvitationService {
       return [];
     }
 
-    return collectApplicationPromptResourceUrls(result.data).filter((url) => {
+    const iconResourceUrl = collectApplicationIconResourceUrl(result.data);
+    const relatedResourceUrls = [
+      ...collectApplicationPromptResourceUrls(result.data),
+      ...(iconResourceUrl != null ? [iconResourceUrl] : []),
+    ];
+
+    return relatedResourceUrls.filter((url) => {
       /*
        * `collectApplicationPromptResourceUrls` normalizes each url through
        * `toShareResourceUrl`, so the bucket segment read here is the encoded
@@ -268,9 +300,9 @@ export class ShareInvitationService {
        * percent-encoded bucket name (S3-style) matches regardless of which
        * side carries the encoding.
        */
-      const promptBucket = safeDecodeURIComponent(getResourceBucket(url));
+      const relatedBucket = safeDecodeURIComponent(getResourceBucket(url));
       const appBucket = safeDecodeURIComponent(resource.bucket);
-      return promptBucket === appBucket;
+      return relatedBucket === appBucket;
     });
   }
 
@@ -354,14 +386,11 @@ export class ShareInvitationService {
 
     this.logger.debug(`Created share link for itemId=${resourceUrl}`);
 
-    const expiresInDays = await this.peekInvitationExpiry(
-      accessToken,
-      invitationId,
-    );
+    const expiry = await this.peekInvitationExpiry(accessToken, invitationId);
 
     return {
       url: this.buildInvitationUrl(invitationId, resourceUrl),
-      ...(expiresInDays != null && { expiresInDays }),
+      ...expiry,
       access,
     };
   }
@@ -370,6 +399,8 @@ export class ShareInvitationService {
    * Accepts a share invitation via DIAL Core, granting the authenticated
    * user its access level, and returns the shared entity's identifier.
    *
+   * @throws {NotFoundException} `code: shareInvitationNotFound` when the invitation expired, was revoked, or never existed
+   * @throws {BadRequestException} `code: shareInvitationAcceptedUsersLimitReached` when the share's maximum number of users is reached
    * @throws {BadGatewayException} When DIAL Core returns an error response
    * @throws {ServiceUnavailableException} When DIAL Core is unreachable or times out
    */
@@ -400,6 +431,9 @@ export class ShareInvitationService {
     }
 
     if (peekResult.error) {
+      if (peekResult.response.status === 404) {
+        this.throwInvitationNotFound(invitationId, peekResult.error);
+      }
       return mapDialHttpStatus(
         peekResult.response.status,
         'peek invitation',
@@ -444,6 +478,30 @@ export class ShareInvitationService {
         isAlreadyOwnedError(acceptResult.error)
       )
     ) {
+      /*
+       * The invitation can expire between the peek and the accept, so a 404
+       * here means the same as one from the peek.
+       */
+      if (acceptResult.response.status === 404) {
+        this.throwInvitationNotFound(invitationId, acceptResult.error);
+      }
+      if (
+        acceptResult.response.status === 400 &&
+        isAcceptedUsersLimitError(acceptResult.error)
+      ) {
+        this.logger.warn(
+          `DIAL Core refused invitationId=${invitationId}: accepted users limit reached`,
+        );
+        const itemName = getSharedConversationTitle(itemId);
+        throw new BadRequestException({
+          statusCode: 400,
+          error: 'Bad Request',
+          code: ShareInvitationErrorCode.AcceptedUsersLimitReached,
+          message:
+            'The shared resource has already been shared with the maximum number of users',
+          ...(itemName != null && { itemName }),
+        });
+      }
       return mapDialHttpStatus(
         acceptResult.response.status,
         'accept invitation',
@@ -486,6 +544,26 @@ export class ShareInvitationService {
   }
 
   /**
+   * DIAL Core answers 404 for an invitation that expired (it purges it on
+   * read), was revoked, or never existed — it does not tell them apart, so
+   * neither can the client.
+   */
+  private throwInvitationNotFound(
+    invitationId: string,
+    errorBody: unknown,
+  ): never {
+    this.logger.warn(
+      `DIAL Core has no live invitation for invitationId=${invitationId}: ${JSON.stringify(errorBody)}`,
+    );
+    throw new NotFoundException({
+      statusCode: 404,
+      error: 'Not Found',
+      code: ShareInvitationErrorCode.NotFound,
+      message: 'The share link has expired or does not exist',
+    });
+  }
+
+  /**
    * Resolves the just-accepted item's list-item summary by id, so the
    * frontend can show it immediately instead of depending on a subsequent
    * bulk deployments/toolsets list refresh reflecting the grant — DIAL Core
@@ -525,6 +603,8 @@ export class ShareInvitationService {
        * frontend picks it up from its own prompts refetch instead.
        */
       if (isPromptResourceUrl(itemId)) return {};
+      /* Nor does a project: its landing page loads it by id. */
+      if (itemId.startsWith('projects/')) return {};
 
       if (itemId.startsWith('toolsets/')) {
         const sharedToolset = await this.toolsetsService.resolveToolsetItem(
@@ -559,6 +639,38 @@ export class ShareInvitationService {
         err,
       );
       return {};
+    }
+  }
+
+  /**
+   * Withdraws one invitation through Core's `DELETE /v1/invitations/{id}`. What was already accepted
+   * from it stays shared; only the link stops working. An invitation that is already gone (404) is the
+   * state a withdrawal wants, so it is success.
+   */
+  async withdrawInvitation(
+    accessToken: string,
+    invitationId: string,
+  ): Promise<void> {
+    this.logger.debug(`Withdrawing invitation ${invitationId}`);
+    try {
+      const result = await this.dialClient.client.deleteInvitation(
+        invitationId,
+        { headers: getBearerAuthHeaders(accessToken) },
+      );
+      if (result.error && result.response.status !== 404) {
+        return mapDialHttpStatus(
+          result.response.status,
+          `withdraw invitation ${invitationId}`,
+          this.logger,
+        );
+      }
+    } catch (err) {
+      return handleDialFetchError(
+        err,
+        `withdraw invitation ${invitationId}`,
+        this.logger,
+        0,
+      );
     }
   }
 }

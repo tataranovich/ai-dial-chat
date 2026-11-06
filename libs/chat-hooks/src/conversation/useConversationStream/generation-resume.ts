@@ -6,6 +6,7 @@ import {
   type StreamChunk,
 } from '@epam/ai-dial-chat-shared';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
+import { readSseEvents } from '../../shared/read-sse-events';
 import { safeDecodeURI } from '../../shared/string-utils';
 import {
   DEFAULT_GENERATION_PERSISTENCE_ERROR_MESSAGE,
@@ -17,8 +18,8 @@ import {
   restoreBufferedMessage,
 } from './buffered-generation';
 import { getConversationPath } from './conversation-path';
+import type { ConversationStreamTransport } from './conversation-stream.types';
 import type { FrameScheduler } from './frame-scheduler';
-import type { ConversationStreamTransport } from './useConversationStream';
 
 /**
  * True when the assistant message carries anything the backend's finalize save
@@ -149,65 +150,11 @@ export const fetchConversationForRecovery = async (
 
 /** One event on the `attachToGeneration` SSE stream (`generation-live-replay`). */
 type GenerationAttachEvent =
-  | { type: 'snapshot'; message: Message }
+  | { type: 'snapshot'; message: Message; generationId?: string }
   | { type: 'chunk'; chunk: StreamChunk }
   | { type: 'done' }
   | { type: 'error'; message?: string; errorType?: string }
   | { type: 'stopped' };
-
-/**
- * Reads a newline-delimited SSE stream, JSON-decoding each `data:` line and
- * passing it to `onEvent`. Stops reading — and always releases the reader —
- * as soon as `onEvent` returns `true`, when the stream ends, or when
- * `reader.read()` rejects (a network error, or the caller aborting the
- * stream's own `AbortSignal`, e.g. on timeout). Malformed lines and
- * non-`data:` lines (comments, keepalives) are skipped silently.
- */
-const readSseEvents = async <TEvent>(
-  stream: ReadableStream<Uint8Array>,
-  onEvent: (event: TEvent) => Promise<boolean> | boolean,
-): Promise<void> => {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-
-      let shouldStop = false;
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-
-        const data = trimmed.slice(5).trim();
-        let event: TEvent;
-        try {
-          event = JSON.parse(data) as TEvent;
-        } catch {
-          continue;
-        }
-        if (await onEvent(event)) {
-          shouldStop = true;
-          break;
-        }
-      }
-      if (shouldStop) break;
-    }
-  } catch {
-    /*
-     * Network error, or the caller's own AbortSignal fired (timeout) — the
-     * caller tracks its own timeout flag separately and decides what to do.
-     */
-  } finally {
-    reader.releaseLock();
-  }
-};
 
 /** Internal options a resume started by the stream hook itself passes; the public API passes none. */
 export interface ResumeGenerationOptions {
@@ -217,6 +164,12 @@ export interface ResumeGenerationOptions {
   onSettled?: () => void;
   /** Resumes even though the path is already in `resumingPathsRef`, for a caller that reserved it itself. */
   skipDedupe?: boolean;
+  /**
+   * Takes the `generationId` the attach `snapshot` carries so Stop can reach a resumed
+   * non-background generation. Set only by the public entry point: stream recovery
+   * already knows its local id, and the conflict handover keeps Stop unavailable.
+   */
+  trackAttachGenerationId?: boolean;
 }
 
 /** Host-owned state {@link createResumeIfAwaitingGeneration} reads/writes through. */
@@ -246,6 +199,13 @@ export interface ResumeIfAwaitingGenerationDeps {
    * its id is removed when the resume settles.
    */
   stoppedGenerationIdsRef?: MutableRefObject<Set<string>>;
+  /** Records the id an attach `snapshot` supplied for `path`, so the host can offer Stop for it. */
+  rememberResumedGenerationId?: (path: string, generationId: string) => void;
+  /**
+   * Drops that id again once the resume no longer owns an attached generation. Compare-and-clear:
+   * the host removes the entry only while it still holds `generationId`.
+   */
+  forgetResumedGenerationId?: (path: string, generationId: string) => void;
 }
 
 /**
@@ -274,6 +234,8 @@ export const createResumeIfAwaitingGeneration = ({
   generationPersistenceErrorMessage = DEFAULT_GENERATION_PERSISTENCE_ERROR_MESSAGE,
   frameScheduler,
   stoppedGenerationIdsRef,
+  rememberResumedGenerationId,
+  forgetResumedGenerationId,
   onReloadError,
   onReloadSuccess,
 }: ResumeIfAwaitingGenerationDeps) => {
@@ -311,15 +273,42 @@ export const createResumeIfAwaitingGeneration = ({
     const backgroundGenerationId = isBackground
       ? conversation.messages[messageIndex].backgroundGeneration?.generationId
       : undefined;
-    const isStoppedByUser = () =>
-      backgroundGenerationId != null &&
-      (stoppedGenerationIdsRef?.current.has(backgroundGenerationId) ?? false);
+    /* The id an attach `snapshot` supplied for a non-background generation, while this resume owns it. */
+    let attachGenerationId: string | undefined;
+    const isStoppedByUser = () => {
+      const stoppableId = backgroundGenerationId ?? attachGenerationId;
+      return (
+        stoppableId != null &&
+        (stoppedGenerationIdsRef?.current.has(stoppableId) ?? false)
+      );
+    };
+    const rememberAttachGenerationId = (generationId?: string) => {
+      if (
+        !options.trackAttachGenerationId ||
+        isBackground ||
+        generationId == null ||
+        !ownsBuffer()
+      ) {
+        return;
+      }
+      attachGenerationId = generationId;
+      rememberResumedGenerationId?.(conversationPath, generationId);
+    };
+    /* Safe to call repeatedly: only the first call after a `remember` reaches the host. */
+    const forgetAttachGenerationId = () => {
+      if (attachGenerationId == null) return;
+      const generationId = attachGenerationId;
+      attachGenerationId = undefined;
+      stoppedGenerationIdsRef?.current.delete(generationId);
+      forgetResumedGenerationId?.(conversationPath, generationId);
+    };
 
     const finish = (result?: Conversation, persistenceFailed = false) => {
       frameScheduler?.flush(conversationPath);
       if (backgroundGenerationId != null) {
         stoppedGenerationIdsRef?.current.delete(backgroundGenerationId);
       }
+      forgetAttachGenerationId();
       if (!ownsBuffer()) return;
       resumingPathsRef.current.delete(conversationPath);
       removeStreamingPath(conversationPath);
@@ -375,6 +364,7 @@ export const createResumeIfAwaitingGeneration = ({
         if (backgroundGenerationId != null) {
           stoppedGenerationIdsRef?.current.delete(backgroundGenerationId);
         }
+        forgetAttachGenerationId();
         onReloadError?.(conversationPath, finalCheck, ownsBuffer);
       }
     };
@@ -516,6 +506,7 @@ export const createResumeIfAwaitingGeneration = ({
         if (!ownsBuffer()) return true;
         switch (event.type) {
           case 'snapshot':
+            rememberAttachGenerationId(event.generationId);
             applySnapshot(event.message);
             return false;
           case 'chunk':
@@ -537,6 +528,8 @@ export const createResumeIfAwaitingGeneration = ({
         else await finalCheck();
         return true;
       }
+      /* The watch fallback cannot prove this instance still runs the generation, so Stop goes away. */
+      forgetAttachGenerationId();
       return !ownsBuffer();
     };
 

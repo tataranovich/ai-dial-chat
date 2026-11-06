@@ -3,9 +3,18 @@ import {
   useAttachmentCanvas,
 } from '@epam/ai-dial-attachment-canvas';
 import { clearAttachmentCache } from '@epam/ai-dial-chat-hooks/file-manager-canvas';
-import { usePanelMaxWidth } from '@epam/ai-dial-chat-hooks/viewport-layout';
+import { useAppVersionCheck } from '@epam/ai-dial-chat-hooks/utils';
+import {
+  usePanelMaxWidth,
+  useViewportWidth,
+} from '@epam/ai-dial-chat-hooks/viewport-layout';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
-import { CodeBlockTheme, FilterTab } from '@epam/ai-dial-chat-shared';
+import {
+  CodeBlockTheme,
+  FilterTab,
+  useIsMobile,
+  useIsTablet,
+} from '@epam/ai-dial-chat-shared';
 import {
   lazy,
   memo,
@@ -33,41 +42,63 @@ import ConversationSourcesPanel from '../components/ConversationSourcesPanel/Con
 import { RouteErrorBoundary } from '../components/ErrorBoundary/ErrorBoundary';
 import Header from '../components/Header/Header';
 import SourcesSidebarToggle from '../components/Header/SourcesSidebarToggle';
-import Navigation from '../components/Navigation/Navigation';
+import SidebarNavigation from '../components/Navigation/SidebarNavigation';
 import NewVersionFallback from '../components/NewVersionFallback/NewVersionFallback';
 import RouteFallback from '../components/RouteFallback/RouteFallback';
 import { MIN_CONTENT_AREA_WIDTH } from '../constants/layout';
 import {
   getConversationRoute,
+  isConversationPagePath,
   normalizeConversationId,
 } from '../constants/routes';
 import {
   AttachmentCanvasI18nKeys,
+  BasicI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
+  SidebarI18nKeys,
+  AttachmentsI18nKeys,
 } from '../constants/translation-keys';
 import { ActiveScheduledTaskProvider } from '../context/ActiveScheduledTaskContext';
-import { useIsolatedModelView } from '../context/IsolatedModelViewContext';
 import { useSourcesSidebar } from '../context/SourcesSidebarContext';
 import { useTheme } from '../context/ThemeContext';
 import { useCanvasVisualizerMessageHandler } from '../hooks/attachment/useCanvasVisualizerMessageHandler';
 import { usePdfPreviewLoader } from '../hooks/attachment/usePdfPreviewLoader';
-import { useIsMobile } from '../hooks/breakpoint/useBreakpoint';
 import { useConversationListBridge } from '../hooks/conversation/useConversationListBridge';
 import { useConversationPanelRouteState } from '../hooks/conversation-panel/useConversationPanelRouteState';
 import { useOverlayPendingModel } from '../hooks/overlay/useOverlayPendingModel';
-import { useAppVersionCheck } from '../hooks/useAppVersionCheck/useAppVersionCheck';
 import { useUiFeature } from '../hooks/useUiFeature';
 import ConversationRoute from '../pages/ConversationRoute/ConversationRoute';
+import { checkHealth } from '../server-api/health.api';
 import { ApplicationEditorKind } from '../types/application-editor';
 import { ROUTES } from '../types/routes';
 import { ThemeId } from '../types/theme-id';
+import {
+  getNavigationSidebarWidth,
+  resolveCanvasWidth,
+} from '../utils/canvas-width';
 import { configurePdfWorker } from '../utils/pdf';
-import { renderSettingsRoutes } from './settings-routes';
+import { renderSettingsRoutes, renderUsageRoute } from './settings-routes';
 
 const CatalogView = lazy(() => import('../components/CatalogView/CatalogView'));
 const DialFileManagerPage = lazy(
   () => import('../pages/DialFileManagerPage/DialFileManagerPage'),
+);
+const ProjectsPage = lazy(() => import('../pages/ProjectsPage/ProjectsPage'));
+const ProjectCreatePage = lazy(
+  () => import('../pages/ProjectCreatePage/ProjectCreatePage'),
+);
+const ProjectChatPage = lazy(
+  () => import('../pages/ProjectChatPage/ProjectChatPage'),
+);
+const ProjectViewPage = lazy(
+  () => import('../pages/ProjectViewPage/ProjectViewPage'),
+);
+const ProjectEditPage = lazy(
+  () => import('../pages/ProjectEditPage/ProjectEditPage'),
+);
+const ProjectSharedInvitationPage = lazy(
+  () => import('../pages/ProjectSharedInvitation/ProjectSharedInvitation'),
 );
 const ScheduledTasksPage = lazy(
   () => import('../pages/ScheduledTasksPage/ScheduledTasksPage'),
@@ -116,20 +147,21 @@ const App: FC = () => {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isMobile = useIsMobile();
+  const isTablet = useIsTablet();
   const loadPdf = usePdfPreviewLoader();
-  const canvasMaxWidth = usePanelMaxWidth(MIN_CONTENT_AREA_WIDTH);
-  const canvasDefaultWidth = isMobile
-    ? window.innerWidth
-    : Math.min(
-        canvasMaxWidth,
-        Math.round((canvasMaxWidth + MIN_CONTENT_AREA_WIDTH) * 0.5),
-      );
+  const isFileManagerRoute = !!useMatch(ROUTES.FileManager);
+  /* The project create, edit and view pages preview their context files in the canvas. */
+  const isProjectCreateRoute = !!useMatch(ROUTES.ProjectCreate);
+  const isProjectViewRoute = !!useMatch(ROUTES.ProjectView);
+  const isProjectEditRoute = !!useMatch(ROUTES.ProjectEdit);
+  const isProjectPageRoute =
+    isProjectCreateRoute || isProjectViewRoute || isProjectEditRoute;
+  const viewportWidth = useViewportWidth();
   const { currentTheme } = useTheme();
   const codeBlockTheme =
     currentTheme === ThemeId.Light ? CodeBlockTheme.Light : CodeBlockTheme.Dark;
-  const { isNewVersionAvailable } = useAppVersionCheck();
+  const { isNewVersionAvailable } = useAppVersionCheck({ checkHealth });
   // TODO: remove in next release
-  const { isActive: isIsolatedView } = useIsolatedModelView();
 
   /*
    * Registers the overlay's conversation-list bridge. Mounted here (below
@@ -153,19 +185,40 @@ const App: FC = () => {
   );
   const isFileManagerEnabled = useUiFeature(OverlayFeature.FileManager);
   const isSettingsPageHidden = useUiFeature(OverlayFeature.HideSettingsPage);
+  const isUsagePageHidden = useUiFeature(OverlayFeature.HideUsagePage);
+  const isSidebarToggleEnabled = useUiFeature(
+    OverlayFeature.ConversationsPanelToggle,
+  );
 
   const { closeCanvas, isOpen: isCanvasOpen } = useAttachmentCanvas();
   const handleCanvasVisualizerSendMessage = useCanvasVisualizerMessageHandler();
   const { handleClose: closeSourcesPanel } = useSourcesSidebar();
 
-  const { isPanelOpen, closePanel, togglePanel } =
-    useConversationPanelRouteState({
-      pathname,
-      isMobile,
-      isCanvasOpen,
-      isOpenByDefault: isConversationsSectionOpenByDefault,
-      onCloseCanvas: closeCanvas,
-      onCloseSourcesPanel: closeSourcesPanel,
+  const { isPanelOpen, togglePanel } = useConversationPanelRouteState({
+    pathname,
+    isMobile,
+    isCanvasOpen,
+    isOpenByDefault: isConversationsSectionOpenByDefault,
+    isToggleEnabled: isSidebarToggleEnabled,
+    onCloseCanvas: closeCanvas,
+    onCloseSourcesPanel: closeSourcesPanel,
+  });
+
+  /* The canvas opens beside the sidebar in whatever state the user left it, so
+     its width is bounded by the room the sidebar leaves; on mobile the sidebar
+     is a drawer and takes none. */
+  const navigationSidebarWidth = isMobile
+    ? 0
+    : getNavigationSidebarWidth(isPanelOpen);
+  const canvasMaxWidth = usePanelMaxWidth(
+    isTablet ? 32 : MIN_CONTENT_AREA_WIDTH + navigationSidebarWidth,
+  );
+  const { defaultWidth: canvasDefaultWidth, minWidth: canvasMinWidth } =
+    resolveCanvasWidth({
+      isFileManagerRoute,
+      isMobile: isMobile && !isTablet,
+      viewportWidth,
+      maxWidth: canvasMaxWidth,
     });
 
   useEffect(() => {
@@ -173,8 +226,8 @@ const App: FC = () => {
   }, [pathname]);
 
   const matchRoot = useMatch(ROUTES.Root);
-  const matchConversation = useMatch(`${ROUTES.Conversations}/*`);
-  const isConversationRoute = !!(matchRoot ?? matchConversation);
+  /* A top-level or a project chat; the sidebar highlight below stays `/conversations/` only. */
+  const isConversationRoute = !!matchRoot || isConversationPagePath(pathname);
   const activeConversationId = useMemo(() => {
     const prefix = `${ROUTES.Conversations}/`;
     if (!pathname.startsWith(prefix)) return;
@@ -218,80 +271,92 @@ const App: FC = () => {
     }
   }, []);
 
+  /* The drawer has nothing to close once the viewport leaves the mobile band. */
+  useEffect(() => {
+    if (!isMobile) closeNav();
+  }, [isMobile, closeNav]);
+
+  /* A drawer opened on a mobile viewport closes behind any chat the user picks,
+     including the one already open, which changes no route. */
   const handleSelectConversation = useCallback(
     (id: string) => {
       if (isMobile) {
-        closePanel();
+        closeNav();
       }
 
       const conversationRoute = getConversationRoute(id);
       navigate(conversationRoute);
     },
-    [navigate, isMobile, closePanel],
+    [navigate, isMobile, closeNav],
+  );
+
+  /* Same drawer rule as a picked chat, for the sidebar's other routes. */
+  const handleOpenRoute = useCallback(
+    (path: string) => {
+      if (isMobile) {
+        closeNav();
+      }
+      navigate(path);
+    },
+    [navigate, isMobile, closeNav],
   );
 
   const handleNewChat = useCallback(() => {
     if (isMobile) {
-      closePanel();
+      closeNav();
     }
     navigate(ROUTES.Root);
-  }, [navigate, isMobile, closePanel]);
+  }, [navigate, isMobile, closeNav]);
 
   if (isNewVersionAvailable) {
     return <NewVersionFallback />;
   }
 
+  /* The chats block of the navigation sidebar. */
+  const conversationPanelView = (
+    <ConversationPanelView
+      activeConversationId={activeConversationId}
+      onSelectConversation={handleSelectConversation}
+      onOpenRoute={handleOpenRoute}
+      requestedFilter={panelRequestedFilter}
+      onRequestedFilterChange={handlePanelRequestedFilterChange}
+      onActiveFilterChange={handlePanelActiveFilterChange}
+      onDuplicateReadonly={handleDuplicateReadonly}
+      isVisible={isMobile ? isNavOpen : isPanelOpen}
+    />
+  );
+
   return (
     <div className="flex size-full flex-col">
       <AnnouncementBanner />
-      <div className="flex min-h-0 flex-1 flex-row">
+      <div className="relative flex min-h-0 flex-1 flex-row tablet:overflow-hidden">
         <Suspense fallback={null}>
           <SigninInterruptDialog />
         </Suspense>
-        {/* TODO: remove in next release. hide-navigation-menu only ever
-            covered the mobile hamburger/sheet, not this desktop rail — see
-            ui-feature-toggles' "The key SHALL NOT affect the desktop
-            navigation rail" — so isolated view hides the whole component
-            directly instead of adding a new permanent OverlayFeature key for
-            a temporary shim. */}
-        {!isIsolatedView && (
-          <Navigation isOpen={isNavOpen} onClose={closeNav} />
-        )}
-
-        <ConversationPanelView
-          isOpen={isPanelOpen}
-          activeConversationId={activeConversationId}
-          onClose={closePanel}
-          onSelectConversation={handleSelectConversation}
-          onNewChat={handleNewChat}
-          requestedFilter={panelRequestedFilter}
-          onRequestedFilterChange={handlePanelRequestedFilterChange}
-          onActiveFilterChange={handlePanelActiveFilterChange}
-          onDuplicateReadonly={handleDuplicateReadonly}
+        <SidebarNavigation
+          chats={conversationPanelView}
+          isCollapsed={!isPanelOpen}
+          onToggleCollapse={togglePanel}
+          isOpen={isNavOpen}
+          onClose={closeNav}
         />
 
         <ActiveScheduledTaskProvider>
+          {/* The open drawer has no backdrop, so the page behind it is inert:
+              Tab and screen readers stay inside the drawer. */}
           <main
             id="main-content"
             role="main"
+            inert={isMobile && isNavOpen}
             className="relative flex min-h-0 min-w-0 flex-1 flex-col"
           >
             <Header
               onMenuToggle={toggleNav}
-              isConversationPanelOpen={isPanelOpen}
-              onConversationPanelToggle={togglePanel}
+              isMenuOpen={isNavOpen}
               onNewChat={handleNewChat}
             />
             <Routes>
-              <Route
-                element={
-                  <ChatLayout
-                    isPanelOpen={isPanelOpen}
-                    onTogglePanel={togglePanel}
-                    onNewChat={handleNewChat}
-                  />
-                }
-              >
+              <Route element={<ChatLayout />}>
                 <Route path={ROUTES.Root} element={<ConversationRoute />} />
                 <Route
                   path="/conversations/*"
@@ -301,6 +366,16 @@ const App: FC = () => {
                         <ConversationPage
                           onDuplicateReadonly={handleDuplicateReadonly}
                         />
+                      </Suspense>
+                    </RouteErrorBoundary>
+                  }
+                />
+                <Route
+                  path={ROUTES.ProjectChat}
+                  element={
+                    <RouteErrorBoundary>
+                      <Suspense fallback={<RouteFallback />}>
+                        <ProjectChatPage />
                       </Suspense>
                     </RouteErrorBoundary>
                   }
@@ -350,6 +425,57 @@ const App: FC = () => {
                     /* Keeps a direct /files URL from bypassing the hidden nav entry. */
                     <Navigate to={ROUTES.Root} replace />
                   )
+                }
+              />
+              {renderUsageRoute(isUsagePageHidden)}
+              <Route
+                path={ROUTES.Projects}
+                element={
+                  <RouteErrorBoundary>
+                    <Suspense fallback={<RouteFallback />}>
+                      <ProjectsPage />
+                    </Suspense>
+                  </RouteErrorBoundary>
+                }
+              />
+              <Route
+                path={ROUTES.ProjectCreate}
+                element={
+                  <RouteErrorBoundary>
+                    <Suspense fallback={<RouteFallback />}>
+                      <ProjectCreatePage />
+                    </Suspense>
+                  </RouteErrorBoundary>
+                }
+              />
+              <Route
+                path={ROUTES.ProjectView}
+                element={
+                  <RouteErrorBoundary>
+                    <Suspense fallback={<RouteFallback />}>
+                      <ProjectViewPage />
+                    </Suspense>
+                  </RouteErrorBoundary>
+                }
+              />
+              <Route
+                path={ROUTES.ProjectEdit}
+                element={
+                  <RouteErrorBoundary>
+                    <Suspense fallback={<RouteFallback />}>
+                      <ProjectEditPage />
+                    </Suspense>
+                  </RouteErrorBoundary>
+                }
+              />
+              <Route
+                path={ROUTES.ProjectSharedInvitation}
+                element={
+                  <RouteErrorBoundary>
+                    <Suspense fallback={<RouteFallback />}>
+                      <ProjectSharedInvitationPage />
+                    </Suspense>
+                  </RouteErrorBoundary>
                 }
               />
               <Route
@@ -482,16 +608,23 @@ const App: FC = () => {
           </main>
           {isConversationRoute && <ConversationSourcesPanel />}
         </ActiveScheduledTaskProvider>
-        {isConversationRoute && isAttachmentsManagerEnabled && (
+        {(isFileManagerRoute ||
+          isProjectPageRoute ||
+          (isConversationRoute && isAttachmentsManagerEnabled)) && (
           <AttachmentCanvasContainer
             loadPdf={loadPdf}
             onVisualizerSendMessage={handleCanvasVisualizerSendMessage}
             labels={{
               ariaLabel: t(AttachmentCanvasI18nKeys.AriaLabel),
               closeLabel: t(AttachmentCanvasI18nKeys.CloseLabel),
+              resizeLabel: t(SidebarI18nKeys.ResizePanel),
+              visualizerErrorLabel: t(
+                AttachmentCanvasI18nKeys.VisualizerLoadErrorLabel,
+              ),
               downloadLabel: t(AttachmentCanvasI18nKeys.DownloadLabel),
               unsupportedLabel: t(AttachmentCanvasI18nKeys.UnsupportedLabel),
               loadErrorLabel: t(AttachmentCanvasI18nKeys.LoadErrorLabel),
+              loadErrorRetryLabel: t(ButtonsI18nKeys.Retry),
               forbiddenErrorLabel: t(
                 AttachmentCanvasI18nKeys.ForbiddenErrorLabel,
               ),
@@ -504,9 +637,7 @@ const App: FC = () => {
               htmlFrameBlockedLabel: t(
                 AttachmentCanvasI18nKeys.HtmlFrameBlocked,
               ),
-              htmlOpenInNewTabLabel: t(
-                AttachmentCanvasI18nKeys.HtmlOpenInNewTab,
-              ),
+              htmlOpenInNewTabLabel: t(AttachmentsI18nKeys.OpenInNewTab),
               htmlViewSourceLabel: t(AttachmentCanvasI18nKeys.HtmlViewSource),
               htmlViewRenderedLabel: t(
                 AttachmentCanvasI18nKeys.HtmlViewRendered,
@@ -553,10 +684,18 @@ const App: FC = () => {
               ooxmlHighlightNavigatedLabel: t(
                 AttachmentCanvasI18nKeys.OoxmlHighlightNavigatedLabel,
               ),
+              loadingLabel: t(BasicI18nKeys.Loading),
             }}
-            leftActions={isMobile ? <SourcesSidebarToggle /> : undefined}
+            /* The project pages have no sources panel for the toggle to drive. */
+            leftActions={
+              isMobile && !isProjectPageRoute ? (
+                <SourcesSidebarToggle />
+              ) : undefined
+            }
             isMobile={isMobile}
+            isBoundedOverlay={isTablet}
             defaultWidth={canvasDefaultWidth}
+            minWidth={canvasMinWidth}
             maxWidth={canvasMaxWidth}
             codeBlockTheme={codeBlockTheme}
             configurePdfWorker={configurePdfWorker}

@@ -11,6 +11,7 @@ interface DocumentPreviewMockProps {
   onThumbnailsLoaded: (map: Map<number, string>) => void;
   onViewerReady: (api: { navigateToPage: (page: number) => void }) => void;
   selectedPageNumber?: number;
+  loadFileCb: (url: string) => Promise<Blob>;
 }
 
 interface PageThumbnailMockProps {
@@ -33,6 +34,7 @@ interface DropdownMockProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   renderOverlay?: () => ReactNode;
+  initialFocus?: 0 | -1;
 }
 
 interface InputMockProps {
@@ -51,7 +53,10 @@ interface ButtonMockProps {
 }
 
 const documentPreviewState = vi.hoisted(() => {
-  return { props: undefined as DocumentPreviewMockProps | undefined };
+  return {
+    props: undefined as DocumentPreviewMockProps | undefined,
+    dropdownInitialFocus: undefined as 0 | -1 | undefined,
+  };
 });
 
 vi.mock('@epam/ai-dial-react-pdf-highlighter', () => ({
@@ -72,9 +77,16 @@ vi.mock('@epam/ai-dial-react-pdf-highlighter', () => ({
   ),
 }));
 
-vi.mock('@epam/ai-dial-ui-kit', () => ({
+vi.mock('@epam/ai-dial-ui-kit', async () => ({
+  ...(await vi
+    .importActual<typeof import('@epam/ai-dial-ui-kit')>('@epam/ai-dial-ui-kit')
+    .then(({ LiveRegion, LiveRegionElement }) => ({
+      LiveRegion,
+      LiveRegionElement,
+    }))),
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   DIAL_KIT_ICON_STROKE: 1.5,
+  DropdownOverlayRole: { Menu: 'menu', Dialog: 'dialog', None: 'none' },
   ElementSize: { Small: 'small', Medium: 'medium', Large: 'large' },
   Button: ({ label, 'aria-label': ariaLabel, onClick }: ButtonMockProps) => (
     <button aria-label={ariaLabel} onClick={onClick}>
@@ -101,21 +113,25 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     open,
     onOpenChange,
     renderOverlay,
-  }: DropdownMockProps) => (
-    <div>
-      <span
-        role="button"
-        tabIndex={0}
-        onClick={() => onOpenChange?.(!open)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') onOpenChange?.(!open);
-        }}
-      >
-        {children}
-      </span>
-      {open && renderOverlay?.()}
-    </div>
-  ),
+    initialFocus,
+  }: DropdownMockProps) => {
+    documentPreviewState.dropdownInitialFocus = initialFocus;
+    return (
+      <div>
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={() => onOpenChange?.(!open)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') onOpenChange?.(!open);
+          }}
+        >
+          {children}
+        </span>
+        {open && renderOverlay?.()}
+      </div>
+    );
+  },
   Input: ({
     value,
     onChange,
@@ -167,6 +183,7 @@ const getThumbnailPageNumbers = (): number[] => {
 describe('PdfContent', () => {
   beforeEach(() => {
     documentPreviewState.props = undefined;
+    documentPreviewState.dropdownInitialFocus = undefined;
     vi.useFakeTimers();
     // Run rAF callbacks synchronously so a scroll's setScrollTop lands
     // before the test's next assertion, without depending on whether this
@@ -398,6 +415,13 @@ describe('PdfContent', () => {
   });
 
   describe('page navigator input', () => {
+    it('does not focus the page input when the thumbnails panel opens', () => {
+      render(<PdfContent url="doc.pdf" highlights={[]} />);
+      setTotalPages(50);
+
+      expect(documentPreviewState.dropdownInitialFocus).toBe(-1);
+    });
+
     it('navigates to a valid committed page number on Enter', () => {
       render(<PdfContent url="doc.pdf" highlights={[]} />);
       setTotalPages(50);
@@ -592,8 +616,11 @@ describe('PdfContent', () => {
       await act(async () => {
         await Promise.resolve();
       });
-      expect(screen.getByRole('alert')).toBeTruthy();
-      expect(screen.getByText('Worker setup failed')).toBeTruthy();
+      expect(
+        screen
+          .getAllByRole('status')
+          .some((region) => region.textContent === 'Worker setup failed'),
+      ).toBe(true);
       expect(configurePdfWorker).toHaveBeenCalledOnce();
       expect(documentPreviewState.props).toBeUndefined();
 
@@ -606,6 +633,61 @@ describe('PdfContent', () => {
       });
       expect(documentPreviewState.props).toBeDefined();
       expect(configurePdfWorker).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('document loading', () => {
+    it('reports the URL through onLoadError when loadPdf rejects', async () => {
+      const failure = new Error('network');
+      const loadPdf = vi.fn().mockRejectedValue(failure);
+      const onLoadError = vi.fn();
+      render(
+        <PdfContent
+          url="doc.pdf"
+          highlights={[]}
+          loadPdf={loadPdf}
+          onLoadError={onLoadError}
+        />,
+      );
+      await expect(
+        documentPreviewState.props?.loadFileCb('doc.pdf'),
+      ).rejects.toBe(failure);
+      expect(loadPdf).toHaveBeenCalledWith('doc.pdf');
+      expect(onLoadError).toHaveBeenCalledWith('doc.pdf');
+    });
+
+    it('does not call onLoadError when loadPdf resolves', async () => {
+      const blob = new Blob(['%PDF']);
+      const onLoadError = vi.fn();
+      render(
+        <PdfContent
+          url="doc.pdf"
+          highlights={[]}
+          loadPdf={vi.fn().mockResolvedValue(blob)}
+          onLoadError={onLoadError}
+        />,
+      );
+      await expect(
+        documentPreviewState.props?.loadFileCb('doc.pdf'),
+      ).resolves.toBe(blob);
+      expect(onLoadError).not.toHaveBeenCalled();
+    });
+
+    it('keeps loadFileCb stable across re-renders so the viewer does not re-fetch', () => {
+      const loadPdf = vi.fn();
+      const { rerender } = render(
+        <PdfContent url="doc.pdf" highlights={[]} loadPdf={loadPdf} />,
+      );
+      const firstLoader = documentPreviewState.props?.loadFileCb;
+      rerender(
+        <PdfContent
+          url="doc.pdf"
+          highlights={[]}
+          loadPdf={loadPdf}
+          selectedPageNumber={3}
+        />,
+      );
+      expect(documentPreviewState.props?.loadFileCb).toBe(firstLoader);
     });
   });
 });

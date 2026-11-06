@@ -5,10 +5,14 @@ import {
   CredentialsLevel,
   ToolsetAuthenticationType,
 } from '@epam/ai-dial-catalog';
+import { CatalogCreationType } from '@epam/ai-dial-chat-api-client';
 import {
   type CatalogEditNavigationLabels,
   type CatalogEditNavigationUrls,
+  canEditShareAccess,
   findDeploymentByIdOrReference,
+  findSchemaDisplayName,
+  resolveFavoriteEntityType,
   type ToolsetCredentialsLabels,
   useCatalogEditNavigation,
   useCatalogToolsetCredentials,
@@ -16,11 +20,13 @@ import {
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { SkillContentFileTree } from '@epam/ai-dial-skills';
+import { LiveRegion, LiveRegionElement } from '@epam/ai-dial-ui-kit';
 import type { FC } from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { useNavigate, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { CONFIRMATION_BOLD_COMPONENTS } from '../../constants/confirmation-copy';
+import { PAGE_HEADER_ROW_CLASS } from '../../constants/layout';
 import { ToolsetEditorQuery } from '../../constants/toolsets';
 import {
   ApiI18nKeys,
@@ -33,6 +39,7 @@ import {
   NavigationI18nKeys,
   PublishI18nKeys,
   ToolsetEditorI18nKeys,
+  ResourceSavePanelI18nKeys,
 } from '../../constants/translation-keys';
 import { useAppConfig, useFeatureFlag } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
@@ -41,6 +48,7 @@ import { useFavoriteApplications } from '../../context/FavoriteApplicationsConte
 import { useNotification } from '../../context/NotificationContext';
 import { usePrompts } from '../../context/PromptsContext';
 import { useSkills } from '../../context/SkillsContext';
+import { useCatalogCreationPermissions } from '../../hooks/catalog/useCatalogCreationPermissions';
 import { useLanguage } from '../../hooks/language/useLanguage';
 import { usePublishErrorNotification } from '../../hooks/publish/usePublishErrorNotification';
 import { usePublishFolders } from '../../hooks/publish/usePublishFolders';
@@ -68,15 +76,18 @@ import { CatalogQuery } from '../../types/catalog';
 import { EditorQuery } from '../../types/editor-query';
 import { EntityOperation } from '../../types/entity-notification';
 import { ROUTES } from '../../types/routes';
-import { getCatalogSearchPlaceholder } from '../../utils/catalog';
 import {
-  findSchemaDisplayName,
-  resolveCatalogItemEntity,
-} from '../../utils/entity-notification';
-import { resolveFavoriteEntityType } from '../../utils/favorites';
+  getCatalogEmptyDescription,
+  getCatalogEmptyTitle,
+  getCatalogMyAppsEmptyTitle,
+  getCatalogNoResultsTitle,
+  getCatalogSearchPlaceholder,
+} from '../../utils/catalog';
+import { resolveCatalogItemEntity } from '../../utils/entity-notification';
 import {
   getAccessRulesLabels,
   getPublishAuthorLabels,
+  getPublishPanelCommonLabels,
 } from '../../utils/publish';
 import { ApplicationCredentials } from '../ApplicationCredentials/ApplicationCredentials';
 import SharePopoverContainer from '../SharePopoverContainer/SharePopoverContainer';
@@ -222,11 +233,13 @@ const CatalogView: FC<Props> = ({
   );
   const isPromptsEnabled = useUiFeature(OverlayFeature.Prompts);
   const isSkillsEnabled = useUiFeature(OverlayFeature.Skills);
+  const isUsagePageHidden = useUiFeature(OverlayFeature.HideUsagePage);
 
   const {
     prompts,
     sharedWithMe: sharedPrompts,
     publicPrompts,
+    error: promptsError,
     refetchPrompts,
   } = usePrompts();
 
@@ -261,6 +274,12 @@ const CatalogView: FC<Props> = ({
     if (skillsError == null) return;
     showErrorNotification({ message: t(CatalogI18nKeys.SkillsLoadError) });
   }, [skillsError, showErrorNotification, t]);
+
+  // Same for prompts: without it the Prompts tab silently disappears.
+  useEffect(() => {
+    if (!isPromptsEnabled || promptsError == null) return;
+    showErrorNotification({ message: t(CatalogI18nKeys.PromptsLoadError) });
+  }, [isPromptsEnabled, promptsError, showErrorNotification, t]);
 
   const {
     quickAppDeploymentIds,
@@ -432,7 +451,6 @@ const CatalogView: FC<Props> = ({
     notifyOperationSuccess,
     showPublishError,
     isAdmin,
-    hasPublishWriteAccess,
   });
 
   const {
@@ -490,6 +508,7 @@ const CatalogView: FC<Props> = ({
       ),
       createSkillUpload: t(CatalogI18nKeys.CreateSkillUpload),
       createPrompt: t(CatalogI18nKeys.CreatePrompt),
+      createRunners: t(CatalogI18nKeys.CreateRunners),
       deleteError: t(CatalogI18nKeys.DetailsDeleteError),
     }),
     [t],
@@ -536,30 +555,45 @@ const CatalogView: FC<Props> = ({
     [deployments, favoriteIds, notifyOperationSuccess, schemas, toggleFavorite],
   );
 
-  const { handleEdit, handleDelete, createOptions, createSearch } =
-    useCatalogEditNavigation({
-      deployments,
-      isCustomAppsEnabled,
-      isSchemaAppsEnabled,
-      isHideCustomAppCreationEnabled,
-      isToolsetsEnabled,
-      isPromptsEnabled,
-      schemas,
-      urls: catalogEditUrls,
-      onNavigate: navigate,
-      deletePrompt,
-      deleteToolset,
-      deleteSkill,
-      deleteApplication,
-      refetchPrompts,
-      refetchToolsets,
-      refetchSkills,
-      refetchDeployments,
-      onDeleteSuccess: handleDeleteSuccess,
-      labels: catalogEditNavigationLabels,
-      onNotify: showErrorNotification,
-      onSkillUploadClick: openSkillArchiveDialog,
-    });
+  /* Creation decisions narrow only the Create menu; the feature flags above
+   * still govern listing and editing on their own. */
+  const { canCreateType, canCreateSchema } = useCatalogCreationPermissions();
+
+  const {
+    handleEdit,
+    handleDelete,
+    createOptions,
+    createSearch,
+    createMenuByType,
+    hasCreateOptions,
+  } = useCatalogEditNavigation({
+    deployments,
+    isCustomAppsEnabled,
+    isSchemaAppsEnabled,
+    isHideCustomAppCreationEnabled,
+    isToolsetsEnabled,
+    isPromptsEnabled,
+    schemas,
+    urls: catalogEditUrls,
+    onNavigate: navigate,
+    deletePrompt,
+    deleteToolset,
+    deleteSkill,
+    deleteApplication,
+    refetchPrompts,
+    refetchToolsets,
+    refetchSkills,
+    refetchDeployments,
+    onDeleteSuccess: handleDeleteSuccess,
+    labels: catalogEditNavigationLabels,
+    onNotify: showErrorNotification,
+    onSkillUploadClick: openSkillArchiveDialog,
+    canCreateCustomApp: canCreateType(CatalogCreationType.CustomApp),
+    canCreateToolset: canCreateType(CatalogCreationType.Toolset),
+    canCreatePrompt: canCreateType(CatalogCreationType.Prompt),
+    canCreateSkill: canCreateType(CatalogCreationType.Skill),
+    canCreateSchema,
+  });
 
   if (!isCatalogEnabled && !isSelectorMode) {
     return null;
@@ -575,16 +609,17 @@ const CatalogView: FC<Props> = ({
         onFilesSelected={handleSkillArchiveFilesSelected}
         onFilesRejected={handleSkillArchiveFilesRejected}
       />
-      <span role="status" aria-live="polite" className="sr-only">
+      <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
         {skillArchiveStatusMessage}
-      </span>
+      </LiveRegion>
       <Catalog
         items={visibleCatalogItems}
         isLoading={isLoading}
         favorites={favorites}
         createOptions={createOptions}
         createSearch={createSearch}
-        hideCreateButton={isSelectorMode}
+        createMenuByTab={createMenuByType}
+        hideCreateButton={isSelectorMode || !hasCreateOptions}
         hidePageTitle={isSelectorMode}
         isFullWidth={isFullWidth}
         selectedItemId={
@@ -643,14 +678,20 @@ const CatalogView: FC<Props> = ({
           }),
           credentialsLabel: t(CatalogI18nKeys.PublishCredentialsLabel),
           credentialsHint: t(CatalogI18nKeys.PublishCredentialsHint),
+          replaceWarning: t(
+            CatalogI18nKeys.PublishVersionAlreadyPublishedWarning,
+          ),
           submitError: t(PublishI18nKeys.SubmitErrorCallout),
           rootFolderLabel: t(BasicI18nKeys.Organization),
+          selectFolderLabel: t(ButtonsI18nKeys.Select),
           accessRulesLabels: getAccessRulesLabels(t),
           ...getPublishAuthorLabels(t),
+          ...getPublishPanelCommonLabels(t),
         }}
         shareOverlay={(item, onClose) => (
           <SharePopoverContainer
-            item={item}
+            itemId={item.id}
+            canEditAccess={canEditShareAccess(item.type)}
             isQuickApp={quickAppDeploymentIds.has(item.id)}
             onClose={onClose}
           />
@@ -658,6 +699,7 @@ const CatalogView: FC<Props> = ({
         isShareVisible={isShareVisible}
         styles={{
           typography: { pageHeadingFontClassName: 'dial-h1-text' },
+          headingRowClassName: PAGE_HEADER_ROW_CLASS,
         }}
         titles={{
           pageTitle: t(NavigationI18nKeys.Catalog),
@@ -665,20 +707,45 @@ const CatalogView: FC<Props> = ({
           createSearchPlaceholder: t(BasicI18nKeys.SearchPlaceholder),
           createSearchClearLabel: t(BasicI18nKeys.ClearSearch),
           createNoResultsLabel: t(BasicI18nKeys.NoResults),
+          createMenuBackLabel: t(ButtonsI18nKeys.Back),
+          createMenuCloseLabel: t(ButtonsI18nKeys.Close),
           favoritesTitle: t(FavoritesI18nKeys.Title),
           browseTitle: t(ButtonsI18nKeys.Browse),
           searchPlaceholder,
-          noResultsTitle: (query) =>
-            t(CatalogI18nKeys.NoResultsTitle, { query }),
+          noResultsTitle: (_query, tab) => getCatalogNoResultsTitle(tab, t),
+          noResultsDescription: t(BasicI18nKeys.NoResultsDescription),
+          emptyTitle: (tab) => getCatalogEmptyTitle(tab, t),
+          emptyDescription: (tab) => getCatalogEmptyDescription(tab, t),
+          myAppsEmptyTitle: (tab) => getCatalogMyAppsEmptyTitle(tab, t),
+          myAppsEmptyDescription: t(CatalogI18nKeys.MyAppsEmptyDescription),
           sortLabel: t(ButtonsI18nKeys.Sort),
           sortRecentlyUpdatedLabel: t(CatalogI18nKeys.SortRecentlyUpdated),
           sortNewestLabel: t(CatalogI18nKeys.SortNewest),
           sortNameAZLabel: t(CatalogI18nKeys.SortNameAZ),
           featuredLabel: t(CatalogI18nKeys.FeaturedLabel),
+          noFolderLabel: t(CatalogI18nKeys.NoFolderLabel),
           gridViewLabel: t(CatalogI18nKeys.GridViewLabel),
           listViewLabel: t(CatalogI18nKeys.ListViewLabel),
           viewToggleLabel: t(CatalogI18nKeys.ViewToggleLabel),
+          filterMyAppsLabel: t(CatalogI18nKeys.BrowseSettingsMy),
+          filterTopicsLabel: t(CatalogI18nKeys.BrowseSettingsTopics),
+          browseSettings: {
+            title: t(CatalogI18nKeys.BrowseSettingsTitle),
+            view: t(CatalogI18nKeys.BrowseSettingsView),
+            sorting: t(CatalogI18nKeys.BrowseSettingsSorting),
+            filtering: t(CatalogI18nKeys.BrowseSettingsFiltering),
+            gridView: t(CatalogI18nKeys.BrowseSettingsCards),
+            listView: t(CatalogI18nKeys.BrowseSettingsList),
+            clear: t(ButtonsI18nKeys.Clear),
+            apply: t(ButtonsI18nKeys.Apply),
+            back: t(ButtonsI18nKeys.Back),
+            close: t(ButtonsI18nKeys.Close),
+            formatFilterCount: (selected, total) =>
+              t(CatalogI18nKeys.BrowseSettingsFilterCount, { selected, total }),
+          },
           ariaLabel: t(NavigationI18nKeys.Catalog),
+          scrollToTopLabel: t(CatalogI18nKeys.ScrollToTop),
+          loadingLabel: t(BasicI18nKeys.Loading),
           tabLabels: {
             [CatalogEntityType.Model]: t(CatalogI18nKeys.TabModels),
             [CatalogEntityType.Agent]: t(CatalogI18nKeys.TabApplications),
@@ -687,10 +754,28 @@ const CatalogView: FC<Props> = ({
             [CatalogEntityType.Skill]: t(CatalogI18nKeys.TabSkills),
           },
         }}
+        /* The Limits tab lists only the model's own limits, so it points to
+           the page with the user's full picture — unless a host hides it. */
+        detailsLimitsFooterNote={
+          isUsagePageHidden ? undefined : (
+            <Trans
+              i18nKey={CatalogI18nKeys.DetailsLimitsFooterNote}
+              components={{
+                link: (
+                  <Link
+                    to={ROUTES.Usage}
+                    className="text-accent underline hover:opacity-75 focus-visible:outline focus-visible:outline-focus"
+                  />
+                ),
+              }}
+            />
+          )
+        }
         detailsTexts={{
           tabToolsLabel: t(CatalogI18nKeys.DetailsTabTools),
           tabContentLabel: t(CatalogI18nKeys.DetailsTabContent),
           tabLimitsLabel: t(CatalogI18nKeys.DetailsTabLimits),
+          emptyTabLabel: t(BasicI18nKeys.Empty),
           contentFileSelectorAriaLabel: t(
             CatalogI18nKeys.DetailsContentFileSelectorAriaLabel,
           ),
@@ -701,6 +786,11 @@ const CatalogView: FC<Props> = ({
           contentFileUnsupportedLabel: t(
             CatalogI18nKeys.DetailsContentFileUnsupported,
           ),
+          toolsSearchPlaceholder: t(BasicI18nKeys.SearchPlaceholder),
+          toolsSearchClearLabel: t(BasicI18nKeys.ClearSearch),
+          toolsCountLabel: (count: number) =>
+            t(CatalogI18nKeys.DetailsToolCount, { count }),
+          toolsNoResultsLabel: t(BasicI18nKeys.NoResults),
           primaryActionLabel: t(ButtonsI18nKeys.UseInChat),
           editActionLabel: t(ButtonsI18nKeys.Edit),
           downloadActionLabel: t(ButtonsI18nKeys.Download),
@@ -721,6 +811,9 @@ const CatalogView: FC<Props> = ({
           mathScrollRegionAriaLabel: t(ChatI18nKeys.ScrollableFormula),
           pricingPricesSectionLabel: t(
             CatalogI18nKeys.DetailsPricingPricesSection,
+          ),
+          pricingCharacterPricesSectionLabel: t(
+            CatalogI18nKeys.DetailsPricingCharacterPricesSection,
           ),
           pricingLimitsSectionLabel: t(
             CatalogI18nKeys.DetailsPricingLimitsSection,
@@ -810,7 +903,7 @@ const CatalogView: FC<Props> = ({
           ),
           tabConnectLabel: t(ButtonsI18nKeys.Connect),
           manageActionLabel: t(ButtonsI18nKeys.Manage),
-          deleteConfirmTitle: t(CatalogI18nKeys.DetailsDeleteConfirmTitle),
+          deleteConfirmTitle: t(ButtonsI18nKeys.Delete),
           deleteConfirmMessage: (name) => (
             <Trans
               i18nKey={CatalogI18nKeys.DetailsDeleteConfirmMessage}
@@ -824,7 +917,7 @@ const CatalogView: FC<Props> = ({
             t(BasicI18nKeys.ConsequenceCannotBeUndone),
           ],
           unshareLabel: t(ButtonsI18nKeys.RemoveFromMyList),
-          unshareConfirmTitle: t(CatalogI18nKeys.DetailsUnshareConfirmTitle),
+          unshareConfirmTitle: t(ButtonsI18nKeys.RemoveFromMyList),
           unshareConfirmMessage: (name) => (
             <Trans
               i18nKey={CatalogI18nKeys.DetailsUnshareConfirmMessage}
@@ -860,6 +953,9 @@ const CatalogView: FC<Props> = ({
             CatalogI18nKeys.DetailsRevokeShareRevokingStatus,
           ),
           unpublishLabel: t(ButtonsI18nKeys.Unpublish),
+          publishChangeFolderTitle: t(
+            ResourceSavePanelI18nKeys.ChangeFolderTitle,
+          ),
           unpublishConfirmTitle: t(
             CatalogI18nKeys.DetailsUnpublishConfirmTitle,
           ),

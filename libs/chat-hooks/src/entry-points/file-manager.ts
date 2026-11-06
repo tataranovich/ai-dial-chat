@@ -8,6 +8,7 @@ export * from '../files/attachment-types';
 export * from '../files/create-files-api';
 export * from '../files/create-upload-file-with-progress';
 export * from '../files/annotation';
+export * from '../files/useUnshareConfirmationState/useUnshareConfirmationState';
 export * from './source-content';
 export * from '../files/attachment-dto-to-display';
 export * from '../files/dial-file';
@@ -35,3 +36,4 @@ export type {
   UseGridEditingScrollResult,
 } from '@epam/ai-dial-chat-shared';
 export { useGridEditingScroll } from '@epam/ai-dial-chat-shared';
+export * from '../files/useFileAttachmentModalState/useFileAttachmentModalState';

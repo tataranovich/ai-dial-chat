@@ -4,6 +4,7 @@ import {
   ConfirmationFooter,
   ConfirmationView,
   mergeClasses,
+  PanelEmptyState,
 } from '@epam/ai-dial-chat-shared';
 import type {
   PublishFolderNode,
@@ -13,7 +14,9 @@ import {
   derivePublishState,
   PublishFooter,
   PublishPanel,
+  PublishPanelView,
   usePublishFlow,
+  usePublishFolderView,
 } from '@epam/ai-dial-publish-panel';
 import {
   ConfirmationPopupVariant,
@@ -21,6 +24,8 @@ import {
   SideDrawer,
   Skeleton,
   Tabs,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import {
   FC,
@@ -34,7 +39,7 @@ import {
 import type { CatalogItem } from '../../models/catalog-item';
 import type {
   CatalogContentFilePreview,
-  CatalogItemApiDetails,
+  ToolsLabels,
 } from '../../models/item-details-data';
 import type { DetailsPanelProps } from '../../models/item-details-props';
 import { CatalogContentPreviewType } from '../../types/catalog-content-type';
@@ -48,6 +53,10 @@ import {
   collectAllFolderIds,
   findContentNodeName,
 } from '../../utils/catalog-content-tree';
+import {
+  getCatalogDetailsTabs,
+  hasConnectableApi,
+} from '../../utils/details-tabs';
 import { getCatalogMarkdownLabels } from '../../utils/item-details-texts';
 import {
   canPublishCredentials,
@@ -66,29 +75,6 @@ import { LimitsTab } from './TabsContent/Limits/Limits';
 import { Overview } from './TabsContent/Overview';
 import { Pricing } from './TabsContent/Pricing';
 import { Tools } from './TabsContent/Tools/Tools';
-
-/*
- * Entity types that lead with their body instead of a description. A prompt's
- * content already carries its description, so an About tab would only repeat
- * it; a skill's listing description is already rendered as the Content tab's
- * summary line, so an About tab would likewise only repeat it. Both open on
- * Content, followed by Overview.
- */
-const CONTENT_FIRST_ENTITY_TYPES = new Set<CatalogEntityType>([
-  CatalogEntityType.Prompt,
-  CatalogEntityType.Skill,
-]);
-
-/**
- * An item is worth a Connect tab only when its api data names something to
- * connect to — a single endpoint URL or a non-empty multi-endpoint list (e.g.
- * a model's Chat Completions/Responses endpoints). A resource identifier
- * alone (a model's `modelId` with no endpoints) has nothing to connect to.
- */
-const hasConnectableApi = (
-  api: CatalogItemApiDetails | undefined,
-): api is CatalogItemApiDetails =>
-  api?.resource?.endpointUrl != null || (api?.endpoints?.length ?? 0) > 0;
 
 /** One folder an item is currently published to, derived from its publish history. */
 interface PublishedFolder {
@@ -109,6 +95,14 @@ const resolveUnpublishFolder = (
   return folders.length === 1 ? folders[0] : undefined;
 };
 
+/*
+ * A catalog publication cannot overwrite an existing version: DIAL Core
+ * rejects an `ADD` whose target exists ("Target resource already exists"),
+ * rejects a `DELETE` + `ADD` pair on the same target as duplicate urls, and
+ * `ADD_IF_ABSENT` silently skips the copy. So an already-published version
+ * blocks submit instead of offering "Update version" (issue #9427).
+ */
+const CATALOG_PUBLISH_ALLOWS_REPLACE = false;
 const NO_OP_PUBLISH = async () => undefined;
 const EMPTY_PUBLISH_FOLDERS: PublishFolderNode[] = [];
 const EMPTY_RULE_SOURCE_OPTIONS: string[] = [];
@@ -265,6 +259,7 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
     '--cat-api-heading-text': detailsColors?.apiHeadingText,
     '--cat-tools-divider': detailsColors?.toolsDivider,
     '--cat-tools-description-text': detailsColors?.toolsDescriptionText,
+    '--cat-tools-count-text': detailsColors?.toolsCountText,
     '--cat-grid-border': detailsColors?.gridBorder,
     '--cat-grid-header-text': detailsColors?.gridHeaderText,
     '--cat-grid-header-bg': detailsColors?.gridHeaderBackground,
@@ -278,6 +273,12 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
     '--cat-cred-row-description-text':
       detailsColors?.credentialsRowDescriptionText,
     '--cat-cred-error-text': detailsColors?.credentialsErrorText,
+    '--cat-cred-delete-action-text': detailsColors?.credentialsDeleteActionText,
+    '--cat-details-limit-reached-bg': detailsColors?.limitReachedBackground,
+    '--cat-details-limit-reached-text': detailsColors?.limitReachedText,
+    '--cat-details-limit-running-low-bg':
+      detailsColors?.limitRunningLowBackground,
+    '--cat-details-limit-running-low-text': detailsColors?.limitRunningLowText,
     '--cat-cred-card-bg': detailsColors?.credentialsCardBackground,
     '--cat-cred-card-icon': detailsColors?.credentialsCardIcon,
     '--cat-cred-card-title-text': detailsColors?.credentialsCardTitleText,
@@ -500,8 +501,12 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
       } catch {
         if (publishHistoryRequestedItemIdRef.current !== requestedItemId)
           return;
-        /* Cleared so the next Manage-menu or publish open retries the lookup. */
+        /* Cleared so the next Manage-menu or publish open retries the lookup.
+         * Settled all the same, with no folder: the header holds its Manage
+         * slot back until the lookup settles, so a failure left pending would
+         * hide every other Manage entry along with Unpublish. */
         publishHistoryRequestedItemIdRef.current = null;
+        setIsPublishHistoryResolved(true);
       }
     };
     void resolve();
@@ -558,6 +563,7 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
         hasWriteAccess: publishFlow.hasWriteAccess,
         isSubmitting: publishFlow.isSubmitting,
         hasSubmitError: publishFlow.hasSubmitError,
+        allowReplace: CATALOG_PUBLISH_ALLOWS_REPLACE,
       }),
     [
       publishFlow.selectedFolderPath,
@@ -812,6 +818,13 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
     setIsPublishOpen(false);
     publishFlow.reset();
   }, [publishFlow]);
+  const publishFolderView = usePublishFolderView({
+    isOpen: isPublishOpen,
+    selectedFolderPath: publishFlow.selectedFolderPath,
+    onSelectedFolderPathChange: publishFlow.setSelectedFolderPath,
+  });
+  const isPublishFolderView =
+    publishFolderView.view === PublishPanelView.ChangeFolder;
   const handleSubmitPublish = useCallback(async () => {
     const isSuccess = await publishFlow.handleSubmit();
     if (isSuccess) {
@@ -826,64 +839,18 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
   }, [isStarred, item.id, onToggleFavorite]);
 
   const tabs = useMemo(() => {
-    const result: { id: string; label: string }[] = [];
-    const isContentFirst = CONTENT_FIRST_ENTITY_TYPES.has(item.type);
-    if (!isContentFirst) {
-      result.push({
-        id: CatalogDetailsTab.About,
-        label: texts?.tabAboutLabel ?? 'About',
-      });
-    }
-    /*
-     * A content-first entity keeps its Content tab even before a body arrives
-     * (or when it has none), so the tab it opens on never shifts as details
-     * resolve.
-     */
-    if (isContentFirst || item.details?.promptContent != null) {
-      result.push({
-        id: CatalogDetailsTab.Content,
-        label: texts?.tabContentLabel ?? 'Details',
-      });
-    }
-    if (item.details?.overview != null) {
-      result.push({
-        id: CatalogDetailsTab.Overview,
-        label: texts?.tabOverviewLabel ?? 'Overview',
-      });
-    }
-    if (item.details?.pricing != null) {
-      result.push({
-        id: CatalogDetailsTab.Pricing,
-        label: texts?.tabPricingLabel ?? 'Pricing',
-      });
-    }
-    if (item.details?.limits != null) {
-      result.push({
-        id: CatalogDetailsTab.Limits,
-        label: texts?.tabLimitsLabel ?? 'Limits',
-      });
-    }
-    if (item.details?.tools != null) {
-      result.push({
-        id: CatalogDetailsTab.Tools,
-        label: texts?.tabToolsLabel ?? 'Tools',
-      });
-    }
-    /*
-     * Connect is pushed last, after every other tab, regardless of type. It
-     * needs a connectable endpoint to be worth showing — either a single
-     * endpoint URL or a non-empty multi-endpoint list (e.g. a model's Chat
-     * Completions/Responses endpoints). Items whose api data is only a
-     * resource identifier (a model's `modelId` with no endpoints) have
-     * nothing to connect to.
-     */
-    if (hasConnectableApi(item.details?.api)) {
-      result.push({
-        id: CatalogDetailsTab.Api,
-        label: texts?.tabConnectLabel ?? 'Connect',
-      });
-    }
-    return result;
+    const labels: Record<CatalogDetailsTab, string> = {
+      [CatalogDetailsTab.About]: texts?.tabAboutLabel ?? 'About',
+      [CatalogDetailsTab.Content]: texts?.tabContentLabel ?? 'Details',
+      [CatalogDetailsTab.Overview]: texts?.tabOverviewLabel ?? 'Overview',
+      [CatalogDetailsTab.Pricing]: texts?.tabPricingLabel ?? 'Pricing',
+      [CatalogDetailsTab.Limits]: texts?.tabLimitsLabel ?? 'Limits',
+      [CatalogDetailsTab.Api]: texts?.tabConnectLabel ?? 'Connect',
+      [CatalogDetailsTab.Tools]: texts?.tabToolsLabel ?? 'Tools',
+    };
+    // Which tabs show, and in what order, is the shared rule hosts embedding
+    // the tab components also use (`getCatalogDetailsTabs`).
+    return getCatalogDetailsTabs(item).map((id) => ({ id, label: labels[id] }));
   }, [item, texts]);
 
   /*
@@ -903,6 +870,30 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
   const markdownLabels = useMemo(
     () => getCatalogMarkdownLabels(texts),
     [texts],
+  );
+
+  // Only the strings the host set: an `undefined` would override the tab's English default.
+  const toolsLabels = useMemo(() => {
+    const labels: Partial<ToolsLabels> = {};
+    if (texts?.toolsSearchPlaceholder != null)
+      labels.searchPlaceholder = texts.toolsSearchPlaceholder;
+    if (texts?.toolsSearchClearLabel != null)
+      labels.searchClearLabel = texts.toolsSearchClearLabel;
+    if (texts?.toolsCountLabel != null)
+      labels.toolCount = texts.toolsCountLabel;
+    if (texts?.toolsNoResultsLabel != null)
+      labels.noResults = texts.toolsNoResultsLabel;
+    return labels;
+  }, [texts]);
+
+  const emptyTabLabel = texts?.emptyTabLabel ?? 'No data';
+  const isAboutEmpty =
+    !item.description?.trim() && (item.topics?.length ?? 0) === 0;
+  const isOverviewEmpty = !item.details?.overview?.sections?.length;
+  const emptyTabState = (
+    <div className="flex size-full items-center justify-center py-6">
+      <PanelEmptyState label={emptyTabLabel} />
+    </div>
   );
 
   const overviewYesLabel = texts?.overviewYesLabel ?? 'Yes';
@@ -1089,9 +1080,13 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
     }
     if (isPublishOpen) {
       return {
-        title: publishTitle,
+        title: isPublishFolderView
+          ? (texts?.publishChangeFolderTitle ?? 'Change folder')
+          : publishTitle,
         isBackDisabled: publishFlow.isSubmitting,
-        onBack: handleClosePublish,
+        onBack: isPublishFolderView
+          ? publishFolderView.backToMain
+          : handleClosePublish,
       };
     }
     if (isCredentialsManagementOpen) {
@@ -1136,7 +1131,10 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
       }
       style={cssVars}
       overlayStyle={cssVars}
-      className={styles.panel}
+      className={mergeClasses(
+        styles.panel,
+        'tablet:w-[540px]! tablet:max-w-[calc(100%-32px)]!',
+      )}
       overlayClassName={styles.backdrop}
       headerClassName={styles.divider}
       titleClassName={mergeClasses(subViewTitleClassName, styles.publishTitle)}
@@ -1201,7 +1199,7 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
           )}
 
         {!isConfirmationOpen && isPublishOpen && (
-          <div className="p-[22px]">
+          <div className="p-4 desktop:p-[22px]">
             <PublishPanel
               resource={{
                 title: item.name,
@@ -1209,9 +1207,12 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
                 type: item.type,
                 iconUrl: item.iconUrl,
               }}
+              view={publishFolderView.view}
+              onChangeFolderClick={publishFolderView.openFolderView}
               folderItems={publishFlow.folderItems}
               selectedFolderPath={publishFlow.selectedFolderPath}
-              onSelectedFolderPathChange={publishFlow.setSelectedFolderPath}
+              pendingFolderPath={publishFolderView.pendingFolderPath}
+              onPendingFolderPathChange={publishFolderView.setPendingFolderPath}
               onCreateFolder={publishFlow.handleCreateFolder}
               expandedPaths={publishExpandedPaths}
               onExpandedPathsChange={onPublishExpandedPathsChange}
@@ -1222,6 +1223,7 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
               hasWriteAccess={publishFlow.hasWriteAccess}
               isSubmitting={publishFlow.isSubmitting}
               hasSubmitError={publishFlow.hasSubmitError}
+              allowReplace={CATALOG_PUBLISH_ALLOWS_REPLACE}
               author={publishFlow.author}
               onAuthorChange={publishFlow.setAuthor}
               publishCredentials={publishFlow.publishCredentials}
@@ -1236,14 +1238,6 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
               isRulesLoading={publishFlow.isRulesLoading}
               hasRulesLoadError={publishFlow.hasRulesLoadError}
               labels={publishLabels}
-              styles={{
-                colors: {
-                  summaryVersionTagBorder: detailsColors?.versionTagBorder,
-                  summaryVersionTagBackground:
-                    detailsColors?.versionTagBackground,
-                  summaryVersionTagText: detailsColors?.versionTagText,
-                },
-              }}
             />
           </div>
         )}
@@ -1308,19 +1302,25 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
             {!isReadonly && isOpen && renderCredentials?.(item)}
 
             <div className="flex items-center px-6">
+              {/* The tab row scrolls on its own so a narrow panel never scrolls sideways as a whole. */}
               <Tabs
                 tabs={tabs}
                 activeTabId={activeTab}
                 onTabChange={setActiveTab}
+                className={mergeClasses(
+                  'min-w-0 flex-1 overflow-x-auto',
+                  styles.tabsScroll,
+                )}
+                tabClassName="shrink-0"
               />
+              {/* Always mounted, so the loading text is announced when fetching starts. */}
+              <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
+                {isDetailsLoading
+                  ? (texts?.detailsLoadingAriaLabel ?? 'Loading details')
+                  : ''}
+              </LiveRegion>
               {isDetailsLoading && (
-                <div
-                  role="status"
-                  aria-label={
-                    texts?.detailsLoadingAriaLabel ?? 'Loading details'
-                  }
-                  className="shrink-0"
-                >
+                <div aria-hidden className="shrink-0">
                   <Skeleton
                     showTitle={false}
                     paragraph={{ rows: 1, width: '72px' }}
@@ -1333,11 +1333,20 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
 
             <div
               className={mergeClasses(
-                'min-h-0 flex-1 overflow-y-auto',
-                activeTab !== CatalogDetailsTab.Overview && 'px-6',
+                'min-h-0 min-w-0 flex-1',
+                activeTab === CatalogDetailsTab.Content
+                  ? 'overflow-hidden'
+                  : 'overflow-y-auto',
+                /* The Content tab pads its own sections so its divider spans the full width. */
+                activeTab !== CatalogDetailsTab.Overview &&
+                  activeTab !== CatalogDetailsTab.Content &&
+                  'px-6',
               )}
             >
-              {activeTab === CatalogDetailsTab.About && (
+              {activeTab === CatalogDetailsTab.About && isAboutEmpty
+                ? emptyTabState
+                : null}
+              {activeTab === CatalogDetailsTab.About && !isAboutEmpty && (
                 <AboutTab
                   content={item.description}
                   topics={item.topics}
@@ -1370,7 +1379,10 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
                   markdownLabels={markdownLabels}
                 />
               )}
-              {activeTab === CatalogDetailsTab.Overview && (
+              {activeTab === CatalogDetailsTab.Overview && isOverviewEmpty
+                ? emptyTabState
+                : null}
+              {activeTab === CatalogDetailsTab.Overview && !isOverviewEmpty && (
                 <Overview
                   sections={item.details?.overview?.sections}
                   sectionClassName={overviewSectionClassName}
@@ -1385,6 +1397,9 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
                 <Pricing
                   pricing={item.details?.pricing}
                   pricesSectionLabel={texts?.pricingPricesSectionLabel}
+                  characterPricesSectionLabel={
+                    texts?.pricingCharacterPricesSectionLabel
+                  }
                   limitsSectionLabel={texts?.pricingLimitsSectionLabel}
                 />
               )}
@@ -1410,7 +1425,7 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
                   />
                 )}
               {activeTab === CatalogDetailsTab.Tools && (
-                <Tools tools={item.details?.tools} />
+                <Tools tools={item.details?.tools} labels={toolsLabels} />
               )}
             </div>
           </>
@@ -1437,10 +1452,18 @@ export const DetailsPanel: FC<DetailsPanelProps> = ({
           hasExistingPublicationInFolder={
             publishFlow.hasExistingPublicationInFolder
           }
+          allowReplace={CATALOG_PUBLISH_ALLOWS_REPLACE}
           isSubmitDisabled={publishDerived.isSubmitDisabled}
           isSubmitLoading={publishDerived.isSubmitLoading}
-          onCancel={handleClosePublish}
+          onCancel={
+            isPublishFolderView
+              ? publishFolderView.backToMain
+              : handleClosePublish
+          }
           onSubmit={handleSubmitPublish}
+          view={publishFolderView.view}
+          onSelectFolder={publishFolderView.selectFolder}
+          isSelectFolderDisabled={publishFolderView.pendingFolderPath == null}
           labels={publishLabels}
         />
       )}

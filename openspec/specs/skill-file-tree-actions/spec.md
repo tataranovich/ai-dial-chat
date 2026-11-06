@@ -1,7 +1,7 @@
 # skill-file-tree-actions Specification
 
 ## Purpose
-Specifies how `libs/skill-editor`'s file tree adds and removes content: the Files pane's Add dropdown, the per-node Add child / Add sibling / Delete menu, the target-folder rule, inline folder creation, archive expansion, picking files from the host's file system, and the editor-only nature of empty folders — with every source staged through the upload dialog and every host detail supplied through `fileActions`.
+Specifies how `libs/skill-editor`'s file tree adds and removes content: the Files pane's Add dropdown, the per-node add entries / Delete menu, the target-folder rule, folder creation (an inline tree draft on desktop, a Create folder dialog on mobile), archive expansion, picking files from the host's file system, and the editor-only nature of empty folders — with every source staged through the upload dialog and every host detail supplied through `fileActions`.
 
 ## Requirements
 
@@ -25,7 +25,7 @@ Labels (each with an English default): `addLabel` ("Add"), `createFolderLabel` (
 
 ### Requirement: Target folder of an add action
 
-Every add action SHALL resolve a **target folder** path (`''` for the skill root). From the header Add dropdown the target SHALL be the selected node when it is a folder, and the root otherwise (including when `SKILL.md` or a supporting file is selected). From a node's **Add child** submenu the target SHALL be that folder; from **Add sibling** it SHALL be the node's parent folder (root for a top-level node). Files staged by any add action SHALL have their resolved relative path prefixed with `<target>/` when the target is not the root; a folder created by Create folder SHALL be created at `<target>/<name>`.
+Every add action SHALL resolve a **target folder** path (`''` for the skill root). From the header Add dropdown the target SHALL be the selected node when it is a folder, and the root otherwise (including when `SKILL.md` or a supporting file is selected). From the add entries listed directly in a folder's context menu the target SHALL be that folder. There SHALL be no **Add sibling** action: adding next to a node goes through its parent folder's menu, or the header Add dropdown for the root (issue #9301). Files staged by any add action SHALL have their resolved relative path prefixed with `<target>/` when the target is not the root; a folder created by Create folder SHALL be created at `<target>/<name>`.
 
 #### Scenario: Header upload with a folder selected
 - **WHEN** the folder `docs` is selected and the user uploads `a.md` from the header Add dropdown
@@ -35,21 +35,25 @@ Every add action SHALL resolve a **target folder** path (`''` for the skill root
 - **WHEN** the supporting file `docs/a.md` is selected and the user uploads `b.md` from the header Add dropdown
 - **THEN** the staged candidate path is `b.md`
 
-#### Scenario: Add sibling of a nested file
-- **WHEN** the user chooses Add sibling → Upload files from device on `docs/a.md` and stages `c.md`
+#### Scenario: Adding next to a nested node
+- **WHEN** the user chooses Upload files from device in the context menu of folder `docs` (the parent of `docs/sub`) and stages `c.md`
 - **THEN** the staged candidate path is `docs/c.md`
 
 ### Requirement: Per-node context menu
 
-For every node other than `SKILL.md`, `getContextMenuItems` SHALL return, in this order: **Add child** (folders only), **Add sibling**, and **Delete**. Add child and Add sibling SHALL each be a submenu (`DropdownItem.children`) containing the same entries the header Add dropdown would show, targeting the folder defined by the target-folder rule. Delete SHALL behave as today's Remove: the node (and, for a folder, everything under it) is removed immediately with no confirmation and `fileActions.onRemoveNode(path)` is called; a removed selection falls back to `SKILL.md`. Delete SHALL render as a danger item (`DropdownItem.danger`), so its label and icon take the error color; `removeIconClassName` stays an optional icon-color override with no default. `SKILL.md` SHALL keep returning an empty menu. Labels: `addChildLabel` ("Add child"), `addSiblingLabel` ("Add sibling"), `deleteLabel` ("Delete"). App keys: `skillEditor.addChild`, `skillEditor.addSibling`; Delete reuses `ButtonsI18nKeys.Delete`.
+For every node other than `SKILL.md`, `getContextMenuItems` SHALL return, in this order: for a folder, the same entries the header Add dropdown would show, listed directly (no intermediate submenu) and targeting that folder, so uploading into a specific folder takes one menu level; then **Delete**. The menu SHALL have no Add child or Add sibling submenu. A supporting file SHALL have no menu (`getContextMenuItems` returns an empty list), only an inline Delete button shown on row hover. Delete SHALL behave as today's Remove: the node (and, for a folder, everything under it) is removed immediately with no confirmation and `fileActions.onRemoveNode(path)` is called; a removed selection falls back to `SKILL.md`. Delete SHALL render as a danger item (`DropdownItem.danger`), so its label and icon take the error color; `removeIconClassName` stays an optional icon-color override with no default. `SKILL.md` SHALL keep returning an empty menu. Label: `deleteLabel` ("Delete"), which reuses `ButtonsI18nKeys.Delete` in the app.
 
 #### Scenario: Folder menu
 - **WHEN** the user opens the context menu of a folder node
-- **THEN** it lists Add child, Add sibling and Delete
+- **THEN** it lists Create folder, Upload files from device, Upload archive from device and Open DIAL file system directly (each subject to its host capability), then Delete, and no Add sibling
 
-#### Scenario: File menu
-- **WHEN** the user opens the context menu of a supporting-file node
-- **THEN** it lists Add sibling and Delete, and no Add child
+#### Scenario: Uploading into a folder from its menu
+- **WHEN** the user chooses Upload files from device in the context menu of folder `docs` and stages `c.md`
+- **THEN** the staged candidate path is `docs/c.md`
+
+#### Scenario: File row
+- **WHEN** a supporting-file node is rendered
+- **THEN** it has no context menu, only an inline Delete button shown on row hover
 
 #### Scenario: SKILL.md stays protected
 - **WHEN** the user opens the context menu of `SKILL.md`
@@ -61,16 +65,18 @@ For every node other than `SKILL.md`, `getContextMenuItems` SHALL return, in thi
 
 ### Requirement: Inline folder creation
 
-Activating Create folder SHALL insert a draft folder node under the target folder, expand the target folder, and render the draft in `DialFoldersTree`'s inline rename state (via `renamedPath`) prefilled with `newFolderDefaultName` ("New folder"). Confirming SHALL call `fileActions.onCreateFolder(<target>/<name>)` with the trimmed name, remove the draft and select the new folder. Cancelling (Escape) SHALL remove the draft with no host call. Before confirming, the name SHALL be validated in this order, with the first failing message shown inline: empty after trim → `folderNameRequiredError` ("Enter a folder name"); contains `/` or `\`, or equals `.` or `..` → `folderNameInvalidError` ("Folder name can't contain / or \\, or be . or .."); equals the name of an existing sibling file or folder, or `SKILL.md` at the root → `folderNameDuplicateError` ("An item with this name already exists here"); otherwise the message returned by the optional `fileActions.validateFolderPath(<target>/<name>)`. Only one draft SHALL exist at a time; starting another Create folder replaces it. The draft SHALL NOT affect the dirty state until committed.
+At the `desktop` breakpoint, activating Create folder SHALL insert a draft folder node under the target folder, expand the target folder, and render the draft in `DialFoldersTree`'s inline rename state (via `renamedPath`) prefilled with `newFolderDefaultName` ("New folder"). Confirming SHALL call `fileActions.onCreateFolder(<target>/<name>)` with the trimmed name, remove the draft and select the new folder. Cancelling (Escape) SHALL remove the draft with no host call. Before confirming, the name SHALL be validated in this order, with the first failing message shown inline: empty after trim → `folderNameRequiredError` ("Enter a folder name"); contains `/` or `\`, or equals `.` or `..` → `folderNameInvalidError` ("Folder name can't contain / or \\, or be . or .."); equals the name of an existing sibling file or folder, or `SKILL.md` at the root → `folderNameDuplicateError` ("An item with this name already exists here"); otherwise the message returned by the optional `fileActions.validateFolderPath(<target>/<name>)`. Only one draft SHALL exist at a time; starting another Create folder replaces it. The draft SHALL NOT affect the dirty state until committed.
 
-App keys: `skillEditor.newFolderDefaultName`, `skillEditor.folderNameRequired`, `skillEditor.folderNameInvalid`, `skillEditor.folderNameDuplicate`; the host's `validateFolderPath` reuses `skillEditor.error.pathInvalid`.
+Below the `desktop` breakpoint, Create folder in the mobile Files pane SHALL NOT insert a draft; it SHALL open a Create folder dialog (a `BottomSheet`, titled `createFolderLabel`) with a required Name field (`createFolderNameLabel`, placeholder `createFolderNamePlaceholder`) and Create (`createFolderConfirmLabel`) / Cancel. The same validation order applies; its message SHALL appear under the field once Create has been pressed and SHALL update as the name is edited. A valid Create SHALL call `fileActions.onCreateFolder(<target>/<name>)`, expand the target folder, select the new folder and close the dialog; Cancel, Escape or the close control SHALL close it with no host call.
+
+App keys: `skillEditor.newFolderDefaultName`, `skillEditor.folderNameRequired`, `skillEditor.folderNameInvalid`, `skillEditor.folderNameDuplicate`, `skillEditor.createFolderNamePlaceholder`; the dialog's Name label reuses `skillEditor.nameLabel`, and the host's `validateFolderPath` reuses `skillEditor.error.pathInvalid`.
 
 #### Scenario: Creating a root folder
 - **WHEN** nothing but `SKILL.md` is selected, the user chooses Create folder, types `scripts` and confirms
 - **THEN** `fileActions.onCreateFolder('scripts')` is called and, once the host adds the node, `scripts` is selected
 
 #### Scenario: Creating a nested folder
-- **WHEN** the user chooses Add child → Create folder on `docs`, types `img` and confirms
+- **WHEN** the user chooses Create folder in the context menu of `docs`, types `img` and confirms
 - **THEN** `docs` is expanded and `fileActions.onCreateFolder('docs/img')` is called
 
 #### Scenario: Duplicate name is rejected
@@ -80,6 +86,10 @@ App keys: `skillEditor.newFolderDefaultName`, `skillEditor.folderNameRequired`, 
 #### Scenario: Cancelling leaves the tree unchanged
 - **WHEN** the user presses Escape on the draft folder
 - **THEN** the draft disappears and no host callback is invoked
+
+#### Scenario: Mobile names a folder in a dialog
+- **WHEN** below the `desktop` breakpoint the user chooses Create folder with `docs` selected, types `img` and presses Create
+- **THEN** no tree draft appears, `fileActions.onCreateFolder('docs/img')` is called and the dialog closes
 
 ### Requirement: Uploading an archive
 
@@ -169,7 +179,7 @@ The client mirror `isValidSkillRelativePath` (`libs/chat-hooks/src/skill/skill.t
 
 ### Requirement: Responsive, RTL and accessibility
 
-The Add dropdown and node menus SHALL render inside the Files pane on desktop and inside the mobile Files accordion, using only logical Tailwind properties. No directional icon is introduced (plus, folder-plus, upload, archive and database icons are symmetric and SHALL NOT be mirrored; submenu chevrons are the ui-kit's own). Every Tabler icon SHALL pass `stroke={DIAL_KIT_ICON_STROKE}` and `aria-hidden`. The inline folder-name error SHALL be exposed by `DialFoldersTree`'s rename field. The feature is not gated behind `ENABLED_FEATURES`; it ships with the Skill Editor route. No telemetry is added.
+The Add dropdown and node menus SHALL render inside the Files pane on desktop and inside the mobile "Editing file" card, using only logical Tailwind properties. No directional icon is introduced (plus, folder-plus, upload, archive and database icons are symmetric and SHALL NOT be mirrored; submenu chevrons are the ui-kit's own). Every Tabler icon SHALL pass `stroke={DIAL_KIT_ICON_STROKE}` and `aria-hidden`. The folder-name error SHALL be exposed by `DialFoldersTree`'s rename field on desktop, and by the Create folder dialog's Name field below the `desktop` breakpoint, where Enter in the field submits like Create. The feature is not gated behind `ENABLED_FEATURES`; it ships with the Skill Editor route. No telemetry is added.
 
 #### Scenario: Keyboard-only Create folder
 - **WHEN** a keyboard user focuses Add, presses Enter, arrows to Create folder, presses Enter, types a name and presses Enter

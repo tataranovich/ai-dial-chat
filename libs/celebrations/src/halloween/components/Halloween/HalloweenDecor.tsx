@@ -59,12 +59,12 @@ const HalloweenDecor: FC<CelebrationDecorationProps> = ({ onActivate }) => {
       <div
         ref={pumpkinRef}
         data-halloween-pumpkin-anchor="true"
-        className="absolute bottom-2 end-2 origin-bottom desktop:bottom-4 desktop:end-4"
+        className="absolute inset-e-2 bottom-2 origin-bottom desktop:inset-e-4 desktop:bottom-4"
       >
         <IconButton
           appearance={ButtonAppearance.Link}
           className={mergeClasses(
-            'focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus focus-visible:outline-offset-[3px]',
+            'focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-focus',
             styles.pumpkinButton,
             CELEBRATIONS_CLASS.trigger,
           )}
@@ -76,7 +76,7 @@ const HalloweenDecor: FC<CelebrationDecorationProps> = ({ onActivate }) => {
       </div>
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 select-none overflow-hidden"
+        className="pointer-events-none absolute inset-0 overflow-hidden select-none"
       >
         {/* The mirror belongs on the web, never on the corner: a flipped
             ancestor would also flip the spider's inline transform, so it
@@ -85,10 +85,10 @@ const HalloweenDecor: FC<CelebrationDecorationProps> = ({ onActivate }) => {
             instead, which follow the corner the same way the mirror does.
             The faintness lives on the web too — the spider is the part
             worth seeing. */}
-        <div className="absolute end-0 top-0">
+        <div className="absolute inset-e-0 top-0">
           <Cobweb className="scale-x-[-1] rtl:scale-x-100" />
           <HalloweenCornerSpider
-            className="end-[26%] top-[48%]"
+            className="inset-e-[26%] top-[48%]"
             pumpkinRef={pumpkinRef}
             silkRef={silkRef}
           />

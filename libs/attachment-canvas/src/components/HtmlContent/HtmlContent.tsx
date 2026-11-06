@@ -26,7 +26,7 @@ export interface HtmlContentProps {
   /** Labels used inside the HTML viewer. */
   labels: Pick<
     AttachmentCanvasLabels,
-    'htmlFrameBlockedLabel' | 'htmlOpenInNewTabLabel'
+    'htmlFrameBlockedLabel' | 'htmlOpenInNewTabLabel' | 'loadingLabel'
   >;
   /** When `true`, displays the highlighted HTML source instead of the rendered iframe. */
   isSourceView: boolean;
@@ -36,6 +36,8 @@ export interface HtmlContentProps {
   codeBlockTheme?: CodeBlockTheme;
   /** Typography class applied to the "Open in new tab" link in the blocked-state panel. Defaults to `'dial-body-semi-text'`. */
   openInNewTabButtonTypographyClassName?: string;
+  /** Typography class of the source-view code, forwarded to `CodeContent`. When omitted, `CodeContent` falls back to `'dial-code-text'`. */
+  codeClassName?: string;
 }
 
 /** Renders HTML content inside a sandboxed iframe, or as highlighted source when `isSourceView` is true. */
@@ -47,10 +49,12 @@ export const HtmlContent: FC<HtmlContentProps> = memo(
     title,
     codeBlockTheme,
     openInNewTabButtonTypographyClassName = 'dial-body-semi-text',
+    codeClassName,
   }) => {
     const {
       htmlFrameBlockedLabel = 'This page cannot be displayed in preview',
       htmlOpenInNewTabLabel = 'Open in new tab',
+      loadingLabel = 'Loading…',
     } = labels;
 
     const [isLoading, setIsLoading] = useState(true);
@@ -206,7 +210,7 @@ export const HtmlContent: FC<HtmlContentProps> = memo(
       if (sourceText == null) {
         return (
           <div className="flex h-full items-center justify-center">
-            <Spinner />
+            <Spinner ariaLabel={loadingLabel} />
           </div>
         );
       }
@@ -218,6 +222,7 @@ export const HtmlContent: FC<HtmlContentProps> = memo(
             language: 'html',
           }}
           codeBlockTheme={codeBlockTheme}
+          codeClassName={codeClassName}
         />
       );
     }
@@ -252,7 +257,7 @@ export const HtmlContent: FC<HtmlContentProps> = memo(
       <div className="relative h-full">
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <Spinner />
+            <Spinner ariaLabel={loadingLabel} />
           </div>
         )}
         {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- onLoad/onError are resource events, not mouse/keyboard listeners */}

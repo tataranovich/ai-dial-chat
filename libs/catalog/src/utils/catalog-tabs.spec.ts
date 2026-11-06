@@ -1,7 +1,12 @@
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { describe, expect, it } from 'vitest';
 import type { CatalogItem } from '../models/catalog-item';
-import { buildCatalogTabs } from './catalog-tabs';
+import {
+  buildCatalogTabs,
+  getCatalogItemDisplayType,
+  getCatalogItemTabs,
+  scrollSelectedTabIntoView,
+} from './catalog-tabs';
 
 const makeItem = (
   overrides: Partial<CatalogItem> & Pick<CatalogItem, 'id' | 'name'>,
@@ -15,7 +20,79 @@ const makeItem = (
   ...overrides,
 });
 
+describe('getCatalogItemTabs', () => {
+  it('falls back to the entity kind when no membership is set', () => {
+    expect(
+      getCatalogItemTabs(
+        makeItem({ id: 'a', name: 'A', type: CatalogEntityType.Agent }),
+      ),
+    ).toEqual([CatalogEntityType.Agent]);
+  });
+
+  it('falls back to the entity kind when the membership is empty', () => {
+    expect(
+      getCatalogItemTabs(makeItem({ id: 'm', name: 'M', catalogTabs: [] })),
+    ).toEqual([CatalogEntityType.Model]);
+  });
+
+  it('returns the supplied membership as given', () => {
+    expect(
+      getCatalogItemTabs(
+        makeItem({
+          id: 'a',
+          name: 'A',
+          type: CatalogEntityType.Agent,
+          catalogTabs: [CatalogEntityType.Agent, CatalogEntityType.Toolset],
+        }),
+      ),
+    ).toEqual([CatalogEntityType.Agent, CatalogEntityType.Toolset]);
+  });
+});
+
+describe('getCatalogItemDisplayType', () => {
+  const mcpAgent = makeItem({
+    id: 'a',
+    name: 'A',
+    type: CatalogEntityType.Agent,
+    catalogTabs: [CatalogEntityType.Agent, CatalogEntityType.Toolset],
+  });
+
+  it('returns the active tab when the item is listed under it', () => {
+    expect(getCatalogItemDisplayType(mcpAgent, CatalogEntityType.Toolset)).toBe(
+      CatalogEntityType.Toolset,
+    );
+    expect(getCatalogItemDisplayType(mcpAgent, CatalogEntityType.Agent)).toBe(
+      CatalogEntityType.Agent,
+    );
+  });
+
+  it('returns the entity kind when the item is not listed under the active tab', () => {
+    expect(getCatalogItemDisplayType(mcpAgent, CatalogEntityType.Model)).toBe(
+      CatalogEntityType.Agent,
+    );
+  });
+
+  it('returns the entity kind when no tab is active', () => {
+    expect(getCatalogItemDisplayType(mcpAgent)).toBe(CatalogEntityType.Agent);
+  });
+});
+
 describe('buildCatalogTabs', () => {
+  it('derives tabs from membership rather than the entity kind', () => {
+    const tabs = buildCatalogTabs([
+      makeItem({
+        id: 'mcp-app',
+        name: 'MCP app',
+        type: CatalogEntityType.Agent,
+        catalogTabs: [CatalogEntityType.Toolset],
+      }),
+    ]);
+
+    expect(tabs).toEqual([
+      { id: CatalogEntityType.Toolset, label: 'Toolsets' },
+    ]);
+  });
+
   it('includes a Prompts tab when at least one prompt item is present', () => {
     const tabs = buildCatalogTabs([
       makeItem({ id: '1', name: 'GPT-4' }),
@@ -78,5 +155,47 @@ describe('buildCatalogTabs', () => {
     expect(tabs).toEqual([
       { id: CatalogEntityType.Prompt, label: 'Подсказки' },
     ]);
+  });
+});
+
+describe('scrollSelectedTabIntoView', () => {
+  const rect = (left: number, right: number) => ({ left, right }) as DOMRect;
+
+  const makeRow = (tabLeft: number, tabRight: number, scrollLeft = 0) => {
+    const row = document.createElement('div');
+    row.style.paddingInlineStart = '16px';
+    row.style.paddingInlineEnd = '16px';
+    row.getBoundingClientRect = () => rect(0, 360);
+    const tab = document.createElement('button');
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', 'true');
+    tab.getBoundingClientRect = () => rect(tabLeft, tabRight);
+    row.appendChild(tab);
+    row.scrollLeft = scrollLeft;
+    return row;
+  };
+
+  it('scrolls forward when the selected tab is past the end of the row', () => {
+    const row = makeRow(380, 460);
+
+    scrollSelectedTabIntoView(row);
+
+    expect(row.scrollLeft).toBe(116);
+  });
+
+  it('scrolls back when the selected tab is before the start of the row', () => {
+    const row = makeRow(-40, 40, 100);
+
+    scrollSelectedTabIntoView(row);
+
+    expect(row.scrollLeft).toBe(44);
+  });
+
+  it('leaves the row alone when the selected tab is already visible', () => {
+    const row = makeRow(100, 200, 30);
+
+    scrollSelectedTabIntoView(row);
+
+    expect(row.scrollLeft).toBe(30);
   });
 });

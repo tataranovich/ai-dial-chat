@@ -1,11 +1,15 @@
-import { useAsyncConfirmDialog } from '@epam/ai-dial-chat-hooks';
 import {
-  ConfirmationPopup,
+  isTotalDeletionFailure,
+  useAsyncConfirmDialog,
+} from '@epam/ai-dial-chat-hooks';
+import { ConfirmationDialog, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
   ConfirmationPopupVariant,
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   Dropdown,
   ElementSize,
+  ErrorMessageNotification,
   GhostIconButton,
   type DropdownItem,
 } from '@epam/ai-dial-ui-kit';
@@ -19,6 +23,7 @@ import { memo, useCallback, useMemo, useState, type FC } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import {
+  BasicI18nKeys,
   ButtonsI18nKeys,
   ConversationExportI18nKeys,
   ConversationImportI18nKeys,
@@ -40,15 +45,18 @@ const PanelMenuTrigger: FC<PanelMenuTriggerProps> = ({ items, label }) => {
     <Dropdown items={items} placement="bottom-end" onOpenChange={setIsOpen}>
       <GhostIconButton
         aria-label={label}
-        size={ElementSize.Standard}
+        size={ElementSize.Small}
         icon={
           <IconDotsVertical
-            size={DIAL_ICON_SIZE.LG}
+            size={DIAL_ICON_SIZE.SM}
             className={isOpen ? 'text-accent' : 'text-secondary'}
             stroke={DIAL_KIT_ICON_STROKE}
           />
         }
-        className={isOpen ? 'bg-control-accent-alpha-hover' : undefined}
+        className={mergeClasses(
+          'size-6! min-h-0! min-w-0! p-1!',
+          isOpen && 'bg-control-accent-alpha-hover',
+        )}
       />
     </Dropdown>
   );
@@ -58,7 +66,8 @@ interface Props {
   activeConversationId?: string;
   /** Omit to hide the "Export all" entry. */
   onExportAll?: () => void;
-  onImport: () => void;
+  /** Omit to hide the "Import" entry. */
+  onImport?: () => void;
 }
 
 const ConversationPanelMenu: FC<Props> = ({
@@ -97,24 +106,28 @@ const ConversationPanelMenu: FC<Props> = ({
             },
           ]
         : []),
-      {
-        key: 'import',
-        label: t(ConversationImportI18nKeys.ImportLabel),
-        icon: (
-          <IconFileArrowLeft
-            size={DIAL_ICON_SIZE.SM}
-            className="text-secondary"
-            stroke={DIAL_KIT_ICON_STROKE}
-          />
-        ),
-        onClick: onImport,
-      },
+      ...(onImport
+        ? [
+            {
+              key: 'import',
+              label: t(ConversationImportI18nKeys.ImportLabel),
+              icon: (
+                <IconFileArrowLeft
+                  size={DIAL_ICON_SIZE.MD}
+                  className="text-secondary"
+                  stroke={DIAL_KIT_ICON_STROKE}
+                />
+              ),
+              onClick: onImport,
+            },
+          ]
+        : []),
       {
         key: 'delete-all',
         label: t(ConversationPanelI18nKeys.DeleteAllChatsLabel),
         icon: (
           <IconTrashX
-            size={DIAL_ICON_SIZE.SM}
+            size={DIAL_ICON_SIZE.MD}
             className="text-error"
             stroke={DIAL_KIT_ICON_STROKE}
           />
@@ -130,12 +143,7 @@ const ConversationPanelMenu: FC<Props> = ({
     await confirmDeleteDialog(
       async () => {
         const deletionResult = await deleteAllConversations();
-        const isTotalFailure =
-          deletionResult.failed.length > 0 &&
-          deletionResult.deleted === 0 &&
-          deletionResult.alreadyAbsent === 0;
-
-        if (isTotalFailure) {
+        if (isTotalDeletionFailure(deletionResult)) {
           throw new Error();
         }
 
@@ -180,28 +188,20 @@ const ConversationPanelMenu: FC<Props> = ({
         items={menuItems}
         label={t(ConversationPanelI18nKeys.PanelActionsLabel)}
       />
-      <ConfirmationPopup
+      <ConfirmationDialog
         open={isDeletePending}
-        header={t(ConversationPanelI18nKeys.DeleteAllConfirmTitle)}
+        title={t(ConversationPanelI18nKeys.DeleteAllConfirmTitle)}
+        variant={ConfirmationPopupVariant.Danger}
+        message={t(ConversationPanelI18nKeys.DeleteAllConfirmDescription)}
         confirmLabel={t(ButtonsI18nKeys.DeleteAll)}
         cancelLabel={t(ButtonsI18nKeys.Cancel)}
-        variant={ConfirmationPopupVariant.Danger}
         isLoading={isDeleting}
-        disableConfirmButton={isDeleting}
-        description={
-          <>
-            <span>
-              {t(ConversationPanelI18nKeys.DeleteAllConfirmDescription)}
-            </span>
-            {deleteError && (
-              <span className="mt-1 block text-error">{deleteError}</span>
-            )}
-          </>
-        }
+        loadingStatusLabel={t(BasicI18nKeys.DeletingStatus)}
         onConfirm={handleConfirm}
-        onCancel={handleCancel}
         onClose={handleCancel}
-      />
+      >
+        {deleteError && <ErrorMessageNotification message={deleteError} />}
+      </ConfirmationDialog>
     </>
   );
 };

@@ -1,5 +1,4 @@
-import type { DeploymentCreationFormValues } from '@epam/ai-dial-builder-form';
-import { ErrorMessageNotification, PrimaryButton } from '@epam/ai-dial-ui-kit';
+import { ErrorMessageNotification, NeutralButton } from '@epam/ai-dial-ui-kit';
 import type { FC } from 'react';
 import {
   memo,
@@ -22,7 +21,6 @@ import type {
   ApplicationSetupProps,
   EmptyApplicationSetup,
 } from '../../../models/application-editor';
-import { updateApplication } from '../../../server-api/applications';
 import {
   AppsEditorQuery,
   type TriggerSaveGeneralPayload,
@@ -58,7 +56,9 @@ const QuickAppSetup: FC<Props> = ({
   onSubmit,
   isSubmitting,
   onReadyChange,
+  onEmbeddedEditorLoadedChange,
   ref,
+  onDirtyChange,
 }) => {
   const { t } = useTranslation();
   const [searchParams] = useSearchParams();
@@ -74,51 +74,55 @@ const QuickAppSetup: FC<Props> = ({
   const pendingSaveRef = useRef<PendingSave | null>(null);
   const [isEditorReady, setIsEditorReady] = useState(false);
   const [isLoggedOut, setIsLoggedOut] = useState(false);
+  const [isEditorValid, setIsEditorValid] = useState(true);
+  const [isUnresponsive, setIsUnresponsive] = useState(false);
+  const [isReadinessTimedOut, setIsReadinessTimedOut] = useState(false);
+  const [editorLoadVersion, setEditorLoadVersion] = useState(0);
   const [saveError, setSaveError] = useState('');
 
   // Without an app there is nothing to save yet, so the page's Create stays available.
-  const isReady = appId ? hasEditor && isEditorReady : true;
+  // An invalid form (e.g. blank Instructions) gates Save/Preview like a not-ready editor.
+  const isReady = appId ? hasEditor && isEditorReady && isEditorValid : true;
   useEffect(() => {
     onReadyChange(isReady);
   }, [isReady, onReadyChange]);
 
-  /*
-   * Re-gates readiness when the editor is (re)loaded for a different app or
-   * schema — including the in-place switch after Create. Seeded from the
-   * current values so it only resets on a later change: on mount, the
-   * iframe's own effects may already have reported readiness.
-   */
-  const readyKeyRef = useRef(`${schema?.id ?? ''}|${appId ?? ''}`);
-  useEffect(() => {
-    const key = `${schema?.id ?? ''}|${appId ?? ''}`;
-    if (readyKeyRef.current === key) return;
-    readyKeyRef.current = key;
+  /* A new iframe load needs a fresh deadline even if the previous one never
+   * became ready. Save failures remain independent of this loading state. */
+  const handleLoadStart = useCallback(() => {
     setIsEditorReady(false);
+    setIsEditorValid(true);
     setIsLoggedOut(false);
-  }, [schema, appId]);
+    setIsUnresponsive(false);
+    setIsReadinessTimedOut(false);
+    setEditorLoadVersion((version) => version + 1);
+  }, []);
 
-  // Read by the readiness timeout so a LoggedOut signal arriving at any point before it fires is honored.
-  const isLoggedOutRef = useRef(isLoggedOut);
+  /*
+   * A logged-out or unresponsive editor never becomes ready, and both already
+   * explain why, so the generic "not ready" error would mislead. Read through
+   * a ref by the readiness timeout so a signal arriving before it fires is honored.
+   */
+  const isNotReadyExplained = isLoggedOut || isUnresponsive;
+  const isNotReadyExplainedRef = useRef(isNotReadyExplained);
   useEffect(() => {
-    isLoggedOutRef.current = isLoggedOut;
-  }, [isLoggedOut]);
+    isNotReadyExplainedRef.current = isNotReadyExplained;
+  }, [isNotReadyExplained]);
 
-  // A logged-out editor never becomes ready, so the generic "not ready" error would mislead.
   useEffect(() => {
-    if (!isLoggedOut) return;
-    setSaveError((prev) =>
-      prev === t(AppsEditorI18nKeys.ErrorSettingsNotReady) ? '' : prev,
-    );
-  }, [isLoggedOut, t]);
+    if (!hasEditor || isEditorReady || isNotReadyExplained) {
+      setIsReadinessTimedOut(false);
+    }
+  }, [hasEditor, isEditorReady, isNotReadyExplained]);
 
   useEffect(() => {
     if (!hasEditor || isEditorReady) return;
     const timeoutId = setTimeout(() => {
-      if (isLoggedOutRef.current) return;
-      setSaveError(t(AppsEditorI18nKeys.ErrorSettingsNotReady));
+      if (isNotReadyExplainedRef.current) return;
+      setIsReadinessTimedOut(true);
     }, SETUP_READY_TIMEOUT_MS);
     return () => clearTimeout(timeoutId);
-  }, [hasEditor, isEditorReady, appId, schema, t]);
+  }, [hasEditor, isEditorReady, editorLoadVersion]);
 
   // Rejects a save still in flight when the component unmounts.
   useEffect(
@@ -171,45 +175,15 @@ const QuickAppSetup: FC<Props> = ({
     [t],
   );
 
-  /*
-   * Quick apps have no chat-side control for `features.skills_supported`, and
-   * the embedded editor's own save has no reason to know about it. A
-   * follow-up update carrying the Metadata already on record triggers the
-   * backend to force-set the flag (see the `applications-write-api` spec),
-   * and must finish before the save counts as successful.
-   */
-  const reassertSkillsSupport = useCallback(
-    async (values: DeploymentCreationFormValues) => {
-      if (!appId) return;
-      const general = toTriggerSaveGeneral(values);
-      try {
-        await updateApplication(appId, {
-          name: general.name,
-          description: general.description,
-          iconUrl: general.iconUrl,
-          topics: general.topics,
-          locales: general.locales,
-          primaryLocale: general.primaryLocale,
-        });
-      } catch (error) {
-        setSaveError(t(AppsEditorI18nKeys.ErrorSaveFailed));
-        throw error;
-      }
-    },
-    [appId, t],
-  );
-
   useImperativeHandle(
     ref,
     () => ({
       save: async (values) => {
         const hasChanges = await runSave(toTriggerSaveGeneral(values));
-        await reassertSkillsSupport(values);
         if (hasChanges) onPreviewReset();
       },
       startPreview: async (values) => {
-        const hasChanges = await runSave();
-        await reassertSkillsSupport(values);
+        const hasChanges = await runSave(toTriggerSaveGeneral(values));
         if (hasChanges) {
           onPreviewReset();
           /*
@@ -230,7 +204,22 @@ const QuickAppSetup: FC<Props> = ({
         }
       },
     }),
-    [onPreviewReset, refetchDeployments, reassertSkillsSupport, runSave],
+    [onPreviewReset, refetchDeployments, runSave],
+  );
+
+  /* Only a loaded editor with nothing to report runs edge to edge; loading, errors and placeholders keep the section padding. */
+  const isEmbeddedEditorLoaded =
+    hasEditor &&
+    isEditorReady &&
+    !isNotReadyExplained &&
+    !saveError &&
+    !isReadinessTimedOut;
+  useEffect(() => {
+    onEmbeddedEditorLoadedChange?.(isEmbeddedEditorLoaded);
+  }, [isEmbeddedEditorLoaded, onEmbeddedEditorLoadedChange]);
+  useEffect(
+    () => () => onEmbeddedEditorLoadedChange?.(false),
+    [onEmbeddedEditorLoadedChange],
   );
 
   const handleUpdated = useCallback(() => {
@@ -244,7 +233,7 @@ const QuickAppSetup: FC<Props> = ({
         <p className="dial-small-text text-secondary">
           {t(ApplicationEditorI18nKeys.SetupPendingCreate)}
         </p>
-        <PrimaryButton
+        <NeutralButton
           label={t(ButtonsI18nKeys.Create)}
           disabled={isSubmitting}
           onClick={onSubmit}
@@ -261,9 +250,13 @@ const QuickAppSetup: FC<Props> = ({
     );
   }
 
+  const errorMessage =
+    saveError ||
+    (isReadinessTimedOut ? t(AppsEditorI18nKeys.ErrorSettingsNotReady) : '');
+
   return (
     <div className="flex min-h-[640px] flex-1 flex-col gap-2">
-      {saveError && <ErrorMessageNotification message={saveError} />}
+      {errorMessage && <ErrorMessageNotification message={errorMessage} />}
       <div className="relative min-h-0 flex-1">
         {/* Absolutely positioned, so the iframe gets a definite height to fill. */}
         <div className="absolute inset-0">
@@ -271,11 +264,15 @@ const QuickAppSetup: FC<Props> = ({
             ref={iframeRef}
             schema={schema}
             appId={appId}
+            onLoadStart={handleLoadStart}
             onUpdated={handleUpdated}
             onSaveSuccess={handleSaveSuccess}
             onSaveError={handleSaveError}
             onReadyChange={setIsEditorReady}
+            onValidityChange={setIsEditorValid}
+            onDirtyChange={onDirtyChange}
             onLoggedOutChange={setIsLoggedOut}
+            onUnresponsiveChange={setIsUnresponsive}
           />
         </div>
       </div>

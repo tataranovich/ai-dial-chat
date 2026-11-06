@@ -1,16 +1,29 @@
-import type { DisplayAttachment, Stage } from '@epam/ai-dial-chat-shared';
+import type {
+  AttachmentDisplayResolvers,
+  DisplayAttachment,
+  Stage,
+} from '@epam/ai-dial-chat-shared';
+import type { ReactNode } from 'react';
+
+/** Renders a `<cit data-id="…">` element found in stage content, given its `data-id` value and children. */
+export type StageCitationRenderer = (
+  dataId: string | undefined,
+  children: ReactNode,
+) => ReactNode;
 
 /** Typography class overrides for stage name and expanded content elements in `StagesPanel`. */
 export interface StageTypography {
   /** CSS utility class applied to the stage/step name. Defaults to `'dial-small-text'`. */
   fontClassName?: string;
+  /** CSS utility class applied, instead of `fontClassName`, to a stage name that is a bare identifier (e.g. a tool name). Defaults to `'dial-code-text'`. */
+  monoFontClassName?: string;
   /** CSS utility class applied to expanded content text elements (paragraphs, lists, blockquotes, links, table cells). Defaults to `'dial-tiny-text'`. */
   contentClassName?: string;
   /** CSS utility class applied to `<strong>` (bold markdown) inside expanded content. Falls back to `contentClassName`, then `'dial-tiny-text'`. */
   strongClassName?: string;
   /** CSS utility class applied to every heading level (`h1`–`h6`) inside expanded content. Defaults to `'dial-small-semi-text'`. */
   headingClassName?: string;
-  /** CSS utility class applied to inline code elements; the monospace family comes from the panel stylesheet. Defaults to `'dial-tiny-text rounded-md'`. */
+  /** CSS utility class applied to inline code elements. Defaults to `'dial-tiny-code-text rounded-md'`. */
   codeClassName?: string;
   /** CSS utility class applied to fenced code blocks. Defaults to `'dial-code-text'`. */
   codeBlockClassName?: string;
@@ -96,4 +109,8 @@ export interface StagesPanelProps {
   labels?: StagesPanelLabels;
   /** Called when a stage attachment tile is clicked/activated. Receives the mapped display attachment. */
   onAttachmentClick?: (attachment: DisplayAttachment) => void;
+  /** Host-owned URL resolvers applied when mapping stage attachments; without them an image tile previews its raw `url`. */
+  attachmentDisplayResolvers?: AttachmentDisplayResolvers;
+  /** Host-owned renderer for `<cit data-id="…">` elements in stage content; without it they render as literal text. */
+  renderCitation?: StageCitationRenderer;
 }

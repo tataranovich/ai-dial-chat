@@ -5,6 +5,7 @@ import type {
 } from '@epam/ai-dial-builder-form';
 import type {
   ApplicationSchemaSummaryDto,
+  CatalogCreationType,
   DeploymentItemDto,
 } from '@epam/ai-dial-chat-api-client';
 import type { ParseKeys, TFunction } from 'i18next';
@@ -28,6 +29,18 @@ export interface ApplicationSetupProps<TSetup> {
   errors: ApplicationSetupErrors<TSetup>;
   /** Merges a patch into the setup values. */
   onChange: (patch: Partial<TSetup>) => void;
+  /**
+   * Merges a patch the Setup applies while initialising itself — schema
+   * defaults, a synced required list — into both the values and the
+   * unsaved-changes baseline, so it never counts as a user edit. Setups that
+   * initialise nothing ignore it.
+   */
+  onInitialize?: (patch: Partial<TSetup>) => void;
+  /**
+   * Reports unsaved edits the Setup tracks outside `value` — the Quick App's
+   * embedded editor. Setups whose state lives in `value` leave it unused.
+   */
+  onDirtyChange?: (isDirty: boolean) => void;
   /** Re-validates one setup field when it loses focus. */
   onFieldBlur: (field: Extract<keyof TSetup, string>) => void;
   /** Whether an existing application is being edited. */
@@ -44,6 +57,8 @@ export interface ApplicationSetupProps<TSetup> {
   isSubmitting: boolean;
   /** Reports whether the Setup can be saved right now; `false` disables the primary button, e.g. while the Setup still loads what validation needs. */
   onReadyChange: (isReady: boolean) => void;
+  /** Reports whether the Setup shows a successfully loaded embedded editor, which the page renders edge to edge without section padding. */
+  onEmbeddedEditorLoadedChange?: (isLoaded: boolean) => void;
   /** Handle a kind whose Setup saves itself exposes to the page. */
   ref?: Ref<ApplicationSetupHandle>;
 }
@@ -77,6 +92,12 @@ export interface ApplicationEditorContext {
 
 /** What a kind's `create` resolves to; `MetadataFirst` kinds must return the new id. */
 export type ApplicationCreateResult = { id?: string } | void;
+
+/** Where a create writes, for a create that saves an edited application as a new version. */
+export interface ApplicationCreateOptions {
+  /** Personal folder to create the application in; omitted is the bucket root. */
+  folderPath?: string[];
+}
 
 /** A key of the app's translation resources. */
 export type ApplicationEditorI18nKey = ParseKeys<'translation'>;
@@ -120,6 +141,8 @@ export interface ApplicationEditorMessageKeys {
 /** An application kind rendered through the shared Metadata | Setup page. */
 export interface ApplicationEditorFormDefinition<TSetup> {
   kind: ApplicationEditorKind;
+  /** The creation-policy type a new application of this kind is checked against. */
+  creationType: CatalogCreationType;
   notifiableEntity: ApplicationNotifiableEntity;
   /** Resolves what the notifications name from the page context when it depends on it, e.g. on the schema; overrides `notifiableEntity`. */
   getNotificationTarget?: (
@@ -167,6 +190,7 @@ export interface ApplicationEditorFormDefinition<TSetup> {
     metadata: DeploymentCreationFormValues,
     setup: TSetup,
     ctx: ApplicationEditorContext,
+    options?: ApplicationCreateOptions,
   ) => Promise<ApplicationCreateResult>;
   /** Updates the application; absent when the Setup handle saves an edited application. */
   update?: (
@@ -174,11 +198,33 @@ export interface ApplicationEditorFormDefinition<TSetup> {
     metadata: DeploymentCreationFormValues,
     setup: TSetup,
   ) => Promise<unknown>;
+  /** Opts the kind into the Save panel for edit-mode Save; absent keeps Save in place. */
+  savePanel?: ApplicationSavePanelConfig;
+  /** Metadata field state that depends on the mode, e.g. a version that is read-only while editing. */
+  getMetadataFieldState?: (
+    isEditMode: boolean,
+  ) => ApplicationMetadataFieldState;
+}
+
+/** How an application kind presents itself in the Save panel. */
+export interface ApplicationSavePanelConfig {
+  /** Returns the translated resource type the panel title names, e.g. the schema's display name. */
+  getTypeLabel: (ctx: ApplicationEditorContext) => string;
+}
+
+/** Metadata field state an application kind derives from the editor mode. */
+export interface ApplicationMetadataFieldState {
+  /** Renders the Version field read-only. */
+  isVersionReadOnly?: boolean;
 }
 
 /** An application kind that renders its own page body (the toolset's auth flow). */
 export interface ApplicationEditorPageDefinition {
   kind: ApplicationEditorKind;
+  /** The creation-policy type a new entity of this kind is checked against. */
+  creationType: CatalogCreationType;
+  /** Query param holding the edited entity's id; its absence means create mode. */
+  idQueryParam: string;
   renderPage: () => ReactNode;
 }
 

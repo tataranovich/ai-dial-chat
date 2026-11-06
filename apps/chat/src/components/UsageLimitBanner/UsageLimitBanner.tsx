@@ -1,0 +1,52 @@
+import { useUsageLimitBanner } from '@epam/ai-dial-chat-hooks';
+import { UsageLimitBannerView } from '@epam/ai-dial-conversation-input';
+import { LiveRegion } from '@epam/ai-dial-ui-kit';
+import { type FC, memo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppConfig } from '../../context/AppConfigContext';
+import { useLanguage } from '../../hooks/language/useLanguage';
+import { getDeploymentUsage } from '../../server-api/deployment-limits';
+import { getUserUsage } from '../../server-api/user-limits';
+
+interface Props {
+  /** ID of the currently selected deployment. */
+  deploymentId: string | undefined;
+  /** Whether the selected deployment is currently generating a response. */
+  isGenerationInProgress?: boolean;
+}
+
+const UsageLimitBanner: FC<Props> = ({
+  deploymentId,
+  isGenerationInProgress = false,
+}) => {
+  /* Widened to the plain key/params signature the hook's `t` takes,
+     matching `UsageLimitsControl`'s own cast. */
+  const { t } = useTranslation() as {
+    t: (key: string, params?: Record<string, unknown>) => string;
+  };
+  const { language: activeLocale } = useLanguage();
+  const {
+    config: { usageLimitsWarningThresholdPercent },
+  } = useAppConfig();
+
+  const { banner } = useUsageLimitBanner({
+    deploymentId,
+    isGenerationInProgress,
+    getDeploymentUsage,
+    getAccountUsage: getUserUsage,
+    warningThresholdPercent: usageLimitsWarningThresholdPercent,
+    activeLocale,
+    t,
+  });
+
+  /* Always mounted, so a banner that appears after streaming is announced; empty, it takes no space. */
+  return (
+    <LiveRegion>
+      {banner != null && (
+        <UsageLimitBannerView {...banner} isLiveRegion={false} />
+      )}
+    </LiveRegion>
+  );
+};
+
+export default memo(UsageLimitBanner);

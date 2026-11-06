@@ -19,7 +19,7 @@ export const EditorSection: FC<EditorSectionProps> = ({
   return (
     <section
       className={mergeClasses(
-        'flex h-full flex-col gap-4 rounded border p-6',
+        'flex h-full flex-col gap-4 rounded border',
         styles.section,
         className,
         BUILDER_FORM_CLASS.section,
@@ -27,7 +27,14 @@ export const EditorSection: FC<EditorSectionProps> = ({
       style={cssVars}
     >
       {title != null && (
-        <h2 className={mergeClasses('dial-h3-text', styles.title)}>{title}</h2>
+        <h2
+          className={mergeClasses(
+            stylesProp?.typography?.titleClassName ?? 'dial-h3-text',
+            styles.title,
+          )}
+        >
+          {title}
+        </h2>
       )}
       {children}
     </section>

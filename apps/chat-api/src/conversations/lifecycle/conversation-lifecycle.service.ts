@@ -1,5 +1,6 @@
 import {
   BadGatewayException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,17 +11,16 @@ import { getBearerAuthHeaders } from '../../common/utils/auth-header';
 import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
 import { generateUUID } from '../../common/utils/generate-uuid';
 import { safeDecodeURIComponent } from '../../common/utils/uri';
+import { DeploymentsService } from '../../deployments/deployments.service';
 import { DialClientService } from '../../dial/dial-client.service';
 import { ConversationResponseDto } from '../../openapi/openapi-response.dto';
+import { ConversationReadStateService } from '../../scheduled-task-unread/conversation-read-state.service';
 import { UserConfigService } from '../../user-config/user-config.service';
+import { SCHEDULER_SEGMENT } from '../constants/conversation.constants';
 import {
   ConditionalUpdateStatus,
   type ConditionalUpdateResult,
 } from '../conversation-persistence.port';
-import {
-  ConversationMessageDto,
-  ConversationMessageRole,
-} from '../dto/conversation-message.dto';
 import {
   ConversationDeletionFailureDto,
   ConversationDeletionResultDto,
@@ -32,16 +32,20 @@ import {
   neutralizeForeignPendingMessages,
   updateConversationUnlessPending,
 } from '../generation/background-message';
+import { ConversationTitleCacheService } from '../listing/conversation-title-cache.service';
 import { ConversationPersistenceService } from '../persistence/conversation-persistence.service';
+import { PublishedFolderAttachmentsService } from '../published-folder-attachments.service';
+import { ConversationErrorCode } from '../types/conversation-error-code.enum';
 import type { MetadataResult } from '../types/conversation.types';
 import {
   buildConversationUrl,
-  getConversationName,
+  buildNewConversation,
   getConversationTitleFromName,
   getDeploymentKey,
   isApplicationDeploymentPath,
   prepareEntityName,
 } from '../utils/conversation.utils';
+import { parseScheduledTaskConversationPath } from '../utils/parse-scheduled-task-conversation-path';
 
 const isHttpLikeError = (e: unknown): e is { status: number } =>
   typeof e === 'object' &&
@@ -57,6 +61,10 @@ export class ConversationLifecycleService {
     private readonly dialClient: DialClientService,
     private readonly userConfigService: UserConfigService,
     private readonly persistenceService: ConversationPersistenceService,
+    private readonly deploymentsService: DeploymentsService,
+    private readonly publishedFolderAttachments: PublishedFolderAttachmentsService,
+    private readonly titleCache: ConversationTitleCacheService,
+    private readonly conversationReadStateService: ConversationReadStateService,
   ) {}
 
   async createConversation(
@@ -66,34 +74,13 @@ export class ConversationLifecycleService {
     deploymentId: string,
     customContent?: MessageCustomContentDto,
   ): Promise<ConversationResponseDto> {
-    const now = Date.now();
-    const uuid = generateUUID();
-    const baseName = getConversationName('New chat', firstMessage);
-    const name = baseName;
-    const conversationPath = `${deploymentId}__${baseName}__${uuid}`;
-    const folderId = `${bucket}`;
-
-    const userMessage: ConversationMessageDto = {
-      id: uuid,
-      role: ConversationMessageRole.User,
-      content: firstMessage,
-      timestamp: new Date(now).toISOString(),
-      custom_content: customContent,
-    };
-
-    const conversation: ConversationResponseDto = {
-      id: `${folderId}/${conversationPath}`,
-      folderId,
-      name,
-      model: { id: deploymentId },
-      prompt: '',
-      temperature: 1,
-      messages: [userMessage],
-      lastActivityDate: now,
-      updatedAt: now,
-      selectedAddons: [],
-      assistantModelId: deploymentId,
-    };
+    const { fileName: conversationPath, conversation } = buildNewConversation({
+      firstMessage,
+      deploymentId,
+      customContent,
+      folderId: bucket,
+      toId: (fileName) => `${bucket}/${fileName}`,
+    });
 
     try {
       const encodedConversationPath = encodeDialResourcePath(conversationPath);
@@ -116,6 +103,11 @@ export class ConversationLifecycleService {
         );
       }
 
+      this.titleCache.set(
+        token,
+        `conversations/${bucket}/${encodedConversationPath}`,
+        conversation,
+      );
       return { ...data, ...conversation } as ConversationResponseDto;
     } catch (error) {
       this.logger.error('DIAL Core rejected saveConversation', error);
@@ -171,6 +163,11 @@ export class ConversationLifecycleService {
       );
     }
 
+    this.titleCache.invalidate(
+      token,
+      `conversations/${bucket}/${encodeDialResourcePath(conversationPath)}`,
+    );
+
     // Remove from pins if present — fire-and-forget, non-fatal
     void this.pinConversation(
       buildConversationUrl(bucket, conversationPath),
@@ -189,6 +186,11 @@ export class ConversationLifecycleService {
     bucket: string,
   ): Promise<RenameConversationResponseDto> {
     const sanitisedTitle = prepareEntityName(newTitle);
+    const shouldKeepRead = await this.isOldChatToKeepRead(
+      conversationPath,
+      token,
+      bucket,
+    );
 
     /* Conditional, so a rename never restores a pending background message over a final
        answer saved between its read and its write. Without a pending message, persistent
@@ -219,6 +221,9 @@ export class ConversationLifecycleService {
     }
     switch (result.status) {
       case ConditionalUpdateStatus.Saved:
+        if (shouldKeepRead) {
+          await this.keepChatRead(conversationPath, token, bucket);
+        }
         return { name: sanitisedTitle };
       case ConditionalUpdateStatus.Skipped:
         throw new NotFoundException('Conversation not found');
@@ -227,6 +232,99 @@ export class ConversationLifecycleService {
           'The conversation changed concurrently; retry shortly.',
         );
     }
+  }
+
+  /*
+   * Saving a rename moves the chat's DIAL Core `updatedAt` past the read-before
+   * baseline, which alone would turn a chat the user has long read into an
+   * unread one. True only for a regular chat last updated at or before the
+   * baseline; a chat already in the viewed ids or already unread needs nothing.
+   * Best effort: any failure answers false, so a rename is never blocked.
+   */
+  private async isOldChatToKeepRead(
+    conversationPath: string,
+    token: string,
+    bucket: string,
+  ): Promise<boolean> {
+    if (
+      parseScheduledTaskConversationPath(
+        buildConversationUrl(bucket, conversationPath),
+      )
+    ) {
+      return false;
+    }
+    try {
+      const readBefore = await this.conversationReadStateService.getReadBefore(
+        token,
+        bucket,
+      );
+      if (readBefore === null) return false;
+      const { data } = await this.dialClient.client.getConversationMetadata(
+        bucket,
+        encodeDialResourcePath(conversationPath),
+        { headers: getBearerAuthHeaders(token) },
+      );
+      const updatedAt = (data as { updatedAt?: unknown } | null)?.updatedAt;
+      return typeof updatedAt === 'number' && updatedAt <= readBefore;
+    } catch (error) {
+      this.logger.warn('Failed to read the read state before rename', error);
+      return false;
+    }
+  }
+
+  /*
+   * Runs after the rename saved. If a new generation started on this chat since
+   * `isOldChatToKeepRead` looked at it, this write adds the chat back to the
+   * viewed ids and hides the dot of that answer. The window is the rename's own
+   * duration, the cost is one missing dot, and read state is last-writer-wins
+   * everywhere else too, so it is accepted instead of paying for a second
+   * metadata read on every rename.
+   */
+  private async keepChatRead(
+    conversationPath: string,
+    token: string,
+    bucket: string,
+  ): Promise<void> {
+    try {
+      await this.conversationReadStateService.addViewed(
+        buildConversationUrl(bucket, conversationPath),
+        token,
+        bucket,
+      );
+    } catch (error) {
+      this.logger.warn('Failed to keep the renamed chat read', error);
+    }
+  }
+
+  /*
+   * A copy would hand an operator-hidden model (HIDDEN_ENTITY_TAGS) a fresh
+   * conversation (Issue #9183). The check reads the model the conversation
+   * uses now: the path keeps the model it was created with, so a chat switched
+   * to a hidden model afterwards would slip past a path-based check.
+   */
+  private async assertDuplicateModelVisible(
+    conversation: ConversationResponseDto,
+    token: string,
+    bucket: string,
+  ): Promise<void> {
+    const modelId = conversation.assistantModelId || conversation.model?.id;
+    if (!modelId) return;
+    const deployment = await this.deploymentsService.resolveDeploymentItem(
+      modelId,
+      token,
+      bucket,
+    );
+    if (!deployment?.isHidden) return;
+    this.logger.warn(
+      `Refusing to duplicate a conversation whose model "${modelId}" is hidden`,
+    );
+    throw new ForbiddenException({
+      statusCode: 403,
+      error: 'Forbidden',
+      code: ConversationErrorCode.DuplicateModelHidden,
+      message:
+        "The conversation's model is not available for new conversations",
+    });
   }
 
   async duplicateConversation(
@@ -282,6 +380,20 @@ export class ConversationLifecycleService {
       );
     }
 
+    await this.assertDuplicateModelVisible(sourceData, token, sessionBucket);
+
+    /*
+     * A conversation published with a folder attachment still points at the
+     * author's private folder; the copy must carry the published folder or
+     * it cannot be sent to an agent by the user who duplicated it.
+     */
+    const resolvedSource = await this.publishedFolderAttachments.resolve(
+      sourceData,
+      sourcePath,
+      token,
+      sessionBucket,
+    );
+
     /*
      * Prefer the stored `name` field (set by LLM naming) over the path-derived
      * title so that conversations renamed by the model keep that name in the copy.
@@ -301,20 +413,29 @@ export class ConversationLifecycleService {
       isApplicationDeployment,
     );
     const decodedRenamedFilename = `${deploymentKey}__${uniqueTitle}`;
+    /*
+     * A UUID-suffixed copy left under `.scheduler/{scheduleId}` would be read
+     * as a scheduled run, so the reserved prefix is not carried over.
+     */
+    const destinationFolderSegments =
+      decodedFolderSegments[0] === SCHEDULER_SEGMENT &&
+      decodedFolderSegments.length > 1
+        ? decodedFolderSegments.slice(2)
+        : decodedFolderSegments;
     const pathExists = await this.conversationPathExists(
       token,
       sessionBucket,
-      [...decodedFolderSegments, decodedRenamedFilename].join('/'),
+      [...destinationFolderSegments, decodedRenamedFilename].join('/'),
     );
     const decodedFinalFilename = pathExists
       ? `${decodedRenamedFilename}__${generateUUID()}`
       : decodedRenamedFilename;
     const decodedDestinationSubPath = [
-      ...decodedFolderSegments,
+      ...destinationFolderSegments,
       decodedFinalFilename,
     ].join('/');
     const encodedDestinationSubPath = [
-      ...decodedFolderSegments.map(encodeURIComponent),
+      ...destinationFolderSegments.map(encodeURIComponent),
       encodeURIComponent(decodedFinalFilename),
     ].join('/');
 
@@ -323,8 +444,8 @@ export class ConversationLifecycleService {
       encodedDestinationSubPath,
     );
 
-    const folderId = decodedFolderSegments.length
-      ? `${sessionBucket}/${decodedFolderSegments.join('/')}`
+    const folderId = destinationFolderSegments.length
+      ? `${sessionBucket}/${destinationFolderSegments.join('/')}`
       : sessionBucket;
 
     const { error: saveError, response: saveResponse } =
@@ -334,8 +455,8 @@ export class ConversationLifecycleService {
         {
           headers: getBearerAuthHeaders(token),
           body: {
-            ...sourceData,
-            messages: neutralizeForeignPendingMessages(sourceData.messages),
+            ...resolvedSource,
+            messages: neutralizeForeignPendingMessages(resolvedSource.messages),
             id: `${sessionBucket}/${decodedDestinationSubPath}`,
             folderId,
             name: uniqueTitle,
@@ -353,6 +474,10 @@ export class ConversationLifecycleService {
       );
     }
 
+    this.titleCache.set(token, destinationUrl, {
+      name: uniqueTitle,
+      llmNamingDone: resolvedSource.llmNamingDone,
+    });
     return { newPath: destinationUrl };
   }
 
@@ -378,15 +503,7 @@ export class ConversationLifecycleService {
       `deleteConversations: bucket=${bucket} total=${uniqueIds.length} owned=${ownedIds.length}`,
     );
 
-    /*
-     * IDs from the metadata listing are already URL-encoded (e.g. %20 for spaces).
-     * Decode each segment before passing to encodeDialResourcePath to avoid
-     * double-encoding (%20 → %2520).
-     */
-    const pathsForDelete = ownedIds.map((id) => {
-      const rawPath = id.slice(prefix.length);
-      return rawPath.split('/').map(safeDecodeURIComponent).join('/');
-    });
+    const pathsForDelete = ownedIds.map((id) => id.slice(prefix.length));
 
     const results = await Promise.allSettled(
       pathsForDelete.map((path, i) => {
@@ -407,19 +524,32 @@ export class ConversationLifecycleService {
       const result = results[i];
 
       if (result.status === 'fulfilled') {
-        const { error } = result.value as { error?: unknown };
-        if (error == null) {
+        const { error, response } = result.value as {
+          error?: unknown;
+          response?: Response;
+        };
+        /*
+         * The SDK's `error` is the parsed DIAL Core error body and carries no
+         * `status`; the HTTP status lives on `response`. An empty error body
+         * also leaves `error` undefined, so `response.ok` decides success.
+         */
+        const status =
+          response?.status ??
+          (isHttpLikeError(error) ? error.status : undefined);
+        if (error == null && (response?.ok ?? true)) {
           deleted++;
+          this.titleCache.invalidate(token, id);
           void this.pinConversation(id, false, token, bucket).catch((err) =>
             this.logger.error('Failed to clean up pin on bulk delete', err),
           );
-        } else if (isHttpLikeError(error) && error.status === 404) {
+        } else if (status === 404) {
           alreadyAbsent++;
-        } else if (isHttpLikeError(error) && error.status === 403) {
+          this.titleCache.invalidate(token, id);
+        } else if (status === 403) {
           failed.push({ id, code: 'FORBIDDEN' });
         } else {
           this.logger.error(
-            `deleteConversations[${i}] UPSTREAM_ERROR id=${id} errorStatus=${isHttpLikeError(error) ? error.status : 'n/a'} error=${JSON.stringify(error)}`,
+            `deleteConversations[${i}] UPSTREAM_ERROR id=${id} errorStatus=${status ?? 'n/a'} error=${JSON.stringify(error)}`,
           );
           failed.push({ id, code: 'UPSTREAM_ERROR' });
         }

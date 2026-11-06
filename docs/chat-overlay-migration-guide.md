@@ -634,6 +634,14 @@ It uses **replace**, not merge, semantics:
 
 Do not send a partial diff. Always send the complete desired set.
 
+`enabledFeatures` controls which UI features exist, not who may create
+catalog entities. The server's per-user creation policy
+([`CATALOG_CREATION_ROLES`](../apps/chat-api/README.md#catalog-creation-roles))
+is a separate condition on every create action. Enabling `custom-apps`,
+`schema-apps`, `toolsets` or `prompts` from the host keeps their existing
+listing and editing, but it does not let a user create a type or schema the
+policy denies them. The same applies to an isolated view's feature override.
+
 ### Renamed flags
 
 | Legacy flag                | New flag                                                    |
@@ -704,7 +712,7 @@ integrations from typos and removed keys.
 
 ### Supported flags and defaults
 
-The new chat supports 48 flags.
+The new chat supports 52 flags.
 
 Enabled by default:
 
@@ -734,6 +742,7 @@ custom-apps
 prompts
 skills
 voice-input
+conversation-drafts
 ```
 
 `chat-settings` and `empty-chat-settings` are not independent. `chat-settings`
@@ -753,6 +762,16 @@ would hold, the "+" button disappears with it. The tools themselves are still
 derived from the deployment's configuration schema either way; the key governs
 only whether the user can add and remove their chips.
 
+`conversation-drafts` keeps what the user typed into an existing conversation's
+input, including skill mentions, for the browser tab session. Switching to
+another conversation, opening "New Chat" or reloading the tab no longer loses
+it: the text comes back when the conversation is opened again. Drafts are
+removed on a successful send, when the conversation is deleted, and on logout.
+Because `enabledFeatures` replaces the default set, a host that passes its own
+list must include `conversation-drafts` to keep drafts. Leave it out to disable
+them; drafts stored while the key was on are then discarded. The New Chat
+screen never keeps a draft.
+
 Disabled by default and enabled explicitly:
 
 ```text
@@ -770,6 +789,7 @@ hide-delete-user-message
 hide-edit-user-message
 hide-regenerate-assistant-message
 hide-user-menu
+hide-user-menu-identity
 hide-user-settings
 hide-keyboard-shortcuts
 hide-navigation-menu
@@ -780,16 +800,63 @@ hide-footer-version
 show-agent-description
 disable-input-history-navigation
 hide-conversation-export
+hide-conversation-import
 hide-settings-page
+hide-usage-page
 show-header-logo
+hide-starter-icon
 ```
 
-`hide-navigation-menu` removes the mobile navigation menu in full â the
-header's hamburger button and the sheet behind it, which carries the nav items,
-the profile row, keyboard shortcuts, and log out. Reach for it when the host
-portal already owns sign-in and sign-out, so the sheet's log-out row would only
-mislead. It leaves the desktop navigation rail and its user menu alone; that
-surface is `hide-user-menu`'s.
+#### Navigation sidebar
+
+The chat shows one navigation sidebar in place of the earlier navigation rail,
+the conversation panel and the mobile navigation sheet. It carries the
+navigation items, the conversation list and the user menu on every page. On a
+desktop viewport (1280px and wider) it is a collapsible column (336px expanded,
+72px collapsed); below that it is a 320px drawer opened from the header. There
+is no flag for it: it replaces the earlier layout for every deployment and
+host. A host that must keep the rail, the panel and the sheet keeps running the
+earlier release of the chat. A host that composes the libraries itself is not
+affected: `NavigationPanel`, `NavigationSheet` and `ConversationPanel` stay
+exported, and `NavigationSidebar`, `ConversationList` and
+`ConversationListHeader` are the new pieces.
+
+The page headers of Catalog, File manager, Usage and Scheduled tasks (a 72px
+row) and the File manager card frame change with it. Settings opens as a
+dialog from the sidebar's user menu, and Usage is its own page at `/usage`;
+`/settings/usage` redirects there.
+
+Existing layout flags keep a meaning: `conversations-section` off removes the
+chats block, `conversations-panel-toggle` off removes the desktop collapse
+toggle, `showConversationsSectionByDefault` sets the initial desktop state
+(expanded or collapsed) — it is not persisted and the page route never changes
+it — `hide-conversations-filter` removes the filter, `hide-new-conversation`
+removes the New chat item, `hide-user-menu` removes the user menu — the
+sidebar's profile trigger and, on mobile, the same menu in the drawer (the
+earlier mobile sheet ignored this key, so a host that set it still showed the
+menu there) — `hide-settings-page` removes the Settings entry, and
+`hide-usage-page` removes the Usage link.
+
+`hide-user-menu-identity` keeps the user menu but removes the row at the top
+of its dropdown that repeats the avatar and the user's name, on desktop and in
+the drawer. Settings and Log out stay. Use it when the sidebar trigger already
+shows the name, so the menu would only say it twice. `hide-user-menu` overrides
+it. In the collapsed desktop sidebar the trigger shows the avatar alone, so with
+the key on the user is identified there only by the avatar and its email
+tooltip.
+
+The sidebar's elements carry their own `dial-navigation-panel-sidebar*` and
+`dial-cp-list*` classes; CSS written against `dial-navigation-panel-rail` or
+`dial-sb-aside` does not reach them, so review such overrides before upgrading.
+
+`hide-navigation-menu` removes the navigation part of the mobile drawer: the
+navigation items, the user menu (profile, language, keyboard shortcuts, log
+out) and the Usage link. Reach for it when the host portal already owns
+sign-in and sign-out, so the user menu's log-out row would only mislead. The
+header's sidebar toggle stays as long as the conversation list remains
+reachable through it (`conversations-section` and `conversations-panel-toggle`
+on), so the drawer then carries the chats alone. It leaves the desktop sidebar
+alone; the user menu is also governed by `hide-user-menu`.
 
 `disallow-change-agent` and `hide-change-agent` both act on the in-chat
 agent selector, and either one removes it: a control the user cannot open is
@@ -807,11 +874,10 @@ leaves the panel permanently showing all sources. Use it for embeds where one
 source is the whole story.
 
 `hide-keyboard-shortcuts` removes the Keyboard shortcuts entry from the user
-menu and from the mobile profile sheet. The preference it edits (Enter vs
+menu of the mobile drawer. The preference it edits (Enter vs
 `⌘`/`Ctrl`+Enter to send) keeps working from its stored value, defaulting to
 Enter — hiding the entry pins users to whatever they last chose rather than
-disabling the shortcut. `hide-user-settings` also hides this entry, on both
-surfaces; use `hide-keyboard-shortcuts` when the language selector should
+disabling the shortcut. `hide-user-settings` also hides this entry; use `hide-keyboard-shortcuts` when the language selector should
 stay.
 
 `show-all-starters` changes how a deployment's conversation starters are laid
@@ -860,13 +926,26 @@ every conversation's row menu, and "Export all" in the conversations panel
 menu. Import and Delete all stay. It hides the entry points only — it does
 not block the export API.
 
-`hide-settings-page` removes the Settings page: the Settings entry in the
-desktop user menu and the Settings row on the mobile navigation sheet's
-profile page. A direct `/settings` URL redirects to `/`. The preferences the
+`hide-conversation-import` removes the Import entry from the conversations
+panel menu. Export all and Delete all stay. Like the export key, it hides the
+entry point only — it does not block the import API.
+
+`hide-settings-page` removes Settings: the Settings entry in the sidebar's
+user menu, on desktop and mobile. A direct `/settings` URL redirects to `/`.
+It no longer affects Usage, which moved out of Settings into its own page. The preferences the
 page edits keep their stored values. Use it when the host owns user
 preferences itself; `hide-user-settings` instead keeps the page and removes
 its controls — language, theme, keyboard shortcuts, and the default agent
 picker.
+
+`hide-usage-page` removes the Usage page: the Usage link in the sidebar
+footer and the "Full usage" link in the usage-limits popover beside the chat
+input. A direct `/usage` URL redirects to `/`. It is independent of the
+backend `USAGE_LIMITS_CONTROL_ENABLED` flag, which decides whether that
+popover's control renders at all.
+
+**Upgrading:** `hide-settings-page` used to hide Usage as well. A host that
+relied on it to hide Usage must add `hide-usage-page`.
 
 `show-header-logo` renders the theme logo in the desktop top bar, centered
 between the conversation-panel and new-chat buttons and the sources toggle, so
@@ -877,6 +956,11 @@ shows it whenever `header` is on; with `header` off, `show-header-logo` still
 renders that header row, carrying only the logo and none of its buttons. The
 mobile header shows the theme's `favicon`, or a smaller full `logo` when the
 theme defines no `favicon`.
+
+`hide-starter-icon` removes the sparkles icon the UI kit renders by default on
+every conversation-starter pill, leaving a label-only button. It does not
+change which starters render, their order, or how `show-all-starters` /
+`starters-below-greeting` lay them out — only the per-pill icon.
 
 `voice-input` additionally adds `microphone` to the iframe's `allow`
 attribute. That attribute is computed once, when `ChatOverlay` is
@@ -983,8 +1067,8 @@ ENABLED_UI_FEATURES=header,conversations-section,likes,input-files
 ```
 
 This is also a complete replacement set, not an addition to the defaults. If
-the variable is absent or empty, the built-in baseline of 26 default-on flags
-out of the 48 supported is used. Entries the server does not recognize — including
+the variable is absent or empty, the built-in baseline of 27 default-on flags
+out of the 52 supported is used. Entries the server does not recognize — including
 the renamed and retired legacy strings listed above — are logged and dropped;
 if every entry is unrecognized, the built-in baseline is used instead. An overlay host may replace the server baseline with
 its own `enabledFeatures`; the server baseline is not a security ceiling.

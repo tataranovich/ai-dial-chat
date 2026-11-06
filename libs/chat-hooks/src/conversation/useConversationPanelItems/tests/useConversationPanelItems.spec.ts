@@ -2,7 +2,7 @@ import type {
   ConversationListItemDto,
   DeploymentItemDto,
 } from '@epam/ai-dial-chat-api-client';
-import { FilterTab } from '@epam/ai-dial-chat-shared';
+import { ConversationKind, FilterTab } from '@epam/ai-dial-chat-shared';
 import { renderHook } from '@testing-library/react';
 import { createElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -130,7 +130,21 @@ describe('useConversationPanelItems', () => {
     expect(task.leadingIcon).toBe(leadingIcon);
     expect(task.isUnread).toBe(true);
     expect(task).not.toHaveProperty('showTaskBadge');
+    expect(task.kind).toBe(ConversationKind.Task);
+    expect(chat.kind).toBe(ConversationKind.Chat);
     expect(chat.leadingIcon).toBeUndefined();
+    expect(chat.isUnread).toBeUndefined();
+  });
+
+  it('carries the unread flag of a regular chat without turning it into a task', () => {
+    const params = makeParams({
+      items: [makeItem('unread-chat', { isUnread: true }), makeItem('chat')],
+    });
+    const { result } = renderHook(() => useConversationPanelItems(params));
+
+    const [unreadChat, chat] = result.current;
+    expect(unreadChat.isUnread).toBe(true);
+    expect(unreadChat.kind).toBe(ConversationKind.Chat);
     expect(chat.isUnread).toBeUndefined();
   });
 
@@ -258,6 +272,16 @@ describe('useConversationPanelItems — item identity and deployment lookup', ()
     );
 
     expect(result.current[0].iconTooltip).toBe('By reference');
+  });
+
+  it('resolves the deployment of a conversation stored in a folder', () => {
+    const { result } = renderItems(
+      makeParams({
+        items: [makeItem('conversations/bucket/qa-run/model-1__Chat__uuid')],
+      }),
+    );
+
+    expect(result.current[0].iconTooltip).toBe('Model 1');
   });
 });
 

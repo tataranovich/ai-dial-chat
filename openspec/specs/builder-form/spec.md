@@ -26,7 +26,12 @@ Specifies `libs/builder-form`'s host-agnostic builder/editor form building block
 - **THEN** none are found; back-navigation is exposed only via `onBack` callback prop
 
 ### Requirement: BuilderFormContainer — page shell
-`BuilderFormContainer` SHALL render a full-height, non-scrolling page shell: a header (back control, title, cancel/submit action pair shown at desktop only, while a sticky bottom footer holds the same pair below desktop, with a `role="status"` region announcing `labels.submittingLabel` while `isSubmitting` is `true`) above a three-column body — `left`, the main column (`children`), and `metadata`. The header SHALL use the same responsive padding as the scheduled-task detail header: `px-4 py-2` below desktop and `px-8 py-0` with a 64 px height at desktop. On mobile the stacked body SHALL own the single vertical scrollbar. On desktop the body SHALL be a non-wrapping clipped row and each populated column SHALL scroll independently, keeping the page root and header fixed. Side columns are full width on mobile and a fixed 400 px on desktop; supplying `left` without `metadata` reserves an empty end column of the same width so the main column stays optically centered. An optional `layout` prop (`sideColumnWidth`, default `'400px'`; `columnGap`, default `'0px'`; `reserveEndColumn`, default `true`) overrides that sizing. The container SHALL hold no state of its own; all strings, disabled flags, and callbacks are host-supplied.
+`BuilderFormContainer` SHALL render a full-height, non-scrolling page shell: a header (back control, title, cancel/submit action pair shown at desktop only, while a sticky bottom footer holds the same pair below desktop, with a `role="status"` region announcing `labels.submittingLabel` while `isSubmitting` is `true`) above a three-column body — `left`, the main column (`children`), and `metadata`. The header SHALL use the same responsive padding as the scheduled-task detail header: `px-4 py-2` below desktop and `px-8 py-0` with a 64 px height at desktop. On mobile the stacked body SHALL own the single vertical scrollbar. On desktop the body SHALL be a non-wrapping clipped row and each populated column SHALL scroll independently, keeping the page root and header fixed. Side columns are full width on mobile and a fixed 400 px on desktop; supplying `left` without `metadata` reserves an empty end column of the same width so the main column stays optically centered. An optional `footerActionsOrder` prop (`BuilderFormActionsOrder.CancelFirst` by default, or `SubmitFirst`) sets the order of the pair in the mobile footer only; `BuilderFormActions` takes the same `order` prop and swaps the DOM order, so the tab order follows the visual one, and the header always lists Cancel first. An optional `layout` prop (`sideColumnWidth`, default `'400px'`; `columnGap`, default `'0px'`; `reserveEndColumn`, default `true`) overrides that sizing. The container SHALL hold no state of its own; all strings, disabled flags, and callbacks are host-supplied.
+
+#### Scenario: Submit-first footer
+
+- **WHEN** a host passes `footerActionsOrder={BuilderFormActionsOrder.SubmitFirst}`
+- **THEN** the mobile footer lists the submit action before Cancel, the header still lists Cancel first, and the default (`CancelFirst`) keeps Cancel first in both
 
 #### Scenario: Default responsive shell
 
@@ -61,7 +66,7 @@ The back-button and title portion of the header row SHALL be visible at all view
 - **THEN** the back arrow icon visually points in the reading-direction-correct "back" direction
 
 ### Requirement: EditorLayout — mobile/tablet action bar
-Below the `desktop` breakpoint, `EditorLayout` SHALL render the same `actions` content in a dedicated bar pinned to the bottom of the page, outside the scrollable body container, instead of in the header. The bar SHALL only render when `actions` is provided, and SHALL NOT overlap `leftContent`/`rightContent` — the scrollable body occupies the remaining vertical space above it via normal flex layout, not absolute/fixed positioning. Each direct child of `actions` SHALL grow to share the bar's width equally (accounting for the bar's padding and inter-button gap). The bar SHALL reverse the DOM order of `actions`' direct children, so the last child (the primary action, e.g. Save/Create) renders at the inline-start side and the first child (e.g. Cancel) renders at the inline-end side — the mirror of the header's inline-end-anchored order — using a writing-mode-aware reversal (`flex-row-reverse`) so the placement stays correct in RTL.
+Below the `desktop` breakpoint, `EditorLayout` SHALL render the same `actions` content in a dedicated bar pinned to the bottom of the page, outside the scrollable body container, instead of in the header. The bar SHALL only render when `actions` is provided, and SHALL NOT overlap `leftContent`/`centerContent` — the scrollable body occupies the remaining vertical space above it via normal flex layout, not absolute/fixed positioning. Each direct child of `actions` SHALL grow to share the bar's width equally (accounting for the bar's padding and inter-button gap). The bar SHALL reverse the DOM order of `actions`' direct children, so the last child (the primary action, e.g. Save/Create) renders at the inline-start side and the first child (e.g. Cancel) renders at the inline-end side — the mirror of the header's inline-end-anchored order — using a writing-mode-aware reversal (`flex-row-reverse`) so the placement stays correct in RTL.
 
 #### Scenario: Actions render in a bottom bar on mobile/tablet
 - **WHEN** the host passes `actions` and `EditorLayout` renders below desktop width
@@ -82,21 +87,35 @@ Below the `desktop` breakpoint, `EditorLayout` SHALL render the same `actions` c
 ### Requirement: EditorLayout — two-column responsive body
 `EditorLayout` SHALL render its body as a two-column layout on desktop and a single stacked column on mobile:
 
-- **Desktop** (≥ `desktop` breakpoint): `leftContent` occupies a fixed 400 px column on the inline-start side; `rightContent` (when provided) occupies the remaining `flex-1` space, separated by a `border-e` divider. The body container is `overflow-hidden` and each column scrolls independently through its own `overflow-y-auto`.
-- **Mobile** (below `desktop` breakpoint): `leftContent` renders first (top), `rightContent` renders below it; both span full width. The body container is a single scrollable column.
-- When `rightContent` is absent or `undefined`, `leftContent` expands to full width at all viewport sizes.
+- **Desktop** (≥ `desktop` breakpoint): `leftContent` occupies a fixed 400 px column on the inline-start side; `centerContent` (when provided) occupies the remaining `flex-1` space, separated by a `border-e` divider. The body container is `overflow-hidden` and each column scrolls independently through its own `overflow-y-auto`.
+- **Mobile** (below `desktop` breakpoint): `leftContent` renders first (top), `centerContent` renders below it; both span full width. The body container is a single scrollable column.
+- When `centerContent` is absent or `undefined`, `leftContent` expands to full width at all viewport sizes.
 
 #### Scenario: Two columns on desktop
-- **WHEN** `EditorLayout` renders with both `leftContent` and `rightContent` at ≥ desktop width
+- **WHEN** `EditorLayout` renders with both `leftContent` and `centerContent` at ≥ desktop width
 - **THEN** the two panels appear side by side, separated by a vertical divider
 
 #### Scenario: Single column on mobile
-- **WHEN** `EditorLayout` renders with both `leftContent` and `rightContent` at < desktop width
+- **WHEN** `EditorLayout` renders with both `leftContent` and `centerContent` at < desktop width
 - **THEN** the two panels stack vertically, `leftContent` on top
 
 #### Scenario: Single-panel mode
-- **WHEN** `rightContent` is absent
+- **WHEN** `centerContent` is absent
 - **THEN** `leftContent` fills the full available width at all viewport sizes
+
+### Requirement: EditorLayout — optional host side panel
+
+`EditorLayout` SHALL accept an optional `rightContent?: ReactNode`, and `EntityEditor` SHALL provide it from its `asideData` section (see "EntityEditor — the standard entity editor layout"). When it is omitted, the layout SHALL be exactly the existing two-column layout. When it is provided, the library SHALL render it verbatim in a plain column wrapper (no landmark role of its own, like the other columns), with no knowledge of what it contains; the host owns the content and its inner spacing.
+
+On desktop the panel SHALL be a third column at the inline end, below the header row, with its own vertical scroll and a divider on its inline-start edge drawn with a logical border (`border-s`). Its width SHALL be a fixed `400px`, not configurable. The divider color SHALL reuse `styles.colors.sidebarBorderColor`, so no separate color override exists. On mobile and tablet the panel SHALL be stacked after the other content. The panel SHALL use logical direction utilities only.
+
+#### Scenario: No panel keeps the two-column layout
+- **WHEN** a host renders `EditorLayout` or `EntityEditor` without `rightContent`
+- **THEN** no side column is rendered and the layout is unchanged
+
+#### Scenario: Host content is rendered in a side panel after the columns
+- **WHEN** a host passes `rightContent={<QualityCheck />}`
+- **THEN** `<QualityCheck />` renders in a column that follows the left and right columns in the DOM
 
 ### Requirement: EditorSection — visual section wrapper
 `EditorSection` SHALL render a bordered/card visual region with:
@@ -197,11 +216,10 @@ have no side effects and SHALL NOT depend on i18n, routing, or network state.
 
 `validateVersionPattern` SHALL accept either `true` — checking the non-empty version against the
 exported default `VERSION_PATTERN` (letters, digits, dots, underscores, dashes) — or a `RegExp`,
-checked instead of the default. The library SHALL also export `SEMVER_VERSION_PATTERN` (a
-SemVer 2.0.0 version: `MAJOR.MINOR.PATCH` without leading zeros, with an optional pre-release
-and build metadata, e.g. `1.0.0`, `1.0.0-beta.1`, `1.0.0+build.5`) as a stricter alternative a
-host can pass when it requires the version rule DIAL Admin applies (`semver.valid()`) rather
-than the default permissive character-set check.
+checked instead of the default. The library SHALL also export `SEMVER_VERSION_PATTERN` (one or
+more dot-separated numeric segments, e.g. `0.0.1`, `2.0`) as a stricter alternative a host can
+pass when it requires a dot-separated numeric version rather than the default permissive
+character-set check.
 
 #### Scenario: Valid values produce no errors
 - **WHEN** the function is called with a non-empty, correctly formatted name
@@ -231,9 +249,8 @@ than the default permissive character-set check.
 
 #### Scenario: Stricter version pattern override
 - **WHEN** the function is called with `validateVersionPattern: SEMVER_VERSION_PATTERN` and a
-  non-empty version that is not SemVer 2.0.0 (e.g. `abc`, `1.2`, `1.0.0.0`, `01.0.0`)
-- **THEN** it returns a version-format error; a version such as `0.0.1`, `1.0.0-beta` or
-  `1.0.0+build` produces no error
+  non-empty version that is not entirely dot-separated numeric segments (e.g. `abc`)
+- **THEN** it returns a version-format error; a version such as `0.0.1` or `2.0` produces no error
 
 #### Scenario: Empty version is never flagged
 - **WHEN** the function is called with `validateVersionPattern` set (either `true` or a `RegExp`)
@@ -289,21 +306,45 @@ the host app's responsibility. The link that opens the popup SHALL show the host
 `labels.addLabel` (e.g. "Add locales") while `otherLocales` is empty, and switch to
 `labels.editLabel` (e.g. "Edit locales") once at least one entry exists.
 
-`availableLocaleOptions` SHALL govern whether the control exists at all. Its default is an empty
-list, and with an empty list `DeploymentLocalesField` SHALL render nothing — no summary row, no
-popup-opening link. A popup with no selectable language could never be satisfied: every row
-requires both a language and a name before Save enables, so the field would offer a control whose
-Save is permanently disabled, with the Language dropdown showing only its own "No options
-available" empty state and no way for the user to make the form valid. Hiding the control SHALL NOT
-call `onChange`, so any `otherLocales` entries the host loaded from an existing entity survive
-unmodified and are written back untouched on the next save.
+A **retained** entry is an entry in `value` whose `language` is not the `code` of any
+`availableLocaleOptions` item — typically a translation stored under a code the host no longer
+configures. Retained entries SHALL be derived by the component from `value`; the host SHALL NOT
+have to pass them separately. A retained entry SHALL be rendered like any other row, with its
+language select listing that entry's own code (labelled through `formatLocaleLabel`) as the
+selected option in addition to `availableLocaleOptions`; the author MAY edit its name and
+description, switch it to a configured language, or delete it. A retained code SHALL NOT be
+listed in any other row's language select and SHALL NOT be pre-selected for a new row, so it can
+be kept or removed but never newly added.
+
+`DeploymentLocalesField` SHALL accept an optional `formatLocaleLabel?: (code: string) => string`
+prop, defaulting to `code.toUpperCase()`, used to label retained codes; `DeploymentCreationForm`
+and `MetadataForm` SHALL accept and forward the same prop. Labels for configured codes still come
+from each option's `label`. The summary row SHALL show each entry's code uppercased
+(`[DE]`, `[PT-BR]`), independent of option labels, so it stays compact when a host supplies
+full language names.
+
+`availableLocaleOptions` together with `value` SHALL govern whether the control exists at all.
+`availableLocaleOptions` defaults to an empty list. When `availableLocaleOptions` is empty **and**
+`value` holds no retained entry, `DeploymentLocalesField` SHALL render nothing — no summary row, no
+popup-opening link. A popup with no selectable language and no existing row could never be
+satisfied: every row requires both a language and a name before Save enables, so the field would
+offer a control whose Save is permanently disabled. When `value` holds a retained entry the
+control SHALL render even if `availableLocaleOptions` is empty, so the author can still see, edit,
+or delete that translation. In every case, rendering or hiding the control SHALL NOT call
+`onChange`, so `otherLocales` entries the host loaded from an existing entity — retained ones
+included — survive unmodified and are written back untouched on the next save unless the author
+changes them in the popup.
+
+The popup's "Add locale" action SHALL be disabled when every `availableLocaleOptions` code is
+already used by a row in the popup (retained rows do not count toward that limit), including when
+`availableLocaleOptions` is empty.
 
 Within the popup, both the per-locale language and the per-locale name SHALL be marked required
 through the ui-kit `Label`'s own `required` prop (which renders the asterisk plus a visually hidden
 "(required)"), the same mechanism the primary Name field in `DeploymentCreationForm` uses — not a
 hand-rolled `aria-hidden` asterisk, which marks the field visually but leaves the requirement
-unannounced. A new row SHALL pre-select the first language not already used by another row, so a
-row is never seeded into the invalid state the required marker describes.
+unannounced. A new row SHALL pre-select the first configured language not already used by another
+row, so a row is never seeded into the invalid state the required marker describes.
 
 The language control SHALL be wide enough to show a full BCP-47 tag (`EN-US`, `PT-BR`) without
 truncation. Below the `desktop` breakpoint the language and name controls SHALL stack to one column
@@ -312,8 +353,13 @@ phone.
 
 #### Scenario: Summary reflects the configured additional locales
 - **WHEN** `otherLocales` contains entries for one or more locales
-- **THEN** the summary row displays each entry's locale code next to the "Locales" label, e.g.
-  `Locales: [FR], [UA]`, and the link to open the popup reads `labels.editLabel`
+- **THEN** the summary row displays each entry's locale code uppercased next to the "Locales" label,
+  e.g. `Locales: [FR], [UA]`, and the link to open the popup reads `labels.editLabel`
+
+#### Scenario: Summary shows codes even when options carry language names
+- **WHEN** `availableLocaleOptions` is `[{ code: 'de', label: 'Deutsch' }]` and `otherLocales`
+  holds a `de` entry
+- **THEN** the summary reads `Locales: [DE]`
 
 #### Scenario: Popup-opening link reads "Add locales" before any locale exists
 - **GIVEN** `availableLocaleOptions` is non-empty
@@ -322,15 +368,33 @@ phone.
 
 #### Scenario: The whole control is absent when no language can be picked
 - **WHEN** `DeploymentLocalesField` renders with an empty (or omitted) `availableLocaleOptions`
+  and no retained entry in `value`
 - **THEN** it renders nothing at all — no summary row and no popup-opening link — rather than a
   link onto a popup whose Save can never enable
 
-#### Scenario: Hiding the control preserves already-stored locales
-- **GIVEN** `otherLocales` holds entries loaded from an existing entity and `availableLocaleOptions`
-  is empty
-- **WHEN** the field renders and the host then saves
-- **THEN** the control is absent, `onChange` is never called, and those entries are written back
-  unchanged
+#### Scenario: Untouched entries are written back unchanged
+- **GIVEN** `otherLocales` holds entries loaded from an existing entity
+- **WHEN** the field renders and the host saves without the author opening the popup
+- **THEN** `onChange` is never called and those entries are written back unchanged
+
+#### Scenario: A retained entry keeps the control visible
+- **GIVEN** `availableLocaleOptions` is empty and `otherLocales` holds an `it` entry
+- **WHEN** the field renders
+- **THEN** the summary row `Locales: [IT]` and the `labels.editLabel` link are shown, and the
+  popup's "Add locale" action is disabled
+
+#### Scenario: A retained entry is labelled through formatLocaleLabel and cannot be re-added
+- **GIVEN** `availableLocaleOptions` is `[{ code: 'de', label: 'Deutsch' }]`, `otherLocales` holds
+  an `it` entry, and `formatLocaleLabel` maps `it` to `italiano`
+- **WHEN** the author opens the popup and adds a row
+- **THEN** the `it` row's language select shows `italiano` as selected, and the new row's select
+  lists only `Deutsch`
+
+#### Scenario: Deleting a retained entry
+- **GIVEN** `otherLocales` holds a retained `it` entry
+- **WHEN** the author deletes that row and saves the popup
+- **THEN** `onChange` is called with an `otherLocales` array without the `it` entry, and if no
+  configured option and no other entry remains the control is no longer rendered
 
 #### Scenario: Language and name are both marked required
 - **WHEN** a user opens the popup
@@ -442,10 +506,15 @@ BuilderFormHeader and its containing public shell SHALL accept and forward optio
 - When `setup` is absent, `alert` (wrapped in `role="alert"`) renders above that section instead.
 - `metadataFooter`, when provided, below that section.
 
-**Right column (`rightContent`)**
+**Center column (`centerContent`)**
 
 - When `setup` is provided: `alert` (wrapped in `role="alert"`, when provided), then an `EditorSection` titled `setupTitle ?? labels.setupTitle` (default `'Setup'`) that contains `setup`.
-- When `setup` is absent, `rightContent` SHALL be omitted so the left column fills the width.
+- When `setup` is absent, `centerContent` SHALL be omitted so the left column fills the width.
+
+**Right column (`rightContent`)**
+
+- When `asideData` is provided, `EntityEditor` SHALL pass `rightContent` an `EditorSection` that contains `asideData`, with a heading only when `asideTitle` is set, the shared section padding, `asideSectionClassName` merged onto it and the public class `BUILDER_FORM_CLASS.asideSection`. The `<aside>` landmark is rendered by `EditorLayout` and named `labels.asideAriaLabel` (default `'Side panel'`).
+- When `asideData` is absent, `rightContent` SHALL be omitted and the layout is the existing two columns.
 
 Mobile behaviour (sections stacked, Metadata first, actions in the bottom bar) is inherited from `EditorLayout`.
 
@@ -482,7 +551,8 @@ The avatar picker is configured by one optional `avatarPicker` prop (`MetadataFo
 It adds the following props:
 
 - `fields?: MetadataField[]`. The default is all six fields. The fields render in the fixed order Avatar, Name + Version (side by side), Description, Locales, Tags. A field absent from `fields` SHALL NOT render. When Version is absent, Name takes the full row.
-- `isNameReadOnly?: boolean`, which renders Name read-only.
+- `isNameReadOnly?: boolean`, which renders Name disabled.
+- `nameReadOnlyTooltip?: string`, the tooltip over Name while `isNameReadOnly` is set. When it is omitted, the tooltip shows the field value.
 - `nameCaption?: string`, helper text under Name.
 - `isDescriptionRequired?: boolean`, which marks Description required.
 - `errors.description?: string`.
@@ -490,7 +560,7 @@ It adds the following props:
 
 The Avatar field SHALL render only when `fields` includes `MetadataField.Avatar` and `avatarPicker` is provided. When `resolveAttachedIconUrl` returns `undefined`, the icon SHALL stay unchanged.
 
-`DeploymentCreationForm` SHALL accept the same `fields`, `isNameReadOnly`, `nameCaption`, `isDescriptionRequired` and `renderDescription` options, and SHALL extend `DeploymentCreationFormFieldErrors` with `description?`. On an error transition, focus-first-invalid SHALL consider Name, then Version, then Description.
+`DeploymentCreationForm` SHALL accept the same `fields`, `isNameReadOnly`, `nameReadOnlyTooltip`, `nameCaption`, `isDescriptionRequired` and `renderDescription` options, and SHALL extend `DeploymentCreationFormFieldErrors` with `description?`. On an error transition, focus-first-invalid SHALL consider Name, then Version, then Description.
 
 The default Tags placeholder SHALL be `'Add tags, comma separated'`.
 
@@ -545,3 +615,72 @@ The default Tags placeholder SHALL be `'Add tags, comma separated'`.
 #### Scenario: Validation options are respected
 - **WHEN** the hook is configured with `validateVersionPattern: SEMVER_VERSION_PATTERN` and the version is `1.0-beta`
 - **THEN** `errorCodes.version` is the invalid-version code
+
+### Requirement: Shared default deployment version
+`@epam/ai-dial-builder-form` SHALL export `DEFAULT_DEPLOYMENT_VERSION`, the string `'1.0.0'`, from `libs/builder-form/src/index.ts`, defined next to `SEMVER_VERSION_PATTERN` in `libs/builder-form/src/utils/validate-deployment-creation-fields.ts`. It is the single frontend source for the Version value a deployment create form opens with, and it SHALL satisfy `SEMVER_VERSION_PATTERN`. The library SHALL NOT apply it on its own: `useMetadataForm`, `MetadataForm` and `validateDeploymentCreationFields` keep using the values the host passes, and a host opts in by seeding its create-mode values with the constant.
+
+#### Scenario: Constant is exported and SemVer-valid
+- **WHEN** a consumer writes `import { DEFAULT_DEPLOYMENT_VERSION, SEMVER_VERSION_PATTERN } from '@epam/ai-dial-builder-form'`
+- **THEN** `DEFAULT_DEPLOYMENT_VERSION` equals `'1.0.0'` and `validateDeploymentCreationFields` with `validateVersionPattern: SEMVER_VERSION_PATTERN` returns no version error for it
+
+#### Scenario: The library does not inject the default
+- **WHEN** `useMetadataForm` is seeded with `version: ''`
+- **THEN** the Version field renders empty; the library does not substitute `DEFAULT_DEPLOYMENT_VERSION`
+
+### Requirement: EditorLayout — resizable left column
+`EditorLayout` SHALL accept an optional host-controlled prop `resizableLeftColumn?: { width: number; onWidthChange: (width: number) => void; defaultWidth?: number; minWidth?: number; maxWidth?: number }` plus `labels.resizeHandleLabel` and `labels.resizeHandleTooltip`, which make the left column resizable on desktop. `EntityEditor` SHALL forward them. When `resizableLeftColumn` is omitted, or `centerContent` is absent, the layout SHALL be exactly the existing fixed 400 px layout and no handle SHALL render.
+
+When enabled, at and above the `desktop` breakpoint the library SHALL render a handle between the left and center columns, and below it the handle SHALL NOT be rendered (the columns stack). The left column width SHALL be `width` clamped to `[minWidth, maxWidth]` (defaults 280 and 640 px) and additionally to the container width minus a 360 px minimum for the center column. The center column SHALL fill the remainder and SHALL NOT cause horizontal scroll. The library SHALL hold only transient pointer-drag state; it SHALL NOT read or write storage, import i18n, or know where the width comes from. During a drag it SHALL call `onWidthChange` with the clamped width on each move.
+
+The handle SHALL:
+- have `role="separator"`, `aria-orientation="vertical"`, `aria-valuenow`, `aria-valuemin`, `aria-valuemax`, an `aria-label` from `labels.resizeHandleLabel`, and `tabIndex={0}`;
+- have an 8 px wide hit area with a thin visible line, drawn with logical properties only;
+- be keyboard operable: the arrow keys change the width by 16 px (the key pointing toward the inline end widens the column, mirrored under `dir="rtl"`), and Home and End jump to min and max;
+- reset to `defaultWidth` (default 400) on double-click;
+- use pointer capture so a drag continues outside the handle, and suppress text selection while dragging;
+- show, once the pointer has rested on it for more than 1 s, an accent-colored line, a `col-resize` cursor and a `labels.resizeHandleTooltip` tooltip; show the active accent color while pressed and keep the accent line while dragging.
+
+Drag direction SHALL follow the inline axis: dragging toward the inline end widens the left column in both LTR and RTL.
+
+#### Scenario: Dragging resizes live
+- **WHEN** the user presses the handle at desktop width and moves the pointer 100 px toward the inline end
+- **THEN** `onWidthChange` is called with a width 100 px larger, clamped to the limits, and the center column shrinks without horizontal scroll
+
+#### Scenario: Width is clamped
+- **WHEN** the pointer is dragged beyond `minWidth` or `maxWidth`
+- **THEN** the left column stops at the limit and `aria-valuenow` equals that limit
+
+#### Scenario: Keyboard resize
+- **WHEN** the handle is focused and the user presses the arrow key pointing toward the inline end
+- **THEN** the width grows by 16 px; under `dir="rtl"` the opposite physical key does so
+
+#### Scenario: Double-click resets
+- **WHEN** the user double-clicks the handle
+- **THEN** `onWidthChange` is called with `defaultWidth`
+
+#### Scenario: No handle below desktop
+- **WHEN** the viewport is below the `desktop` breakpoint
+- **THEN** no separator is rendered and the columns stack as before
+
+#### Scenario: Opt-out keeps the existing layout
+- **WHEN** `resizableLeftColumn` is not passed
+- **THEN** the left column is a fixed 400 px and no separator is rendered
+
+### Requirement: MetadataForm can render the Version field read-only
+`MetadataForm` (`libs/builder-form/src/components/MetadataForm/MetadataForm.tsx`) SHALL accept `isVersionReadOnly?: boolean` (default `false`) and `versionReadOnlyTooltip?: string`, declared on `MetadataFormProps` in `libs/builder-form/src/models/metadata-form-props.ts`. They mirror `isNameReadOnly` / `nameReadOnlyTooltip`:
+
+- the Version input renders with the native `readOnly` attribute, so it stays focusable and assistive tech announces it as read-only (unlike Name, which `isNameReadOnly` renders disabled);
+- the tooltip is passed to the kit `Input` as `tooltipText`;
+- typing reports no `onChange`, and `onVersionBlur` is not called.
+
+Both props are forwarded unchanged to `DeploymentCreationForm` (`libs/builder-form/src/models/deployment-creation-form.ts`), which owns the default.
+
+The tooltip default is the English `'The version is changed with "Save as new version"'`. The lib reads no i18n, and the host passes the translated string. RTL impact: none beyond the existing field, since the tooltip placement uses logical sides.
+
+#### Scenario: Read-only version
+- **WHEN** `MetadataForm` renders with `isVersionReadOnly`
+- **THEN** the Version input is read-only, keeps its value, and fires no `onChange` on typing
+
+#### Scenario: Default is editable
+- **WHEN** `isVersionReadOnly` is omitted
+- **THEN** the Version input is editable, as before

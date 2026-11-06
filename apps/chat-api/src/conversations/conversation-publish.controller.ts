@@ -16,6 +16,8 @@ import {
   resolveDisplayAuthor,
 } from '../common/utils/user-display-name';
 import { ConversationPublishService } from './conversation-publish.service';
+import { ConversationAttachmentMissingErrorDto } from './dto/conversation-attachment-missing-error.dto';
+import { ConversationModelHiddenErrorDto } from './dto/conversation-model-hidden-error.dto';
 import { ConversationPathDto } from './dto/conversation-path.dto';
 import { PublishConversationResultDto } from './dto/publish-conversation-result.dto';
 import { PublishConversationDto } from './dto/publish-conversation.dto';
@@ -68,13 +70,26 @@ export class ConversationPublishController {
   })
   @ApiResponse({
     status: 403,
-    description: 'Caller lacks write access to the target folder',
+    description:
+      "Caller lacks write access to the target folder, or (`code: conversationModelHidden`) the conversation's model is hidden through HIDDEN_ENTITY_TAGS",
+    type: ConversationModelHiddenErrorDto,
   })
   @ApiResponse({ status: 404, description: 'Conversation not found' })
   @ApiResponse({
     status: 409,
     description:
       'An answer in the conversation is still being generated in the background; publish after it finishes',
+  })
+  @ApiResponse({
+    status: 413,
+    description:
+      'The conversation attachments (files plus every file inside attached folders) exceed PUBLISH_ATTACHMENTS_MAX_FILES',
+  })
+  @ApiResponse({
+    status: 422,
+    description:
+      'A file the conversation attachments reference no longer exists (`code: conversationAttachmentMissing`, `missingFiles` lists the urls); nothing is published',
+    type: ConversationAttachmentMissingErrorDto,
   })
   @ApiResponse({
     status: 502,

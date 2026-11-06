@@ -5,6 +5,13 @@ export { AssistantMessageBubble } from './components/MessageBubble/AssistantMess
 export { StatusMessageBubble } from './components/MessageBubble/StatusMessageBubble';
 export { MessageActions } from './components/MessageActions/MessageActions';
 export { MessageSelectionReply } from './components/MessageSelectionReply/MessageSelectionReply';
+export { ConversationStartTimestamp } from './components/ConversationStartTimestamp/ConversationStartTimestamp';
+export { NegativeFeedbackModal } from './components/NegativeFeedbackModal/NegativeFeedbackModal';
+export type {
+  NegativeFeedbackModalLabels,
+  NegativeFeedbackModalProps,
+} from './models/negative-feedback-modal';
+export { NegativeFeedbackCategory } from './types/negative-feedback-category';
 export { BubblePosition } from './types/bubble-position';
 export type {
   MessageBubbleProps,
@@ -15,6 +22,8 @@ export type {
   MessageBubbleTypography,
   MessageBubbleLabels,
   AssistantMessageBubbleLabels,
+  UserMessageBubbleLabels,
+  MarkdownContentLabels,
 } from './models/message-bubble';
 export type {
   MessageSelectionReplyColors,
@@ -41,3 +50,8 @@ export type {
   MessageSourceColors,
   MessageSourceTypography,
 } from './models/message-source';
+export type {
+  ConversationStartTimestampColors,
+  ConversationStartTimestampLabels,
+  ConversationStartTimestampProps,
+} from './models/conversation-start';

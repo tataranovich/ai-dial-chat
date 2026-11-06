@@ -28,6 +28,8 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
   className,
   styles: groupStyles,
   onAttachmentClick,
+  attachmentDisplayResolvers,
+  renderCitation,
 }) => {
   const {
     executedLabel = 'Executed',
@@ -112,6 +114,8 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
         styles={{ colors: panelColors, typography: groupStyles?.typography }}
         labels={panelLabels}
         onAttachmentClick={onAttachmentClick}
+        attachmentDisplayResolvers={attachmentDisplayResolvers}
+        renderCitation={renderCitation}
       />
     );
   }
@@ -128,6 +132,7 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
     const liveName = cleanStageName(liveStage.name).name;
     summary = (
       <span
+        // eslint-disable-next-line no-restricted-syntax -- mounted with the first stage and kept for the whole stream; only the stage name inside it changes
         role="status"
         aria-live="polite"
         className="flex min-w-0 items-center gap-2"
@@ -138,7 +143,7 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
         {liveName && (
           <span
             className={mergeClasses(
-              'min-w-0 max-w-[22rem] truncate',
+              'max-w-88 min-w-0 truncate',
               summaryTypography.fontClassName,
               styles.liveName,
             )}
@@ -228,6 +233,8 @@ export const CollapsedGroup: FC<CollapsedGroupProps> = ({
             labels={panelLabels}
             className="pt-1"
             onAttachmentClick={onAttachmentClick}
+            attachmentDisplayResolvers={attachmentDisplayResolvers}
+            renderCitation={renderCitation}
           />
         )}
       </Accordion>

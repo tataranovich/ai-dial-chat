@@ -15,12 +15,14 @@ export * from './models/custom-visualizer';
 export * from './models/application-visualizer';
 export * from './models/entity';
 export * from './models/locale';
+export * from './models/inline-segment';
 export * from './types/attachment';
 export * from './types/entity-type';
 export * from './types/mime-type';
 export * from './types/code-editor';
 export * from './types/file-manager-node';
 export * from './utils/annotation';
+export * from './utils/base64-json';
 export * from './utils/string-utils';
 export * from './utils/entity-field-limits';
 export * from './utils/merge-class';
@@ -30,6 +32,7 @@ export * from './utils/message-attachment-to-display';
 export * from './utils/mime-type';
 export * from './utils/is-audio-transcription-supported';
 export * from './utils/copy-to-clipboard';
+export * from './utils/dom';
 export * from './utils/format-last-used';
 export * from './utils/format-file-size';
 export * from './utils/format-price';
@@ -52,7 +55,10 @@ export * from './components/InitialsAvatar/InitialsAvatar';
 export * from './components/CopyButton/CopyButton';
 export * from './utils/initials';
 export * from './utils/avatar-color';
+export * from './components/ActionMenu/ActionMenu';
 export * from './components/PanelEmptyState/PanelEmptyState';
+export * from './components/NewVersionAlert/NewVersionAlert';
+export * from './components/NotificationStack/NotificationStack';
 export * from './components/ItemHeader/ItemHeader';
 export * from './components/EntityTypeLabel/EntityTypeLabel';
 export * from './components/FeaturedChip/FeaturedChip';
@@ -63,13 +69,28 @@ export * from './components/ConfirmationIdentityRow/ConfirmationIdentityRow';
 export * from './components/ConfirmationView/ConfirmationView';
 export * from './components/ConfirmationView/ConfirmationFooter';
 export * from './components/ConfirmationDialog/ConfirmationDialog';
+export * from './components/DeleteConfirmationView/DeleteConfirmationView';
+export * from './components/DeleteConfirmationDialog/DeleteConfirmationDialog';
+export * from './components/DeleteConfirmationDrawer/DeleteConfirmationDrawer';
 export * from './components/MarkdownRenderer/Table/TableHeader';
 export * from './components/TextRefinementField/TextRefinementField';
 export * from './entry-points/markdown';
 export * from './hooks/useAvailableHeightCap';
+export * from './hooks/useControlErrorAssociation';
 export * from './hooks/useIsMobile';
+export * from './hooks/useIsPhone';
+export * from './hooks/useIsTablet';
+export * from './hooks/useIsTextClipped';
+export * from './hooks/useIsVerticallyClamped';
 export * from './hooks/useTextRefinement';
 export * from './hooks/useUnsavedChangesGuard';
+export * from './hooks/useUnsavedChangesLeaveGuard';
+export * from './hooks/useUnsavedChangesLeaveConfirmation';
+export * from './components/UnsavedChangesProvider/UnsavedChangesProvider';
+export {
+  useUnsavedChanges,
+  type UnsavedChangesContextValue,
+} from './components/UnsavedChangesProvider/unsaved-changes-context';
 
 /*
  * Explicit `/index` avoids a declaration-resolution collision with this
@@ -84,3 +105,5 @@ export * from './hooks/useUnsavedChangesGuard';
 export * from './file-manager/index';
 export { CHAT_SHARED_CLASS } from './constants/public-class-names';
 export { isSkillSelectionUnsupported } from './utils/is-skill-selection-unsupported';
+
+export * from './conversation-transfer/conversation-transfer-queue';

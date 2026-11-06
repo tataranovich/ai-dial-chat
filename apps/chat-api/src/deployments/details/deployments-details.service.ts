@@ -39,6 +39,17 @@ import {
   toAdditionalProperties,
 } from '../utils/deployment-mapper.util';
 
+/* The first candidate that is a plain object, or undefined. */
+const pickRecord = (
+  ...candidates: unknown[]
+): Record<string, unknown> | undefined => candidates.find(isRecord);
+
+/* The first candidate that is a string, or undefined. */
+const pickString = (...candidates: unknown[]): string | undefined =>
+  candidates.find(
+    (candidate): candidate is string => typeof candidate === 'string',
+  );
+
 @Injectable()
 export class DeploymentsDetailsService {
   private readonly logger = new Logger(DeploymentsDetailsService.name);
@@ -408,11 +419,10 @@ export class DeploymentsDetailsService {
       type: DeploymentItemType.Application,
       applicationDetails: {
         displayName: resolveLocalizedValue(raw.display_name),
-        applicationProperties: isRecord(customAppRaw?.application_properties)
-          ? customAppRaw.application_properties
-          : isRecord(raw.application_properties)
-            ? raw.application_properties
-            : undefined,
+        applicationProperties: pickRecord(
+          customAppRaw?.application_properties,
+          raw.application_properties,
+        ),
         /* The Custom App editor's Features textarea reads/writes the
          * top-level DIAL Core `features` JSON (via updateApplication's
          * `features` field) — distinct from application_properties.features,
@@ -433,12 +443,7 @@ export class DeploymentsDetailsService {
           : undefined,
         catalogProperties: mapCatalogProperties(raw.catalog_properties),
         applicationTypeSchemaId: raw.application_type_schema_id,
-        endpoint:
-          typeof customAppRaw?.endpoint === 'string'
-            ? customAppRaw.endpoint
-            : typeof rawRecord.endpoint === 'string'
-              ? rawRecord.endpoint
-              : undefined,
+        endpoint: pickString(customAppRaw?.endpoint, rawRecord.endpoint),
         maxInputAttachments:
           typeof raw.max_input_attachments === 'number'
             ? raw.max_input_attachments
@@ -576,6 +581,41 @@ export class DeploymentsDetailsService {
   }
 
   /*
+   * Unlike `getDeploymentLimits`, every stat here is scoped to the queried
+   * deployment: `*CostStats.used` is its own direct plus aggregated spend, and
+   * `*CostStats.total` is DIAL Core's unlimited sentinel, since no
+   * per-deployment cost cap exists.
+   */
+  async getDeploymentUsage(
+    deploymentName: string,
+    accessToken: string,
+  ): Promise<DeploymentLimitsResponseDto> {
+    try {
+      const result = await this.dialClient.client.getDeploymentUsage(
+        encodeDialResourcePath(deploymentName),
+        {
+          headers: getBearerAuthHeaders(accessToken),
+        },
+      );
+      if (result.error) {
+        return mapDialHttpStatus(
+          result.response.status,
+          `get deployment usage "${deploymentName}"`,
+          this.logger,
+        );
+      }
+      return result.data as unknown as DeploymentLimitsResponseDto;
+    } catch (err) {
+      return handleDialFetchError(
+        err,
+        `get deployment usage "${deploymentName}"`,
+        this.logger,
+        0,
+      );
+    }
+  }
+
+  /*
    * The request's deployment kinds, or the configured default when it names
    * none, as `getUserLimits`/`getUserUsage` query params. DIAL Core reads the
    * parameter once and splits it on commas (`LimitController`'s
@@ -664,9 +704,6 @@ export class DeploymentsDetailsService {
           extractDialErrorMessage(result.error),
         );
       }
-      this.logger.debug(
-        `DIAL Core user usage raw response: ${JSON.stringify(result.data)}`,
-      );
       return result.data as unknown as UserLimitStatsResponseDto;
     } catch (err) {
       if (err instanceof HttpException) {

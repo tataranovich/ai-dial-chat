@@ -4,6 +4,7 @@ export type {
   BuilderFormContainerStyles,
   BuilderFormContainerColors,
 } from './models/builder-form-container-props';
+export { BuilderFormActionsOrder } from './models/builder-form-actions-order';
 export type { BuilderFormActionsLabels } from './models/builder-form-actions-props';
 export type {
   BuilderFormHeaderLabels,
@@ -15,12 +16,15 @@ export type {
   EditorSectionColors,
   EditorSectionProps,
   EditorSectionStyles,
+  EditorSectionTypography,
 } from './models/editor-section-props';
 export type {
   EditorLayoutColors,
   EditorLayoutProps,
   EditorLayoutLabels,
   EditorLayoutStyles,
+  EditorLayoutTypography,
+  ResizableLeftColumn,
 } from './models/editor-layout-props';
 export type {
   AddAvatarProps,
@@ -54,8 +58,10 @@ export type {
 export type { DeploymentLocalesFieldProps } from './components/DeploymentLocalesField/DeploymentLocalesField';
 export type {
   AvatarPickerFileManagerModalProps,
+  AvatarPickerModalColors,
   AvatarPickerModalLabels,
   AvatarPickerModalProps,
+  AvatarPickerModalStyles,
 } from './models/avatar-picker-modal';
 export type {
   DeploymentCreationFormFieldErrors,
@@ -68,6 +74,7 @@ export type {
   DeploymentCreationFormProps,
   DeploymentCreationFormStyles,
   DeploymentCreationFormValues,
+  DeploymentLocalesFieldColors,
 } from './models/deployment-creation-form';
 export type {
   DeploymentCreationFormErrorCodes,
@@ -75,6 +82,7 @@ export type {
 } from './models/validation';
 export { DeploymentCreationFieldErrorCode } from './models/validation';
 export {
+  DEFAULT_DEPLOYMENT_VERSION,
   NAME_PATTERN,
   SEMVER_VERSION_PATTERN,
   VERSION_PATTERN,
@@ -82,3 +90,7 @@ export {
 } from './utils/validate-deployment-creation-fields';
 export { BUILDER_FORM_CLASS } from './constants/public-class-names';
 export { DEFAULT_METADATA_FORM_LABELS } from './constants/metadata-form';
+export {
+  AVATAR_ALLOWED_MIME_TYPES,
+  AVATAR_MAX_FILE_SIZE_BYTES,
+} from './constants/avatar-picker';

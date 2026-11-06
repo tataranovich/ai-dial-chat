@@ -115,39 +115,39 @@ const buildOptions = (
   ...overrides,
 });
 
-beforeEach(() => {
-  filesApi = makeFilesApi();
-  mockListFiles = vi.mocked(filesApi.listFiles);
-  mockListSharedFiles = vi.mocked(filesApi.listSharedFiles);
-  mockListPublicFiles = vi.mocked(filesApi.listPublicFiles);
-  mockListSharedByMe = vi.mocked(filesApi.listSharedByMe);
-  mockDownloadArchive = vi.mocked(filesApi.downloadArchive);
-  mockDownloadFile = vi.mocked(filesApi.downloadFile);
-  mockDeleteFiles = vi.mocked(filesApi.deleteFiles);
-  mockCopyFiles = vi.mocked(filesApi.copyFiles);
-  mockMoveFiles = vi.mocked(filesApi.moveFiles);
-  mockDiscardShared = vi.mocked(filesApi.discardShared);
-  mockRevokeAccess = vi.mocked(filesApi.revokeAccess);
-  mockGetFileMetadata = vi.mocked(filesApi.getFileMetadata);
-  mockOnOperationSuccess = vi.fn();
-  mockOnNotification = vi.fn();
-
-  mockListFiles.mockResolvedValue({
-    bucket: BUCKET,
-    path: '',
-    items: [],
-    nextToken: undefined,
-  });
-  mockListSharedFiles.mockResolvedValue(emptySharedListResponse);
-  mockListPublicFiles.mockResolvedValue(emptyPublicListResponse);
-  mockListSharedByMe.mockResolvedValue(emptySharedByMeResponse);
-});
-
-afterEach(() => {
-  vi.clearAllMocks();
-});
-
 describe('useDialFileManager', () => {
+  beforeEach(() => {
+    filesApi = makeFilesApi();
+    mockListFiles = vi.mocked(filesApi.listFiles);
+    mockListSharedFiles = vi.mocked(filesApi.listSharedFiles);
+    mockListPublicFiles = vi.mocked(filesApi.listPublicFiles);
+    mockListSharedByMe = vi.mocked(filesApi.listSharedByMe);
+    mockDownloadArchive = vi.mocked(filesApi.downloadArchive);
+    mockDownloadFile = vi.mocked(filesApi.downloadFile);
+    mockDeleteFiles = vi.mocked(filesApi.deleteFiles);
+    mockCopyFiles = vi.mocked(filesApi.copyFiles);
+    mockMoveFiles = vi.mocked(filesApi.moveFiles);
+    mockDiscardShared = vi.mocked(filesApi.discardShared);
+    mockRevokeAccess = vi.mocked(filesApi.revokeAccess);
+    mockGetFileMetadata = vi.mocked(filesApi.getFileMetadata);
+    mockOnOperationSuccess = vi.fn();
+    mockOnNotification = vi.fn();
+
+    mockListFiles.mockResolvedValue({
+      bucket: BUCKET,
+      path: '',
+      items: [],
+      nextToken: undefined,
+    });
+    mockListSharedFiles.mockResolvedValue(emptySharedListResponse);
+    mockListPublicFiles.mockResolvedValue(emptyPublicListResponse);
+    mockListSharedByMe.mockResolvedValue(emptySharedByMeResponse);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('starts with isLoading true and resolves to items', async () => {
     const item: ListFilesItemDto = {
       name: 'report.pdf',
@@ -957,22 +957,25 @@ describe('useDialFileManager', () => {
       ]);
     });
 
-    await waitFor(() => expect(result.current.isDownloading).toBe(false));
+    await waitFor(() => expect(mockOnOperationSuccess).toHaveBeenCalled());
 
-    expect(mockDownloadArchive).toHaveBeenCalledWith([
-      {
-        bucket: BUCKET,
-        path: 'report-a.pdf',
-        name: 'report-a.pdf',
-        nodeType: 'item',
-      },
-      {
-        bucket: BUCKET,
-        path: 'report-b.pdf',
-        name: 'report-b.pdf',
-        nodeType: 'item',
-      },
-    ]);
+    expect(mockDownloadArchive).toHaveBeenCalledWith(
+      [
+        {
+          bucket: BUCKET,
+          path: 'report-a.pdf',
+          name: 'report-a.pdf',
+          nodeType: 'item',
+        },
+        {
+          bucket: BUCKET,
+          path: 'report-b.pdf',
+          name: 'report-b.pdf',
+          nodeType: 'item',
+        },
+      ],
+      expect.any(AbortSignal),
+    );
     expect(mockOnOperationSuccess).toHaveBeenCalledWith({
       kind: 'filesDownloaded',
       count: 2,
@@ -1359,6 +1362,60 @@ describe('useDialFileManager', () => {
         );
       });
 
+      it('omits Size and Modified Date columns on Shared tab', async () => {
+        const { result } = renderHook(() =>
+          useDialFileManager(
+            buildOptions({
+              bucket: BUCKET,
+              activeTab: DialFileManagerTabs.Shared,
+            }),
+          ),
+        );
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        expect(result.current.visibleColumns).not.toContain(
+          FileManagerColumnKey.Size,
+        );
+        expect(result.current.visibleColumns).not.toContain(
+          FileManagerColumnKey.UpdatedAt,
+        );
+      });
+
+      it('lists shared files nested in the owner bucket in sharedWithMeIds by their row path', async () => {
+        const nestedFile: ListFilesItemDto = {
+          name: 'report.md',
+          path: `files/${OWNER_BUCKET}/folder/nested/report.md`,
+          url: `files/${OWNER_BUCKET}/folder/nested/report.md`,
+          folderId: `${OWNER_BUCKET}:files/${OWNER_BUCKET}/folder/`,
+          nodeType: ListFilesItemDtoNodeTypeEnum.Item,
+          bucket: OWNER_BUCKET,
+          permissions: ['READ'],
+          author: 'Owner User',
+        };
+        mockListSharedFiles.mockResolvedValue({
+          bucket: '',
+          path: '',
+          items: [nestedFile, sharedRootItem],
+        });
+
+        const { result } = renderHook(() =>
+          useDialFileManager(
+            buildOptions({
+              bucket: BUCKET,
+              activeTab: DialFileManagerTabs.Shared,
+              rootLabel: 'Shared',
+            }),
+          ),
+        );
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        await waitFor(() =>
+          expect(result.current.sharedWithMeIds).toHaveLength(2),
+        );
+
+        const rowPaths = result.current.items[0].items?.map((row) => row.path);
+        expect(rowPaths).toEqual(['/Shared/report.md', '/Shared/team-docs/']);
+        expect(result.current.sharedWithMeIds).toEqual(rowPaths);
+      });
+
       it('keeps Author values on Shared tab root items', async () => {
         mockListSharedFiles.mockResolvedValue({
           bucket: '',
@@ -1394,7 +1451,7 @@ describe('useDialFileManager', () => {
         );
       });
 
-      it('omits Author column on Organization tab', async () => {
+      it('shows Name, Modified Date, Size and Author on Organization tab', async () => {
         const { result } = renderHook(() =>
           useDialFileManager(
             buildOptions({
@@ -1404,9 +1461,13 @@ describe('useDialFileManager', () => {
           ),
         );
         await waitFor(() => expect(result.current.isLoading).toBe(false));
-        expect(result.current.visibleColumns).not.toContain(
+        expect(result.current.visibleColumns).toEqual([
+          FileManagerColumnKey.Name,
+          FileManagerColumnKey.UpdatedAt,
+          FileManagerColumnKey.Size,
           FileManagerColumnKey.Author,
-        );
+          FileManagerColumnKey.Actions,
+        ]);
       });
     });
 
@@ -1816,7 +1877,8 @@ describe('useDialFileManager', () => {
       expect(result.current.isAnyOperationInProgress).toBe(true);
     });
 
-    it('is true while a download is in flight', async () => {
+    /* A download is a non-blocking queue row: it never gates other actions. */
+    it('stays false while a download is in flight', async () => {
       mockDownloadArchive.mockImplementation(
         () => new Promise(() => undefined),
       );
@@ -1850,7 +1912,7 @@ describe('useDialFileManager', () => {
       });
 
       await waitFor(() => expect(result.current.isDownloading).toBe(true));
-      expect(result.current.isAnyOperationInProgress).toBe(true);
+      expect(result.current.isAnyOperationInProgress).toBe(false);
     });
 
     it('is true while a delete request is in flight', async () => {

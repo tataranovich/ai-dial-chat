@@ -32,7 +32,7 @@ describe('ApplicationCredentials', () => {
     const options = props();
     render(<ApplicationCredentials {...options} />);
     await user.click(screen.getByRole('button', { name: 'Add' }));
-    expect(screen.getByRole('alert').textContent).toBe('API key is required.');
+    expect(screen.getByText('API key is required.')).toBeTruthy();
     expect(options.onLogin).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText('API key'), 'secret');
     await user.click(screen.getByRole('button', { name: 'Add' }));
@@ -55,10 +55,10 @@ describe('ApplicationCredentials', () => {
     await user.click(screen.getByRole('button', { name: 'Add' }));
     expect(input).toHaveProperty('value', 'secret');
     await user.click(screen.getByRole('button', { name: 'Add' }));
-    expect(screen.getByRole('alert').textContent).toBe('Access denied');
+    expect(screen.getByText('Access denied')).toBeTruthy();
     expect(input).toHaveProperty('value', 'secret');
     await user.click(screen.getByRole('button', { name: 'Add' }));
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('Access denied')).toBeNull();
   });
 
   it('requires confirmation to delete a configured key and supports cancelling removal', async () => {
@@ -147,5 +147,45 @@ describe('ApplicationCredentials', () => {
     const native = within(screen.getByRole('group', { name: 'Native' }));
     expect(native.queryByRole('button')).toBeNull();
     expect(native.getByRole('status').textContent).toBe('Signed in');
+  });
+
+  it('announces a load failure through the status region mounted while loading', () => {
+    const { rerender } = render(
+      <ApplicationCredentials {...props()} services={[]} isLoading />,
+    );
+    const region = screen
+      .getAllByRole('status')
+      .find((node) => node.textContent === '');
+    expect(region).toBeTruthy();
+    rerender(<ApplicationCredentials {...props()} services={[]} hasError />);
+    expect(region?.isConnected).toBe(true);
+    expect(region?.textContent).toBe('Unable to load credentials');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('announces a failed removal through an alert region mounted with the confirmation', async () => {
+    const user = userEvent.setup();
+    const options = props();
+    vi.mocked(options.onLogout).mockRejectedValueOnce(
+      new Error('Removal failed'),
+    );
+    render(
+      <ApplicationCredentials
+        {...options}
+        services={[{ ...service, status: CredentialStatus.SignedIn }]}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    const regions = screen.getAllByRole('alert');
+    regions.forEach((region) => expect(region.textContent).toBe(''));
+    const confirm = screen
+      .getAllByRole('button', { name: 'Delete' })
+      .find((button) => !button.hasAttribute('disabled'));
+    if (!confirm) throw new Error('Missing delete confirmation');
+    await user.click(confirm);
+    expect(
+      regions.some((region) => region.textContent === 'Removal failed'),
+    ).toBe(true);
   });
 });

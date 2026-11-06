@@ -1,0 +1,738 @@
+import {
+  ProjectSource,
+  ResponseError,
+  type ProjectDetailsDto,
+} from '@epam/ai-dial-chat-api-client';
+import {
+  AttachmentType,
+  RequestStatus,
+  type Attachment,
+} from '@epam/ai-dial-chat-shared';
+import type { ProjectContextFile } from '@epam/ai-dial-projects';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { Route, Routes } from 'react-router';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  NotFoundI18nKeys,
+  ProjectsI18nKeys,
+  UnsavedChangesI18nKeys,
+} from '../../../constants/translation-keys';
+import { useUser } from '../../../context/auth/UserContext';
+import {
+  useAppConfig as useAppConfigMock,
+  useFeatureFlag as useFeatureFlagMock,
+} from '../../../context/tests/app-config-context-mock';
+import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
+import {
+  previewResolvers,
+  withPreviewCanvas,
+} from '../../../hooks/projects/tests/project-preview-test-helpers';
+import { renderWithLeaveGuard } from '../../../hooks/unsaved-changes/tests/render-with-leave-guard';
+import { getProject, updateProject } from '../../../server-api/projects.api';
+import ProjectEditPage from '../ProjectEditPage';
+
+vi.mock(
+  '../../../context/AppConfigContext',
+  async () => import('../../../context/tests/app-config-context-mock'),
+);
+vi.mock('../../../context/auth/UserContext', () => ({ useUser: vi.fn() }));
+vi.mock('../../../context/ThemeContext', () => ({
+  useTheme: () => ({ currentTheme: 'light' }),
+}));
+const showNotificationMock = vi.fn();
+vi.mock('../../../context/NotificationContext', () => ({
+  useNotification: () => createNotificationContextValue(showNotificationMock),
+}));
+const userConfig = vi.hoisted(() => ({ replacePinnedProjectId: vi.fn() }));
+vi.mock('../../../context/UserConfigContext', () => ({
+  useUserConfig: () => userConfig,
+}));
+vi.mock('../../../server-api/projects.api', () => ({
+  getProject: vi.fn(),
+  updateProject: vi.fn(),
+}));
+vi.mock(
+  '../../../components/ProjectFileManagerModal/ProjectFileManagerModal',
+  () => ({ default: () => null }),
+);
+vi.mock('../../../hooks/attachment/useAttachmentCanvasResolvers', async () => {
+  const { previewCanvasResolvers: stub } =
+    await import('../../../hooks/projects/tests/project-preview-test-helpers');
+  return { useAttachmentCanvasResolvers: () => stub };
+});
+
+interface FakeFormProps {
+  values: { name: string; instructions: string };
+  errors: { name?: string; context?: string };
+  onFieldChange: (field: string, value: string) => void;
+  contextFiles: ProjectContextFile[];
+  onContextFilesChange: (files: ProjectContextFile[]) => void;
+  onContextFileClick?: (id: string) => void;
+  onContextFileDownload?: (id: string) => void;
+  selectedContextFileId?: string;
+  onCancel: () => void;
+  onSubmit: () => void;
+  isNameReadOnly?: boolean;
+  labels: { title: string; createLabel: string; nameReadOnlyHint?: string };
+}
+
+const formProps: { current?: FakeFormProps } = {};
+
+vi.mock('@epam/ai-dial-projects', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@epam/ai-dial-projects')>()),
+  ProjectCreateForm: (props: FakeFormProps) => {
+    formProps.current = props;
+    return (
+      <form>
+        <h1>{props.labels.title}</h1>
+        <input
+          aria-label="name"
+          value={props.values.name}
+          readOnly={props.isNameReadOnly}
+          disabled={props.isNameReadOnly}
+          onChange={(event) => {
+            if (!props.isNameReadOnly)
+              props.onFieldChange('name', event.target.value);
+          }}
+        />
+        {props.isNameReadOnly && <p>{props.labels.nameReadOnlyHint}</p>}
+        <textarea
+          aria-label="instructions"
+          value={props.values.instructions}
+          onChange={(event) =>
+            props.onFieldChange('instructions', event.target.value)
+          }
+        />
+        <ul>
+          {props.contextFiles.map((file) => (
+            <li key={file.id}>
+              {file.name}
+              <button
+                type="button"
+                aria-pressed={file.id === props.selectedContextFileId}
+                onClick={() => props.onContextFileClick?.(file.id)}
+              >
+                {`Preview ${file.name}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => props.onContextFileDownload?.(file.id)}
+              >
+                {`Download ${file.name}`}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  props.onContextFilesChange(
+                    props.contextFiles.filter((f) => f.id !== file.id),
+                  )
+                }
+              >
+                remove {file.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+        {props.errors.name && <p role="alert">{props.errors.name}</p>}
+        {props.errors.context && <p role="alert">{props.errors.context}</p>}
+        <button
+          type="button"
+          onClick={() =>
+            props.onContextFilesChange([
+              ...props.contextFiles,
+              {
+                id: 'new-1',
+                name: 'retro.pdf',
+                contentType: 'application/pdf',
+                type: AttachmentType.File,
+                status: RequestStatus.Idle,
+                file: new File(['%PDF-'], 'retro.pdf'),
+              } as Attachment,
+            ])
+          }
+        >
+          add file
+        </button>
+        <button type="button" onClick={props.onCancel}>
+          cancel
+        </button>
+        <button type="button" onClick={props.onSubmit}>
+          {props.labels.createLabel}
+        </button>
+      </form>
+    );
+  },
+}));
+
+const details = (
+  extra: Partial<ProjectDetailsDto> = {},
+): ProjectDetailsDto => ({
+  id: 'projects/my-bucket/q4',
+  name: 'q4',
+  bucket: 'my-bucket',
+  path: 'q4',
+  source: ProjectSource.Personal,
+  description: 'About',
+  instructions: '## Steps',
+  contextFiles: [
+    { name: 'tickets.csv', size: 2048 },
+    { name: 'survey.xlsx', size: 1024 },
+  ],
+  etag: '"e1"',
+  contentVersion: '"cv1"',
+  conversationCount: 0,
+  canEdit: true,
+  canManage: true,
+  ...extra,
+});
+
+const READY_CONFIG = {
+  status: 'ready',
+  config: {
+    aiTextRefinementAvailable: false,
+    projectContextAllowedExtensions: ['csv', 'pdf', 'xlsx'],
+    projectContextFileMaxBytes: 1_048_576,
+    projectContextTotalMaxBytes: 10_485_760,
+  },
+};
+
+const responseError = (status: number, body: unknown) =>
+  new ResponseError(
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
+
+const renderAt = (path = '/projects/edit/my-bucket/q4') =>
+  renderWithLeaveGuard(
+    withPreviewCanvas(
+      <Routes>
+        <Route path="/projects/edit/:bucket/*" element={<ProjectEditPage />} />
+        <Route path="/projects/view/:bucket/*" element={<p>project view</p>} />
+        <Route path="/projects" element={<p>projects list</p>} />
+      </Routes>,
+    ),
+    [path],
+  );
+
+const typeInstructions = (value: string) =>
+  fireEvent.change(screen.getByRole('textbox', { name: 'instructions' }), {
+    target: { value },
+  });
+
+describe('ProjectEditPage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    formProps.current = undefined;
+    useAppConfigMock.mockReturnValue(READY_CONFIG);
+    useFeatureFlagMock.mockReturnValue(true);
+    vi.mocked(useUser).mockReturnValue({
+      user: { bucket: 'my-bucket' },
+    } as unknown as ReturnType<typeof useUser>);
+    vi.mocked(getProject).mockResolvedValue(details());
+  });
+
+  it('renders NotFound without a request when the flag is off', () => {
+    useFeatureFlagMock.mockReturnValue(false);
+    renderAt();
+
+    expect(screen.getByText(NotFoundI18nKeys.Title)).toBeTruthy();
+    expect(getProject).not.toHaveBeenCalled();
+  });
+
+  it('prefills the form from the project with stored context files', async () => {
+    renderAt();
+
+    expect(
+      await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle }),
+    ).toBeTruthy();
+    expect(formProps.current?.values).toEqual({
+      name: 'q4',
+      instructions: '## Steps',
+    });
+    expect(formProps.current?.contextFiles.map((file) => file.name)).toEqual([
+      'tickets.csv',
+      'survey.xlsx',
+    ]);
+  });
+
+  it('sends the project to its view page when it cannot be edited', async () => {
+    vi.mocked(getProject).mockResolvedValue(
+      details({
+        source: ProjectSource.Shared,
+        canEdit: false,
+        canManage: false,
+      }),
+    );
+    const { router } = renderAt();
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        '/projects/view/my-bucket/q4',
+      ),
+    );
+    expect(formProps.current).toBeUndefined();
+  });
+
+  it('leaves without a prompt when nothing changed', async () => {
+    const { router } = renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    await userEvent.click(screen.getByRole('button', { name: 'cancel' }));
+
+    expect(await screen.findByText('project view')).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/projects/view/my-bucket/q4');
+  });
+
+  describe('context file preview', () => {
+    const PROJECT_ID = 'projects/my-bucket/q4';
+    const getCanvas = () => screen.getByLabelText('canvas');
+    const openEditor = async () => {
+      renderAt();
+      await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+    };
+
+    it('opens a stored file as an attachment with the project file locator, so the shared resolvers fetch it', async () => {
+      await openEditor();
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Preview tickets.csv' }),
+      );
+
+      await waitFor(() =>
+        expect(getCanvas().textContent).toBe(
+          `${PROJECT_ID}::stored:tickets.csv`,
+        ),
+      );
+      await waitFor(() =>
+        expect(previewResolvers.resolveOoxmlContent).toHaveBeenCalledOnce(),
+      );
+      expect(
+        previewResolvers.resolveOoxmlContent.mock.calls[0][0],
+      ).toMatchObject({
+        id: 'stored:tickets.csv',
+        name: 'tickets.csv',
+        url: `${PROJECT_ID}/files/context/tickets.csv`,
+      });
+    });
+
+    it('opens a file added in the session from its local File', async () => {
+      await openEditor();
+      await userEvent.click(screen.getByRole('button', { name: 'add file' }));
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Preview retro.pdf' }),
+      );
+
+      expect(getCanvas().textContent).toBe(`${PROJECT_ID}::new-1`);
+      await waitFor(() =>
+        expect(previewResolvers.resolvePdfContent).toHaveBeenCalledOnce(),
+      );
+      const [opened] = previewResolvers.resolvePdfContent.mock
+        .calls[0] as unknown as [{ file: File; url?: string }];
+      expect(opened.file.name).toBe('retro.pdf');
+      expect(opened.url).toBeUndefined();
+    });
+
+    it('downloads a stored file from the project file endpoint without opening the canvas', async () => {
+      const clicked: HTMLAnchorElement[] = [];
+      const click = vi
+        .spyOn(HTMLAnchorElement.prototype, 'click')
+        .mockImplementation(function (this: HTMLAnchorElement) {
+          clicked.push(this);
+        });
+      await openEditor();
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Download tickets.csv' }),
+      );
+
+      expect(clicked).toHaveLength(1);
+      expect(clicked[0].getAttribute('href')).toBe(
+        `/api/v1/projects/${encodeURIComponent(PROJECT_ID)}/files/tickets.csv`,
+      );
+      expect(clicked[0].download).toBe('tickets.csv');
+      expect(getCanvas().textContent).toBe('closed');
+      click.mockRestore();
+    });
+
+    it('downloads a file added in the session from its local File without a request', async () => {
+      const createObjectURL = vi.fn(() => 'blob:retro');
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: createObjectURL,
+      });
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        value: vi.fn(),
+      });
+      const click = vi
+        .spyOn(HTMLAnchorElement.prototype, 'click')
+        .mockImplementation(() => undefined);
+      await openEditor();
+      await userEvent.click(screen.getByRole('button', { name: 'add file' }));
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Download retro.pdf' }),
+      );
+
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      expect((createObjectURL.mock.calls[0] as unknown as [File])[0].name).toBe(
+        'retro.pdf',
+      );
+      expect(click).toHaveBeenCalledOnce();
+      click.mockRestore();
+    });
+
+    it('marks only the open file selected', async () => {
+      await openEditor();
+      const card = screen.getByRole('button', { name: 'Preview tickets.csv' });
+
+      await userEvent.click(card);
+
+      await waitFor(() =>
+        expect(card.getAttribute('aria-pressed')).toBe('true'),
+      );
+      expect(
+        screen
+          .getByRole('button', { name: 'Preview survey.xlsx' })
+          .getAttribute('aria-pressed'),
+      ).toBe('false');
+    });
+
+    it('closes the canvas when the open stored file is removed', async () => {
+      await openEditor();
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Preview tickets.csv' }),
+      );
+      await waitFor(() =>
+        expect(getCanvas().textContent).toBe(
+          `${PROJECT_ID}::stored:tickets.csv`,
+        ),
+      );
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'remove tickets.csv' }),
+      );
+
+      expect(getCanvas().textContent).toBe('closed');
+    });
+
+    it('does not ask to discard changes after only previewing a file', async () => {
+      const { router } = renderAt();
+      await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Preview tickets.csv' }),
+      );
+      await waitFor(() =>
+        expect(getCanvas().textContent).toBe(
+          `${PROJECT_ID}::stored:tickets.csv`,
+        ),
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: 'cancel' }));
+
+      expect(await screen.findByText('project view')).toBeTruthy();
+      expect(router.state.location.pathname).toBe(
+        '/projects/view/my-bucket/q4',
+      );
+      expect(
+        screen.queryByRole('dialog', { name: UnsavedChangesI18nKeys.Title }),
+      ).toBeNull();
+    });
+  });
+
+  it('asks before leaving after a stored file is removed', async () => {
+    renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'remove survey.xlsx' }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'cancel' }));
+
+    expect(
+      await screen.findByRole('dialog', { name: UnsavedChangesI18nKeys.Title }),
+    ).toBeTruthy();
+  });
+
+  it('saves only the new files and the removed names with the loaded contentVersion', async () => {
+    vi.mocked(updateProject).mockResolvedValue({
+      id: 'projects/my-bucket/q4',
+      name: 'q4',
+      bucket: 'my-bucket',
+      path: 'q4',
+      etag: '"e2"',
+      isPinned: false,
+    });
+    const { router } = renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'remove survey.xlsx' }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'add file' }));
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        '/projects/view/my-bucket/q4',
+      ),
+    );
+    const [id, fields, files, removed, contentVersion] =
+      vi.mocked(updateProject).mock.calls[0];
+    expect(id).toBe('projects/my-bucket/q4');
+    expect(fields).toEqual({
+      name: 'q4',
+      instructions: '## Steps',
+    });
+    expect(files.map((file) => file.name)).toEqual(['retro.pdf']);
+    expect(removed).toEqual(['survey.xlsx']);
+    expect(contentVersion).toBe('"cv1"');
+    expect(
+      screen.queryByRole('dialog', { name: UnsavedChangesI18nKeys.Title }),
+    ).toBeNull();
+  });
+
+  it('lets a shared editor save new instructions under the stored name', async () => {
+    vi.mocked(getProject).mockResolvedValue(
+      details({
+        source: ProjectSource.Shared,
+        canEdit: true,
+        canManage: false,
+      }),
+    );
+    vi.mocked(updateProject).mockResolvedValue({
+      id: 'projects/my-bucket/q4',
+      name: 'q4',
+      bucket: 'my-bucket',
+      path: 'q4',
+      etag: '"e2"',
+      isPinned: false,
+    });
+    const { router } = renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    expect(
+      screen.getByRole('textbox', { name: 'name' }).hasAttribute('readonly'),
+    ).toBe(true);
+    expect(
+      screen.getByText(ProjectsI18nKeys.EditNameReadOnlyHint),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('textbox', { name: 'name' }).hasAttribute('disabled'),
+    ).toBe(true);
+    typeInstructions('Updated instructions');
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        '/projects/view/my-bucket/q4',
+      ),
+    );
+    const [, fields] = vi.mocked(updateProject).mock.calls[0];
+    expect(fields).toMatchObject({
+      name: 'q4',
+      instructions: 'Updated instructions',
+    });
+  });
+
+  it('locks the name for the owner without blocking instructions edits', async () => {
+    renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    const nameInput = screen.getByRole('textbox', { name: 'name' });
+    expect(nameInput.hasAttribute('disabled')).toBe(true);
+    await userEvent.type(nameInput, 'renamed');
+    expect(formProps.current?.values.name).toBe('q4');
+    expect(
+      screen.getByText(ProjectsI18nKeys.EditNameReadOnlyHint),
+    ).toBeTruthy();
+    typeInstructions('Updated instructions');
+    expect(formProps.current?.values.instructions).toBe('Updated instructions');
+  });
+
+  it('saves the loaded name even if the draft name is changed externally', async () => {
+    vi.mocked(updateProject).mockResolvedValue({
+      id: 'projects/my-bucket/q4',
+      name: 'q4',
+      bucket: 'my-bucket',
+      path: 'q4',
+      etag: '"e2"',
+      isPinned: false,
+    });
+    renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    act(() => formProps.current?.onFieldChange('name', 'renamed'));
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => expect(updateProject).toHaveBeenCalledOnce());
+    expect(vi.mocked(updateProject).mock.calls[0][1].name).toBe('q4');
+  });
+
+  it('sends the contentVersion, not the ETag a chat write changed', async () => {
+    vi.mocked(getProject).mockResolvedValue(
+      details({ etag: '"after-chat"', contentVersion: '"cv1"' }),
+    );
+    vi.mocked(updateProject).mockResolvedValue({
+      id: 'projects/my-bucket/q4',
+      name: 'q4',
+      bucket: 'my-bucket',
+      path: 'q4',
+      etag: '"e2"',
+      isPinned: false,
+    });
+    const { router } = renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    typeInstructions('Updated instructions');
+    await userEvent.click(
+      screen.getByRole('button', { name: 'remove survey.xlsx' }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        '/projects/view/my-bucket/q4',
+      ),
+    );
+    expect(vi.mocked(updateProject).mock.calls[0][4]).toBe('"cv1"');
+  });
+
+  it('follows a changed response id and keeps its pin', async () => {
+    vi.mocked(updateProject).mockResolvedValue({
+      id: 'projects/my-bucket/Q4 launch',
+      name: 'Q4 launch',
+      bucket: 'my-bucket',
+      path: 'Q4 launch',
+      etag: '"e2"',
+      isPinned: true,
+    });
+    const { router } = renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    typeInstructions('Updated instructions');
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        '/projects/view/my-bucket/Q4%20launch',
+      ),
+    );
+    expect(vi.mocked(updateProject).mock.calls[0][1].name).toBe('q4');
+    expect(userConfig.replacePinnedProjectId).toHaveBeenCalledWith(
+      'projects/my-bucket/q4',
+      'projects/my-bucket/Q4 launch',
+    );
+    /* The edit entry is replaced, so Back does not reopen the old id. */
+    expect(router.state.historyAction).toBe('REPLACE');
+  });
+
+  it('drops the local pin when the BFF reports the renamed project unpinned', async () => {
+    vi.mocked(updateProject).mockResolvedValue({
+      id: 'projects/my-bucket/Q4 launch',
+      name: 'Q4 launch',
+      bucket: 'my-bucket',
+      path: 'Q4 launch',
+      etag: '"e2"',
+      isPinned: false,
+    });
+    const { router } = renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    typeInstructions('Updated instructions');
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        '/projects/view/my-bucket/Q4%20launch',
+      ),
+    );
+    expect(userConfig.replacePinnedProjectId).toHaveBeenCalledWith(
+      'projects/my-bucket/q4',
+      null,
+    );
+  });
+
+  it('explains a project too large to edit in a toast', async () => {
+    vi.mocked(updateProject).mockRejectedValue(
+      responseError(413, { code: 'project-too-large' }),
+    );
+    renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    typeInstructions('Updated instructions');
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() =>
+      expect(showNotificationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: ProjectsI18nKeys.EditToastTooLarge,
+        }),
+      ),
+    );
+  });
+
+  it('shows a taken name inline without a toast', async () => {
+    vi.mocked(updateProject).mockRejectedValue(
+      responseError(409, { code: 'name-taken', field: 'name' }),
+    );
+    renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    typeInstructions('Updated instructions');
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      ProjectsI18nKeys.CreateErrorNameTaken,
+    );
+    expect(showNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it('offers a reload when the project changed elsewhere and keeps the draft', async () => {
+    vi.mocked(updateProject).mockRejectedValue(
+      responseError(409, { code: 'project-changed' }),
+    );
+    renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    typeInstructions('Draft instructions');
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    await waitFor(() => expect(showNotificationMock).toHaveBeenCalled());
+    const [notification] = showNotificationMock.mock.calls[0];
+    expect(notification).toMatchObject({
+      message: ProjectsI18nKeys.ErrorsChangedElsewhere,
+    });
+    expect(notification.action).toBeTruthy();
+    expect(formProps.current?.values.instructions).toBe('Draft instructions');
+  });
+
+  it('puts a file rejection under Context', async () => {
+    vi.mocked(updateProject).mockRejectedValue(
+      responseError(413, { code: 'capacity-exceeded' }),
+    );
+    renderAt();
+    await screen.findByRole('heading', { name: ProjectsI18nKeys.EditTitle });
+
+    await userEvent.click(screen.getByRole('button', { name: 'add file' }));
+    await userEvent.click(screen.getByRole('button', { name: 'buttons.save' }));
+
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      ProjectsI18nKeys.CreateErrorFilesRejected,
+    );
+  });
+
+  it('shows the not-found state for a missing project', async () => {
+    vi.mocked(getProject).mockRejectedValue(
+      new ResponseError(new Response(null, { status: 404 })),
+    );
+    renderAt();
+
+    expect(await screen.findByText(ProjectsI18nKeys.ViewNotFound)).toBeTruthy();
+    expect(formProps.current).toBeUndefined();
+  });
+});

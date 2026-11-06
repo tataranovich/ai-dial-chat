@@ -4,11 +4,15 @@
 The toolset create/edit screen: a flat, single-page `EditorLayout`-based editor for MCP toolsets (no wizard/step navigation), covering the route and load behavior, the Metadata and Setup sections, the Connect toolset section, and save behavior. The editor surface is owned by the host-agnostic `ToolsetEditor` component from `@epam/ai-dial-toolset-editor` (see the `toolset-editor-library` spec); the `/toolset-editor` app page is a thin adapter that loads the entity, builds labels, and wires the server callbacks.
 ## Requirements
 ### Requirement: Toolset editor route and entry modes
-The system SHALL provide a `/toolset-editor` route that opens the toolset editor in either create mode (no `id` search param) or edit mode (`id` search param present). In edit mode the system SHALL load the toolset by id before rendering the form; if the toolset cannot be found the system SHALL redirect away from the editor rather than render an empty form.
+The system SHALL provide a `/toolset-editor` route that opens the toolset editor in either create mode (no `id` search param) or edit mode (`id` search param present). In create mode the system SHALL render the form immediately from `getDefaultToolsetForm()` — an empty Name and the Version `DEFAULT_TOOLSET_VERSION` (`1.0.0`, an alias of builder-form's `DEFAULT_DEPLOYMENT_VERSION`), the same create-mode Name/Version defaults every application kind uses — without first listing the user's toolsets. In edit mode the system SHALL load the toolset by id before rendering the form; if the toolset cannot be found the system SHALL redirect away from the editor rather than render an empty form.
 
 #### Scenario: Open editor in create mode
 - **WHEN** a user navigates to `/toolset-editor` with no `id` search param
-- **THEN** the editor opens as a flat single-page form with all fields visible and default values populated, including an auto-generated conflict-free toolset name
+- **THEN** the editor opens as a flat single-page form with all fields visible, the Name field empty, the Version field showing `1.0.0`, and no list-toolsets request issued
+
+#### Scenario: Create is blocked until a name is entered
+- **WHEN** the create-mode form is otherwise valid but the Name field is empty
+- **THEN** the Create action stays disabled and no create request is sent; typing a name enables it
 
 #### Scenario: Open editor in edit mode
 - **WHEN** a user navigates to `/toolset-editor?id=<toolsetName>` for an existing toolset
@@ -19,18 +23,18 @@ The system SHALL provide a `/toolset-editor` route that opens the toolset editor
 - **THEN** the system redirects the user out of the editor instead of rendering the form
 
 ### Requirement: Metadata section fields
-The Metadata section SHALL allow editing the toolset avatar, name, version, description, and topics. The avatar SHALL be picked via the shared `AddAvatar` control (preview box plus "Add avatar" button), which opens the `AvatarPickerModal` file manager restricted to a single image up to a host-configured size, rather than a plain URL text field. The name and description fields SHALL also allow editing translations for additional locales through the shared `DeploymentLocalesField` popup, which is present only while the host supplies a non-empty `availableLocaleOptions` (see `builder-form`). These fields SHALL be rendered through the toolset-editor lib's `GeneralForm` component, which wraps the shared `MetadataForm` component from `@epam/ai-dial-builder-form` (itself composed over `DeploymentCreationForm`). The Metadata section SHALL NOT contain any connection or authentication fields.
+The Metadata section SHALL allow editing the toolset avatar, name, version, description, and topics. The avatar SHALL be picked via the shared `AddAvatar` control (preview box plus "Add avatar" button), which opens the `AvatarPickerModal` file manager restricted to a single image up to a host-configured size, rather than a plain URL text field. The name and description fields SHALL also allow editing translations for additional locales through the shared `DeploymentLocalesField` popup, which is present only while the host supplies a non-empty `availableLocaleOptions` (see `builder-form`). These fields SHALL be rendered by the toolset-editor lib's `ToolsetEditor` through the shared `MetadataForm` component from `@epam/ai-dial-builder-form` (itself composed over `DeploymentCreationForm`), with the avatar picker the host supplies as `avatarPicker`. The Metadata section SHALL NOT contain any connection or authentication fields.
 
-The Version field SHALL be validated against the shared `builder-form` library's `SEMVER_VERSION_PATTERN` (via `validateDeploymentCreationFields` with `validateVersionPattern: SEMVER_VERSION_PATTERN`), the same rule the Quick App and Custom App editors use: a non-empty version must be a SemVer 2.0.0 version (`MAJOR.MINOR.PATCH` without leading zeros, with optional pre-release and build metadata — e.g. `1.0.0`, `1.0.0-beta`, `1.0.0+build`; not `1.2`, `1.0.0.0`, `01.0.0` or `abc`), the rule DIAL Admin applies through `semver.valid()`. A non-empty version that is not SemVer 2.0.0 SHALL surface a version-invalid error ("Version must follow semantic versioning (e.g., 1.0.0)" (`editor.versionInvalid`)) under the Version field and SHALL keep the Save button disabled. The BFF's `ToolsetBodyDto` SHALL enforce the same pattern (at most 64 characters).
+The Version field SHALL be validated against the shared `builder-form` library's default `VERSION_PATTERN` (via `validateDeploymentCreationFields` with `validateVersionPattern: true`) — letters, digits, dots, underscores, and dashes are all allowed, unlike the stricter dot-separated-numeric-only pattern the Quick App and Custom App editors use. A non-empty version that contains any other character SHALL surface a version-invalid error (`toolsetEditor.general.versionInvalid`, "Version may only contain letters, digits, dots, underscores, and dashes") under the Version field and SHALL keep the Save button disabled.
 
 The Name field SHALL be at most 256 characters and SHALL NOT contain control characters. The Description field SHALL be at most 2000 characters (see `entity-field-limits`). The host SHALL pass the translated `editor.fieldTooLong` and `editor.nameControlCharacters` messages as `labels.validation.nameTooLong`, `nameControlCharacters` and `descriptionTooLong`, so these errors appear inline under their fields. The BFF's DTO message SHALL NOT surface as a toast for a rule the client already enforces.
 
 #### Scenario: Version format error
-- **WHEN** a user types a version that is not SemVer 2.0.0 (e.g. `abc`, `1.2`, `1.0.0.0` or `01.0.0`)
+- **WHEN** a user types a version containing a character outside letters, digits, dots, underscores, and dashes (e.g. a space or `/`)
 - **THEN** a version-invalid error is shown under the Version field and the Save button stays disabled
 
-#### Scenario: Pre-release and build metadata are accepted
-- **WHEN** a user types a SemVer 2.0.0 version with a pre-release or build metadata (e.g. `1.0.0-beta` or `1.0.0+build`)
+#### Scenario: Letters-only version is accepted
+- **WHEN** a user types a version made only of letters, digits, dots, underscores, and dashes (e.g. `abc` or `1.0-beta`)
 - **THEN** no version error is shown
 
 #### Scenario: Edit metadata fields
@@ -71,18 +75,6 @@ full-replacement semantics every other Metadata-section field already has on upd
   removes every row from the "Add locale" popup, and saves
 - **THEN** the update request omits `locales`/`primaryLocale` and DIAL Core's `displayName`/
   `description` for that toolset become plain strings again
-
-### Requirement: Name-uniqueness check compares against the primary locale
-The default-name-collision check performed when opening the editor in create mode SHALL compare
-the candidate name against each existing toolset's name resolved to the primary locale, not to
-the viewer's active UI locale (see "Unique name generation" for the collision check itself),
-since the candidate name itself is always primary-locale content.
-
-#### Scenario: Collision check ignores the viewer's UI language
-- **WHEN** the viewer's UI language differs from the primary locale and an existing toolset's
-  `displayName` is a locale map
-- **THEN** the collision check compares against that toolset's primary-locale name, not the
-  name resolved for the viewer's UI language
 
 ### Requirement: Form-only editor layout
 The editor SHALL use the shared `EntityEditor` from `@epam/ai-dial-builder-form` (composed by the toolset-editor lib's `ToolsetEditor`), which wraps `EditorLayout` and two `EditorSection`s, to render a header row and a two-column body. The left column SHALL contain a Metadata `EditorSection` (Avatar, Name, Version, Description, Locales, Tags fields). The right column SHALL contain a Setup `EditorSection` (Endpoint, Protocol, Allowed tools, Authentication fields). On mobile, the two sections SHALL stack vertically (Metadata on top, Setup below). On desktop the Cancel and primary (Create in create mode, Save in edit mode) actions render in the header actions slot; below the `desktop` breakpoint `EditorLayout` moves the same actions into a bottom action bar outside the scrollable body. The editor SHALL NOT render a wizard step indicator or a separate live preview pane.
@@ -141,33 +133,66 @@ The Connect toolset section SHALL render inside the Setup `EditorSection` at the
 - **WHEN** the user clicks "Copy URL" in the Connect toolset section
 - **THEN** the clipboard receives the toolset's MCP URL and the button shows transient copied feedback announced via `aria-live="polite"`
 
-### Requirement: Unique name generation
-When creating a new toolset, the system SHALL generate a storage-safe, conflict-free default
-name by appending a numeric suffix when the default name collides with an existing toolset
-name.
-
-#### Scenario: Default name collides
-- **WHEN** the default toolset name already exists among the user's toolsets
-- **THEN** the generated default name is suffixed so it does not collide with any existing name
-
 ### Requirement: Save and exit
-The editor SHALL persist the toolset via the backend write API on save and SHALL surface a saving state. On successful save it SHALL raise a success notification and navigate to the return URL (the catalog, `ROUTES.Catalog`); on failure it SHALL keep the user in the editor and show an error.
+The editor SHALL persist the toolset via the backend write API on save and SHALL surface a saving state. Both in create mode and in edit mode of the user's own toolset, the primary action opens the Save panel (see the `resource-save-panel` capability), and the toolset is persisted only when the panel's Save is confirmed:
 
-The success notification SHALL be raised through `useOperationNotification` with `NotifiableEntity.Toolset` and `EntityOperation.Created` (create mode) or `EntityOperation.Edited` (edit mode), passing the toolset's name. Navigation SHALL NOT be delayed to keep the notification on screen.
+- in create mode the panel creates the toolset create-only in the chosen Personal folder (`createToolsetCreateAdapter`), or at the Personal root and then publishes it to an Organization folder; it offers no version choice;
+- in edit mode the toolset may be saved in place, moved to another Personal folder, saved as a new version, or saved and then published to an Organization folder. In edit mode the Version field SHALL be read-only.
+
+A toolset shared with the user saves in place without the panel. A toolset created through the panel in this session (including the draft the editor saves before a Log In) is then edited as the user's own.
+
+On a successful save the panel raises the success notification and the editor navigates to the return URL (the catalog, `ROUTES.Catalog`). When the save itself fails, the panel shows the error, stays open, and the editor stays put.
+
+The success notification SHALL be raised through `useOperationNotification` with `NotifiableEntity.Toolset` and `EntityOperation.Created` (create) or `EntityOperation.Edited` (edit, keep version), passing the toolset's name. Navigation SHALL NOT be delayed to keep the notification on screen.
 
 #### Scenario: Successful create
-- **WHEN** a user with a valid form clicks the primary action (labelled "Create" in create mode) while creating a new toolset
-- **THEN** the system calls the create endpoint and, on success, shows a success notification titled `"Toolset created successfully"` and navigates to the return URL
+- **WHEN** a user with a valid form clicks the primary action (labelled "Create" in create mode) and confirms the Save panel with Personal `Search`
+- **THEN** the system calls the create endpoint with `createOnly: true` and `folderPath: "Search"` and, on success, shows a success notification titled `"Toolset created successfully"` and navigates to the return URL
 
 #### Scenario: Successful update
-- **WHEN** a user with a valid form clicks Save while editing an existing toolset
+- **WHEN** a user with a valid form clicks Save while editing an existing toolset and confirms "Keep version" in the current folder in the Save panel
 - **THEN** the system calls the update endpoint and, on success, shows a success notification titled `"Toolset edited successfully"` and navigates to the return URL
+
+#### Scenario: Save as new version
+- **WHEN** a user editing toolset `search@1.0.0` confirms "Save as new version" `1.1.0` in the Save panel
+- **THEN** the system calls the create endpoint with the edited values, `version: "1.1.0"` and `createOnly: true`, makes no update request for `search__1.0.0`, and navigates to the return URL
+
+#### Scenario: Version is read-only in edit mode
+- **WHEN** a user opens an existing toolset in the editor
+- **THEN** the Version field is read-only
 
 #### Scenario: Notification survives leaving the editor
 - **WHEN** the editor navigates to the return URL immediately after a successful save
 - **THEN** the success notification remains visible on the destination route
 
 #### Scenario: Save failure
-- **WHEN** the backend returns an error during save
-- **THEN** the editor remains open, shows an error notification, clears the saving state, and shows no success notification
+- **WHEN** the backend returns an error during the panel's save
+- **THEN** the editor remains open, the panel shows the error and clears its saving state, and no success notification is shown
 
+### Requirement: Toolset editor reports unsaved changes to the host
+
+`ToolsetEditor` from `libs/toolset-editor` SHALL accept a new optional prop `onDirtyChange?: (isDirty: boolean) => void`. It SHALL call this prop on mount and whenever the reported value changes. The value is whether the whole form — Metadata and Setup alike — differs from a baseline: the form the editor was seeded with, replaced by the last successfully persisted form.
+
+When the user starts Log In, the editor may persist a draft first (`persistFormIfChanged`). After that persist succeeds, the editor SHALL report `onDirtyChange(false)` straight away, before the login continues, because the persisted draft is now the baseline. The OAuth login itself runs in a popup, so the editor page never unloads during it. A failed draft persist leaves the form dirty.
+
+The lib stays free of routing and app contexts. `ToolsetApplicationEditor` (`apps/chat/src/pages/ApplicationEditor/toolset/ToolsetApplicationEditor.tsx`) SHALL:
+
+- feed the reported value to `useBuilderLeaveGuard`;
+- call `allowNextNavigation()` before its `onSaveComplete` navigation;
+- keep `handleBack` as a plain navigation, which the guard intercepts.
+
+#### Scenario: Dirty state is reported
+- **WHEN** the user edits the toolset name and then reverts it
+- **THEN** `onDirtyChange` is called with `true` and then with `false`
+
+#### Scenario: Successful save exit is not intercepted
+- **WHEN** a user saves a valid, dirty toolset with the primary action
+- **THEN** the editor navigates to the return URL without the unsaved-changes dialog
+
+#### Scenario: Log In draft persist clears dirtiness before the login continues
+- **WHEN** a dirty toolset is persisted by Log In before the login request
+- **THEN** `onDirtyChange(false)` is reported before the login continues
+
+#### Scenario: Failed Log In draft persist keeps the form dirty
+- **WHEN** Log In tries to persist a dirty toolset and the persist fails
+- **THEN** `onDirtyChange(false)` is not reported and the form stays dirty

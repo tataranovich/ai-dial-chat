@@ -1,4 +1,5 @@
 import {
+  useLatestCanvasRequest,
   useAttachmentCanvas,
   useOpenAttachmentCanvas,
 } from '@epam/ai-dial-attachment-canvas';
@@ -7,62 +8,46 @@ import {
   isMimeTypeAllowed,
 } from '@epam/ai-dial-attachment-input';
 import {
-  AttachmentValidationErrorReason,
-  dialFilesToAttachments,
-  dialFolderPathToAttachment,
-  findDeploymentByIdOrReference,
-  getQuickAppConversationStarters,
+  type AttachmentValidationErrorEvent,
+  getEffectiveDeploymentIds,
   isQuickAppSchema,
-  referenceAttachmentToPdfCanvasContent,
   normalizeResponseFormat,
-  shouldRerunGenerationOnEdit,
+  referenceAttachmentToPdfCanvasContent,
   useAttachmentValidation,
   useChatSettingsFormConfig,
+  useConversationAnnotationPool,
 } from '@epam/ai-dial-chat-hooks';
 import { useMessageSelectionReply } from '@epam/ai-dial-chat-hooks/conversation';
-import {
-  useMcpAppTools,
-  useOpenMcpAppCanvas,
-} from '@epam/ai-dial-chat-hooks/mcp-apps';
 import { useConversationScroll } from '@epam/ai-dial-chat-hooks/scroll-anchoring';
 import { usePageFileDrag } from '@epam/ai-dial-chat-hooks/viewport-layout';
 import { OverlayFeature } from '@epam/ai-dial-chat-overlay';
 import {
-  DisplayAttachment,
-  formatFileSize,
-  isStatusMessage,
-  StatusEvent,
   type Annotation,
   type Attachment,
   type Conversation,
-  type MessageRating,
+  DisplayAttachment,
+  mergeClasses,
   type Message as MessageType,
+  type MessageRating,
   type RequestSkill,
   type StarterOption,
   type ToolMenuItem,
   type UploadedAttachmentResult,
+  useIsMobile,
 } from '@epam/ai-dial-chat-shared';
 import {
-  useComposerSeed,
-  useComposerSeedSource,
   type TextInsertion,
   type ToolsChipLabels,
 } from '@epam/ai-dial-conversation-input';
-import type {
-  MessageActionAriaLabels,
-  MessageActionTooltips,
-} from '@epam/ai-dial-conversation-messages';
 import { MessageSelectionReply } from '@epam/ai-dial-conversation-messages';
-import { useMcpAppResponseCache } from '@epam/ai-dial-mcp-apps';
 import {
   BASE_ICON_SIZE,
-  DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
-  ErrorMessageNotification,
   FabButton,
-  NeutralButton,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
-import { IconCopy, IconPrompt } from '@tabler/icons-react';
+import { IconPrompt } from '@tabler/icons-react';
 import {
   FC,
   lazy,
@@ -70,9 +55,7 @@ import {
   type ReactNode,
   Suspense,
   useCallback,
-  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -83,50 +66,41 @@ import {
   ButtonsI18nKeys,
   ChatI18nKeys,
   ConversationI18nKeys,
-  ConversationPanelI18nKeys,
   DialFileManagerI18nKeys,
   FileDndI18nKeys,
   PromptSelectorI18nKeys,
   VoiceRecordingI18nKeys,
 } from '../../constants/translation-keys';
-import { useAppConfig } from '../../context/AppConfigContext';
+import { useAppConfig, useFeatureFlag } from '../../context/AppConfigContext';
 import { useUser } from '../../context/auth/UserContext';
-import { useConversationPanel } from '../../context/ConversationPanelContext';
-import { useDeployments } from '../../context/DeploymentsContext';
 import { useNotification } from '../../context/NotificationContext';
-import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
 import { useAttachmentCanvasResolvers } from '../../hooks/attachment/useAttachmentCanvasResolvers';
-import { useMcpAppHostAdapter } from '../../hooks/attachment/useMcpAppHostAdapter';
-import { useIsMobile } from '../../hooks/breakpoint/useBreakpoint';
+import { useAnchoredMessageActions } from '../../hooks/conversation/useAnchoredMessageActions';
 import { useChatSettingsFormLabels } from '../../hooks/conversation/useChatSettingsFormLabels';
-import { useConversationAnnotationPool } from '../../hooks/conversation/useConversationAnnotationPool';
-import { useModelSelectorLabels } from '../../hooks/conversation/useModelSelectorLabels';
+import { useComposerDraftWiring } from '../../hooks/conversation/useComposerDraftWiring';
+import { useConversationDeploymentState } from '../../hooks/conversation/useConversationDeploymentState';
+import { useConversationMcpApps } from '../../hooks/conversation/useConversationMcpApps';
+import { useMessageListLabels } from '../../hooks/conversation/useMessageListLabels';
+import { useDialFileManagerState } from '../../hooks/files/useDialFileManagerState';
 import { useKeyboardShortcutPreference } from '../../hooks/keyboard-shortcut/useKeyboardShortcutPreference';
-import { useLanguage } from '../../hooks/language/useLanguage';
 import { useUiFeature } from '../../hooks/useUiFeature';
-import { mcpAppsApiClient } from '../../server-api/mcp-apps';
 import { attachmentCanvasUrlResolvers } from '../../utils/attachment-display-resolvers';
-import { resolveCatalogIconUrl } from '../../utils/icon-path';
-import { resolveLocalizedText } from '../../utils/locale';
+import { buildAttachmentValidationNotification } from '../../utils/attachment-validation-notification';
 import { useDeploymentSelectorOverlay } from '../DeploymentSelector/useDeploymentSelectorOverlay';
-import type { AttachResult } from '../DialFileManagerModal/types/attach-result';
-import FileDeleteConfirmContent from '../FileDeleteConfirmContent/FileDeleteConfirmContent';
 import FooterMessage from '../FooterMessage/FooterMessage';
 import { usePromptSelectorOverlay } from '../PromptSelector/usePromptSelectorOverlay';
 import { useSkillSelectorOverlay } from '../SkillSelector/useSkillSelectorOverlay';
+import UsageLimitBanner from '../UsageLimitBanner/UsageLimitBanner';
 import UsageLimitsControl from '../UsageLimitsControl/UsageLimitsControl';
+import ConversationFileManagerModal from './ConversationFileManagerModal';
 import ConversationMessageItem from './ConversationMessageItem';
+import ConversationReadOnlyFooter from './ConversationReadOnlyFooter';
 import { ConversationReloadNotification } from './ConversationReloadNotification';
 import { getInputMessageHistory } from './utils/message-display';
 
 const ConversationInput = lazy(async () => {
   const module = await import('@epam/ai-dial-conversation-input');
   return { default: module.ConversationInput };
-});
-
-const DialFileManagerModal = lazy(async () => {
-  const module = await import('../DialFileManagerModal/DialFileManagerModal');
-  return { default: module.default };
 });
 
 interface Props {
@@ -169,6 +143,8 @@ interface Props {
   stoppedGeneratingText: string;
   isReadOnly?: boolean;
   onDuplicateConversation?: () => void;
+  /** The conversation's model is hidden, so a read-only chat explains why it can't be duplicated instead of offering the button. */
+  isDuplicateUnavailable?: boolean;
   duplicateError?: string;
   isAudioMessageSupported?: boolean;
   isVoiceRecordingSupported?: boolean;
@@ -181,7 +157,12 @@ interface Props {
    * user's own typing after that is not overridden until this changes again.
    */
   inputContent?: string;
-  /** Token that forces `inputContent` to re-apply even if its string is unchanged. */
+  /**
+   * Token that forces `inputContent` to re-apply even if its string is
+   * unchanged. `0` (or omitted) means no content is pending: a revision > 0 at
+   * mount is treated as fresh content for the conversation, so the host resets
+   * it to `0` once the content has been shown.
+   */
   inputContentRevision?: number;
   /**
    * Text inserted at the composer's caret whenever its `revision` changes. This
@@ -211,6 +192,12 @@ interface Props {
    * Never persisted as a message.
    */
   topContent?: ReactNode;
+  /**
+   * Shows each message's relative send time in its action row, revealed on
+   * hover or focus (always on devices without hover). Off by default so hosts
+   * such as the app preview chat stay unchanged.
+   */
+  hasMessageTimestamps?: boolean;
   /** A terminal read failed; received output remains in the view. */
   hasConversationReloadError?: boolean;
   /** Disables read retry while its request is pending. */
@@ -218,6 +205,8 @@ interface Props {
   /** Repeats the terminal read without regenerating or saving. */
   onRetryConversationReload?: () => Promise<void>;
 }
+
+export type ConversationViewProps = Props;
 
 const ConversationView: FC<Props> = ({
   messages,
@@ -245,6 +234,7 @@ const ConversationView: FC<Props> = ({
   stoppedGeneratingText,
   isReadOnly = false,
   onDuplicateConversation,
+  isDuplicateUnavailable = false,
   duplicateError,
   isAudioMessageSupported = false,
   isVoiceRecordingSupported = false,
@@ -261,17 +251,69 @@ const ConversationView: FC<Props> = ({
   toolsMenuTitle,
   toolsChipLabels,
   topContent,
+  hasMessageTimestamps = false,
 }) => {
   const isModelFixed = !!fixedModel;
-  const { renderOverlay, catalogModal } = useDeploymentSelectorOverlay();
+  const {
+    renderOverlay,
+    catalogModal,
+    onOpenChange: onModelPickerOpenChange,
+  } = useDeploymentSelectorOverlay();
+  const { t } = useTranslation();
+  const {
+    items,
+    setSelectedItemId,
+    isLoading,
+    toolsets,
+    activeDeploymentId,
+    selectedDeployment,
+    isSelectedModelHidden,
+    usageDeploymentId,
+    deploymentItems,
+    fixedDeploymentItems,
+    isInputDisabled,
+    modelSelectorLabels,
+  } = useConversationDeploymentState({ fixedModel });
+  /* Set only while the reload notification is shown. */
+  const retryConversationReload = hasConversationReloadError
+    ? onRetryConversationReload
+    : undefined;
+
+  const {
+    skillMenuOverlay,
+    commandMenu,
+    skillCatalogModal,
+    skillDetailsPanel,
+    message: skillMessage,
+    messageRevision: skillMessageRevision,
+    activeMentions,
+    onDraftChange,
+    onBackspaceAtCaret,
+    caretPositionOverride,
+    selectedSkills,
+    isSkillUnsupported,
+    resetSkillMentions,
+    recognizeMentionsInInsertion,
+    renderHistorySkillSegments,
+    renderHistorySkills,
+    seedSkillMentions: seedComposerSkillMentions,
+  } = useSkillSelectorOverlay({
+    isSkillsSupported: selectedDeployment?.features?.skillsSupported === true,
+  });
+
+  /* A `/skill-name` written in a prompt's text becomes a real mention once inserted ([#9354](https://github.com/epam/ai-dial-chat/issues/9354)). */
+  const handlePromptInsertText = useCallback(
+    (text: string) => {
+      recognizeMentionsInInsertion(text);
+      onInsertText?.(text);
+    },
+    [recognizeMentionsInInsertion, onInsertText],
+  );
   const {
     renderOverlay: renderPromptsOverlay,
     promptCatalogModal,
     parametersPopup: promptParametersPopup,
-  } = usePromptSelectorOverlay({
-    onInsertText: onInsertText ?? (() => undefined),
-  });
-  const { t } = useTranslation();
+  } = usePromptSelectorOverlay({ onInsertText: handlePromptInsertText });
   const promptsMenuOverlays = useMemo(
     () =>
       onInsertText && renderPromptsOverlay
@@ -292,48 +334,6 @@ const ConversationView: FC<Props> = ({
         : undefined,
     [onInsertText, renderPromptsOverlay, t],
   );
-  const { language } = useLanguage();
-  const {
-    items,
-    selectedItemId,
-    setSelectedItemId,
-    selectedDeploymentConfiguration,
-    isLoading,
-    error,
-    toolsets,
-  } = useDeployments();
-  const activeDeploymentId = fixedModel?.id ?? selectedItemId;
-
-  const selectedDeployment = useMemo(() => {
-    const deployment = findDeploymentByIdOrReference(items, activeDeploymentId);
-    return deployment
-      ? {
-          ...deployment,
-          displayName: resolveLocalizedText(deployment.displayName, language),
-          description: resolveLocalizedText(deployment.description, language),
-        }
-      : undefined;
-  }, [items, activeDeploymentId, language]);
-
-  const {
-    skillMenuOverlay,
-    commandMenu,
-    skillCatalogModal,
-    skillDetailsPanel,
-    message: skillMessage,
-    messageRevision: skillMessageRevision,
-    activeMentions,
-    onDraftChange,
-    onBackspaceAtCaret,
-    caretPositionOverride,
-    selectedSkills,
-    isSkillUnsupported,
-    resetSkillMentions,
-    renderHistorySkillSegments,
-    renderHistorySkills,
-  } = useSkillSelectorOverlay({
-    isSkillsSupported: selectedDeployment?.features?.skillsSupported === true,
-  });
   /*
    * A second, independent hook instance drives the edit surface's mention
    * tracking. Sharing the composer's instance would make starting an edit
@@ -368,27 +368,23 @@ const ConversationView: FC<Props> = ({
     [editSelectedSkills],
   );
 
-  /*
-   * Merges two independent "seed the composer once" sources into the one
-   * message/messageRevision pair ConversationInput accepts: this component's
-   * own `inputContent`/`inputContentRevision` props (overlay mode's external
-   * content injection) and the skill hook's own message/messageRevision push
-   * (a mention insertion).
-   */
   const {
-    message: composerSeedText,
-    messageRevision: composerSeedRevision,
-    seedMessage: seedComposerSeed,
-  } = useComposerSeed({
-    text: inputContent,
-    revision: inputContentRevision ?? 0,
+    composerSeedText,
+    composerSeedRevision,
+    handleDraftChange,
+    sendWithDraft,
+  } = useComposerDraftWiring({
+    conversationId: conversation.id,
+    inputContent,
+    inputContentRevision,
+    selectedDeployment,
+    isLoading,
+    onDraftChange,
+    seedComposerSkillMentions,
+    selectedSkills,
+    skillMessage,
+    skillMessageRevision,
   });
-  useComposerSeedSource(inputContentRevision, () =>
-    seedComposerSeed(inputContent ?? ''),
-  );
-  useComposerSeedSource(skillMessageRevision, () =>
-    seedComposerSeed(skillMessage),
-  );
   /*
    * The Skills entry joins the Prompts entry in array order, so it renders
    * below Prompts in the `+` menu; `undefined` when both are absent keeps
@@ -408,6 +404,7 @@ const ConversationView: FC<Props> = ({
   const {
     config: { maxAttachmentFileSizeBytes },
   } = useAppConfig();
+  const isUsageLimitsControlEnabled = useFeatureFlag('usageLimitsControl');
   const isDisallowChangeAgentEnabled = useUiFeature(
     OverlayFeature.DisallowChangeAgent,
   );
@@ -424,40 +421,25 @@ const ConversationView: FC<Props> = ({
   );
   // bucket is the authenticated user's DIAL Core storage bucket from their profile
   const bucket = user?.bucket ?? '';
-  const [isDialFileManagerOpen, setIsDialFileManagerOpen] = useState(false);
-  const [pendingDialAttachments, setPendingDialAttachments] = useState<
-    Attachment[]
-  >([]);
+  const {
+    isOpen: isDialFileManagerOpen,
+    openModal: handleOpenDialFileManager,
+    closeModal: closeDialFileManager,
+    pendingAttachments: pendingDialAttachments,
+    clearPendingAttachments: clearPendingDialAttachments,
+    handleAttach: handleAttachDialFiles,
+  } = useDialFileManagerState(bucket);
   const [attachmentsAmount, setAttachmentsAmount] = useState(0);
   const { resolvers, options } = useAttachmentCanvasResolvers();
   const { openAttachmentCanvas } = useOpenAttachmentCanvas(resolvers, options);
+  const startCanvasRequest = useLatestCanvasRequest();
   /* Applies to existing messages as well as new ones, which is what the
      chat-settings hint promises — the format is a property of the
      conversation, not of the message it was chosen before. */
   const responseFormat = normalizeResponseFormat(conversation.responseFormat);
   const fallbackCitationGroups = useConversationAnnotationPool(conversation);
-  const mcpAppCache = useMcpAppResponseCache(conversation.id);
-  const mcpAppHostAdapter = useMcpAppHostAdapter('fullscreen');
-  const { closePanel } = useConversationPanel();
-  const { handleClose: closeSourcesPanel } = useSourcesSidebar();
-  const closeMcpAppCanvasBlockers = useCallback(() => {
-    closePanel();
-    closeSourcesPanel();
-  }, [closePanel, closeSourcesPanel]);
-  const mcpAppCanvasLabels = useMemo(
-    () => ({
-      forbiddenErrorLabel: t(
-        AttachmentCanvasI18nKeys.McpAppForbiddenErrorLabel,
-      ),
-      loadErrorLabel: t(AttachmentCanvasI18nKeys.McpAppLoadErrorLabel),
-    }),
-    [t],
-  );
-  const { openMcpAppCanvas } = useOpenMcpAppCanvas(
-    mcpAppCache,
-    mcpAppHostAdapter,
-    mcpAppCanvasLabels,
-    closeMcpAppCanvasBlockers,
+  const { mcpAppCache, openMcpAppCanvas, mcpAppTools } = useConversationMcpApps(
+    { conversationId: conversation.id, selectedDeployment, messages, toolsets },
   );
   const { openCanvas, attachmentId: selectedAttachmentKey } =
     useAttachmentCanvas();
@@ -475,57 +457,11 @@ const ConversationView: FC<Props> = ({
     [openCanvas],
   );
 
-  const stepsLabel = useCallback(
-    (count: number) => t(ConversationI18nKeys.StagesStep, { count }),
-    [t],
-  );
-
   const isEditActive = !!editingMessageIndexes?.size;
 
-  const mcpAppTools = useMcpAppTools(
-    mcpAppsApiClient,
-    selectedDeployment,
-    messages,
-    toolsets,
-  );
-
   const handleAttachmentValidationError = useCallback(
-    ({
-      reason,
-      formats,
-      maxFileSizeBytes,
-    }: {
-      reason: AttachmentValidationErrorReason;
-      formats?: string;
-      maxFileSizeBytes?: number;
-    }) => {
-      if (reason === AttachmentValidationErrorReason.FileTooLarge) {
-        showErrorNotification({
-          title: t(AttachmentsI18nKeys.FileTooLargeTitle),
-          message: t(AttachmentsI18nKeys.FileTooLargeMessage, {
-            maxSize:
-              maxFileSizeBytes != null ? formatFileSize(maxFileSizeBytes) : '',
-          }),
-        });
-        return;
-      }
-
-      const noTypesAllowed =
-        reason === AttachmentValidationErrorReason.NoTypesAllowed;
-      showErrorNotification({
-        title: t(
-          noTypesAllowed
-            ? AttachmentsI18nKeys.NoAttachmentsAllowedTitle
-            : AttachmentsI18nKeys.UnsupportedTypeTitle,
-        ),
-        message: t(
-          noTypesAllowed
-            ? AttachmentsI18nKeys.NoAttachmentsAllowedMessage
-            : AttachmentsI18nKeys.UnsupportedTypeMessage,
-          noTypesAllowed ? undefined : { formats },
-        ),
-      });
-    },
+    (event: AttachmentValidationErrorEvent) =>
+      showErrorNotification(buildAttachmentValidationNotification(event, t)),
     [showErrorNotification, t],
   );
 
@@ -551,44 +487,6 @@ const ConversationView: FC<Props> = ({
     inputAttachmentTypes,
   );
 
-  const deploymentItems = useMemo(
-    () =>
-      items.map(
-        ({
-          id,
-          displayName,
-          displayVersion,
-          iconUrl,
-          type,
-          inputAttachmentTypes,
-          features,
-        }) => ({
-          id,
-          displayName: resolveLocalizedText(displayName, language),
-          displayVersion,
-          iconUrl: iconUrl ? resolveCatalogIconUrl(iconUrl) : undefined,
-          type,
-          inputAttachmentTypes,
-          features,
-        }),
-      ),
-    [items, language],
-  );
-
-  const fixedDeploymentItems = useMemo(
-    () =>
-      fixedModel
-        ? [
-            {
-              id: fixedModel.id,
-              displayName: fixedModel.displayName,
-              iconUrl: fixedModel.iconUrl,
-            },
-          ]
-        : undefined,
-    [fixedModel],
-  );
-
   /*
    * A selector the user cannot act on is removed rather than dimmed: a greyed-out
    * icon with a caret advertises a menu that never opens, and where a deployment
@@ -608,20 +506,6 @@ const ConversationView: FC<Props> = ({
   const agentSelectorItems = isModelFixed
     ? fixedDeploymentItems
     : deploymentItems;
-
-  const hasQuickAppStarters = useMemo(
-    () =>
-      getQuickAppConversationStarters(selectedDeployment?.conversationStarters)
-        .starters.length > 0,
-    [selectedDeployment?.conversationStarters],
-  );
-
-  const isInputDisabled = useMemo(
-    () =>
-      !hasQuickAppStarters &&
-      !!selectedDeploymentConfiguration?.isChatMessageInputDisabled,
-    [hasQuickAppStarters, selectedDeploymentConfiguration],
-  );
 
   /*
    * While the composer input is disabled a page drop is rejected the same way
@@ -648,6 +532,7 @@ const ConversationView: FC<Props> = ({
       !isInputDisabled &&
       !isDisabledSendEnabled &&
       !isSkillUnsupported &&
+      !isSelectedModelHidden &&
       isInputFilesEnabled &&
       isAttachmentsAllowed &&
       isTextAttachmentsAllowed &&
@@ -657,91 +542,26 @@ const ConversationView: FC<Props> = ({
     onDroppedFilesConsumed: onFilesConsumed,
   });
 
-  const deploymentLookup = useMemo<
-    Record<string, { displayName: string; iconUrl: string | undefined }>
-  >(
-    () =>
-      Object.fromEntries(
-        items.map((d) => [
-          d.id,
-          {
-            displayName: resolveLocalizedText(d.displayName, language),
-            iconUrl: resolveCatalogIconUrl(d.iconUrl),
-          },
-        ]),
-      ),
-    [items, language],
-  );
+  const {
+    deploymentLookup,
+    tooltips,
+    ariaLabels,
+    formatStatusModelChangedBody,
+    stepsLabel,
+  } = useMessageListLabels({ items });
 
   /*
    * For each message, resolve the deployment active at that point in the conversation.
    * Scans status messages in order so messages before a model change get the initial model icon.
    */
-  const effectiveDeploymentIds = useMemo<(string | undefined)[]>(() => {
-    /* Single linear pass — copying the accumulator per message was O(n²) on long conversations. */
-    const result: (string | undefined)[] = [];
-    let activeId = initialModelId;
-    for (const msg of messages) {
-      if (
-        isStatusMessage(msg) &&
-        msg.custom_content?.event_type === StatusEvent.ModelChanged
-      ) {
-        activeId = msg.custom_content.new_deployment_id;
-      }
-      result.push(msg.deploymentId ?? activeId);
-    }
-    return result;
-  }, [messages, initialModelId]);
+  const effectiveDeploymentIds = useMemo(
+    () => getEffectiveDeploymentIds(messages, initialModelId),
+    [messages, initialModelId],
+  );
 
   const messageHistory = useMemo(
     () => getInputMessageHistory(messages, isInputHistoryNavigationDisabled),
     [messages, isInputHistoryNavigationDisabled],
-  );
-
-  const tooltips = useMemo<MessageActionTooltips>(
-    () => ({
-      edit: t(ButtonsI18nKeys.Edit),
-      delete: t(ButtonsI18nKeys.Delete),
-      regenerate: t(ButtonsI18nKeys.Regenerate),
-      copy: t(ButtonsI18nKeys.CopyText),
-      copyMessage: t(ButtonsI18nKeys.CopyMessage),
-      copied: t(ButtonsI18nKeys.Copied),
-      copyMarkdown: t(ButtonsI18nKeys.CopyAsMarkdown),
-      copiedMarkdown: t(ButtonsI18nKeys.Copied),
-      like: t(ButtonsI18nKeys.Like),
-      dislike: t(ButtonsI18nKeys.Dislike),
-    }),
-    [t],
-  );
-
-  const ariaLabels = useMemo<MessageActionAriaLabels>(
-    () => ({
-      editMessage: t(ButtonsI18nKeys.EditMessage),
-      deleteMessage: t(ButtonsI18nKeys.DeleteMessage),
-      regenerateResponse: t(ButtonsI18nKeys.RegenerateResponse),
-      copyResponse: t(ButtonsI18nKeys.CopyResponse),
-      copyMessage: t(ButtonsI18nKeys.CopyMessage),
-      copiedMessageStatus: t(ButtonsI18nKeys.MessageCopiedStatus),
-      copyAsMarkdown: t(ButtonsI18nKeys.CopyAsMarkdown),
-      likeResponse: t(ButtonsI18nKeys.LikeResponse),
-      dislikeResponse: t(ButtonsI18nKeys.DislikeResponse),
-    }),
-    [t],
-  );
-
-  const modelSelectorLabels = useModelSelectorLabels({
-    isLoading,
-    error,
-    itemCount: items.length,
-  });
-
-  const formatStatusModelChangedBody = useCallback(
-    (from: string, to: string) =>
-      t(ConversationI18nKeys.StatusModelChangedBody, {
-        from,
-        to,
-      }),
-    [t],
   );
 
   const {
@@ -758,126 +578,32 @@ const ConversationView: FC<Props> = ({
     conversationId: conversation.id,
   });
 
-  const handleSendWithAnchor = useCallback(
-    async (message: string, attachments: Attachment[]) => {
-      armAnchor(messages.length);
-      /* ConversationInput awaits this to know whether to restore the draft
-       * on failure — forward onSend's result rather than discarding it. */
-      await onSend(message, attachments, selectedSkills);
-      /*
-       * Clear only after a successful send: a rejected onSend restores the
-       * draft, and the mentions should survive with it for the retry.
-       * No-op while the skill flag is off.
-       */
-      resetSkillMentions();
-    },
-    [onSend, messages.length, armAnchor, selectedSkills, resetSkillMentions],
-  );
+  const {
+    handleSendWithAnchor,
+    handleRegenerateMessageWithAnchor,
+    handleStartEdit,
+    handleCancelEdit,
+    handleEditMessageWithAnchor,
+  } = useAnchoredMessageActions({
+    messages,
+    isAssistantTyping,
+    onSend,
+    onRegenerateMessage,
+    onStartEdit,
+    onCancelEdit,
+    onEditMessage,
+    armAnchor,
+    sendWithDraft,
+    selectedSkills,
+    resetSkillMentions,
+    seedSkillMentions,
+    resetEditSkillMentions,
+    editSkills,
+  });
 
-  /*
-   * Per-chunk values read by the message-item handlers at call time. Keeping
-   * them out of those handlers' deps keeps every item's props stable while a
-   * reply streams, so `memo(ConversationMessageItem)` re-renders only the
-   * streaming message. Assigned in a layout effect: committed before any user
-   * event can reach a handler.
-   */
-  const latestRef = useRef({ messages, isAssistantTyping });
-  useLayoutEffect(() => {
-    latestRef.current = { messages, isAssistantTyping };
-  }, [messages, isAssistantTyping]);
-
-  const handleOpenDialFileManager = useCallback(
-    () => setIsDialFileManagerOpen(true),
-    [],
-  );
   const editMenuOverlays = useMemo(
     () => (editSkillMenuOverlay ? [editSkillMenuOverlay] : undefined),
     [editSkillMenuOverlay],
-  );
-
-  const handleRegenerateMessageWithAnchor = useCallback(
-    (messageIndex: number) => {
-      /*
-       * Regenerating while another generation is in flight is a no-op in
-       * handleRegenerateMessage — skip arming the anchor so a later,
-       * unrelated message update doesn't consume a stale index.
-       */
-      if (!latestRef.current.isAssistantTyping) {
-        armAnchor(messageIndex - 1);
-      }
-      onRegenerateMessage?.(messageIndex);
-    },
-    [onRegenerateMessage, armAnchor],
-  );
-
-  /*
-   * Seeds the edit input with the edited message's full mention state:
-   * `seedSkillMentions` reconstructs every mention's position in the
-   * message's text, matching `custom_content.skills` in order. A no-op (empty
-   * mentions) while the skill flag is off.
-   */
-  const handleStartEdit = useCallback(
-    (messageIndex: number) => {
-      const editedMessage = latestRef.current.messages[messageIndex];
-      seedSkillMentions(
-        editedMessage?.content ?? '',
-        editedMessage?.custom_content?.skills,
-      );
-      onStartEdit?.(messageIndex);
-    },
-    [onStartEdit, seedSkillMentions],
-  );
-
-  /*
-   * An edit session's mentions never outlive it — otherwise the composer
-   * would silently attach the edited message's mentions to the next message.
-   * No-op while the skill flag is off.
-   */
-  const handleCancelEdit = useCallback(
-    (messageIndex: number) => {
-      resetEditSkillMentions();
-      onCancelEdit?.(messageIndex);
-    },
-    [onCancelEdit, resetEditSkillMentions],
-  );
-
-  const handleEditMessageWithAnchor = useCallback(
-    (
-      messageIndex: number,
-      text: string,
-      keptAttachments: DisplayAttachment[],
-      newAttachments: Attachment[],
-    ) => {
-      /*
-       * handleEditMessage no-ops if a generation is in flight, or if nothing
-       * changed and the existing answer is complete (shouldRerunGenerationOnEdit
-       * mirrors that same check) — skip arming in either case so a later,
-       * unrelated update can't consume a stale index.
-       */
-      if (
-        !latestRef.current.isAssistantTyping &&
-        shouldRerunGenerationOnEdit(
-          latestRef.current.messages,
-          messageIndex,
-          text,
-          keptAttachments,
-          newAttachments,
-          editSkills,
-        )
-      ) {
-        armAnchor(messageIndex);
-      }
-      onEditMessage?.(
-        messageIndex,
-        text,
-        keptAttachments,
-        newAttachments,
-        editSkills,
-      );
-      /* The edit session consumed the mentions; the next edit starts fresh. */
-      resetEditSkillMentions();
-    },
-    [onEditMessage, armAnchor, editSkills, resetEditSkillMentions],
   );
 
   const chatSettingsLabels = useChatSettingsFormLabels();
@@ -895,20 +621,6 @@ const ConversationView: FC<Props> = ({
         message: chatSettingsLabels.savedNotification,
       }),
   });
-
-  const handleAttachDialFiles = useCallback(
-    (result: AttachResult) => {
-      const fileAttachments = dialFilesToAttachments(result.files, bucket, {
-        resolvePreviewUrl: resolveCatalogIconUrl,
-      });
-      const folderAttachments = result.folderPaths.map(
-        dialFolderPathToAttachment,
-      );
-      setPendingDialAttachments([...fileAttachments, ...folderAttachments]);
-      setIsDialFileManagerOpen(false);
-    },
-    [bucket],
-  );
 
   const handleReplyAttachmentsChange = reply.onAttachmentsChange;
   const handleAttachmentsChange = useCallback(
@@ -944,14 +656,9 @@ const ConversationView: FC<Props> = ({
 
   const handleInputAttachmentClick = useCallback(
     (attachment: DisplayAttachment) => {
-      void openAttachmentCanvas(attachment);
+      void openAttachmentCanvas(attachment, undefined, startCanvasRequest());
     },
-    [openAttachmentCanvas],
-  );
-
-  const clearPendingDialAttachments = useCallback(
-    () => setPendingDialAttachments([]),
-    [],
+    [openAttachmentCanvas, startCanvasRequest],
   );
 
   const handleMessageAttachmentClick = useCallback(
@@ -962,9 +669,13 @@ const ConversationView: FC<Props> = ({
        * attached twice) — prefix with the message index so the "selected"
        * tile highlight can't spuriously match a different message's tile.
        */
-      void openAttachmentCanvas(attachment, `${messageIndex}:${attachment.id}`);
+      void openAttachmentCanvas(
+        attachment,
+        `${messageIndex}:${attachment.id}`,
+        startCanvasRequest(),
+      );
     },
-    [openAttachmentCanvas],
+    [openAttachmentCanvas, startCanvasRequest],
   );
 
   return (
@@ -1003,11 +714,18 @@ const ConversationView: FC<Props> = ({
           aria-label={t(ChatI18nKeys.ConversationMessages)}
           aria-live="polite"
           aria-relevant="additions"
-          className="flex w-full flex-1 flex-col overflow-y-auto overflow-x-hidden"
+          /*
+           * `relative` makes the scroller the containing block for absolutely
+           * positioned descendants (e.g. `sr-only` live regions in message
+           * actions). Without it they overflow the `overflow-hidden` wrapper
+           * above, which keyboard selection (Shift+ArrowUp) can then scroll,
+           * pushing the whole message list out of view (#9137).
+           */
+          className="relative flex w-full flex-1 flex-col overflow-x-hidden overflow-y-auto"
         >
           <div
             ref={contentRef}
-            className="mx-auto flex w-full min-w-0 max-w-[760px] shrink-0 flex-col gap-[26px] px-6 pt-7"
+            className="mx-auto flex w-full max-w-[760px] min-w-0 shrink-0 flex-col gap-[26px] px-6 pt-7"
           >
             {topContent}
             {messages.map((msg, index) => {
@@ -1019,6 +737,7 @@ const ConversationView: FC<Props> = ({
                 >
                   <ConversationMessageItem
                     msg={msg}
+                    hasTimestamp={hasMessageTimestamps}
                     contentRef={reply.contentRef}
                     index={index}
                     totalCount={messages.length}
@@ -1046,6 +765,7 @@ const ConversationView: FC<Props> = ({
                     onEditDraftChange={onEditDraftChange}
                     editCommandMenu={editCommandMenu}
                     editMenuOverlays={editMenuOverlays}
+                    editSendOnEnter={sendOnEnter}
                     renderHistorySkillSegments={renderHistorySkillSegments}
                     renderHistorySkills={renderHistorySkills}
                     onUploadAttachment={onUploadAttachment}
@@ -1140,11 +860,11 @@ const ConversationView: FC<Props> = ({
                 </div>
               );
             })}
-            {hasConversationReloadError && onRetryConversationReload && (
+            {retryConversationReload != null && (
               <ConversationReloadNotification
                 isReloading={isReloadingConversation}
                 isStreaming={isAssistantTyping}
-                onRetry={onRetryConversationReload}
+                onRetry={retryConversationReload}
               />
             )}
           </div>
@@ -1155,6 +875,14 @@ const ConversationView: FC<Props> = ({
             style={{ height: 0 }}
           />
         </div>
+
+        {/* The reload notification mounts inside the log on demand; this
+            always-mounted region carries its announcement instead. */}
+        <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
+          {retryConversationReload != null
+            ? `${t(ChatI18nKeys.ConversationReloadErrorTitle)} ${t(ChatI18nKeys.ConversationReloadError)}`
+            : ''}
+        </LiveRegion>
 
         {isScrollButtonVisible && (
           <FabButton
@@ -1171,30 +899,31 @@ const ConversationView: FC<Props> = ({
         className="relative z-10 w-full px-6"
       >
         {isReadOnly ? (
-          <div className="flex flex-col items-center justify-center gap-2 p-4">
-            {duplicateError && (
-              <ErrorMessageNotification message={duplicateError} />
-            )}
-            <NeutralButton
-              label={t(ConversationPanelI18nKeys.DuplicateReadOnlyDescription)}
-              iconBefore={
-                <IconCopy
-                  size={DIAL_ICON_SIZE.MD}
-                  stroke={DIAL_KIT_ICON_STROKE}
-                />
-              }
-              onClick={onDuplicateConversation}
-            />
-          </div>
+          <ConversationReadOnlyFooter
+            duplicateError={duplicateError}
+            isDuplicateUnavailable={isDuplicateUnavailable}
+            onDuplicateConversation={onDuplicateConversation}
+          />
         ) : (
           <>
+            {/* Empty while the model is available, so it takes no space. */}
+            <LiveRegion
+              as={LiveRegionElement.P}
+              className={mergeClasses(
+                'dial-small-text text-center text-secondary',
+                isSelectedModelHidden && 'pb-2',
+              )}
+            >
+              {isSelectedModelHidden &&
+                t(ConversationI18nKeys.ModelUnavailableNotice)}
+            </LiveRegion>
             <Suspense fallback={null}>
               <ConversationInput
                 key={conversation.id}
                 focusRequestId={reply.focusRequestId}
                 message={composerSeedText}
                 messageRevision={composerSeedRevision}
-                onChange={onDraftChange}
+                onChange={handleDraftChange}
                 textInsertion={inputInsertion}
                 onSend={handleSendWithAnchor}
                 onUploadAttachment={onUploadAttachment}
@@ -1215,10 +944,14 @@ const ConversationView: FC<Props> = ({
                 }
                 onDeploymentChange={fixedModel ? undefined : setSelectedItemId}
                 isModelSelectorDisabled={isModelFixed}
-                isSendDisabled={isDisabledSendEnabled || isSkillUnsupported}
+                isSendDisabled={
+                  isDisabledSendEnabled ||
+                  isSkillUnsupported ||
+                  isSelectedModelHidden
+                }
                 isInputDisabled={isInputDisabled}
                 modelSelectorLabels={modelSelectorLabels}
-                addMenuTitle={t(ConversationI18nKeys.AddMenuTitle)}
+                addMenuTitle={t(ButtonsI18nKeys.Add)}
                 sendLabel={t(ChatI18nKeys.SendMessage)}
                 sendTooltip={t(ChatI18nKeys.SendMessage)}
                 stopLabel={t(ChatI18nKeys.StopStreaming)}
@@ -1253,9 +986,7 @@ const ConversationView: FC<Props> = ({
                   !isEditActive ? reply.onFilesConsumed : undefined
                 }
                 onPendingAttachmentsConsumed={
-                  !isEditActive
-                    ? () => setPendingDialAttachments([])
-                    : undefined
+                  !isEditActive ? clearPendingDialAttachments : undefined
                 }
                 autoFocus={!isMobile && !isSkipFocusChatInputOnloadEnabled}
                 onDialFileSystemClick={
@@ -1283,6 +1014,7 @@ const ConversationView: FC<Props> = ({
                 fileAccept={fileAccept}
                 onAttachmentClick={handleInputAttachmentClick}
                 modelPickerOverlay={isModelFixed ? undefined : renderOverlay}
+                onModelPickerOpenChange={onModelPickerOpenChange}
                 menuOverlays={menuOverlays}
                 activeMentions={activeMentions}
                 onBackspaceAtCaret={onBackspaceAtCaret}
@@ -1290,61 +1022,33 @@ const ConversationView: FC<Props> = ({
                 commandMenu={commandMenu}
                 onMessageTooLong={handleMessageTooLong}
                 usageLimitsSlot={
-                  <UsageLimitsControl
-                    deploymentId={
-                      selectedDeployment?.id ?? activeDeploymentId ?? undefined
-                    }
-                    isGenerationInProgress={isAssistantTyping}
-                  />
+                  isUsageLimitsControlEnabled ? (
+                    <UsageLimitsControl
+                      deploymentId={usageDeploymentId}
+                      isGenerationInProgress={isAssistantTyping}
+                    />
+                  ) : undefined
+                }
+                aboveInputSlot={
+                  isUsageLimitsControlEnabled ? undefined : (
+                    <UsageLimitBanner
+                      deploymentId={usageDeploymentId}
+                      isGenerationInProgress={isAssistantTyping}
+                    />
+                  )
                 }
               />
             </Suspense>
-            <Suspense fallback={null}>
-              {isDialFileManagerOpen && (
-                <DialFileManagerModal
-                  isOpen={isDialFileManagerOpen}
-                  onClose={() => setIsDialFileManagerOpen(false)}
-                  onAttach={handleAttachDialFiles}
-                  bucket={bucket}
-                  allowedTypes={inputAttachmentTypes}
-                  maxSelectableFileSize={maxAttachmentFileSizeBytes}
-                  maximumAttachmentsAmount={
-                    selectedDeployment?.maxInputAttachments
-                  }
-                  existingAttachmentsAmount={attachmentsAmount}
-                  canAttachFolders={
-                    selectedDeployment?.features?.folderAttachments
-                  }
-                  title={t(BasicI18nKeys.AttachFiles)}
-                  attachLabel={t(DialFileManagerI18nKeys.Attach)}
-                  emptyTitle={t(DialFileManagerI18nKeys.Empty)}
-                  emptyDescription=""
-                  errorMessage={t(DialFileManagerI18nKeys.Error)}
-                  retryLabel={t(DialFileManagerI18nKeys.Retry)}
-                  hiddenFilesLabel={t(DialFileManagerI18nKeys.HiddenFiles)}
-                  showHiddenFilesLabel={t(
-                    DialFileManagerI18nKeys.ShowHiddenFiles,
-                  )}
-                  hideHiddenFilesLabel={t(
-                    DialFileManagerI18nKeys.HideHiddenFiles,
-                  )}
-                  getSelectionLabel={(count) =>
-                    t(DialFileManagerI18nKeys.ItemsSelected, { count })
-                  }
-                  uploadFilesLabel={t(DialFileManagerI18nKeys.Upload)}
-                  newFolderLabel={t(DialFileManagerI18nKeys.NewFolder)}
-                  downloadLabel={t(ButtonsI18nKeys.Download)}
-                  downloadingLabel={t(DialFileManagerI18nKeys.Downloading)}
-                  deleteLabel={t(ButtonsI18nKeys.Delete)}
-                  deletingLabel={t(BasicI18nKeys.DeletingStatus)}
-                  deleteConfirmBody={(names) => (
-                    <FileDeleteConfirmContent names={names} />
-                  )}
-                  deleteConfirmLabel={t(ButtonsI18nKeys.Delete)}
-                  deleteCancelLabel={t(ButtonsI18nKeys.Cancel)}
-                />
-              )}
-            </Suspense>
+            <ConversationFileManagerModal
+              isDialFileManagerOpen={isDialFileManagerOpen}
+              closeDialFileManager={closeDialFileManager}
+              handleAttachDialFiles={handleAttachDialFiles}
+              bucket={bucket}
+              inputAttachmentTypes={inputAttachmentTypes}
+              maxAttachmentFileSizeBytes={maxAttachmentFileSizeBytes}
+              selectedDeployment={selectedDeployment}
+              attachmentsAmount={attachmentsAmount}
+            />
           </>
         )}
       </div>

@@ -1,15 +1,24 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import express from 'express';
 import { chromium } from 'playwright';
 import { build } from 'vite';
-import tailwindcss from 'tailwindcss';
+import tailwindcss from '@tailwindcss/vite';
 
 const workspace = resolve(import.meta.dirname, '../../..');
-const require = createRequire(import.meta.url);
+
+/* The libraries the fixture page renders, scanned for the classes they use. */
+const FIXTURE_LIBS = [
+  'skill-editor',
+  'scheduled-tasks',
+  'builder-form',
+  'chat-shared',
+];
+
+/* Tailwind resolves CSS import and `@source` paths with "/" separators only. */
+const toCssPath = (path) => path.replaceAll('\\', '/');
 
 test('standalone refinement text fallbacks meet 7:1 contrast', async () => {
   const luminance = (hex) => {
@@ -53,7 +62,18 @@ test(
     );
     await writeFile(
       resolve(fixture, 'main.css'),
-      '@tailwind base; @tailwind components; @tailwind utilities; body{margin:0;background:#fff;color:#161b2d} #root{min-height:100vh;display:flex;flex-direction:column}',
+      [
+        `@import 'tailwindcss/theme.css' theme(reference inline);`,
+        `@import '${toCssPath(resolve(workspace, 'tools/tailwind/theme.css'))}';`,
+        `@import 'tailwindcss/preflight.css';`,
+        `@import '${toCssPath(resolve(workspace, 'tools/tailwind/preflight-v3.css'))}';`,
+        `@import 'tailwindcss/utilities.css' source(none);`,
+        ...FIXTURE_LIBS.map(
+          (lib) =>
+            `@source '${toCssPath(resolve(workspace, `libs/${lib}/src`))}/**/*.{ts,tsx}';`,
+        ),
+        'body{margin:0;background:#fff;color:#161b2d} #root{min-height:100vh;display:flex;flex-direction:column}',
+      ].join('\n'),
     );
     await writeFile(
       resolve(fixture, 'main.tsx'),
@@ -72,7 +92,7 @@ const labels={descriptionLabel:'Description',instructionsLabel:'Instructions',re
 const refine=(text,signal)=>new Promise(resolve=>{window.finishRefinement=()=>resolve(text+' refined');window.refinementSignal=signal;});
 function App(){
  const [values,setValues]=useState({displayName:'Task',description:'Original',prompt:'# Instructions',modelId:'model',repeat:'hourly',minute:'0',time:'09:00'});
- return query.get('form')==='skill'?<SkillEditor title="Skill" labels={{...labels,createLabel:'Save'}} initialValues={{name:'skill',description:'Original',instructions:'# Instructions'}} files={[]} fileActions={{validateBatch:async()=>({results:[],batchErrors:[]}),commitBatch:async()=>({}),onRemoveNode:()=>{}}} onBack={()=>{}} onCancel={()=>{}} onSubmit={()=>{}} onRefineDescription={refine} onRefineInstructions={refine} />:<ScheduledTaskCreateForm labels={{...labels,pageTitle:'Task',backButtonLabel:'Back',detailsSectionTitle:'Details',detailsSectionSubtitle:'Details',configurationSectionTitle:'Configuration',configurationSectionSubtitle:'Configuration',displayNameLabel:'Name',repeatLabel:'Repeat',repeatOptions:[{key:'hourly',label:'Hourly'}],minuteLabel:'Minute',startDateLabel:'Start',endDateLabel:'End',cancelButtonLabel:'Cancel',createButtonLabel:'Save'}} values={values} errors={{}} modelSelector={null} modelLabelId="model" onFieldChange={(key,value)=>setValues(prev=>({...prev,[key]:value}))} onBack={()=>{}} onCancel={()=>{}} onSubmit={()=>{}} onRefineDescription={refine} onRefineInstructions={refine} />;
+ return query.get('form')==='skill'?<SkillEditor title="Skill" labels={{...labels,createLabel:'Save'}} initialValues={{name:'skill',description:'Original',instructions:'# Instructions'}} files={[]} fileActions={{validateBatch:async()=>({results:[],batchErrors:[]}),commitBatch:async()=>({}),onRemoveNode:()=>{}}} onBack={()=>{}} onCancel={()=>{}} onSubmit={()=>{}} onRefineDescription={refine} onRefineInstructions={refine} />:<ScheduledTaskCreateForm labels={{...labels,pageTitle:'Task',backButtonLabel:'Back',detailsSectionTitle:'Details',detailsSectionSubtitle:'Details',configurationSectionTitle:'Configuration',displayNameLabel:'Name',repeatLabel:'Repeat',repeatOptions:[{key:'hourly',label:'Hourly'}],minuteLabel:'Minute',startDateLabel:'Start',endDateLabel:'End',cancelButtonLabel:'Cancel',createButtonLabel:'Save'}} values={values} errors={{}} modelSelector={null} modelLabelId="model" onFieldChange={(key,value)=>setValues(prev=>({...prev,[key]:value}))} onBack={()=>{}} onCancel={()=>{}} onSubmit={()=>{}} onRefineDescription={refine} onRefineInstructions={refine} />;
 }
 createRoot(document.getElementById('root')).render(<App/>);
 `,
@@ -89,26 +109,7 @@ createRoot(document.getElementById('root')).render(<App/>);
           'development|production',
         ],
       },
-      css: {
-        postcss: {
-          plugins: [
-            tailwindcss({
-              presets: [require(resolve(workspace, 'tailwind.config.js'))],
-              content: [
-                'skill-editor',
-                'scheduled-tasks',
-                'builder-form',
-                'chat-shared',
-              ].map((lib) =>
-                resolve(workspace, `libs/${lib}/src/**/*.{ts,tsx}`).replaceAll(
-                  '\\',
-                  '/',
-                ),
-              ),
-            }),
-          ],
-        },
-      },
+      plugins: [tailwindcss()],
       build: { outDir: resolve(fixture, 'dist'), minify: false },
     });
     const app = express();

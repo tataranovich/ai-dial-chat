@@ -30,12 +30,14 @@ export enum ScheduledTaskValidationErrorCode {
   TimeInvalid = 'timeInvalid',
   MinuteInvalid = 'minuteInvalid',
   DayOfWeekInvalid = 'dayOfWeekInvalid',
+  /** The Custom repeat selects no weekday, an unknown one, or the same one twice. */
+  DaysOfWeekInvalid = 'daysOfWeekInvalid',
   DayOfMonthInvalid = 'dayOfMonthInvalid',
   StartDateInvalid = 'startDateInvalid',
-  /** The activity-window start date is earlier than the injected clock's local today and differs from the option's original. */
+  /** The activity-window start boundary is earlier than the clock — its day earlier than today for a date-only value, its instant earlier than now for a time-carrying one — and differs from the option's original. */
   StartDateInPast = 'startDateInPast',
   EndDateInvalid = 'endDateInvalid',
-  /** The activity-window end date is earlier than the injected clock's local today and differs from the option's original. */
+  /** The activity-window end boundary is earlier than the clock — its day earlier than today for a date-only value, its instant earlier than now for a time-carrying one — and differs from the option's original. */
   EndDateInPast = 'endDateInPast',
 }
 
@@ -47,12 +49,13 @@ export type ScheduledTaskValidationErrors = Partial<
 /** Explicit clock and lead-time inputs make schedule validation deterministic. */
 export interface ScheduledTaskValidationOptions {
   now: Date;
+  /** Minimum time a one-shot `runAt` must lie ahead of `now`. Defaults to `SCHEDULED_TASK_MINIMUM_LEAD_MS`. */
   minimumLeadMs?: number;
   /** Explicit capability of the draft's selected model; omitted means unsupported. */
   isSkillsSupported?: boolean;
-  /** Activity-window start date the edit form was hydrated with, in the form's local `YYYY-MM-DD` shape; an unchanged original is exempt from the past-date rule. */
+  /** Activity-window start boundary the edit form was hydrated with, in the hydrated boundary's shape (`YYYY-MM-DD`); an unchanged original is exempt from the past-date rule. */
   originalStartDate?: string;
-  /** Activity-window end date the edit form was hydrated with, in the form's local `YYYY-MM-DD` shape; an unchanged original is exempt from the past-date rule. */
+  /** Activity-window end boundary the edit form was hydrated with, in the hydrated boundary's shape (`YYYY-MM-DD`); an unchanged original is exempt from the past-date rule. */
   originalEndDate?: string;
 }
 
@@ -89,11 +92,17 @@ export const validateScheduledTaskTextField = (
   }
 };
 
-const DEFAULT_MINIMUM_LEAD_MS = 60_000;
+/** Minimum time a one-shot `runAt` must lie ahead of `now`; the default of `minimumLeadMs`. */
+export const SCHEDULED_TASK_MINIMUM_LEAD_MS = 60_000;
 const MINUTE_PATTERN = /^(?:[0-9]|[1-5][0-9])$/;
 const WEEKDAY_PATTERN = /^[0-6]$/;
 const MONTH_DAY_PATTERN = /^(?:[1-9]|[12][0-9]|3[01])$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const isValidDaysOfWeek = (days: string[] | undefined): boolean =>
+  !!days?.length &&
+  days.every((day) => WEEKDAY_PATTERN.test(day)) &&
+  new Set(days).size === days.length;
 
 const isValidDateOnly = (value: string): boolean => {
   if (!DATE_PATTERN.test(value)) return false;
@@ -118,6 +127,10 @@ const padDatePart = (value: number): string => String(value).padStart(2, '0');
 const toLocalDateOnly = (date: Date): string =>
   `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
 
+/** A date-only boundary is past when its day is earlier than today; any time on today's day is allowed. */
+const isWindowBoundaryInPast = (value: string, today: string): boolean =>
+  value < today;
+
 /**
  * Validates only the fields active for the selected repeat cadence. This pure
  * function deliberately has no translation, DOM, network, or implicit-clock
@@ -127,7 +140,7 @@ export const validateScheduledTaskFormValues = (
   values: ScheduledTaskCreateFormValues,
   {
     now,
-    minimumLeadMs = DEFAULT_MINIMUM_LEAD_MS,
+    minimumLeadMs = SCHEDULED_TASK_MINIMUM_LEAD_MS,
     isSkillsSupported,
     originalStartDate,
     originalEndDate,
@@ -186,11 +199,19 @@ export const validateScheduledTaskFormValues = (
     errors.time = ScheduledTaskValidationErrorCode.TimeInvalid;
   }
 
+  /* Weekly picks one day in the weekday Calendar; Custom picks several in
+   * the day button row — both use the APScheduler-convention day string. */
   if (
     values.repeat === ScheduledTaskRepeat.Weekly &&
     !WEEKDAY_PATTERN.test(values.dayOfWeek ?? '')
   ) {
     errors.dayOfWeek = ScheduledTaskValidationErrorCode.DayOfWeekInvalid;
+  }
+  if (
+    values.repeat === ScheduledTaskRepeat.Custom &&
+    !isValidDaysOfWeek(values.daysOfWeek)
+  ) {
+    errors.daysOfWeek = ScheduledTaskValidationErrorCode.DaysOfWeekInvalid;
   }
   if (
     values.repeat === ScheduledTaskRepeat.Monthly &&
@@ -205,6 +226,7 @@ export const validateScheduledTaskFormValues = (
   if (values.endDate && !isValidDateOnly(values.endDate)) {
     errors.endDate = ScheduledTaskValidationErrorCode.EndDateInvalid;
   }
+  /* Fixed-width `YYYY-MM-DD` strings compare chronologically. */
   if (
     values.startDate &&
     values.endDate &&
@@ -216,20 +238,19 @@ export const validateScheduledTaskFormValues = (
   }
 
   /*
-   * ISO date-only strings compare lexicographically as chronological dates,
-   * so a boundary earlier than the clock's local today is a past date. This
-   * runs after the ordering check so the more fundamental "date is past"
-   * message wins when a boundary is both past and mis-ordered. A boundary
-   * matching its original is the loaded value of an older task opened for
-   * editing, not a user choice, so it is exempt — only a boundary changed
-   * into the past is rejected.
+   * A boundary is past when its day is earlier than today. This runs after
+   * the ordering check so the more fundamental "date is past" message wins
+   * when a boundary is both past and mis-ordered. A boundary matching its
+   * original is the loaded value of an older task opened for editing, not a
+   * user choice, so it is exempt — only a boundary changed into the past is
+   * rejected.
    */
   const today = toLocalDateOnly(now);
   if (
     values.startDate &&
     values.startDate !== originalStartDate &&
     isValidDateOnly(values.startDate) &&
-    values.startDate < today
+    isWindowBoundaryInPast(values.startDate, today)
   ) {
     errors.startDate = ScheduledTaskValidationErrorCode.StartDateInPast;
   }
@@ -237,7 +258,7 @@ export const validateScheduledTaskFormValues = (
     values.endDate &&
     values.endDate !== originalEndDate &&
     isValidDateOnly(values.endDate) &&
-    values.endDate < today
+    isWindowBoundaryInPast(values.endDate, today)
   ) {
     errors.endDate = ScheduledTaskValidationErrorCode.EndDateInPast;
   }

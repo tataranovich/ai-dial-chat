@@ -2,6 +2,7 @@ import type { CatalogItem } from '@epam/ai-dial-catalog';
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { describe, expect, it } from 'vitest';
 import {
+  canEditShareAccess,
   deriveAvailableTabIds,
   deriveFavoriteItems,
   filterCatalogItemsBySelector,
@@ -52,6 +53,37 @@ describe('filterCatalogItemsBySelector', () => {
     expect(filterCatalogItemsBySelector([model, prompt], visible)).toHaveLength(
       2,
     );
+  });
+
+  it('drops items that cannot hold a conversation', () => {
+    const chatApp = makeItem('chat', CatalogEntityType.Agent, {
+      supportsChat: true,
+    });
+    const mcpApp = makeItem('mcp', CatalogEntityType.Agent, {
+      supportsChat: false,
+    });
+    const prompt = makeItem('p', CatalogEntityType.Prompt);
+    const visible = new Set([
+      CatalogEntityType.Agent,
+      CatalogEntityType.Prompt,
+    ]);
+    expect(
+      filterCatalogItemsBySelector([chatApp, mcpApp, prompt], visible),
+    ).toEqual([chatApp, prompt]);
+  });
+
+  it('omits applications listed only under Toolsets', () => {
+    const toolsetOnly = makeItem('mcp', CatalogEntityType.Agent, {
+      catalogTabs: [CatalogEntityType.Toolset],
+    });
+    const dual = makeItem('dual', CatalogEntityType.Agent, {
+      catalogTabs: [CatalogEntityType.Agent, CatalogEntityType.Toolset],
+    });
+    const legacy = makeItem('legacy', CatalogEntityType.Agent);
+    const visible = new Set([CatalogEntityType.Model, CatalogEntityType.Agent]);
+    expect(
+      filterCatalogItemsBySelector([toolsetOnly, dual, legacy], visible),
+    ).toEqual([dual, legacy]);
   });
 });
 
@@ -139,6 +171,23 @@ describe('deriveAvailableTabIds', () => {
     const skill = makeItem('s', CatalogEntityType.Skill);
     expect(deriveAvailableTabIds([skill], TAB_ORDER)).toEqual([]);
   });
+
+  it('follows tab membership rather than the entity kind', () => {
+    const mcpApp = makeItem('mcp', CatalogEntityType.Agent, {
+      catalogTabs: [CatalogEntityType.Toolset],
+    });
+    const model = makeItem('m', CatalogEntityType.Model);
+    expect(
+      deriveAvailableTabIds(
+        [mcpApp, model],
+        [
+          CatalogEntityType.Model,
+          CatalogEntityType.Agent,
+          CatalogEntityType.Toolset,
+        ],
+      ),
+    ).toEqual([CatalogEntityType.Model, CatalogEntityType.Toolset]);
+  });
 });
 
 describe('reconcileFilterTopics', () => {
@@ -175,5 +224,18 @@ describe('reconcileFilterTopics', () => {
   it('returns empty set when items array is empty', () => {
     const persisted = new Set(['alpha']);
     expect(reconcileFilterTopics(persisted, [])).toEqual(new Set());
+  });
+});
+
+describe('canEditShareAccess', () => {
+  it('allows edit access for agents, prompts, skills and toolsets', () => {
+    expect(canEditShareAccess(CatalogEntityType.Agent)).toBe(true);
+    expect(canEditShareAccess(CatalogEntityType.Prompt)).toBe(true);
+    expect(canEditShareAccess(CatalogEntityType.Skill)).toBe(true);
+    expect(canEditShareAccess(CatalogEntityType.Toolset)).toBe(true);
+  });
+
+  it('keeps models view-only', () => {
+    expect(canEditShareAccess(CatalogEntityType.Model)).toBe(false);
   });
 });

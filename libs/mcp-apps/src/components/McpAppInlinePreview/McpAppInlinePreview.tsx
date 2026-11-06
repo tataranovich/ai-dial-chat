@@ -9,6 +9,8 @@ import {
   GhostIconButton,
   Spinner,
   mergeClasses,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import type { Implementation } from '@modelcontextprotocol/sdk/types.js';
 import {
@@ -23,6 +25,7 @@ import {
   McpAppInlinePreviewStatus,
   type McpAppHostAdapter,
   type McpAppInlinePreviewColors,
+  type McpAppInlinePreviewTypography,
   type McpAppResponseCache,
   type McpAppToolCallSeed,
   type McpAppToolRef,
@@ -51,6 +54,8 @@ export interface McpAppInlinePreviewProps {
   actionsGroupAriaLabel?: string;
   /** Message shown when the resource fails to load or the app fails to initialize. */
   loadErrorLabel: string;
+  /** Accessible label of the spinner shown while the app loads. Defaults to `'Loading app'`. */
+  loadingAriaLabel?: string;
   /**
    * Whether this message's MCP App is currently open in the full-width
    * canvas. When `true`, the header stays (so the tool/app identity is still
@@ -62,6 +67,8 @@ export interface McpAppInlinePreviewProps {
   openedInCanvasLabel: string;
   /** Color overrides applied as CSS custom properties on the preview's root. */
   colors?: McpAppInlinePreviewColors;
+  /** Typography class overrides; each field has a kit scale default. */
+  typography?: McpAppInlinePreviewTypography;
 }
 
 /** Compact, always-visible header+frame preview of a message's matched MCP App — see `McpAppInlinePreviewProps` and the mcp-app-trigger openspec. */
@@ -76,10 +83,16 @@ const McpAppInlinePreviewBase: FC<McpAppInlinePreviewProps> = ({
   reloadAriaLabel,
   actionsGroupAriaLabel = 'MCP app actions',
   loadErrorLabel,
+  loadingAriaLabel = 'Loading app',
   isOpenedInCanvas = false,
   openedInCanvasLabel,
   colors,
+  typography,
 }) => {
+  const {
+    headerNameClassName = 'dial-tiny-lead-semi-text',
+    messageClassName = 'dial-body-text',
+  } = typography ?? {};
   /* Populated once `ui/initialize` completes; reset per `cacheKey` — see mcp-app-trigger spec.md. */
   const [appInfo, setAppInfo] = useState<Implementation | undefined>(undefined);
   useEffect(() => {
@@ -102,6 +115,10 @@ const McpAppInlinePreviewBase: FC<McpAppInlinePreviewProps> = ({
     '--mcpapp-preview-bg': colors?.previewBackground,
     '--mcpapp-preview-border': colors?.previewBorder,
     '--mcpapp-preview-header-border': colors?.previewHeaderBorder,
+    '--mcpapp-header-text': colors?.headerText,
+    '--mcpapp-placeholder-text': colors?.placeholderText,
+    '--mcpapp-error-icon': colors?.errorIcon,
+    '--mcpapp-error-text': colors?.errorText,
   });
 
   const { status, content, reload, attemptId } = useMcpAppInlinePreview(
@@ -116,6 +133,11 @@ const McpAppInlinePreviewBase: FC<McpAppInlinePreviewProps> = ({
   if (status === McpAppInlinePreviewStatus.Unavailable) {
     return null;
   }
+
+  let statusText = '';
+  if (isOpenedInCanvas) statusText = openedInCanvasLabel;
+  else if (status === McpAppInlinePreviewStatus.Error)
+    statusText = loadErrorLabel;
 
   return (
     <div
@@ -142,27 +164,18 @@ const McpAppInlinePreviewBase: FC<McpAppInlinePreviewProps> = ({
           text={
             appInfo != null ? (
               <>
-                <span className="dial-tiny-lead-semi-text">
-                  {match.mcpToolName}
-                </span>
+                <span className={headerNameClassName}>{match.mcpToolName}</span>
                 <span
                   aria-hidden
-                  className="border-current mx-1.5 inline-block h-3 w-0 border-s align-middle"
+                  className="mx-1.5 inline-block h-3 w-0 border-s border-current align-middle"
                 />
-                <span className="dial-tiny-lead-semi-text">{appInfo.name}</span>
-                {appInfo.version && (
-                  <span className="dial-caption-text ms-2">
-                    {appInfo.version}
-                  </span>
-                )}
+                <span className={headerNameClassName}>{appInfo.name}</span>
               </>
             ) : (
-              <span className="dial-tiny-lead-semi-text">
-                {match.mcpToolName}
-              </span>
+              <span className={headerNameClassName}>{match.mcpToolName}</span>
             )
           }
-          className="text-secondary"
+          className={styles.headerText}
         />
         <div
           role="toolbar"
@@ -195,14 +208,23 @@ const McpAppInlinePreviewBase: FC<McpAppInlinePreviewProps> = ({
           />
         </div>
       </div>
-      <div className="relative min-h-[200px] w-full">
+      <div className="relative min-h-[100px] w-full">
+        {/* Always mounted so the polite region exists before the canvas opens or the load fails. */}
+        <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
+          {statusText}
+        </LiveRegion>
         {isOpenedInCanvas ? (
           <div
-            role="status"
-            aria-live="polite"
+            aria-hidden
             className="absolute inset-0 flex items-center justify-center p-4"
           >
-            <span className="dial-body-text text-center text-secondary">
+            <span
+              className={mergeClasses(
+                messageClassName,
+                'text-center',
+                styles.placeholderText,
+              )}
+            >
               {openedInCanvasLabel}
             </span>
           </div>
@@ -210,7 +232,7 @@ const McpAppInlinePreviewBase: FC<McpAppInlinePreviewProps> = ({
           <>
             {status === McpAppInlinePreviewStatus.Loading && (
               <div className="absolute inset-0 flex items-center justify-center">
-                <Spinner />
+                <Spinner ariaLabel={loadingAriaLabel} />
               </div>
             )}
             {status === McpAppInlinePreviewStatus.Error && (
@@ -219,11 +241,15 @@ const McpAppInlinePreviewBase: FC<McpAppInlinePreviewProps> = ({
                   size={40}
                   stroke={DIAL_KIT_ICON_STROKE}
                   aria-hidden
-                  className="text-error"
+                  className={styles.errorIcon}
                 />
                 <p
-                  role="alert"
-                  className="dial-body-text text-center text-primary"
+                  aria-hidden
+                  className={mergeClasses(
+                    messageClassName,
+                    'text-center',
+                    styles.errorText,
+                  )}
                 >
                   {loadErrorLabel}
                 </p>

@@ -10,7 +10,11 @@ import {
   DialFileNodeType,
   FileManagerColumnKey,
 } from '@epam/ai-dial-react-file-manager';
-import { NotificationVariant, type FilterChipItem } from '@epam/ai-dial-ui-kit';
+import {
+  ButtonVariant,
+  NotificationVariant,
+  type FilterChipItem,
+} from '@epam/ai-dial-ui-kit';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useCallback, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -219,6 +223,9 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
       contentClassName?: string;
       gridClassName?: string;
       gridOptions?: {
+        filterable?: boolean;
+        withoutHeaderBorders?: boolean;
+        containerClassName?: string;
         additionalGridOptions?: {
           domLayout?: string;
           rowSelection?: {
@@ -244,6 +251,7 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
         hideHiddenFilesLabel?: string;
         isNewButtonDisabled?: boolean;
         disabledNewButtonTooltip?: string;
+        newButtonVariant?: string;
       };
       bulkActionsToolbarOptions?: {
         getSelectionLabel: (count: number) => string;
@@ -301,6 +309,10 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
         })}
         data-upload-enabled={uploadEnabled}
         data-new-button-disabled={toolbarOptions?.isNewButtonDisabled}
+        data-new-button-variant={toolbarOptions?.newButtonVariant}
+        data-grid-filterable={String(gridOptions?.filterable)}
+        data-grid-no-header-borders={String(gridOptions?.withoutHeaderBorders)}
+        data-grid-container-class={gridOptions?.containerClassName}
         data-new-button-tooltip={toolbarOptions?.disabledNewButtonTooltip}
         data-show-hidden-files-toggle={toolbarOptions?.showHiddenFilesToggle}
         data-hidden-files-label={toolbarOptions?.hiddenFilesSwitcherLabel}
@@ -386,10 +398,11 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
         >
           Invoke tab-change handler
         </button>
-        {selectedPaths?.size ? (
+        {/* Like the real file manager, the bulk toolbar needs its options. */}
+        {bulkActionsToolbarOptions && selectedPaths?.size ? (
           <>
             <span>
-              {bulkActionsToolbarOptions?.getSelectionLabel(selectedPaths.size)}
+              {bulkActionsToolbarOptions.getSelectionLabel(selectedPaths.size)}
             </span>
             <button
               type="button"
@@ -506,6 +519,10 @@ const defaultHookResult: UseDialFileManagerResult = {
   isCreatingFolder: false,
   onDownloadFiles: vi.fn(),
   isDownloading: false,
+  downloadBatchState: null,
+  cancelDownloadFile: vi.fn(),
+  cancelAllDownloads: vi.fn(),
+  clearDownloadBatch: vi.fn(),
   onDeleteFiles: vi.fn(),
   isDeleting: false,
   onRenameValidate: vi.fn(),
@@ -582,17 +599,17 @@ const defaultProps = {
   deleteCancelLabel: 'Cancel',
 };
 
-beforeEach(() => {
-  mockActiveTab.value = undefined;
-  mockFileManagerTabs.value = ['all', 'my_files', 'shared', 'organization'];
-  mockHandleTabChange.mockClear();
-  mockShowNotification.mockClear();
-  mockUseFileAttachmentPicker.mockClear();
-  mockUseFileAttachmentPicker.mockImplementation(fakeUseFileAttachmentPicker);
-  setControllerResult(defaultHookResult);
-});
-
 describe('DialFileManagerModal', () => {
+  beforeEach(() => {
+    mockActiveTab.value = undefined;
+    mockFileManagerTabs.value = ['all', 'my_files', 'shared', 'organization'];
+    mockHandleTabChange.mockClear();
+    mockShowNotification.mockClear();
+    mockUseFileAttachmentPicker.mockClear();
+    mockUseFileAttachmentPicker.mockImplementation(fakeUseFileAttachmentPicker);
+    setControllerResult(defaultHookResult);
+  });
+
   it('renders with the given title when isOpen is true', () => {
     render(<DialFileManagerModal {...defaultProps} />);
     expect(screen.getByText('Attach files')).toBeTruthy();
@@ -634,13 +651,15 @@ describe('DialFileManagerModal', () => {
     render(<DialFileManagerModal {...defaultProps} />);
     const fileManager = screen.getByRole('region', { name: 'file manager' });
     expect(fileManager.classList.contains('grow')).toBe(true);
-    expect(fileManager.classList.contains('bg-layer-sunken')).toBe(true);
+    /* The surface is the shell's CSS-module class, painted from `--dfms-surface`. */
+    expect(fileManager.className).toMatch(/surface/);
+    expect(fileManager.classList.contains('p-0')).toBe(true);
     expect(fileManager.getAttribute('data-content-class')).toBe('px-0 pb-0');
     expect(fileManager.getAttribute('data-grid-class')).toBe(
       'size-full gap-6 px-6 py-4',
     );
-    expect(fileManager.getAttribute('data-tree-container-class')).toBe(
-      'min-h-0 h-full w-[360px] shrink-0 rounded-xl bg-layer-raised shadow-sm',
+    expect(fileManager.getAttribute('data-tree-container-class')).toMatch(
+      /^relative z-1 min-h-0 h-full w-\[360px\] shrink-0 border-e \S*tree/,
     );
     expect(fileManager.getAttribute('data-grid-layout')).toBe('normal');
     expect(fileManager.getAttribute('data-show-hidden-files-toggle')).toBe(
@@ -669,7 +688,7 @@ describe('DialFileManagerModal', () => {
       'dialFileManager.conflictMultipleTitle',
     );
     expect(manager.getAttribute('data-conflict-replace')).toBe(
-      'dialFileManager.conflictReplace',
+      'buttons.replace',
     );
     expect(manager.getAttribute('data-conflict-duplicate')).toBe(
       'buttons.duplicate',
@@ -682,12 +701,18 @@ describe('DialFileManagerModal', () => {
     );
   });
 
-  it('keeps a fixed modal height and uses one-sided header and footer padding', () => {
+  it('keeps a fixed modal height and divides the header and footer from the body', () => {
     render(<DialFileManagerModal {...defaultProps} />);
 
     const dialog = screen.getByRole('dialog');
-    expect(dialog.classList.contains('!h-[min(800px,100dvh)]')).toBe(true);
-    expect(dialog.classList.contains('!bg-layer-sunken')).toBe(true);
+    expect(dialog.classList.contains('h-[min(900px,100dvh)]!')).toBe(true);
+    expect(dialog.className).toMatch(/popup/);
+    expect(dialog.classList.contains('max-w-[1600px]!')).toBe(true);
+    expect(dialog.classList.contains('mobile:h-full!')).toBe(true);
+    expect(dialog.classList.contains('mobile:max-w-full!')).toBe(true);
+    expect(dialog.classList.contains('mobile:rounded-none')).toBe(true);
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(dialog.closest('.mobile\\:p-0')).toBeTruthy();
 
     /* These assert pure CSS-level styling (which class is present), for which
        no semantic query applies — this repo's spec conventions carve out
@@ -703,15 +728,11 @@ describe('DialFileManagerModal', () => {
     expect(contentWrapper?.classList.contains('min-h-0')).toBe(true);
     expect(contentWrapper?.classList.contains('flex-col')).toBe(true);
 
+    // The kit draws a rule under the header and above the footer.
     // eslint-disable-next-line testing-library/no-node-access
-    const header = dialog.querySelector('.pb-0');
-    expect(header?.classList.contains('px-6')).toBe(true);
-    expect(header).not.toBeNull();
-
+    expect(dialog.querySelector('.border-b.border-tertiary')).not.toBeNull();
     // eslint-disable-next-line testing-library/no-node-access
-    const footer = dialog.querySelector('.pt-0');
-    expect(footer?.classList.contains('px-6')).toBe(true);
-    expect(footer).not.toBeNull();
+    expect(dialog.querySelector('.border-t.border-tertiary')).not.toBeNull();
   });
 
   it('attaches selected files', () => {
@@ -823,22 +844,51 @@ describe('DialFileManagerModal', () => {
     ).toBe('false');
   });
 
-  it('shows the selection count and clears the selection', () => {
+  it('paints the picker on the same raised layer as the modal', () => {
     render(<DialFileManagerModal {...defaultProps} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select report' }));
+    /* The surface wrapper has no role; it is the manager region's parent. */
+    /* eslint-disable testing-library/no-node-access */
+    const surface = screen.getByRole('region', {
+      name: 'file manager',
+    }).parentElement;
+    /* eslint-enable testing-library/no-node-access */
+    expect(surface?.style.getPropertyValue('--dfms-surface')).toBe(
+      'var(--fmam-bg, var(--bg-layer-raised, #fcfcfc))',
+    );
+  });
 
-    expect(screen.getByText('1 item selected')).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'Attach' }).hasAttribute('disabled'),
-    ).toBe(false);
+  it('configures the picker without column filters and with a neutral Add button', () => {
+    render(<DialFileManagerModal {...defaultProps} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    const manager = screen.getByRole('region', { name: 'file manager' });
+    expect(manager.getAttribute('data-grid-filterable')).toBe('false');
+    expect(manager.getAttribute('data-grid-no-header-borders')).toBe('true');
+    // The attach picker keeps the file manager's own grid card and shadow.
+    expect(manager.getAttribute('data-grid-container-class')).toBeNull();
+    expect(manager.getAttribute('data-new-button-variant')).toBe(
+      String(ButtonVariant.Neutral),
+    );
+  });
 
-    expect(screen.queryByText('1 item selected')).toBeNull();
+  it('enables Attach once a file is selected and renders no bulk-actions toolbar', () => {
+    render(<DialFileManagerModal {...defaultProps} />);
+
     expect(
       screen.getByRole('button', { name: 'Attach' }).hasAttribute('disabled'),
     ).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select report' }));
+
+    expect(
+      screen.getByRole('button', { name: 'Attach' }).hasAttribute('disabled'),
+    ).toBe(false);
+    /* Attach is a picker: the bulk toolbar (selection count, clear, bulk
+       Download/Delete) is not offered. */
+    expect(screen.queryByText('1 item selected')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Clear selection' }),
+    ).toBeNull();
   });
 
   it('blocks dot-prefixed hidden files from attach selection', () => {
@@ -878,7 +928,6 @@ describe('DialFileManagerModal', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }));
 
-    expect(screen.getByText('1 item selected')).toBeTruthy();
     expect(onAttach).toHaveBeenCalledWith({
       files: [expect.objectContaining({ name: 'report.pdf' })],
       folderPaths: [],
@@ -890,22 +939,17 @@ describe('DialFileManagerModal', () => {
     expect(screen.queryByText('Attach files')).toBeNull();
   });
 
-  it('shows a loader while an archive is being prepared', () => {
+  it('shows no blocking loader while a download runs, since downloads are queue rows', () => {
     setControllerResult({
       ...defaultHookResult,
       isDownloading: true,
-      isAnyOperationInProgress: true,
     });
 
     render(<DialFileManagerModal {...defaultProps} />);
 
     expect(
-      screen.getByRole('img', { name: 'Preparing download…' }),
-    ).toBeTruthy();
-    expect(screen.queryByText('Preparing download…')).toBeNull();
-    expect(
-      screen.getByRole('button', { name: 'Attach' }).hasAttribute('disabled'),
-    ).toBe(true);
+      screen.queryByRole('img', { name: 'Preparing download…' }),
+    ).toBeNull();
   });
 
   it('disables Attach while any file operation is in progress', () => {
@@ -1023,297 +1067,304 @@ describe('DialFileManagerModal', () => {
     expect(manager.getAttribute('data-max-file-size')).toBeNull();
     expect(manager.getAttribute('data-oversized-files-message')).toBeNull();
   });
-});
 
-describe('DialFileManagerModal — tab navigation', () => {
-  it('renders four tabs beside the folder tree', () => {
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-tab-count')).toBe('4');
-    expect(screen.getByRole('button', { name: 'All' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'My Files' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Shared' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Organization' })).toBeTruthy();
-  });
-
-  it('renders only the tabs allowed by the deployment-configured fileManagerTabs', () => {
-    mockFileManagerTabs.value = ['my_files', 'organization'];
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-tab-count')).toBe('2');
-    expect(screen.getByRole('button', { name: 'My Files' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Organization' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Shared' })).toBeNull();
-  });
-
-  it('passes the activeTab from useFileAttachmentPicker to treeOptions', () => {
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-active-tab')).toBe(
-      DialFileManagerTabs.All,
-    );
-  });
-
-  it('clears selectedPaths when the tab-change handler is invoked', () => {
-    render(<DialFileManagerModal {...defaultProps} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Select report' }));
-    expect(screen.getByText('1 item selected')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Shared' })).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Invoke tab-change handler' }),
-    );
-
-    expect(mockHandleTabChange).toHaveBeenCalledWith(
-      DialFileManagerTabs.Shared,
-    );
-    expect(screen.queryByText('1 item selected')).toBeNull();
-  });
-});
-
-describe('DialFileManagerModal — per-tab Delete action visibility', () => {
-  it('includes Delete in actionLabels on my_files tab', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      actionLabels: {
-        [DialFileManagerActions.Download]: 'Download',
-        [DialFileManagerActions.Delete]: 'Delete',
-      },
+  describe('DialFileManagerModal — tab navigation', () => {
+    it('renders four tabs beside the folder tree', () => {
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-tab-count')).toBe('4');
+      expect(screen.getByRole('button', { name: 'All' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'My Files' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Shared' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Organization' })).toBeTruthy();
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-has-delete')).toBe('true');
-    expect(manager.getAttribute('data-has-bulk-delete')).toBe('true');
-  });
 
-  it('omits Delete from actionLabels on shared tab', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      actionLabels: {
-        [DialFileManagerActions.Download]: 'Download',
-      },
+    it('renders only the tabs allowed by the deployment-configured fileManagerTabs', () => {
+      mockFileManagerTabs.value = ['my_files', 'organization'];
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-tab-count')).toBe('2');
+      expect(screen.getByRole('button', { name: 'My Files' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Organization' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Shared' })).toBeNull();
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-has-delete')).toBe('false');
-    expect(manager.getAttribute('data-has-bulk-delete')).toBe('false');
-  });
 
-  it('omits Delete from actionLabels on organization tab', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      actionLabels: {
-        [DialFileManagerActions.Download]: 'Download',
-      },
+    it('passes the activeTab from useFileAttachmentPicker to treeOptions', () => {
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-active-tab')).toBe(
+        DialFileManagerTabs.All,
+      );
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-has-delete')).toBe('false');
-  });
-});
 
-describe('DialFileManagerModal — Copy/Move/Duplicate excluded (Attach profile)', () => {
-  it('does not surface Copy/Move/Duplicate in row/tree/bulk menus on my_files', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      actionLabels: {
-        [DialFileManagerActions.Download]: 'Download',
-        [DialFileManagerActions.Delete]: 'Delete',
-        [DialFileManagerActions.Rename]: 'Rename',
-      },
+    it('clears selectedPaths when the tab-change handler is invoked', () => {
+      render(<DialFileManagerModal {...defaultProps} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Select report' }));
+      expect(
+        screen.getByRole('button', { name: 'Attach' }).hasAttribute('disabled'),
+      ).toBe(false);
+      expect(screen.queryByRole('button', { name: 'Shared' })).toBeNull();
+
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Invoke tab-change handler' }),
+      );
+
+      expect(mockHandleTabChange).toHaveBeenCalledWith(
+        DialFileManagerTabs.Shared,
+      );
+      expect(
+        screen.getByRole('button', { name: 'Attach' }).hasAttribute('disabled'),
+      ).toBe(true);
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-
-    expect(manager.getAttribute('data-has-copy')).toBe('false');
-    expect(manager.getAttribute('data-has-move')).toBe('false');
-    expect(manager.getAttribute('data-has-duplicate')).toBe('false');
-    expect(manager.getAttribute('data-has-bulk-copy')).toBe('false');
-    expect(manager.getAttribute('data-has-bulk-move')).toBe('false');
-    expect(manager.getAttribute('data-has-bulk-duplicate')).toBe('false');
-    expect(manager.getAttribute('data-has-delete')).toBe('true');
   });
-});
 
-describe('DialFileManagerModal — per-tab uploadEnabled', () => {
-  it('passes uploadEnabled=false when organization tab is active', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      uploadEnabled: false,
-      isNewButtonDisabled: true,
+  describe('DialFileManagerModal — per-tab Delete action visibility', () => {
+    it('includes Delete in actionLabels on my_files tab', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        actionLabels: {
+          [DialFileManagerActions.Download]: 'Download',
+          [DialFileManagerActions.Delete]: 'Delete',
+        },
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-has-delete')).toBe('true');
+      /* Attach renders no bulk-actions toolbar, so bulk Delete is never offered. */
+      expect(manager.getAttribute('data-has-bulk-delete')).toBe('false');
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-upload-enabled')).toBe('false');
-    expect(manager.getAttribute('data-new-button-disabled')).toBe('true');
-  });
 
-  it('passes uploadEnabled=false when on shared root', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      uploadEnabled: false,
-      isNewButtonDisabled: true,
+    it('omits Delete from actionLabels on shared tab', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        actionLabels: {
+          [DialFileManagerActions.Download]: 'Download',
+        },
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-has-delete')).toBe('false');
+      expect(manager.getAttribute('data-has-bulk-delete')).toBe('false');
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-upload-enabled')).toBe('false');
-  });
 
-  it('passes uploadEnabled=true when my_files tab has WRITE permission', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      uploadEnabled: true,
-      isNewButtonDisabled: false,
+    it('omits Delete from actionLabels on organization tab', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        actionLabels: {
+          [DialFileManagerActions.Download]: 'Download',
+        },
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-has-delete')).toBe('false');
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-upload-enabled')).toBe('true');
   });
-});
 
-describe('DialFileManagerModal — sharedWithMeIds', () => {
-  it('passes sharedWithMeIds to DialFileManager when on Shared tab', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      sharedWithMeIds: ['shared/file1.pdf', 'shared/folder1/'],
+  describe('DialFileManagerModal — Copy/Move/Duplicate excluded (Attach profile)', () => {
+    it('does not surface Copy/Move/Duplicate in row/tree/bulk menus on my_files', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        actionLabels: {
+          [DialFileManagerActions.Download]: 'Download',
+          [DialFileManagerActions.Delete]: 'Delete',
+          [DialFileManagerActions.Rename]: 'Rename',
+        },
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+
+      expect(manager.getAttribute('data-has-copy')).toBe('false');
+      expect(manager.getAttribute('data-has-move')).toBe('false');
+      expect(manager.getAttribute('data-has-duplicate')).toBe('false');
+      expect(manager.getAttribute('data-has-bulk-copy')).toBe('false');
+      expect(manager.getAttribute('data-has-bulk-move')).toBe('false');
+      expect(manager.getAttribute('data-has-bulk-duplicate')).toBe('false');
+      expect(manager.getAttribute('data-has-delete')).toBe('true');
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-shared-with-me-ids')).toBe(
-      'shared/file1.pdf,shared/folder1/',
-    );
   });
 
-  it('passes undefined sharedWithMeIds on My Files tab', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      sharedWithMeIds: undefined,
+  describe('DialFileManagerModal — per-tab uploadEnabled', () => {
+    it('passes uploadEnabled=false when organization tab is active', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        uploadEnabled: false,
+        isNewButtonDisabled: true,
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-upload-enabled')).toBe('false');
+      expect(manager.getAttribute('data-new-button-disabled')).toBe('true');
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-shared-with-me-ids')).toBe('none');
-  });
-});
 
-describe('DialFileManagerModal — per-tab visibleColumns', () => {
-  it('does not include Author column on my_files tab', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      visibleColumns: [
-        FileManagerColumnKey.Name,
-        FileManagerColumnKey.UpdatedAt,
-        FileManagerColumnKey.Size,
-        FileManagerColumnKey.Actions,
-      ],
+    it('passes uploadEnabled=false when on shared root', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        uploadEnabled: false,
+        isNewButtonDisabled: true,
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-upload-enabled')).toBe('false');
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    const cols = manager.getAttribute('data-visible-columns') ?? '';
-    expect(cols).not.toContain(FileManagerColumnKey.Author);
-  });
 
-  it('includes Author column on Shared tab', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      visibleColumns: [
-        FileManagerColumnKey.Name,
-        FileManagerColumnKey.UpdatedAt,
-        FileManagerColumnKey.Size,
-        FileManagerColumnKey.Author,
-        FileManagerColumnKey.Actions,
-      ],
+    it('passes uploadEnabled=true when my_files tab has WRITE permission', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        uploadEnabled: true,
+        isNewButtonDisabled: false,
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-upload-enabled')).toBe('true');
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    const cols = manager.getAttribute('data-visible-columns') ?? '';
-    expect(cols).toContain(FileManagerColumnKey.Author);
-  });
-});
-
-describe('DialFileManagerModal — autoSelectUploadedItems', () => {
-  /*
-   * The attach modal exists to pick files to attach, so a file uploaded from
-   * inside it is ticked without being switched on at every call site — both
-   * composer call sites relied on the default and got no selection.
-   */
-  it('ticks items uploaded from inside the modal by default', () => {
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
-      'true',
-    );
   });
 
-  it('passes autoSelectUploadedItems=true when prop is true', () => {
-    render(<DialFileManagerModal {...defaultProps} autoSelectUploadedItems />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
-      'true',
-    );
-  });
-
-  it('honours an explicit opt-out', () => {
-    render(
-      <DialFileManagerModal
-        {...defaultProps}
-        autoSelectUploadedItems={false}
-      />,
-    );
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
-      'false',
-    );
-  });
-});
-
-describe('DialFileManagerModal — tab-specific empty states', () => {
-  it('shows MyFiles empty state on the MyFiles tab', () => {
-    mockActiveTab.value = DialFileManagerTabs.MyFiles;
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-empty-state-title')).toBe(
-      'dialFileManager.myFiles.emptyStateTitle',
-    );
-    expect(manager.getAttribute('data-empty-state-description')).toBe(
-      'dialFileManager.myFiles.emptyStateDescription',
-    );
-  });
-
-  it('shows Shared empty state on the Shared tab', () => {
-    mockActiveTab.value = DialFileManagerTabs.Shared;
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-empty-state-title')).toBe(
-      'dialFileManager.shared.emptyStateTitle',
-    );
-    expect(manager.getAttribute('data-empty-state-description')).toBe(
-      'dialFileManager.shared.emptyStateDescription',
-    );
-  });
-
-  it('shows Organization empty state on the Organization tab', () => {
-    mockActiveTab.value = DialFileManagerTabs.Organization;
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-empty-state-title')).toBe(
-      'dialFileManager.organization.emptyStateTitle',
-    );
-    expect(manager.getAttribute('data-empty-state-description')).toBe(
-      'dialFileManager.organization.emptyStateDescription',
-    );
-  });
-
-  it('shows "This folder is empty" with empty description when inside a subfolder', () => {
-    setControllerResult({
-      ...defaultHookResult,
-      path: '/My files/reports/',
+  describe('DialFileManagerModal — sharedWithMeIds', () => {
+    it('passes sharedWithMeIds to DialFileManager when on Shared tab', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        sharedWithMeIds: ['shared/file1.pdf', 'shared/folder1/'],
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-shared-with-me-ids')).toBe(
+        'shared/file1.pdf,shared/folder1/',
+      );
     });
-    render(<DialFileManagerModal {...defaultProps} />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.getAttribute('data-empty-state-title')).toBe(
-      'dialFileManager.empty',
-    );
-    expect(manager.getAttribute('data-empty-state-description')).toBe('');
+
+    it('passes undefined sharedWithMeIds on My Files tab', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        sharedWithMeIds: undefined,
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-shared-with-me-ids')).toBe('none');
+    });
+  });
+
+  describe('DialFileManagerModal — per-tab visibleColumns', () => {
+    it('does not include Author column on my_files tab', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        visibleColumns: [
+          FileManagerColumnKey.Name,
+          FileManagerColumnKey.UpdatedAt,
+          FileManagerColumnKey.Size,
+          FileManagerColumnKey.Actions,
+        ],
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      const cols = manager.getAttribute('data-visible-columns') ?? '';
+      expect(cols).not.toContain(FileManagerColumnKey.Author);
+    });
+
+    it('includes Author column on Shared tab', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        visibleColumns: [
+          FileManagerColumnKey.Name,
+          FileManagerColumnKey.UpdatedAt,
+          FileManagerColumnKey.Size,
+          FileManagerColumnKey.Author,
+          FileManagerColumnKey.Actions,
+        ],
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      const cols = manager.getAttribute('data-visible-columns') ?? '';
+      expect(cols).toContain(FileManagerColumnKey.Author);
+    });
+  });
+
+  describe('DialFileManagerModal — autoSelectUploadedItems', () => {
+    /*
+     * The attach modal exists to pick files to attach, so a file uploaded from
+     * inside it is ticked without being switched on at every call site — both
+     * composer call sites relied on the default and got no selection.
+     */
+    it('ticks items uploaded from inside the modal by default', () => {
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
+        'true',
+      );
+    });
+
+    it('passes autoSelectUploadedItems=true when prop is true', () => {
+      render(
+        <DialFileManagerModal {...defaultProps} autoSelectUploadedItems />,
+      );
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
+        'true',
+      );
+    });
+
+    it('honours an explicit opt-out', () => {
+      render(
+        <DialFileManagerModal
+          {...defaultProps}
+          autoSelectUploadedItems={false}
+        />,
+      );
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-auto-select-uploaded-items')).toBe(
+        'false',
+      );
+    });
+  });
+
+  describe('DialFileManagerModal — tab-specific empty states', () => {
+    it('shows MyFiles empty state on the MyFiles tab', () => {
+      mockActiveTab.value = DialFileManagerTabs.MyFiles;
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-empty-state-title')).toBe(
+        'dialFileManager.myFiles.emptyStateTitle',
+      );
+      expect(manager.getAttribute('data-empty-state-description')).toBe(
+        'dialFileManager.myFiles.emptyStateDescription',
+      );
+    });
+
+    it('shows Shared empty state on the Shared tab', () => {
+      mockActiveTab.value = DialFileManagerTabs.Shared;
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-empty-state-title')).toBe(
+        'dialFileManager.shared.emptyStateTitle',
+      );
+      expect(manager.getAttribute('data-empty-state-description')).toBe(
+        'dialFileManager.shared.emptyStateDescription',
+      );
+    });
+
+    it('shows Organization empty state on the Organization tab', () => {
+      mockActiveTab.value = DialFileManagerTabs.Organization;
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-empty-state-title')).toBe(
+        'dialFileManager.organization.emptyStateTitle',
+      );
+      expect(manager.getAttribute('data-empty-state-description')).toBe(
+        'dialFileManager.organization.emptyStateDescription',
+      );
+    });
+
+    it('shows "This folder is empty" with empty description when inside a subfolder', () => {
+      setControllerResult({
+        ...defaultHookResult,
+        path: '/My files/reports/',
+      });
+      render(<DialFileManagerModal {...defaultProps} />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      expect(manager.getAttribute('data-empty-state-title')).toBe(
+        'dialFileManager.empty',
+      );
+      expect(manager.getAttribute('data-empty-state-description')).toBe('');
+    });
   });
 });

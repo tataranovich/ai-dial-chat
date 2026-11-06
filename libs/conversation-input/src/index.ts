@@ -4,6 +4,13 @@ export type { BottomSheetShellProps } from './components/BottomSheetShell/Bottom
 export { ConversationInput } from './components/ConversationInput/ConversationInput';
 export { EditMessageInput } from './components/EditMessageInput/EditMessageInput';
 export { Input } from './components/Input/Input';
+export { UsageLimitBannerView } from './components/UsageLimitBannerView/UsageLimitBannerView';
+export { UsageLimitBannerSeverity } from './models/UsageLimitBanner';
+export type {
+  UsageLimitBannerColors,
+  UsageLimitBannerReset,
+  UsageLimitBannerViewProps,
+} from './models/UsageLimitBanner';
 export type {
   ConversationInputColors,
   ConversationInputProps,
@@ -22,6 +29,7 @@ export type {
 } from './hooks/useComposerSeed';
 export type { TranscribeAudio } from './models/Voice';
 export type {
+  ChatSettingsModalColors,
   ChatSettingsValues,
   CommandMenuConfig,
   CommandMenuContext,

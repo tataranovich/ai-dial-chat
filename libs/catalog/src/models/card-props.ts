@@ -1,3 +1,4 @@
+import type { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import type { CSSProperties } from 'react';
 import type { CatalogItem } from './catalog-item';
 import type { CatalogMarkdownLabels } from './item-details-props';
@@ -16,6 +17,10 @@ export interface CardTypography {
   folderLabelClassName?: string;
   /** Typography class applied to the leaf (last) folder path segment. Default: `'dial-tiny-semi-text'`. */
   folderLeafClassName?: string;
+  /** Typography class of the text in the full-description tooltip (paragraphs, lists and headings). Default: `'dial-small-text'`. */
+  descriptionTooltipClassName?: string;
+  /** Typography class of bold text in the full-description tooltip. Default: `'dial-small-semi-text'`. */
+  descriptionTooltipStrongClassName?: string;
 }
 
 /** Color overrides applied as CSS custom properties for `Card`. */
@@ -34,6 +39,8 @@ export interface CardColors {
   checkIcon?: string;
   /** Top border color of the footer row (folder path / star button). Fallback: `--stroke-tertiary`. */
   footerBorder?: string;
+  /** Keyboard focus outline of a clickable card. Fallback: `--stroke-focus`. */
+  focusOutline?: string;
   /** Featured chip style override, merged over its default per-entity-type colors for every entity type, e.g. `{ backgroundColor, color, border }`. */
   featuredChipStyle?: CSSProperties;
 }
@@ -74,6 +81,8 @@ export interface CardProps {
   isSelected?: boolean;
   /** Accessible label for the logged-out warning icon on the entity avatar, and the text shown in its hover tooltip. Default: `'Authorize to use this toolset.'`. */
   credentialsBadgeLoggedOutLabel?: string;
+  /** Text shown in the footer when the item is in no folder. Default: `'No folder'`. */
+  noFolderLabel?: string;
   /**
    * Renders the card as a read-only browsing surface: no favorite star, no
    * footer divider, and no "Featured" tag. The footer row is dropped entirely
@@ -82,4 +91,6 @@ export interface CardProps {
   isReadonly?: boolean;
   /** Code-block, table and formula labels forwarded to the description markdown. Defaults to the renderer's English labels. */
   markdownLabels?: CatalogMarkdownLabels;
+  /** Active Browse tab; an item listed under it is labeled with that type instead of `item.type`. */
+  activeTab?: CatalogEntityType;
 }

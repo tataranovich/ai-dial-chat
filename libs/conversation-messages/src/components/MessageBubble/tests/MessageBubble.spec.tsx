@@ -30,6 +30,8 @@ const ATTACHMENT: DisplayAttachment = {
 
 const TABLE_MARKDOWN = '| A | B |\n| - | - |\n| 1 | 2 |';
 
+const LONG_TOKEN = `sha512-${'f2'.repeat(120)}`;
+
 const ASSISTANT_TABLE_LABELS = {
   tableCopyLabel: 'Copy',
   tableCopiedLabel: 'Copied!',
@@ -42,22 +44,36 @@ const findMessageParagraph = (message: string) =>
   });
 
 /*
- * The collapsible wrapper around the message paragraph carries no ARIA role
- * of its own (it is only referenced via aria-controls from the toggle
- * button), so reaching it to check its inline style requires walking up from
- * the paragraph — a CSS-level check with no semantic query available.
+ * The collapsible wrapper around the message text carries no ARIA role of its
+ * own; it is reached through the toggle button's `aria-controls` to check its
+ * inline style — a CSS-level check with no semantic query available.
  */
-const getMessageTextWrapper = (message: string) =>
-  // eslint-disable-next-line testing-library/no-node-access -- see comment above
-  findMessageParagraph(message).parentElement as HTMLElement;
+const getCollapsibleTextWrapper = (toggle: HTMLElement) =>
+  // eslint-disable-next-line testing-library/no-node-access -- see above
+  document.getElementById(
+    toggle.getAttribute('aria-controls') ?? '',
+  ) as HTMLElement;
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+/*
+ * `useCollapsedText` measures the container that wraps the rendered markdown
+ * (its child is the renderer root, whose child is the paragraph), so jsdom's
+ * zero `scrollHeight` is replaced for that element alone.
+ */
+const mockRenderedTextHeight = (height: number) =>
+  vi
+    .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+    .mockImplementation(function getScrollHeight(this: HTMLElement) {
+      // eslint-disable-next-line testing-library/no-node-access -- jsdom scrollHeight stub must locate the measured wrapper; see above
+      return this.querySelector(':scope > div > p') ? height : 0;
+    });
 
 describe('MessageBubble', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it.each([MessageRole.User, MessageRole.Assistant])(
     'exposes only the text body for %s messages',
     (role) => {
@@ -179,777 +195,1022 @@ describe('MessageBubble', () => {
     });
     expect(actionsWrapper.className).not.toContain('opacity-0');
   });
-});
 
-describe('UserMessageBubble — attachments', () => {
-  it('preserves line breaks in the message text', () => {
-    const message = 'First line\n\nSecond line\n- Item';
+  describe('UserMessageBubble — markdown', () => {
+    const TS_FENCE =
+      '```ts\nconst add = (x: number) => (y: number): number => x + y;\n```';
 
-    render(<UserMessageBubble text={message} />);
+    it('renders single-newline lines on separate lines and a dash line as a list item', () => {
+      const { container } = render(
+        <UserMessageBubble text={'First line\nSecond line\n\n- Item'} />,
+      );
 
-    const paragraph = findMessageParagraph(message);
-    expect(paragraph.textContent).toBe(message);
-    expect(paragraph.className).toContain('whitespace-pre-wrap');
-    expect(paragraph.className).toContain('text-start');
-    expect(paragraph.className).toContain('[overflow-wrap:anywhere]');
-  });
-
-  it('renders an attachment tray when attachments are provided', () => {
-    render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
-    // AttachmentGroup renders a list role
-    expect(screen.getByRole('list')).toBeTruthy();
-  });
-
-  it('renders no attachment tray when attachments prop is absent', () => {
-    render(<UserMessageBubble text="Hello" />);
-    expect(screen.queryByRole('list')).toBeNull();
-  });
-
-  it('renders no attachment tray when attachments array is empty', () => {
-    render(<UserMessageBubble text="Hello" attachments={[]} />);
-    expect(screen.queryByRole('list')).toBeNull();
-  });
-
-  it('renders the tray before the message text in the DOM', () => {
-    render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
-
-    const root = screen.getByRole('group', { name: 'User message' });
-    const trayIndex = root.textContent?.indexOf('report') ?? -1;
-    const textIndex = root.textContent?.indexOf('Hello') ?? -1;
-
-    expect(trayIndex).toBeGreaterThanOrEqual(0);
-    // tray should come before the bubble
-    expect(trayIndex).toBeLessThan(textIndex);
-  });
-
-  it('remove button does not trigger a callback (read-only tray)', () => {
-    render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
-    expect(screen.queryByRole('button', { name: /remove/i })).toBeNull();
-  });
-
-  it('tray cards are inert when onAttachmentClick is absent', () => {
-    render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
-    const tray = screen.getByRole('list');
-    expect(within(tray).queryAllByRole('button')).toHaveLength(0);
-  });
-
-  it('tray cards are buttons that invoke onAttachmentClick when it is given', () => {
-    const onAttachmentClick = vi.fn();
-    render(
-      <UserMessageBubble
-        text="Hello"
-        attachments={[ATTACHMENT]}
-        onAttachmentClick={onAttachmentClick}
-      />,
-    );
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Download attachment' }),
-    );
-    expect(onAttachmentClick).toHaveBeenCalledWith(ATTACHMENT);
-  });
-
-  it('names the tile and its download button by separate labels', () => {
-    const onDownloadAll = vi.fn();
-    render(
-      <UserMessageBubble
-        text="Hello"
-        attachments={[ATTACHMENT]}
-        onAttachmentClick={vi.fn()}
-        onDownloadAll={onDownloadAll}
-        labels={{
-          attachmentClickLabel: 'Open in canvas',
-          attachmentDownloadLabel: 'Download file',
-        }}
-      />,
-    );
-
-    expect(screen.getByRole('button', { name: 'Open in canvas' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Download file' }));
-    expect(onDownloadAll).toHaveBeenCalledWith([ATTACHMENT]);
-  });
-});
-
-describe('UserMessageBubble — collapsed text', () => {
-  const longMessage = 'Line 1\nLine 2\nLine 3';
-
-  it('collapses long user messages by default', async () => {
-    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(
-      function getScrollHeight(this: HTMLElement) {
-        return this.tagName === 'P' ? 72 : 0;
-      },
-    );
-
-    render(<UserMessageBubble text={longMessage} collapsedLineCount={2} />);
-
-    const button = await screen.findByRole('button', { name: 'Show more' });
-    const textWrapper = getMessageTextWrapper(longMessage);
-
-    expect(button).toBeTruthy();
-    expect(textWrapper.style.maxHeight).toBe('');
-  });
-
-  it('expands and collapses a long user message', async () => {
-    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(
-      function getScrollHeight(this: HTMLElement) {
-        return this.tagName === 'P' ? 72 : 0;
-      },
-    );
-
-    render(<UserMessageBubble text={longMessage} collapsedLineCount={2} />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
-
-    const textWrapper = getMessageTextWrapper(longMessage);
-
-    expect(screen.getByRole('button', { name: 'Show less' })).toBeTruthy();
-    expect(textWrapper.style.maxHeight).toBe('');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Show more' })).toBeTruthy();
+      // <br> has no accessible role, so the line break is checked on the DOM.
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
+      expect(container.querySelector('p br')).toBeTruthy();
+      expect(screen.getByRole('listitem').textContent).toBe('Item');
+      expect(screen.queryByText(/- Item/)).toBeNull();
     });
-    expect(textWrapper.style.maxHeight).toBe('');
-  });
 
-  it('does not show the toggle button for short user messages', async () => {
-    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(
-      function getScrollHeight(this: HTMLElement) {
-        return this.tagName === 'P' ? 24 : 0;
-      },
-    );
+    it('renders a fenced code block with its language label and copy button', () => {
+      render(<UserMessageBubble text={TS_FENCE} />);
 
-    render(<UserMessageBubble text="Short" collapsedLineCount={2} />);
+      expect(screen.getByText('ts')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Copy code' })).toBeTruthy();
+      expect(screen.queryByText(/```/)).toBeNull();
+    });
 
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+    it('renders bold and inline code without the markdown markers', () => {
+      render(<UserMessageBubble text="Use **bold** and `npm test`" />);
+
+      expect(screen.getByText('bold').tagName).toBe('STRONG');
+      expect(screen.getByText('npm test').tagName).toBe('CODE');
+      expect(screen.queryByText(/\*\*/)).toBeNull();
+    });
+
+    it('shows a raw HTML tag as literal text', () => {
+      render(<UserMessageBubble text="What does <div> do?" />);
+
+      expect(screen.getByText('What does <div> do?')).toBeTruthy();
+    });
+
+    it('renders a table with its actions when table labels are supplied', () => {
+      render(
+        <UserMessageBubble
+          text={TABLE_MARKDOWN}
+          labels={ASSISTANT_TABLE_LABELS}
+        />,
+      );
+
+      expect(screen.getByRole('table')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+      expect(
+        screen.getByRole('button', { name: 'Download as CSV' }),
+      ).toBeTruthy();
+    });
+
+    it('keeps rendering markdown when the response format is plain text', () => {
+      render(
+        <MessageBubble
+          role={MessageRole.User}
+          text="**bold**"
+          responseFormat={ResponseFormat.PlainText}
+        />,
+      );
+
+      expect(screen.getByText('bold').tagName).toBe('STRONG');
+    });
+
+    it('forwards localized code block labels', () => {
+      render(
+        <UserMessageBubble
+          text={TS_FENCE}
+          labels={{
+            codeBlockCopyLabel: 'Kopieren',
+            codeBlockDownloadLabel: 'Herunterladen',
+          }}
+        />,
+      );
+
+      expect(screen.getByRole('button', { name: 'Kopieren' })).toBeTruthy();
+      expect(
+        screen.getByRole('button', { name: 'Herunterladen' }),
+      ).toBeTruthy();
+    });
+
+    it('caps the bubble width so long unbroken lines wrap or scroll inside it', () => {
+      const longUrl = `https://chat.example.com/share/${'a'.repeat(200)}`;
+      render(
+        <UserMessageBubble
+          text={`- ${longUrl}\n\n\`\`\`\n${longUrl}\n\`\`\``}
+        />,
+      );
+
+      /*
+       * The bubble and its width cap carry no role, so the regression guard
+       * for issue #9508 is a CSS-level check.
+       */
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      const bubble = screen.getByRole('listitem').closest('.border');
+      expect(bubble?.className).toContain('max-w-full');
+      expect(bubble?.className).toContain('min-w-0');
+      expect(bubble?.className).toContain('wrap-anywhere');
+      const codeBlock = screen.getByText(longUrl, { selector: 'code' });
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      expect(codeBlock.closest('.overflow-auto')).toBeTruthy();
+    });
+
+    it('aligns lists to the inline start and keeps code LTR under dir="rtl"', () => {
+      render(
+        <div dir="rtl">
+          <UserMessageBubble text={`- عنصر\n\n${TS_FENCE}`} />
+        </div>,
+      );
+
+      expect(screen.getByRole('listitem').textContent).toBe('عنصر');
+      /*
+       * The text container and the code scroller carry no role; their
+       * direction classes/attributes are a CSS-level check.
+       */
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      const list = screen.getByRole('list').closest('.text-start');
+      expect(list).toBeTruthy();
+      expect(
+        // eslint-disable-next-line testing-library/no-node-access -- see comment above
+        screen.getByText(/const add/).closest('[dir="ltr"]'),
+      ).toBeTruthy();
     });
   });
 
-  it('uses custom labels and aria labels for the toggle button', async () => {
-    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(
-      function getScrollHeight(this: HTMLElement) {
-        return this.tagName === 'P' ? 72 : 0;
-      },
-    );
-
-    render(
-      <UserMessageBubble
-        text={longMessage}
-        collapsedLineCount={2}
-        labels={{
-          showMoreLabel: 'More',
-          showLessLabel: 'Less',
-          showMoreAriaLabel: 'Expand user message',
-          showLessAriaLabel: 'Collapse user message',
-        }}
-      />,
-    );
-
-    const expandButton = await screen.findByRole('button', {
-      name: 'Expand user message',
+  describe('UserMessageBubble — attachments', () => {
+    it('renders an attachment tray when attachments are provided', () => {
+      render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
+      // AttachmentGroup renders a list role
+      expect(screen.getByRole('list')).toBeTruthy();
     });
 
-    expect(expandButton.textContent).toContain('More');
-
-    fireEvent.click(expandButton);
-
-    const collapseButton = screen.getByRole('button', {
-      name: 'Collapse user message',
+    it('renders no attachment tray when attachments prop is absent', () => {
+      render(<UserMessageBubble text="Hello" />);
+      expect(screen.queryByRole('list')).toBeNull();
     });
-    expect(collapseButton.textContent).toContain('Less');
+
+    it('renders no attachment tray when attachments array is empty', () => {
+      render(<UserMessageBubble text="Hello" attachments={[]} />);
+      expect(screen.queryByRole('list')).toBeNull();
+    });
+
+    it('renders the tray before the message text in the DOM', () => {
+      render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
+
+      const root = screen.getByRole('group', { name: 'User message' });
+      const trayIndex = root.textContent?.indexOf('report') ?? -1;
+      const textIndex = root.textContent?.indexOf('Hello') ?? -1;
+
+      expect(trayIndex).toBeGreaterThanOrEqual(0);
+      // tray should come before the bubble
+      expect(trayIndex).toBeLessThan(textIndex);
+    });
+
+    it('remove button does not trigger a callback (read-only tray)', () => {
+      render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
+      expect(screen.queryByRole('button', { name: /remove/i })).toBeNull();
+    });
+
+    it('tray cards are inert when onAttachmentClick is absent', () => {
+      render(<UserMessageBubble text="Hello" attachments={[ATTACHMENT]} />);
+      const tray = screen.getByRole('list');
+      expect(within(tray).queryAllByRole('button')).toHaveLength(0);
+    });
+
+    it('tray cards are buttons that invoke onAttachmentClick when it is given', () => {
+      const onAttachmentClick = vi.fn();
+      render(
+        <UserMessageBubble
+          text="Hello"
+          attachments={[ATTACHMENT]}
+          onAttachmentClick={onAttachmentClick}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Download attachment' }),
+      );
+      expect(onAttachmentClick).toHaveBeenCalledWith(ATTACHMENT);
+    });
+
+    it('names the tile and its download button by separate labels', () => {
+      const onDownloadAll = vi.fn();
+      render(
+        <UserMessageBubble
+          text="Hello"
+          attachments={[ATTACHMENT]}
+          onAttachmentClick={vi.fn()}
+          onDownloadAll={onDownloadAll}
+          labels={{
+            attachmentClickLabel: 'Open in canvas',
+            attachmentDownloadLabel: 'Download file',
+          }}
+        />,
+      );
+
+      expect(
+        screen.getByRole('button', { name: 'Open in canvas' }),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Download file' }));
+      expect(onDownloadAll).toHaveBeenCalledWith([ATTACHMENT]);
+    });
   });
-});
 
-describe('UserMessageBubble — textSegments', () => {
-  const segments = [<span key="chip">/Summarizer</span>, ' please summarize'];
+  describe('UserMessageBubble — collapsed text', () => {
+    const longMessage = 'Line 1\nLine 2\nLine 3';
 
-  it('renders textSegments in order inside the text paragraph, in place of text', () => {
-    render(
-      <UserMessageBubble
-        text="/Summarizer please summarize"
-        textSegments={segments}
-      />,
-    );
+    it('collapses long user messages by default', async () => {
+      mockRenderedTextHeight(72);
 
-    const chip = screen.getByText('/Summarizer');
-    /*
-     * The segments' DOM position — inside the text paragraph, in reading
-     * order — is the feature under test; the chip's wrapper span carries no
-     * ARIA hook, so no semantic query reaches the paragraph directly (see
-     * spec.md's node-access exception).
-     */
-    // eslint-disable-next-line testing-library/no-node-access -- see comment above
-    const paragraph = chip.closest('p') as HTMLParagraphElement;
+      render(<UserMessageBubble text={longMessage} collapsedLineCount={2} />);
 
-    expect(paragraph).toBeTruthy();
-    expect(paragraph.textContent).toBe('/Summarizer please summarize');
-    // eslint-disable-next-line testing-library/no-node-access -- see comment above
-    expect(paragraph.firstElementChild).toBe(chip);
+      const button = await screen.findByRole('button', { name: 'Show more' });
+      const textWrapper = getCollapsibleTextWrapper(button);
+
+      expect(button.getAttribute('aria-expanded')).toBe('false');
+      expect(textWrapper.style.maxHeight).toBe('');
+    });
+
+    it('expands and collapses a long user message', async () => {
+      mockRenderedTextHeight(72);
+
+      render(<UserMessageBubble text={longMessage} collapsedLineCount={2} />);
+
+      const showMore = await screen.findByRole('button', { name: 'Show more' });
+      const textWrapper = getCollapsibleTextWrapper(showMore);
+      fireEvent.click(showMore);
+
+      expect(
+        screen
+          .getByRole('button', { name: 'Show less' })
+          .getAttribute('aria-expanded'),
+      ).toBe('true');
+      expect(textWrapper.style.maxHeight).toBe('');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Show more' })).toBeTruthy();
+      });
+      expect(textWrapper.style.maxHeight).toBe('');
+    });
+
+    it('does not show the toggle button for short user messages', async () => {
+      mockRenderedTextHeight(24);
+
+      render(<UserMessageBubble text="Short" collapsedLineCount={2} />);
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+      });
+    });
+
+    it('collapses a message whose rendered code block is taller than the line limit', async () => {
+      mockRenderedTextHeight(300);
+
+      render(
+        <UserMessageBubble
+          text={'Intro\n\n```ts\nconst a = 1;\n```'}
+          collapsedLineCount={2}
+        />,
+      );
+
+      const showMore = await screen.findByRole('button', { name: 'Show more' });
+      expect(showMore.getAttribute('aria-expanded')).toBe('false');
+
+      fireEvent.click(showMore);
+
+      expect(
+        screen
+          .getByRole('button', { name: 'Show less' })
+          .getAttribute('aria-expanded'),
+      ).toBe('true');
+    });
+
+    it('uses custom labels and aria labels for the toggle button', async () => {
+      mockRenderedTextHeight(72);
+
+      render(
+        <UserMessageBubble
+          text={longMessage}
+          collapsedLineCount={2}
+          labels={{
+            showMoreLabel: 'More',
+            showLessLabel: 'Less',
+            showMoreAriaLabel: 'Expand user message',
+            showLessAriaLabel: 'Collapse user message',
+          }}
+        />,
+      );
+
+      const expandButton = await screen.findByRole('button', {
+        name: 'Expand user message',
+      });
+
+      expect(expandButton.textContent).toContain('More');
+
+      fireEvent.click(expandButton);
+
+      const collapseButton = screen.getByRole('button', {
+        name: 'Collapse user message',
+      });
+      expect(collapseButton.textContent).toContain('Less');
+    });
   });
 
-  it('renders text unchanged, byte-identical, when textSegments is absent', () => {
-    render(<UserMessageBubble text="Hello world" />);
+  describe('UserMessageBubble — textSegments', () => {
+    const chipSegment = {
+      text: '/Summarizer',
+      node: <span key="chip">/Summarizer</span>,
+    };
+    const segments = [chipSegment, ' please summarize'];
 
-    const paragraph = findMessageParagraph('Hello world');
-    /*
-     * No segment wrapper — a plain span with no ARIA hook — should appear
-     * inside the paragraph, so the check is DOM-level.
-     */
-    // eslint-disable-next-line testing-library/no-node-access -- see comment above
-    expect(paragraph.firstElementChild).toBeNull();
-    expect(paragraph.textContent).toBe('Hello world');
-  });
-
-  it('renders interleaved segments correctly under dir="rtl"', () => {
-    render(
-      <div dir="rtl">
+    it('renders an inline segment at its position inside the rendered paragraph', () => {
+      render(
         <UserMessageBubble
           text="/Summarizer please summarize"
           textSegments={segments}
-        />
-      </div>,
-    );
+        />,
+      );
 
-    const chip = screen.getByText('/Summarizer');
-    // eslint-disable-next-line testing-library/no-node-access -- see comment above
-    const paragraph = chip.closest('p') as HTMLParagraphElement;
+      const chip = screen.getByText('/Summarizer');
+      /*
+       * The segments' DOM position — inside the text paragraph, in reading
+       * order — is the feature under test; the chip's wrapper span carries no
+       * ARIA hook, so no semantic query reaches the paragraph directly (see
+       * spec.md's node-access exception).
+       */
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      const paragraph = chip.closest('p') as HTMLParagraphElement;
 
-    expect(paragraph.textContent).toBe('/Summarizer please summarize');
-    expect(paragraph.className).toContain('text-start');
-  });
-});
-
-describe('AssistantMessageBubble — attachments', () => {
-  it('allows long unbroken markdown text to wrap inside the bubble', () => {
-    const longToken = `integrity sha512-${'f2'.repeat(120)}`;
-
-    const { container } = render(<AssistantMessageBubble text={longToken} />);
-
-    const paragraph = screen.getByText(longToken);
-    expect(paragraph.className).toContain('[overflow-wrap:anywhere]');
-    expect(paragraph.className).toContain('break-words');
-    expect(paragraph.className).toContain('dial-body-paragraph-text');
-    expect(paragraph.className).toContain('mb-3');
-    expect(paragraph.className).toContain('[text-wrap:pretty]');
-    /*
-     * The min-w-0/max-w-full wrapper around MDMessageViewer only carries
-     * aria-live/aria-atomic (not a role), so there is no semantic query that
-     * reaches it directly — a CSS-level check with no semantic alternative.
-     */
-    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
-    expect(container.querySelector('.min-w-0.max-w-full')).not.toBeNull();
-  });
-
-  it('allows long unbroken code block lines to scroll horizontally inside the bubble', () => {
-    const longToken = `integrity sha512-${'f2'.repeat(120)}`;
-
-    const { container } = render(
-      <AssistantMessageBubble text={`\`\`\`\n${longToken}\n\`\`\``} />,
-    );
-
-    /*
-     * CodeBlock's scroll container and <pre><code> carry no ARIA role —
-     * a CSS-level check with no semantic query available.
-     */
-    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
-    const scrollContainer = container.querySelector('[dir="ltr"]');
-    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
-    const code = container.querySelector('pre code');
-    expect(scrollContainer?.className).toContain('overflow-auto');
-    expect(code?.className).toContain('whitespace-pre');
-  });
-
-  it('reveals appended streaming text gradually', () => {
-    vi.useFakeTimers();
-
-    const { rerender } = render(
-      <AssistantMessageBubble text="Hi" isStreaming />,
-    );
-
-    rerender(<AssistantMessageBubble text="Hi there" isStreaming />);
-
-    expect(screen.queryByText('Hi there')).toBeNull();
-
-    act(() => {
-      vi.advanceTimersByTime(1000);
+      expect(paragraph).toBeTruthy();
+      expect(paragraph.textContent).toBe('/Summarizer please summarize');
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      expect(paragraph.firstElementChild).toBe(chip);
     });
 
-    expect(screen.getByText('Hi there')).toBeTruthy();
-  });
+    it('renders an inline segment inside a rendered list item', () => {
+      render(
+        <UserMessageBubble
+          text="- /Summarizer please summarize"
+          textSegments={['- ', ...segments]}
+        />,
+      );
 
-  it('renders remaining text immediately after streaming stops', () => {
-    vi.useFakeTimers();
-
-    const { rerender } = render(
-      <AssistantMessageBubble text="Hi" isStreaming />,
-    );
-
-    rerender(<AssistantMessageBubble text="Hi there" isStreaming />);
-
-    act(() => {
-      vi.advanceTimersByTime(100);
+      const item = screen.getByRole('listitem');
+      expect(within(item).getByText('/Summarizer').tagName).toBe('SPAN');
+      expect(item.textContent).toBe('/Summarizer please summarize');
     });
 
-    rerender(<AssistantMessageBubble text="Hi there friend" />);
+    it('renders a segment inside a code fence as its literal text', () => {
+      render(
+        <UserMessageBubble
+          text={'```\n/Summarizer\n```'}
+          textSegments={['```\n', chipSegment, '\n```']}
+        />,
+      );
 
-    expect(screen.getByText('Hi there friend')).toBeTruthy();
+      const code = screen.getByText('/Summarizer');
+      expect(code.tagName).not.toBe('SPAN');
+      // eslint-disable-next-line testing-library/no-node-access -- the literal sits in the code element, which has no role
+      expect(code.closest('code')).toBeTruthy();
+    });
+
+    it('renders no inline element when textSegments is absent', () => {
+      render(<UserMessageBubble text="Hello world" />);
+
+      const paragraph = findMessageParagraph('Hello world');
+      /*
+       * No segment wrapper — a plain span with no ARIA hook — should appear
+       * inside the paragraph, so the check is DOM-level.
+       */
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      expect(paragraph.firstElementChild).toBeNull();
+    });
+
+    it('renders interleaved segments correctly under dir="rtl"', () => {
+      render(
+        <div dir="rtl">
+          <UserMessageBubble
+            text="/Summarizer please summarize"
+            textSegments={segments}
+          />
+        </div>,
+      );
+
+      const chip = screen.getByText('/Summarizer');
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      const paragraph = chip.closest('p') as HTMLParagraphElement;
+
+      expect(paragraph.textContent).toBe('/Summarizer please summarize');
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      expect(paragraph.closest('.text-start')).toBeTruthy();
+    });
   });
 
-  it('does not reveal structural markdown blocks character by character', () => {
-    vi.useFakeTimers();
-    const tableText = 'Intro\n\n| A | B |\n| - | - |\n| 1 | 2 |';
+  describe('AssistantMessageBubble — attachments', () => {
+    it('allows long unbroken markdown text to wrap inside the bubble', () => {
+      const longToken = `integrity sha512-${'f2'.repeat(120)}`;
 
-    const { rerender } = render(
-      <AssistantMessageBubble text="Intro" isStreaming />,
-    );
+      const { container } = render(<AssistantMessageBubble text={longToken} />);
 
-    rerender(<AssistantMessageBubble text={tableText} isStreaming />);
+      const paragraph = screen.getByText(longToken);
+      expect(paragraph.className).toContain('[overflow-wrap:anywhere]');
+      expect(paragraph.className).toContain('break-words');
+      expect(paragraph.className).toContain('dial-body-paragraph-text');
+      expect(paragraph.className).toContain('mb-3');
+      expect(paragraph.className).toContain('[text-wrap:pretty]');
+      /*
+       * The min-w-0/max-w-full wrapper around MDMessageViewer only carries
+       * aria-live/aria-atomic (not a role), so there is no semantic query that
+       * reaches it directly — a CSS-level check with no semantic alternative.
+       */
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
+      expect(container.querySelector('.min-w-0.max-w-full')).not.toBeNull();
+    });
 
-    expect(screen.getByRole('table')).toBeTruthy();
+    it('allows long unbroken code block lines to scroll horizontally inside the bubble', () => {
+      const longToken = `integrity sha512-${'f2'.repeat(120)}`;
+
+      const { container } = render(
+        <AssistantMessageBubble text={`\`\`\`\n${longToken}\n\`\`\``} />,
+      );
+
+      /*
+       * CodeBlock's scroll container and <pre><code> carry no ARIA role —
+       * a CSS-level check with no semantic query available.
+       */
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
+      const scrollContainer = container.querySelector('[dir="ltr"]');
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
+      const code = container.querySelector('pre code');
+      expect(scrollContainer?.className).toContain('overflow-auto');
+      expect(code?.className).toContain('whitespace-pre');
+    });
+
+    it('reveals appended streaming text gradually', () => {
+      vi.useFakeTimers();
+
+      const { rerender } = render(
+        <AssistantMessageBubble text="Hi" isStreaming />,
+      );
+
+      rerender(<AssistantMessageBubble text="Hi there" isStreaming />);
+
+      expect(screen.queryByText('Hi there')).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(screen.getByText('Hi there')).toBeTruthy();
+    });
+
+    it('renders remaining text immediately after streaming stops', () => {
+      vi.useFakeTimers();
+
+      const { rerender } = render(
+        <AssistantMessageBubble text="Hi" isStreaming />,
+      );
+
+      rerender(<AssistantMessageBubble text="Hi there" isStreaming />);
+
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+
+      rerender(<AssistantMessageBubble text="Hi there friend" />);
+
+      expect(screen.getByText('Hi there friend')).toBeTruthy();
+    });
+
+    it('does not reveal structural markdown blocks character by character', () => {
+      vi.useFakeTimers();
+      const tableText = 'Intro\n\n| A | B |\n| - | - |\n| 1 | 2 |';
+
+      const { rerender } = render(
+        <AssistantMessageBubble text="Intro" isStreaming />,
+      );
+
+      rerender(<AssistantMessageBubble text={tableText} isStreaming />);
+
+      expect(screen.getByRole('table')).toBeTruthy();
+    });
+
+    it('forwards code block labels to assistant code blocks', () => {
+      render(
+        <AssistantMessageBubble
+          text={'```ts\nconst x = 1;\n```'}
+          labels={{
+            codeBlockCopyLabel: 'Kopieren',
+            codeBlockDownloadLabel: 'Herunterladen',
+          }}
+        />,
+      );
+
+      expect(screen.getByRole('button', { name: 'Kopieren' })).toBeTruthy();
+      expect(
+        screen.getByRole('button', { name: 'Herunterladen' }),
+      ).toBeTruthy();
+    });
+
+    it('forwards table action labels to completed assistant tables', () => {
+      render(
+        <AssistantMessageBubble
+          text={TABLE_MARKDOWN}
+          labels={ASSISTANT_TABLE_LABELS}
+        />,
+      );
+
+      expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+      expect(
+        screen.getByRole('button', { name: 'Download as CSV' }),
+      ).toBeTruthy();
+    });
+
+    it('hides table actions while an assistant message is streaming', () => {
+      render(
+        <AssistantMessageBubble
+          text={TABLE_MARKDOWN}
+          isStreaming
+          labels={ASSISTANT_TABLE_LABELS}
+        />,
+      );
+
+      expect(screen.queryByRole('button')).toBeNull();
+    });
+
+    it('renders assistant tables without actions when labels are absent', () => {
+      render(<AssistantMessageBubble text={TABLE_MARKDOWN} />);
+
+      expect(screen.queryByRole('button')).toBeNull();
+    });
+
+    it('forwards tableOnOpenInCanvas to the table, calling it with the serialized Markdown', async () => {
+      /* The action button's Tooltip mounts via floating-ui, which requires
+       * IntersectionObserver — absent by default in jsdom. */
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          observe() {
+            // No-op in JSDOM.
+          }
+          unobserve() {
+            // No-op in JSDOM.
+          }
+          disconnect() {
+            // No-op in JSDOM.
+          }
+        },
+      );
+      const tableOnOpenInCanvas = vi.fn();
+
+      render(
+        <AssistantMessageBubble
+          text={TABLE_MARKDOWN}
+          labels={{
+            ...ASSISTANT_TABLE_LABELS,
+            tableOpenInCanvasLabel: 'Open in canvas',
+          }}
+          tableOnOpenInCanvas={tableOnOpenInCanvas}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open in canvas' }));
+
+      expect(tableOnOpenInCanvas).toHaveBeenCalledWith(
+        '| A | B |\n| :-- | :-- |\n| 1 | 2 |',
+      );
+      vi.unstubAllGlobals();
+    });
+
+    it('does not render Open in Canvas when tableOnOpenInCanvas is absent', () => {
+      render(
+        <AssistantMessageBubble
+          text={TABLE_MARKDOWN}
+          labels={{
+            ...ASSISTANT_TABLE_LABELS,
+            tableOpenInCanvasLabel: 'Open in canvas',
+          }}
+        />,
+      );
+
+      expect(
+        screen.queryByRole('button', { name: 'Open in canvas' }),
+      ).toBeNull();
+    });
+
+    it('renders an attachment tray when attachments are provided', () => {
+      render(
+        <AssistantMessageBubble
+          text="Here is your file"
+          attachments={[ATTACHMENT]}
+        />,
+      );
+      expect(screen.getByRole('list')).toBeTruthy();
+    });
+
+    it('renders no attachment tray when attachments prop is absent', () => {
+      render(<AssistantMessageBubble text="Hello" />);
+      expect(screen.queryByRole('list')).toBeNull();
+    });
+
+    it('renders no attachment tray when attachments array is empty', () => {
+      render(<AssistantMessageBubble text="Hello" attachments={[]} />);
+      expect(screen.queryByRole('list')).toBeNull();
+    });
+
+    it('renders the tray after the message text in the DOM', () => {
+      render(
+        <AssistantMessageBubble
+          text="Here is your file"
+          attachments={[ATTACHMENT]}
+        />,
+      );
+
+      const root = screen.getByRole('group', { name: 'Assistant message' });
+      const textIndex = root.textContent?.indexOf('Here is your file') ?? -1;
+      const trayIndex = root.textContent?.indexOf('report') ?? -1;
+
+      expect(textIndex).toBeGreaterThanOrEqual(0);
+      // text comes before the tray
+      expect(textIndex).toBeLessThan(trayIndex);
+    });
+
+    it('remove button does not trigger a callback (read-only tray)', () => {
+      render(
+        <AssistantMessageBubble
+          text="Here is your file"
+          attachments={[ATTACHMENT]}
+        />,
+      );
+      expect(screen.queryByRole('button', { name: /remove/i })).toBeNull();
+    });
+
+    it('tray cards are inert when onAttachmentClick is absent', () => {
+      render(
+        <AssistantMessageBubble
+          text="Here is your file"
+          attachments={[ATTACHMENT]}
+        />,
+      );
+      const tray = screen.getByRole('list');
+      expect(within(tray).queryAllByRole('button')).toHaveLength(0);
+    });
+
+    it('names the tile and its download button by separate labels', () => {
+      const onDownloadAll = vi.fn();
+      render(
+        <AssistantMessageBubble
+          text="Here is your file"
+          attachments={[ATTACHMENT]}
+          onAttachmentClick={vi.fn()}
+          onDownloadAll={onDownloadAll}
+          labels={{
+            attachmentClickLabel: 'Open in canvas',
+            attachmentDownloadLabel: 'Download file',
+          }}
+        />,
+      );
+
+      expect(
+        screen.getByRole('button', { name: 'Open in canvas' }),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Download file' }));
+      expect(onDownloadAll).toHaveBeenCalledWith([ATTACHMENT]);
+    });
   });
 
-  it('forwards code block labels to assistant code blocks', () => {
-    render(
-      <AssistantMessageBubble
-        text={'```ts\nconst x = 1;\n```'}
-        labels={{
-          codeBlockCopyLabel: 'Kopieren',
-          codeBlockDownloadLabel: 'Herunterladen',
-        }}
-      />,
-    );
+  describe('MessageBubble — long unbreakable text', () => {
+    it('breaks a long token in an assistant heading that carries no break class of its own', () => {
+      render(<AssistantMessageBubble text={`# ${LONG_TOKEN}`} />);
 
-    expect(screen.getByRole('button', { name: 'Kopieren' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Herunterladen' })).toBeTruthy();
+      const heading = screen.getByRole('heading', {
+        level: 1,
+        name: LONG_TOKEN,
+      });
+
+      expect(heading.className).not.toContain('overflow-wrap');
+
+      /*
+       * The `.cm-bubble-markdown` wrapper carries no role — a CSS-level check
+       * with no semantic query available.
+       */
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      const wrapper = heading.closest('.cm-bubble-markdown') as HTMLElement;
+
+      expect(wrapper.className).toContain('wrap-anywhere');
+    });
+
+    it('keeps a long token breakable when a host override drops the paragraph break classes', () => {
+      render(
+        <AssistantMessageBubble
+          text={LONG_TOKEN}
+          markdownClassNames={{ p: 'dial-body-paragraph-text' }}
+        />,
+      );
+
+      const paragraph = findMessageParagraph(LONG_TOKEN);
+
+      expect(paragraph.className).not.toContain('[overflow-wrap:anywhere]');
+
+      // eslint-disable-next-line testing-library/no-node-access -- same wrapper check as above
+      const wrapper = paragraph.closest('.cm-bubble-markdown') as HTMLElement;
+
+      expect(wrapper.className).toContain('wrap-anywhere');
+    });
   });
 
-  it('forwards table action labels to completed assistant tables', () => {
-    render(
-      <AssistantMessageBubble
-        text={TABLE_MARKDOWN}
-        labels={ASSISTANT_TABLE_LABELS}
-      />,
-    );
+  describe('AssistantMessageBubble — markdown URLs', () => {
+    it('rewrites markdown image src through markdownUrlTransform', () => {
+      render(
+        <AssistantMessageBubble
+          text="![chart](files/bucket/chart.png)"
+          markdownUrlTransform={(url) =>
+            url.startsWith('files/') ? `/dl/${url.slice('files/'.length)}` : url
+          }
+        />,
+      );
 
-    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'Download as CSV' }),
-    ).toBeTruthy();
+      expect(
+        screen.getByRole('img', { name: 'chart' }).getAttribute('src'),
+      ).toBe('/dl/bucket/chart.png');
+    });
   });
 
-  it('hides table actions while an assistant message is streaming', () => {
-    render(
-      <AssistantMessageBubble
-        text={TABLE_MARKDOWN}
-        isStreaming
-        labels={ASSISTANT_TABLE_LABELS}
-      />,
-    );
+  describe('AssistantMessageBubble — deployment icon', () => {
+    it('renders an img when deploymentIconUrl is provided', () => {
+      render(
+        <AssistantMessageBubble
+          text="Hello"
+          deploymentIconUrl="https://example.com/icon.png"
+          deploymentDisplayName="GPT-4"
+        />,
+      );
+      const img = screen.getByAltText('');
+      expect(img).toBeTruthy();
+      expect(img.getAttribute('src')).toBe('https://example.com/icon.png');
+    });
 
-    expect(screen.queryByRole('button')).toBeNull();
+    it('renders no icon header when neither deploymentIconUrl nor deploymentDisplayName is provided', () => {
+      render(<AssistantMessageBubble text="Hello" />);
+      expect(screen.queryByAltText('')).toBeNull();
+      expect(screen.queryByText(/GPT/)).toBeNull();
+    });
   });
 
-  it('renders assistant tables without actions when labels are absent', () => {
-    render(<AssistantMessageBubble text={TABLE_MARKDOWN} />);
-
-    expect(screen.queryByRole('button')).toBeNull();
-  });
-
-  it('forwards tableOnOpenInCanvas to the table, calling it with the serialized Markdown', async () => {
-    /* The action button's Tooltip mounts via floating-ui, which requires
-     * IntersectionObserver — absent by default in jsdom. */
-    vi.stubGlobal(
-      'IntersectionObserver',
-      class {
-        observe() {
-          // No-op in JSDOM.
-        }
-        unobserve() {
-          // No-op in JSDOM.
-        }
-        disconnect() {
-          // No-op in JSDOM.
-        }
-      },
-    );
-    const tableOnOpenInCanvas = vi.fn();
-
-    render(
-      <AssistantMessageBubble
-        text={TABLE_MARKDOWN}
-        labels={{
-          ...ASSISTANT_TABLE_LABELS,
-          tableOpenInCanvasLabel: 'Open in canvas',
-        }}
-        tableOnOpenInCanvas={tableOnOpenInCanvas}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open in canvas' }));
-
-    expect(tableOnOpenInCanvas).toHaveBeenCalledWith(
-      '| A | B |\n| :-- | :-- |\n| 1 | 2 |',
-    );
-    vi.unstubAllGlobals();
-  });
-
-  it('does not render Open in Canvas when tableOnOpenInCanvas is absent', () => {
-    render(
-      <AssistantMessageBubble
-        text={TABLE_MARKDOWN}
-        labels={{
-          ...ASSISTANT_TABLE_LABELS,
-          tableOpenInCanvasLabel: 'Open in canvas',
-        }}
-      />,
-    );
-
-    expect(screen.queryByRole('button', { name: 'Open in canvas' })).toBeNull();
-  });
-
-  it('renders an attachment tray when attachments are provided', () => {
-    render(
-      <AssistantMessageBubble
-        text="Here is your file"
-        attachments={[ATTACHMENT]}
-      />,
-    );
-    expect(screen.getByRole('list')).toBeTruthy();
-  });
-
-  it('renders no attachment tray when attachments prop is absent', () => {
-    render(<AssistantMessageBubble text="Hello" />);
-    expect(screen.queryByRole('list')).toBeNull();
-  });
-
-  it('renders no attachment tray when attachments array is empty', () => {
-    render(<AssistantMessageBubble text="Hello" attachments={[]} />);
-    expect(screen.queryByRole('list')).toBeNull();
-  });
-
-  it('renders the tray after the message text in the DOM', () => {
-    render(
-      <AssistantMessageBubble
-        text="Here is your file"
-        attachments={[ATTACHMENT]}
-      />,
-    );
-
-    const root = screen.getByRole('group', { name: 'Assistant message' });
-    const textIndex = root.textContent?.indexOf('Here is your file') ?? -1;
-    const trayIndex = root.textContent?.indexOf('report') ?? -1;
-
-    expect(textIndex).toBeGreaterThanOrEqual(0);
-    // text comes before the tray
-    expect(textIndex).toBeLessThan(trayIndex);
-  });
-
-  it('remove button does not trigger a callback (read-only tray)', () => {
-    render(
-      <AssistantMessageBubble
-        text="Here is your file"
-        attachments={[ATTACHMENT]}
-      />,
-    );
-    expect(screen.queryByRole('button', { name: /remove/i })).toBeNull();
-  });
-
-  it('tray cards are inert when onAttachmentClick is absent', () => {
-    render(
-      <AssistantMessageBubble
-        text="Here is your file"
-        attachments={[ATTACHMENT]}
-      />,
-    );
-    const tray = screen.getByRole('list');
-    expect(within(tray).queryAllByRole('button')).toHaveLength(0);
-  });
-
-  it('names the tile and its download button by separate labels', () => {
-    const onDownloadAll = vi.fn();
-    render(
-      <AssistantMessageBubble
-        text="Here is your file"
-        attachments={[ATTACHMENT]}
-        onAttachmentClick={vi.fn()}
-        onDownloadAll={onDownloadAll}
-        labels={{
-          attachmentClickLabel: 'Open in canvas',
-          attachmentDownloadLabel: 'Download file',
-        }}
-      />,
-    );
-
-    expect(screen.getByRole('button', { name: 'Open in canvas' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Download file' }));
-    expect(onDownloadAll).toHaveBeenCalledWith([ATTACHMENT]);
-  });
-});
-
-describe('AssistantMessageBubble — markdown URLs', () => {
-  it('rewrites markdown image src through markdownUrlTransform', () => {
-    render(
-      <AssistantMessageBubble
-        text="![chart](files/bucket/chart.png)"
-        markdownUrlTransform={(url) =>
-          url.startsWith('files/') ? `/dl/${url.slice('files/'.length)}` : url
-        }
-      />,
-    );
-
-    expect(screen.getByRole('img', { name: 'chart' }).getAttribute('src')).toBe(
-      '/dl/bucket/chart.png',
-    );
-  });
-});
-
-describe('AssistantMessageBubble — deployment icon', () => {
-  it('renders an img when deploymentIconUrl is provided', () => {
-    render(
-      <AssistantMessageBubble
-        text="Hello"
-        deploymentIconUrl="https://example.com/icon.png"
-        deploymentDisplayName="GPT-4"
-      />,
-    );
-    const img = screen.getByAltText('');
-    expect(img).toBeTruthy();
-    expect(img.getAttribute('src')).toBe('https://example.com/icon.png');
-  });
-
-  it('renders no icon header when neither deploymentIconUrl nor deploymentDisplayName is provided', () => {
-    render(<AssistantMessageBubble text="Hello" />);
-    expect(screen.queryByAltText('')).toBeNull();
-    expect(screen.queryByText(/GPT/)).toBeNull();
-  });
-});
-
-describe('AssistantMessageBubble — inline-start slot', () => {
-  const skillSlot = <span>/Summarizer</span>;
-
-  /*
-   * The text container carries only aria-live/aria-atomic (no role), so no
-   * semantic query reaches it — a CSS-level check with no semantic alternative.
-   */
-  const getTextContainer = (container: HTMLElement) =>
-    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
-    container.querySelector('[aria-live="polite"]') as HTMLElement | null;
-
-  it('overlays the slot at the inline start of the first markdown block without entering it', () => {
-    /* The overlaid slot is measured by a ResizeObserver, absent in jsdom. */
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {
-          // No-op in JSDOM.
-        }
-        unobserve() {
-          // No-op in JSDOM.
-        }
-        disconnect() {
-          // No-op in JSDOM.
-        }
-      },
-    );
-
-    const { container } = render(
-      <AssistantMessageBubble text="Hello world" beforeContent={skillSlot} />,
-    );
-
-    const textContainer = getTextContainer(container) as HTMLElement;
-    expect(textContainer).toBeTruthy();
-
-    // eslint-disable-next-line testing-library/no-node-access -- see getTextContainer comment
-    const slotWrapper = textContainer.firstElementChild as HTMLElement;
-    expect(slotWrapper.className).toContain('absolute');
-    expect(slotWrapper.className).toContain('start-0');
-    expect(slotWrapper.className).toContain('top-0');
-
-    // eslint-disable-next-line testing-library/no-node-access -- see getTextContainer comment
-    const markdownWrapper = textContainer.querySelector(
-      '.cm-bubble-markdown',
-    ) as HTMLElement | null;
-    expect(markdownWrapper).toBeTruthy();
-    /*
-     * The indent selector is scoped through the wrapper class precisely so the
-     * host-supplied slot never sits inside the markdown container it indents.
-     */
-    expect(markdownWrapper?.contains(slotWrapper)).toBe(false);
-    expect(textContainer.className).toContain(
-      '[&>.cm-bubble-markdown>div>*:first-child]',
-    );
-    expect(textContainer.className).toContain(
-      'indent-[var(--cm-bubble-first-line-indent,0px)]',
-    );
-  });
-
-  it('renders the slot in flow above the streaming placeholder while no text has arrived', () => {
-    render(
-      <AssistantMessageBubble
-        isStreaming
-        beforeContent={skillSlot}
-        labels={{ thinkingLabel: 'Thinking…' }}
-      />,
-    );
-
-    const slot = screen.getByText('/Summarizer');
-    /* The in-flow wrapper carries no ARIA hook — a CSS-level check. */
-    // eslint-disable-next-line testing-library/no-node-access -- see comment above
-    const wrapper = slot.parentElement as HTMLElement;
-    expect(wrapper.className).not.toContain('absolute');
-
-    const root = screen.getByRole('group', { name: 'Assistant message' });
-    const slotIndex = root.textContent?.indexOf('/Summarizer') ?? -1;
-    const placeholderIndex = root.textContent?.indexOf('Thinking…') ?? -1;
-    expect(slotIndex).toBeGreaterThanOrEqual(0);
-    expect(slotIndex).toBeLessThan(placeholderIndex);
-  });
-
-  it('omits the thinking placeholder when hasThinkingPlaceholder is false', () => {
-    render(
-      <AssistantMessageBubble
-        isStreaming
-        hasThinkingPlaceholder={false}
-        afterContent={<span>Stages</span>}
-        labels={{ thinkingLabel: 'Thinking…' }}
-      />,
-    );
-
-    expect(screen.queryByText('Thinking…')).toBeNull();
-    expect(screen.getByText('Stages')).toBeTruthy();
-  });
-
-  it('renders the slot on its own line for a message with no text at all', () => {
-    const { container } = render(
-      <AssistantMessageBubble beforeContent={skillSlot} />,
-    );
-
-    expect(screen.getByText('/Summarizer')).toBeTruthy();
-    expect(getTextContainer(container)).toBeNull();
-  });
-
-  it('renders no slot and no indent class when beforeContent is absent', () => {
-    const { container } = render(<AssistantMessageBubble text="Hello world" />);
-
-    const textContainer = getTextContainer(container) as HTMLElement;
-    expect(textContainer).toBeTruthy();
-    expect(screen.queryByText('/Summarizer')).toBeNull();
-    expect(textContainer.className).not.toContain(
-      'indent-[var(--cm-bubble-first-line-indent,0px)]',
-    );
-
-    expect(textContainer.firstElementChild?.className).toContain(
-      'cm-bubble-markdown',
-    );
-  });
-});
-
-describe('StatusMessageBubble', () => {
-  it('renders bodyText', () => {
-    render(
-      <StatusMessageBubble
-        labels={{ bodyText: 'The model has been switched from A to B.' }}
-      />,
-    );
-    expect(
-      screen.getByText('The model has been switched from A to B.'),
-    ).toBeTruthy();
-  });
-
-  it('renders default titleText when titleText prop is omitted', () => {
-    render(<StatusMessageBubble labels={{ bodyText: 'Changed.' }} />);
-    expect(screen.getByText('Model switched.')).toBeTruthy();
-  });
-
-  it('renders custom titleText when provided', () => {
-    render(
-      <StatusMessageBubble
-        labels={{ titleText: 'Agent updated.', bodyText: 'Changed.' }}
-      />,
-    );
-    expect(screen.getByText('Agent updated.')).toBeTruthy();
-  });
-
-  it('renders an svg icon (IconInfoCircleFilled)', () => {
-    const { container } = render(
-      <StatusMessageBubble labels={{ bodyText: 'Changed.' }} />,
-    );
-    /*
-     * InfoMessageNotification (ui-kit) renders its icon as a bare
-     * decorative svg with no accessible role or name to query by — a
-     * DOM-presence check with no semantic query available.
-     */
-    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
-    expect(container.querySelector('svg')).not.toBeNull();
-  });
-});
-
-describe('AssistantMessageBubble — response format', () => {
-  it('renders markdown by default', () => {
-    render(<AssistantMessageBubble text={TABLE_MARKDOWN} />);
-
-    expect(screen.getByRole('table')).toBeTruthy();
-  });
-
-  it('renders the body verbatim when the format is plain text', () => {
-    render(
-      <AssistantMessageBubble
-        text={TABLE_MARKDOWN}
-        responseFormat={ResponseFormat.PlainText}
-      />,
-    );
-
-    expect(screen.queryByRole('table')).toBeNull();
-    expect(findMessageParagraph(TABLE_MARKDOWN)).toBeTruthy();
-  });
-
-  it('forwards the format through the role-switching MessageBubble', () => {
-    render(
-      <MessageBubble
-        role={MessageRole.Assistant}
-        text="**bold**"
-        responseFormat={ResponseFormat.PlainText}
-      />,
-    );
-
-    expect(findMessageParagraph('**bold**')).toBeTruthy();
-  });
-
-  it('keeps the plain-text body inside the markdown wrapper the indent targets', () => {
-    /* The overlaid slot is measured by a ResizeObserver, absent in jsdom. */
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {
-          // No-op in JSDOM.
-        }
-        unobserve() {
-          // No-op in JSDOM.
-        }
-        disconnect() {
-          // No-op in JSDOM.
-        }
-      },
-    );
-
-    render(
-      <AssistantMessageBubble
-        text="plain body"
-        beforeContent={<span>slot</span>}
-        responseFormat={ResponseFormat.PlainText}
-      />,
-    );
+  describe('AssistantMessageBubble — inline-start slot', () => {
+    const skillSlot = <span>/Summarizer</span>;
 
     /*
-     * The first-line indent selector is
-     * `.cm-bubble-markdown > div > *:first-child`, so the plain-text body has
-     * to keep the element shape a markdown body has. Only the DOM shape can
-     * show that.
+     * The text container carries only aria-live/aria-atomic (no role), so no
+     * semantic query reaches it — a CSS-level check with no semantic alternative.
      */
-    const body = findMessageParagraph('plain body');
-    expect(body.parentElement?.parentElement?.className).toContain(
-      'cm-bubble-markdown',
-    );
+    const getTextContainer = (container: HTMLElement) =>
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
+      container.querySelector('[aria-live="polite"]') as HTMLElement | null;
+
+    it('overlays the slot at the inline start of the first markdown block without entering it', () => {
+      /* The overlaid slot is measured by a ResizeObserver, absent in jsdom. */
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {
+            // No-op in JSDOM.
+          }
+          unobserve() {
+            // No-op in JSDOM.
+          }
+          disconnect() {
+            // No-op in JSDOM.
+          }
+        },
+      );
+
+      const { container } = render(
+        <AssistantMessageBubble text="Hello world" beforeContent={skillSlot} />,
+      );
+
+      const textContainer = getTextContainer(container) as HTMLElement;
+      expect(textContainer).toBeTruthy();
+
+      // eslint-disable-next-line testing-library/no-node-access -- see getTextContainer comment
+      const slotWrapper = textContainer.firstElementChild as HTMLElement;
+      expect(slotWrapper.className).toContain('absolute');
+      expect(slotWrapper.className).toContain('inset-s-0');
+      expect(slotWrapper.className).toContain('top-0');
+
+      // eslint-disable-next-line testing-library/no-node-access -- see getTextContainer comment
+      const markdownWrapper = textContainer.querySelector(
+        '.cm-bubble-markdown',
+      ) as HTMLElement | null;
+      expect(markdownWrapper).toBeTruthy();
+      /*
+       * The indent selector is scoped through the wrapper class precisely so the
+       * host-supplied slot never sits inside the markdown container it indents.
+       */
+      expect(markdownWrapper?.contains(slotWrapper)).toBe(false);
+      expect(textContainer.className).toContain(
+        '[&>.cm-bubble-markdown>div>*:first-child]',
+      );
+      expect(textContainer.className).toContain(
+        'indent-[var(--cm-bubble-first-line-indent,0px)]',
+      );
+    });
+
+    it('renders the slot in flow above the streaming placeholder while no text has arrived', () => {
+      render(
+        <AssistantMessageBubble
+          isStreaming
+          beforeContent={skillSlot}
+          labels={{ thinkingLabel: 'Thinking…' }}
+        />,
+      );
+
+      const slot = screen.getByText('/Summarizer');
+      /* The in-flow wrapper carries no ARIA hook — a CSS-level check. */
+      // eslint-disable-next-line testing-library/no-node-access -- see comment above
+      const wrapper = slot.parentElement as HTMLElement;
+      expect(wrapper.className).not.toContain('absolute');
+
+      const root = screen.getByRole('group', { name: 'Assistant message' });
+      const slotIndex = root.textContent?.indexOf('/Summarizer') ?? -1;
+      const placeholderIndex = root.textContent?.indexOf('Thinking…') ?? -1;
+      expect(slotIndex).toBeGreaterThanOrEqual(0);
+      expect(slotIndex).toBeLessThan(placeholderIndex);
+    });
+
+    it('omits the thinking placeholder when hasThinkingPlaceholder is false', () => {
+      render(
+        <AssistantMessageBubble
+          isStreaming
+          hasThinkingPlaceholder={false}
+          afterContent={<span>Stages</span>}
+          labels={{ thinkingLabel: 'Thinking…' }}
+        />,
+      );
+
+      expect(screen.queryByText('Thinking…')).toBeNull();
+      expect(screen.getByText('Stages')).toBeTruthy();
+    });
+
+    it('mounts the live region before the first token and keeps the same node once text streams in', () => {
+      const { container, rerender } = render(
+        <AssistantMessageBubble
+          isStreaming
+          hasThinkingPlaceholder={false}
+          afterContent={<span>Stages</span>}
+        />,
+      );
+
+      const region = getTextContainer(container);
+      expect(region).toBeTruthy();
+      expect(region?.textContent).toBe('');
+      expect(region?.className).toContain('absolute');
+
+      rerender(
+        <AssistantMessageBubble
+          text="First token"
+          isStreaming
+          hasThinkingPlaceholder={false}
+          afterContent={<span>Stages</span>}
+        />,
+      );
+
+      expect(getTextContainer(container)).toBe(region);
+      expect(region?.getAttribute('aria-atomic')).toBe('false');
+      expect(region?.className).toContain('relative');
+    });
+
+    it('renders the slot on its own line for a message with no text at all', () => {
+      const { container } = render(
+        <AssistantMessageBubble beforeContent={skillSlot} />,
+      );
+
+      expect(screen.getByText('/Summarizer')).toBeTruthy();
+      expect(getTextContainer(container)).toBeNull();
+    });
+
+    it('renders no text container for whitespace-only text', () => {
+      const { container } = render(
+        <AssistantMessageBubble
+          text={'\n\n'}
+          afterContent={<span>Stages</span>}
+        />,
+      );
+
+      expect(getTextContainer(container)).toBeNull();
+      expect(screen.getByText('Stages')).toBeTruthy();
+    });
+
+    it('renders no slot and no indent class when beforeContent is absent', () => {
+      const { container } = render(
+        <AssistantMessageBubble text="Hello world" />,
+      );
+
+      const textContainer = getTextContainer(container) as HTMLElement;
+      expect(textContainer).toBeTruthy();
+      expect(screen.queryByText('/Summarizer')).toBeNull();
+      expect(textContainer.className).not.toContain(
+        'indent-[var(--cm-bubble-first-line-indent,0px)]',
+      );
+
+      expect(textContainer.firstElementChild?.className).toContain(
+        'cm-bubble-markdown',
+      );
+    });
+  });
+
+  describe('StatusMessageBubble', () => {
+    it('renders bodyText', () => {
+      render(
+        <StatusMessageBubble
+          labels={{ bodyText: 'The model has been switched from A to B.' }}
+        />,
+      );
+      expect(
+        screen.getByText('The model has been switched from A to B.'),
+      ).toBeTruthy();
+    });
+
+    it('renders default titleText when titleText prop is omitted', () => {
+      render(<StatusMessageBubble labels={{ bodyText: 'Changed.' }} />);
+      expect(screen.getByText('Model switched.')).toBeTruthy();
+    });
+
+    it('renders custom titleText when provided', () => {
+      render(
+        <StatusMessageBubble
+          labels={{ titleText: 'Agent updated.', bodyText: 'Changed.' }}
+        />,
+      );
+      expect(screen.getByText('Agent updated.')).toBeTruthy();
+    });
+
+    it('renders an svg icon (IconInfoCircleFilled)', () => {
+      const { container } = render(
+        <StatusMessageBubble labels={{ bodyText: 'Changed.' }} />,
+      );
+      /*
+       * InfoMessageNotification (ui-kit) renders its icon as a bare
+       * decorative svg with no accessible role or name to query by — a
+       * DOM-presence check with no semantic query available.
+       */
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
+      expect(container.querySelector('svg')).not.toBeNull();
+    });
+  });
+
+  describe('AssistantMessageBubble — response format', () => {
+    it('renders markdown by default', () => {
+      render(<AssistantMessageBubble text={TABLE_MARKDOWN} />);
+
+      expect(screen.getByRole('table')).toBeTruthy();
+    });
+
+    it('renders the body verbatim when the format is plain text', () => {
+      render(
+        <AssistantMessageBubble
+          text={TABLE_MARKDOWN}
+          responseFormat={ResponseFormat.PlainText}
+        />,
+      );
+
+      expect(screen.queryByRole('table')).toBeNull();
+      expect(findMessageParagraph(TABLE_MARKDOWN)).toBeTruthy();
+    });
+
+    it('forwards the format through the role-switching MessageBubble', () => {
+      render(
+        <MessageBubble
+          role={MessageRole.Assistant}
+          text="**bold**"
+          responseFormat={ResponseFormat.PlainText}
+        />,
+      );
+
+      expect(findMessageParagraph('**bold**')).toBeTruthy();
+    });
+
+    it('keeps the plain-text body inside the markdown wrapper the indent targets', () => {
+      /* The overlaid slot is measured by a ResizeObserver, absent in jsdom. */
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {
+            // No-op in JSDOM.
+          }
+          unobserve() {
+            // No-op in JSDOM.
+          }
+          disconnect() {
+            // No-op in JSDOM.
+          }
+        },
+      );
+
+      render(
+        <AssistantMessageBubble
+          text="plain body"
+          beforeContent={<span>slot</span>}
+          responseFormat={ResponseFormat.PlainText}
+        />,
+      );
+
+      /*
+       * The first-line indent selector is
+       * `.cm-bubble-markdown > div > *:first-child`, so the plain-text body has
+       * to keep the element shape a markdown body has. Only the DOM shape can
+       * show that.
+       */
+      const body = findMessageParagraph('plain body');
+      expect(body.parentElement?.parentElement?.className).toContain(
+        'cm-bubble-markdown',
+      );
+    });
   });
 });

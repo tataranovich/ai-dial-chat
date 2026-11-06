@@ -21,6 +21,8 @@ export interface ToolsetAuthFormData {
   clientId?: string;
   /** OAUTH: client secret, never returned by the backend on read. */
   clientSecret?: string;
+  /** OAUTH: last characters of the saved client secret, supplied by the host for display only. */
+  clientSecretHint?: string;
   /** OAUTH: authorization endpoint URL. */
   authorizationEndpoint?: string;
   /** OAUTH: token endpoint URL. */
@@ -31,6 +33,8 @@ export interface ToolsetAuthFormData {
   codeChallenge?: string;
   /** OAUTH: PKCE code challenge method, when the backend supplied one. */
   codeChallengeMethod?: string;
+  /** OAUTH: RFC 8707 resource indicator; editable for a static client, read back from the backend otherwise. */
+  resource?: string;
 }
 
 export interface DeploymentGeneralFormData {
@@ -82,6 +86,8 @@ export interface ToolsetFormErrors {
   authorizationEndpoint?: string;
   /** Validation message for the OAuth token endpoint field. */
   tokenEndpoint?: string;
+  /** Validation message for the OAuth resource field. */
+  resource?: string;
 }
 
 /**

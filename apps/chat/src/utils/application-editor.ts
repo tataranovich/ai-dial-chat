@@ -1,15 +1,18 @@
 import type { DeploymentCreationFormValues } from '@epam/ai-dial-builder-form';
-import type {
-  ApplicationSchemaSummaryDto,
-  DeploymentItemDto,
+import {
+  CatalogCreationType,
+  type ApplicationSchemaSummaryDto,
+  type DeploymentItemDto,
 } from '@epam/ai-dial-chat-api-client';
 import {
   composeLocalePayload,
   decomposeLocalizedFields,
+  getRunnerSchemas,
   isQuickAppSchema,
 } from '@epam/ai-dial-chat-hooks';
 import type { JsonSchema } from '@epam/ai-dial-ui-kit';
 import type {
+  ApplicationCreateOptions,
   ApplicationEditorContext,
   ApplicationEditorDefinition,
   ApplicationNotificationTarget,
@@ -17,13 +20,36 @@ import type {
   ApplicationEditorPageDefinition,
   ApplicationSetupValues,
 } from '../models/application-editor';
+import type { CatalogCreationCheck } from '../models/catalog-creation';
 import { ApplicationEditorKind } from '../types/application-editor';
 import { AppsEditorQuery } from '../types/apps-editor';
 import type { TriggerSaveGeneralPayload } from '../types/apps-editor';
 import { NotifiableEntity } from '../types/entity-notification';
 import { PRIMARY_LOCALE, resolveLocalizedText } from './locale';
 
+/* Serialises plain data with object keys sorted, so key order never affects equality. */
+const toStableJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, nested: unknown) =>
+    nested && typeof nested === 'object' && !Array.isArray(nested)
+      ? Object.fromEntries(
+          Object.entries(nested).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : nested,
+  );
+
+/** Structural equality for Setup values, which are plain JSON-like objects. */
+export const areSetupValuesEqual = (a: unknown, b: unknown): boolean =>
+  toStableJson(a) === toStableJson(b);
+
 /** Erases a kind's setup type so it can sit in the shared registry. */
+/** Returns the create request's `folderPath` field for `options`, or no field for the bucket root. */
+export const toFolderPathField = (
+  options?: ApplicationCreateOptions,
+): { folderPath?: string } =>
+  options?.folderPath?.length
+    ? { folderPath: options.folderPath.join('/') }
+    : {};
+
 export const defineApplicationEditor = <TSetup extends ApplicationSetupValues>(
   definition: ApplicationEditorFormDefinition<TSetup>,
 ): ApplicationEditorFormDefinition<ApplicationSetupValues> =>
@@ -38,6 +64,34 @@ export const resolveSchemaEditorKind = (
   return schema && !schema.editorUrl
     ? ApplicationEditorKind.SchemaApp
     : ApplicationEditorKind.QuickApp;
+};
+
+/**
+ * Returns the creation check for an application editor route. A schema app
+ * is checked against the exact `schema` query value, resolved against the
+ * runner schemas: pending while they load, unavailable when the id is not a
+ * runner — never another schema in its place.
+ */
+export const resolveApplicationCreationCheck = (
+  creationType: CatalogCreationType,
+  searchParams: URLSearchParams,
+  schemas: ApplicationSchemaSummaryDto[],
+  isSchemasLoading: boolean,
+): CatalogCreationCheck => {
+  if (creationType !== CatalogCreationType.SchemaApp) {
+    return { type: creationType };
+  }
+  const schemaId = searchParams.get(AppsEditorQuery.Schema);
+  const isPending = isSchemasLoading && schemas.length === 0;
+  const isRunner = getRunnerSchemas(schemas).some(
+    (schema) => schema.id === schemaId,
+  );
+  return {
+    type: creationType,
+    schemaId,
+    isPending,
+    isUnavailable: !isPending && !isRunner,
+  };
 };
 
 /** Returns what a schema app's notifications name: quick app for the QuickApp schema, the schema's display name for any other known schema, else the generic application (agent). */
@@ -57,7 +111,7 @@ export const resolveSchemaNotificationTarget = ({
 
 /**
  * Returns the required property names that have no value: absent, `null` or an
- * empty string. Matches the rule `DialSchemaRenderer` marks a required field
+ * empty string. Matches the rule `SchemaRenderer` marks a required field
  * invalid by, so every field that blocks a save is also highlighted.
  */
 export const getMissingRequiredProperties = (
@@ -78,6 +132,18 @@ export const getSchemaTopLevelDefaults = (
       property.default === undefined ? [] : [[name, property.default]],
     ),
   );
+
+/**
+ * Returns whether `schema` has a top-level property the schema form shows: one
+ * not marked `isHidden`, directly or through the local `$defs` entry its `$ref`
+ * points at.
+ */
+export const hasVisibleSchemaProperties = (schema: JsonSchema): boolean =>
+  Object.values(schema.properties ?? {}).some((property) => {
+    if (property.isHidden) return false;
+    const refName = property.$ref?.replace(/^#\/\$defs\//, '');
+    return !(refName && schema.$defs?.[refName]?.isHidden);
+  });
 
 /** Returns whether a registered kind renders its own page body. */
 export const isApplicationEditorPageDefinition = (

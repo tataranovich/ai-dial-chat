@@ -140,7 +140,7 @@ The `UserContext` provider MUST register a single listener that, before resettin
 
 ### Requirement: Routing gates protected UI behind a resolved session
 
-The SPA SHALL declare three top-level routes in `apps/chat/src/main.tsx`: `/login` (the provider picker), `/overlay-close` (`<OverlayClose />`, outside the auth gate), and `*` (everything else, wrapped in `<OverlayModeGate>` and a `<RequireAuth>` gate). The `<RequireAuth>` component MUST render its `children` only when `status === 'authenticated'`. While `status === 'loading'` it renders a centred ui-kit `<Spinner />` outside overlay mode and `null` in overlay mode (see `chat-overlay-app-mode` for the overlay-mode loading presentation). When `status === 'unauthenticated'`:
+The SPA SHALL declare three top-level routes in `apps/chat/src/AppRoot.tsx`: `/login` (the provider picker), `/overlay-close` (`<OverlayClose />`, outside the auth gate), and `*` (everything else, wrapped in `<OverlayModeGate>` and a `<RequireAuth>` gate). The `<RequireAuth>` component MUST render its `children` only when `status === 'authenticated'`. While `status === 'loading'` it renders a centred ui-kit `<Spinner />` outside overlay mode and `null` in overlay mode (see `chat-overlay-app-mode` for the overlay-mode loading presentation). When `status === 'unauthenticated'`:
 
 - outside overlay mode (`useOptionalOverlay()` returns `undefined`): call `useAuthRedirect()` with no disabling options, triggering the existing automatic redirect policy;
 - inside overlay mode (`useOptionalOverlay()` returns a defined value): call `useAuthRedirect({ disabled: true })`, so no automatic redirect is attempted, and render the overlay login gate defined in `overlay-external-login` instead of `null`.
@@ -176,7 +176,7 @@ The SPA SHALL declare three top-level routes in `apps/chat/src/main.tsx`: `/logi
 
 ### Requirement: Login picker page lists providers and links to the BFF login endpoint
 
-The `<LoginPage />` component (`apps/chat/src/pages/auth/Login.tsx`) SHALL own provider loading on the `/login` route, load the provider list once on mount via `getProviders()` (`authApi.listProviders()`, i.e. `GET /api/v1/auth/providers`), read an optional `callbackUrl` from the route query string, and render one ui-kit `NeutralButton` with an `href` (which renders an `<a>`) per provider, whose `href` is `/api/v1/auth/login/<encoded-providerId>?callbackUrl=<encoded-callback-url>`, whose `label` is the provider's `label` as-is, and whose `iconBefore` is a `ProviderIcon`. The buttons are preceded by a `t(AuthI18nKeys.LoginDescription)` line (`auth.loginDescription`, "Sign in with:") under the `auth.loginTitle` heading. The page SHALL use `callbackUrl` only when it parses as a same-origin URL (and does not start with `//`); otherwise, or when the query omits it, it SHALL default to the application root (`window.location.origin + '/'`). Provider links MUST NOT be React Router `<Link>` elements, because the destination is a BFF route that requires a top-level browser navigation to the IdP. While loading, a localised placeholder MUST be shown; on failure, a localised error message MUST be shown.
+The `<LoginPage />` component (`apps/chat/src/pages/auth/Login.tsx`) SHALL own provider loading on the `/login` route, load the provider list once on mount via `getProviders()` (`authApi.listProviders()`, i.e. `GET /api/v1/auth/providers`), read an optional `callbackUrl` from the route query string, and render the ui-kit `LoginScreen` with one provider entry (a link-styled `NeutralButton`, i.e. an `<a>`) per provider, whose `href` is `/api/v1/auth/login/<encoded-providerId>?callbackUrl=<encoded-callback-url>`, whose `label` is the provider's `label` as-is, and whose `iconSrc` is `getProviderIconUrl(providerId)`; `toLoginScreenProviders` in `apps/chat/src/utils/auth.ts` builds these entries. The provider list is named by `auth.loginProvidersLabel` and preceded by a `t(AuthI18nKeys.LoginDescription)` line (`auth.loginDescription`, "Sign in with:") under the `auth.loginTitle` heading; the theme favicon is passed as `logoSrc`. The page SHALL use `callbackUrl` only when it parses as a same-origin URL (and does not start with `//`); otherwise, or when the query omits it, it SHALL default to the application root (`window.location.origin + '/'`). Provider links MUST NOT be React Router `<Link>` elements, because the destination is a BFF route that requires a top-level browser navigation to the IdP. While loading, a localised placeholder MUST be shown; on failure, a localised error message MUST be shown. Both render in one always-mounted kit `LiveRegion`, so the change from loading to error is announced.
 
 #### Scenario: Provider list rendered
 
@@ -197,36 +197,6 @@ The `<LoginPage />` component (`apps/chat/src/pages/auth/Login.tsx`) SHALL own p
 
 - **WHEN** `GET /api/v1/auth/providers` rejects with any error
 - **THEN** `<LoginPage />` renders the i18n key `auth.providersError` (the error is caught and only sets the error state; it is not logged)
-
----
-
-### Requirement: User menu shows identity and offers sign-out behind a confirmation
-
-On desktop, `apps/chat/src/components/Navigation/Navigation.tsx` SHALL render the `UserMenu` from `@epam/ai-dial-navigation-panel` in the footer of the `NavigationPanel` rail, only when `status === 'authenticated'` with a `user` and `OverlayFeature.HideUserMenu` is not set. The menu's trigger is an avatar `Button` with `aria-label` `t(AuthI18nKeys.SignedInAs, { email })` (`auth.signedInAs`) and an email tooltip; the avatar uses `auth.userAvatar` as its alt text. Its 2.0 `Dropdown` holds the user's identity, the language group (when one is offered), a Settings item (`basic.settings`, omitted when `OverlayFeature.HideSettingsPage` is set), and a Log out item (`ButtonsI18nKeys.LogOut`, `buttons.logOut`). On mobile, the `NavigationSheet` profile page's Log out row triggers the same flow.
-
-Both Log out entries SHALL call `openLogout()` from `useLogout()`, which opens `LogoutConfirmationModal` (a ui-kit `ConfirmationPopup` with `auth.logOutConfirmTitle`, `auth.logOutConfirmDescription`, and confirm label `buttons.logOut`). Confirming SHALL call `logout()` from `server-api/auth.api.ts`, which sends `fetch(ApiEndpoints.AUTH_LOGOUT, { method: 'POST', credentials: 'include', redirect: 'manual' })` with an `X-CSRF-Token` header when a token is held and always clears the CSRF token afterwards. The modal then logs any request failure via `console.error`, calls `useUser().reset()`, and, outside overlay mode, navigates to `ROUTES.Login`; in overlay mode the current route is kept. There is no HTML form submission.
-
-#### Scenario: Authenticated state shows the user menu
-
-- **WHEN** the user is authenticated with email `u@x.io` on a desktop viewport and `OverlayFeature.HideUserMenu` is not set
-- **THEN** the rail footer renders a button named by `auth.signedInAs` interpolated with `u@x.io`, opening a dropdown that contains the Log out item
-
-#### Scenario: Unauthenticated or hidden state omits the menu
-
-- **WHEN** `status` is not `'authenticated'`, or `OverlayFeature.HideUserMenu` is set
-- **THEN** no `UserMenu` is rendered
-
-#### Scenario: Log out asks for confirmation first
-
-- **WHEN** the user picks Log out in the `UserMenu` or the mobile sheet
-- **THEN** `LogoutConfirmationModal` opens and no logout request has been sent yet
-
-#### Scenario: Confirming sign-out posts to the BFF and resets the session
-
-- **WHEN** the user confirms in `LogoutConfirmationModal` outside overlay mode
-- **THEN** a `fetch` `POST` to `/api/v1/auth/logout` is sent with `credentials: 'include'`, the CSRF token is cleared, `useUser().reset()` is called, and the app navigates to `/login`
-- **AND WHEN** the same happens in overlay mode
-- **THEN** the app stays on the current route
 
 ---
 
@@ -334,3 +304,67 @@ If the revalidation request itself returns `401` (rather than a differing-`sub` 
 
 - **WHEN** `focus` and `visibilitychange` both fire in quick succession while a revalidation request triggered by the first event is still in flight
 - **THEN** only one `GET /api/v1/auth/me` request is in flight at a time for this mechanism; the second trigger does not issue a duplicate request
+
+### Requirement: The sidebar's user menu shows identity and offers sign-out behind a confirmation
+
+`apps/chat/src/components/Navigation/SidebarNavigation.tsx` SHALL render the `UserMenu` from `@epam/ai-dial-navigation-panel` in the footer of the sidebar (the desktop column and the mobile drawer), only when `status === 'authenticated'` with a `user` and `OverlayFeature.HideUserMenu` is not set. The menu's trigger is a `Button` showing the avatar and, while the sidebar is expanded, the display name; its accessible name contains `t(AuthI18nKeys.SignedInAs, { email })` (`auth.signedInAs`), and it has an email tooltip; the avatar uses `auth.userAvatar` as its alt text. Its 2.0 `Dropdown` holds the user's identity, the language group (when one is offered), a Settings item (`basic.settings`, omitted when `OverlayFeature.HideSettingsPage` is set), and a Log out item (`ButtonsI18nKeys.LogOut`, `buttons.logOut`).
+
+The Log out entry SHALL call `openLogout()` from `useLogout()`, which opens `LogoutConfirmationModal` (a ui-kit `ConfirmationPopup` with `auth.logOutConfirmTitle`, `auth.logOutConfirmDescription`, and confirm label `buttons.logOut`). Confirming SHALL call `logout()` from `server-api/auth.api.ts`, which sends `fetch(ApiEndpoints.AUTH_LOGOUT, { method: 'POST', credentials: 'include', redirect: 'manual' })` with an `X-CSRF-Token` header when a token is held and always clears the CSRF token afterwards. The modal then logs any request failure via `console.error`, calls `useUser().reset()`, and, outside overlay mode, navigates to `ROUTES.Login`; in overlay mode the current route is kept. There is no HTML form submission.
+
+#### Scenario: Authenticated state shows the user menu
+
+- **WHEN** the user is authenticated with email `u@x.io` and `OverlayFeature.HideUserMenu` is not set
+- **THEN** the sidebar footer renders a button whose name contains `auth.signedInAs` interpolated with `u@x.io`, opening a dropdown that contains the Log out item
+
+#### Scenario: Unauthenticated or hidden state omits the menu
+
+- **WHEN** `status` is not `'authenticated'`, or `OverlayFeature.HideUserMenu` is set
+- **THEN** no `UserMenu` is rendered
+
+#### Scenario: Log out asks for confirmation first
+
+- **WHEN** the user picks Log out in the `UserMenu`
+- **THEN** `LogoutConfirmationModal` opens and no logout request has been sent yet
+
+#### Scenario: Confirming sign-out posts to the BFF and resets the session
+
+- **WHEN** the user confirms in `LogoutConfirmationModal` outside overlay mode
+- **THEN** a `fetch` `POST` to `/api/v1/auth/logout` is sent with `credentials: 'include'`, the CSRF token is cleared, `useUser().reset()` is called, and the app navigates to `/login`
+- **AND WHEN** the same happens in overlay mode
+- **THEN** the app stays on the current route
+
+### Requirement: The user avatar shows the identity provider's profile picture
+
+`GET /api/v1/auth/me` SHALL return an optional `pictureUrl` on `UserProfileDto` (mirrored as `UserProfile.pictureUrl` in `@epam/ai-dial-chat-shared`), omitted when there is no picture. Its value is one of:
+
+- the `picture` claim, when it is an absolute `http(s)` URL (`getPictureClaim`);
+- the same-origin path `/api/v1/auth/me/picture`, when the session carries the `pic` flag.
+
+The login callback SHALL set `pic` only for an inline `data:` picture that `parseInlinePicture` accepts: JPEG, PNG, GIF or WebP, at most 256 KiB decoded, read from Keycloak UserInfo whose `sub` matches the ID token. The image itself SHALL NOT be stored in the session cookie. SVG and any other type SHALL be refused because SVG can carry script.
+
+`GET /api/v1/auth/me/picture` SHALL re-read UserInfo with the session's access token and check the subject again. It SHALL return the decoded bytes with their image `Content-Type` and `Cache-Control: private, max-age=3600`. It SHALL return `404` when the session has no `pic` flag, when the provider advertises no UserInfo endpoint, or when UserInfo no longer supplies a usable picture for the same subject. It SHALL return `502` when the UserInfo lookup fails.
+
+`useUserProfile` SHALL use `user.pictureUrl` as the avatar `image`, and SHALL NOT read the claims for it. The initials fallback SHALL show when `pictureUrl` is absent or when that exact URL has failed to load. A different URL arriving later, for example once the profile resolves after the first render, SHALL get its own load attempt.
+
+#### Scenario: http(s) picture claim
+
+- **WHEN** the ID token or Keycloak UserInfo carries `picture: 'https://idp.example.com/u.png'`
+- **THEN** `GET /api/v1/auth/me` returns `pictureUrl: 'https://idp.example.com/u.png'`
+- **AND** the sidebar avatar renders that image
+
+#### Scenario: Inline picture from Keycloak UserInfo
+
+- **WHEN** Keycloak UserInfo for the signed-in subject carries `picture: 'data:image/jpeg;base64,...'`
+- **THEN** the session cookie holds only the `pic` flag and no `picture` claim
+- **AND** `GET /api/v1/auth/me` returns `pictureUrl: '/api/v1/auth/me/picture'`
+- **AND** `GET /api/v1/auth/me/picture` returns the JPEG bytes with `Content-Type: image/jpeg`
+
+#### Scenario: Unusable or missing picture
+
+- **WHEN** the picture is an SVG or other non-raster `data:` URL, is empty, or is absent
+- **THEN** `GET /api/v1/auth/me` has no `pictureUrl`, `GET /api/v1/auth/me/picture` returns `404`, and the avatar shows the initials
+
+#### Scenario: Picture fails to load
+
+- **WHEN** the browser fails to load `pictureUrl`
+- **THEN** the avatar falls back to the initials until a different `pictureUrl` arrives

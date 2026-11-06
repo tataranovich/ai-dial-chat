@@ -4,32 +4,26 @@ import {
   mergeClasses,
 } from '@epam/ai-dial-chat-shared';
 import {
-  Button,
   DIAL_ICON_SIZE,
-  DIAL_KIT_ICON_STROKE,
-  Dropdown,
-  ElementSize,
-  GhostIconButton,
   Highlight,
   Skeleton,
   SkeletonVariant,
   type DropdownItem,
 } from '@epam/ai-dial-ui-kit';
-import { IconDotsVertical } from '@tabler/icons-react';
-import {
-  memo,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  type DragEvent,
-  type FC,
-} from 'react';
+import { memo, useCallback, useMemo, type DragEvent, type FC } from 'react';
+import { useRowActions } from '../../hooks/useRowActions';
 import { ConversationItem } from '../../models/panel-props';
+import type { NestedRowPosition } from '../../models/pinned-projects';
 import type { VirtualRow } from '../../models/virtual-row';
-import { getButtonPaddingEnd } from '../../utils/conversation-row';
+import { ConversationRowVariant } from '../../types/conversation-row-variant';
+import {
+  getButtonPaddingEnd,
+  getNestedRowProps,
+} from '../../utils/conversation-row';
 import { getDropAfterId } from '../../utils/drag';
 import styles from '../ConversationPanel/ConversationPanel.module.scss';
+import { RowActionsMenu } from '../RowActionsMenu/RowActionsMenu';
+import { RowLink } from '../RowLink/RowLink';
 
 /** Props for `ConversationRow`. */
 export interface ConversationRowProps {
@@ -52,10 +46,16 @@ export interface ConversationRowProps {
   actionsLabel?: string;
   /** Typography class for the conversation title text. Defaults to `'dial-small-text'`. */
   itemTitleClassName?: string;
+  /** Typography class for the title of an unread conversation. Defaults to `'dial-small-semi-text'`. */
+  unreadItemTitleClassName?: string;
   /** CSS class applied to the icon badge. Defaults to `'rounded-full'`. */
   itemIconBadgeClassName?: string;
   /** Accessible (visually hidden) label announced for the unread indicator dot. Defaults to `"Unread"`. */
   unreadIndicatorLabel?: string;
+  /** Presentation of the row's leading slot and metrics. Defaults to `ConversationRowVariant.Avatar`. */
+  variant?: ConversationRowVariant;
+  /** Renders the row nested under a pinned project: indented, with its guide-line segment and level-2 ARIA position. */
+  nesting?: NestedRowPosition;
   /** Group this row belongs to — required to enable drag-and-drop. */
   rowGroupKey?: FilterTab;
   /** The full virtual rows array — used to compute drop position. */
@@ -91,8 +91,11 @@ const ConversationRowComponent: FC<ConversationRowProps> = ({
   onActionMenuOpen,
   actionsLabel = 'More actions',
   itemTitleClassName = 'dial-small-text',
+  unreadItemTitleClassName = 'dial-small-semi-text',
   itemIconBadgeClassName,
   unreadIndicatorLabel = 'Unread',
+  variant = ConversationRowVariant.Avatar,
+  nesting,
   rowGroupKey,
   rows,
   draggingId,
@@ -104,24 +107,15 @@ const ConversationRowComponent: FC<ConversationRowProps> = ({
   onDragLeave,
   onDrop,
 }) => {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const actionTriggerRef = useRef<HTMLButtonElement>(null);
-
-  const handleMenuOpenChange = useCallback(
-    (isOpen: boolean) => {
-      setIsMenuOpen(isOpen);
-      if (isOpen && actionTriggerRef.current) {
-        onActionMenuOpen?.(item, actionTriggerRef.current);
-      }
-    },
-    [item, onActionMenuOpen],
-  );
-
-  /* Built only when this row renders with a new item or a new `getActions`;
-     a host's new `getActions` (e.g. a landed revoke-count lookup) still
+  /* A host's new `getActions` (e.g. a landed revoke-count lookup) still
      refreshes an open menu. */
-  const menuItems = useMemo(() => getActions?.(item) ?? [], [getActions, item]);
-  const hasActions = menuItems.length > 0;
+  const {
+    menuItems,
+    hasActions,
+    isMenuOpen,
+    handleOpenChange: handleMenuOpenChange,
+    handleOpen: handleMenuOpen,
+  } = useRowActions(item, getActions, onActionMenuOpen);
 
   const deploymentIconLabels = useMemo(
     () => ({ tooltip: item.iconTooltip }),
@@ -131,6 +125,8 @@ const ConversationRowComponent: FC<ConversationRowProps> = ({
     () => ({ badgeClassName: itemIconBadgeClassName }),
     [itemIconBadgeClassName],
   );
+
+  const isIndicator = variant === ConversationRowVariant.Indicator;
 
   const avatar = item.leadingIcon ? (
     <span className="flex size-6 shrink-0 items-center justify-center">
@@ -154,29 +150,43 @@ const ConversationRowComponent: FC<ConversationRowProps> = ({
     />
   );
 
-  const buttonPaddingEnd = getButtonPaddingEnd(hasActions, isMenuOpen);
+  const buttonPaddingEnd = getButtonPaddingEnd(hasActions, isMenuOpen, variant);
 
   /*
    * The dot sits in a 24px trailing slot. Whenever the actions trigger is shown
    * (hover, focus-within, open menu) the dot is hidden so the trigger takes that
    * spot; the visually hidden label keeps announcing the unread state.
    */
-  const unreadIndicator = item.isUnread ? (
+  const leadingIndicator = (
     <span className="flex size-6 shrink-0 items-center justify-center">
       <span
         className={mergeClasses(
           'size-[7.11px] rounded-full',
-          styles.unreadDot,
-          hasActions &&
-            (isMenuOpen
-              ? 'opacity-0'
-              : 'group-focus-within/conversation:opacity-0 group-hover/conversation:opacity-0'),
+          item.isUnread ? styles.unreadDot : styles.indicatorDot,
         )}
         aria-hidden
       />
-      <span className="sr-only">{unreadIndicatorLabel}</span>
+      {item.isUnread && <span className="sr-only">{unreadIndicatorLabel}</span>}
     </span>
-  ) : undefined;
+  );
+
+  const unreadIndicator =
+    item.isUnread && !isIndicator ? (
+      <span className="flex size-6 shrink-0 items-center justify-center">
+        <span
+          className={mergeClasses(
+            'size-[7.11px] rounded-full',
+            styles.unreadDot,
+            hasActions &&
+              (isMenuOpen
+                ? 'opacity-0'
+                : 'group-focus-within/conversation:opacity-0 group-hover/conversation:opacity-0'),
+          )}
+          aria-hidden
+        />
+        <span className="sr-only">{unreadIndicatorLabel}</span>
+      </span>
+    ) : undefined;
 
   const isDragEnabled = rowGroupKey != null;
 
@@ -205,12 +215,15 @@ const ConversationRowComponent: FC<ConversationRowProps> = ({
   const isDropAllowed =
     rowGroupKey != null && (allowedDropGroups?.has(rowGroupKey) ?? false);
   const isDragActive = draggingId != null;
+  const nestedRowProps = nesting ? getNestedRowProps(nesting) : undefined;
 
   return (
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <li
+      {...nestedRowProps}
       className={mergeClasses(
         'group/conversation relative',
+        nestedRowProps?.className,
         isDragging && 'cursor-grabbing opacity-50',
         isDropTarget && isDropAllowed && 'rounded',
         isDropTarget && isDropAllowed && styles.dropZoneActive,
@@ -230,74 +243,44 @@ const ConversationRowComponent: FC<ConversationRowProps> = ({
       onDragLeave={isDragEnabled ? handleDragLeave : undefined}
       onDrop={isDragEnabled ? handleDrop : undefined}
     >
-      <a
+      <RowLink
         href={item.href}
-        className="contents"
-        onClick={(e) => {
-          if (!item.href) return;
-          e.preventDefault();
-          onSelectConversation(item.id);
-        }}
-      >
-        <Button
-          iconBefore={avatar}
-          label={
-            <Highlight
-              text={item.title}
-              query={searchQuery}
-              className={
-                item.isUnread ? 'dial-small-semi-text' : itemTitleClassName
-              }
-              maxLines={1}
-            />
-          }
-          iconAfter={unreadIndicator}
-          textClassName="min-w-0 flex-1"
-          aria-current={isActive ? 'page' : undefined}
-          onClick={item.href ? undefined : () => onSelectConversation(item.id)}
-          tabIndex={item.href ? -1 : undefined}
-          className={mergeClasses(
-            /* The row's corner radius comes from `styles.item` (--cp-row-radius). */
-            'h-8 w-full justify-start gap-2 py-2 ps-3 after:pointer-events-none',
-            buttonPaddingEnd,
-            styles.item,
-            isActive && styles.itemActive,
-            isMenuOpen && styles.itemActive,
-          )}
-        />
-      </a>
+        onSelect={() => onSelectConversation(item.id)}
+        iconBefore={isIndicator ? leadingIndicator : avatar}
+        label={
+          <Highlight
+            text={item.title}
+            query={searchQuery}
+            className={
+              item.isUnread ? unreadItemTitleClassName : itemTitleClassName
+            }
+            maxLines={1}
+          />
+        }
+        iconAfter={unreadIndicator}
+        textClassName="min-w-0 flex-1"
+        aria-current={isActive ? 'page' : undefined}
+        className={mergeClasses(
+          /* The row's corner radius comes from `styles.item` (--cp-row-radius). */
+          'h-8 w-full justify-start py-2 after:pointer-events-none',
+          isIndicator ? 'gap-0.5 ps-2' : 'gap-2 ps-3',
+          buttonPaddingEnd,
+          styles.item,
+          isIndicator && styles.itemIndicator,
+          isActive && styles.itemActive,
+          isMenuOpen && styles.itemActive,
+        )}
+      />
 
       {hasActions && (
-        <div
-          className={mergeClasses(
-            'absolute inset-y-0 end-1 flex items-center',
-            isMenuOpen
-              ? 'opacity-100'
-              : 'opacity-0 group-focus-within/conversation:opacity-100 group-hover/conversation:opacity-100',
-          )}
-        >
-          <Dropdown
-            items={menuItems}
-            onOpenChange={handleMenuOpenChange}
-            matchReferenceWidth={false}
-            listClassName="w-[200px]"
-          >
-            <GhostIconButton
-              ref={actionTriggerRef}
-              icon={
-                <IconDotsVertical
-                  size={DIAL_ICON_SIZE.MD}
-                  className={styles.triggerIcon}
-                  aria-hidden
-                  stroke={DIAL_KIT_ICON_STROKE}
-                />
-              }
-              size={ElementSize.Small}
-              aria-label={actionsLabel}
-              className={mergeClasses(isMenuOpen && styles.triggerActive)}
-            />
-          </Dropdown>
-        </div>
+        <RowActionsMenu
+          items={menuItems}
+          isOpen={isMenuOpen}
+          onOpenChange={handleMenuOpenChange}
+          onOpen={handleMenuOpen}
+          actionsLabel={actionsLabel}
+          variant={variant}
+        />
       )}
     </li>
   );

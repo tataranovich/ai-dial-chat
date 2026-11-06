@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 import dts from 'vite-plugin-dts';
 import * as path from 'path';
 import { createIsExternalPeerImport } from '../../tools/vite-external-matcher.mjs';
+
 const ownPackageJson = JSON.parse(
   readFileSync(path.join(import.meta.dirname, 'package.json'), 'utf8'),
 ) as {
@@ -16,6 +17,7 @@ const EXTERNAL_PEER_NAMES = [
   ...Object.keys(ownPackageJson.peerDependencies ?? {}),
 ];
 const isExternalPeerImport = createIsExternalPeerImport(EXTERNAL_PEER_NAMES);
+
 export default defineConfig(({ command }) => ({
   // Published libraries must also run with React's production runtime.
   oxc: command === 'build' ? { jsx: { development: false } } : undefined,
@@ -38,7 +40,15 @@ export default defineConfig(({ command }) => ({
     dts({
       entryRoot: 'src',
       tsconfigPath: path.join(import.meta.dirname, 'tsconfig.lib.json'),
-      rollupTypes: true,
+      insertTypesEntry: true,
+      /* resolve.alias points these packages at sibling sources for the JS
+       * build only; published declarations must keep the package names. */
+      aliasesExclude: [
+        '@epam/ai-dial-attachment-canvas',
+        '@epam/ai-dial-mcp-apps',
+        '@epam/ai-dial-projects',
+        '@epam/ai-dial-scheduled-tasks/validation',
+      ],
     }),
   ],
   build: {
@@ -64,11 +74,15 @@ export default defineConfig(({ command }) => ({
         'skills-state': 'src/entry-points/skills-state.ts',
         'skill-editor': 'src/entry-points/skill-editor.ts',
         oauth: 'src/entry-points/oauth.ts',
+        'external-services': 'src/entry-points/external-services.ts',
+        'offline-credentials': 'src/entry-points/offline-credentials.ts',
         'scheduled-tasks': 'src/entry-points/scheduled-tasks.ts',
+        project: 'src/entry-points/project.ts',
         sharing: 'src/entry-points/sharing.ts',
         attachments: 'src/entry-points/attachments.ts',
         utils: 'src/entry-points/utils.ts',
         usage: 'src/entry-points/usage.ts',
+        'usage-limits': 'src/entry-points/usage-limits.ts',
         'mcp-apps': 'src/entry-points/mcp-apps.ts',
       },
       name: '@epam/ai-dial-chat-hooks',
@@ -109,6 +123,14 @@ export default defineConfig(({ command }) => ({
         import.meta.dirname,
         '../attachment-input/src/index.ts',
       ),
+      '@epam/ai-dial-builder-form/styles.css': path.resolve(
+        import.meta.dirname,
+        '../builder-form/src/styles.css',
+      ),
+      '@epam/ai-dial-builder-form': path.resolve(
+        import.meta.dirname,
+        '../builder-form/src/index.ts',
+      ),
       // The catalog source imports its publish-panel dependency's stylesheet; do not prefix-match it.
       '@epam/ai-dial-publish-panel/styles.css': path.resolve(
         import.meta.dirname,
@@ -125,6 +147,14 @@ export default defineConfig(({ command }) => ({
       '@epam/ai-dial-chat-shared': path.resolve(
         import.meta.dirname,
         '../chat-shared/src/index.ts',
+      ),
+      '@epam/ai-dial-conversation-input': path.resolve(
+        import.meta.dirname,
+        '../conversation-input/src/index.ts',
+      ),
+      '@epam/ai-dial-projects': path.resolve(
+        import.meta.dirname,
+        '../projects/src/index.ts',
       ),
       '@epam/ai-dial-publish-panel': path.resolve(
         import.meta.dirname,
@@ -149,6 +179,18 @@ export default defineConfig(({ command }) => ({
       '@epam/ai-dial-source-panel': path.resolve(
         import.meta.dirname,
         '../source-panel/src/index.ts',
+      ),
+      '@epam/ai-dial-sidebar': path.resolve(
+        import.meta.dirname,
+        '../sidebar/src/index.ts',
+      ),
+      '@epam/ai-dial-usage-dashboard': path.resolve(
+        import.meta.dirname,
+        '../usage-dashboard/src/index.ts',
+      ),
+      '@epam/ai-dial-visualizer-connector': path.resolve(
+        import.meta.dirname,
+        '../visualizer-connector/src/index.ts',
       ),
     },
     setupFiles: ['./src/test-setup.ts'],

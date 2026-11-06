@@ -1,6 +1,7 @@
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import type { ColDef } from 'ag-grid-community';
 import { CatalogItem } from '../../models/catalog-item';
+import { getCatalogItemDisplayType } from '../../utils/catalog-tabs';
 import styles from './ListView.module.scss';
 import { EntityTypeCellRenderer } from './Renders/EntityTypeCellRenderer';
 import { FolderCellRenderer } from './Renders/FolderCellRenderer';
@@ -60,6 +61,9 @@ const resolveColumnVisibility = (
  * left Folder and Tags permanently at their floor, where paths collapsed into
  * unreadable stubs and tags were clipped mid-word. Name keeps twice the share
  * because it carries the icon, the name and the version.
+ *
+ * The multi-select checkbox column is the ui-kit `Grid`'s own, so it is not
+ * declared here.
  */
 export const CATALOG_COLUMNS = (
   type: CatalogEntityType,
@@ -86,7 +90,7 @@ export const CATALOG_COLUMNS = (
       filter: false,
       sortable: false,
       cellRenderer: EntityTypeCellRenderer,
-      valueGetter: (p) => p.data?.type,
+      valueGetter: (p) => p.data && getCatalogItemDisplayType(p.data, type),
     },
     {
       headerName: 'Folder',

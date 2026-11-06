@@ -28,6 +28,7 @@ export { useAnnotations } from './utils/useAnnotations';
 export { useCitationCard } from './utils/useCitationCard';
 export { useCitationMarkdownComponents } from './hooks/useCitationMarkdownComponents/useCitationMarkdownComponents';
 export type { UseCitationMarkdownComponentsCallbacks } from './hooks/useCitationMarkdownComponents/useCitationMarkdownComponents';
+export { useCitationTagRenderer } from './hooks/useCitationTagRenderer/useCitationTagRenderer';
 
 // Utils
 export {
@@ -44,6 +45,7 @@ export {
   annotationsToPdfHighlights,
   annotationToOfficeHighlightLocations,
   getAnnotationPdfPage,
+  getCitationGroupPage,
   isDocxRangeSelector,
   isExcelRcRangeSelector,
   isPptxRangeSelector,
@@ -60,6 +62,8 @@ export type {
 
 export {
   injectCitationSentinels,
+  prepareCitationContent,
+  replaceCitTagsWithSourceNames,
   replaceSentinelsInChildren,
   stripCitTagsWhileStreaming,
 } from './utils/citation-injection';
@@ -71,3 +75,5 @@ export {
 } from './utils/reference-attachment';
 export type { PdfPageReference } from './utils/reference-attachment';
 export { QUOTATIONS_CLASS } from './constants/public-class-names';
+
+export * from './utils/useHtmlTagAnnotationGroups';

@@ -135,7 +135,7 @@ const HalloweenWitches: FC = () => {
       ref={hostRef}
       className={mergeClasses(
         styles.scene,
-        'pointer-events-none absolute inset-0 select-none overflow-clip',
+        'pointer-events-none absolute inset-0 overflow-clip select-none',
       )}
       aria-hidden="true"
       inert
@@ -144,7 +144,7 @@ const HalloweenWitches: FC = () => {
       data-ended={ended || changed}
       data-stationary={stationary}
     >
-      <div ref={copiesRef} className="absolute inset-0 z-[2]" />
+      <div ref={copiesRef} className="absolute inset-0 z-2" />
       {!stationary && (
         <div ref={templateRef} className="hidden">
           <HalloweenFrogFeatures />
@@ -169,7 +169,7 @@ const HalloweenWitches: FC = () => {
             ref={(node) => {
               actorsRef.current[index] = node;
             }}
-            className="absolute top-0 z-[3] size-0 opacity-0"
+            className="absolute top-0 z-3 size-0 opacity-0"
             data-witch-actor={index}
             style={{
               left: 0,
@@ -209,7 +209,7 @@ const HalloweenWitches: FC = () => {
             aria-hidden="true"
             focusable="false"
             className={mergeClasses(
-              'absolute -top-2.5 z-[4] size-5 opacity-0',
+              'absolute -top-2.5 z-4 size-5 opacity-0',
               spell.mentor ? styles.mentorSpell : styles.spell,
             )}
             style={{ left: -10, right: 'auto' }}

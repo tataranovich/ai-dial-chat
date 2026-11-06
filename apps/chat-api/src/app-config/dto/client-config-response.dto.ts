@@ -7,6 +7,8 @@ import {
 import { IsOptional, IsString } from 'class-validator';
 import { AnnouncementItemDto } from './announcement-item.dto';
 import { ApplicationVisualizerDto } from './application-visualizer.dto';
+import { CatalogCreationPermissionsDto } from './catalog-creation-permissions.dto';
+import { CelebrationDeliveryDto } from './celebration-delivery.dto';
 import { CustomVisualizerDto } from './custom-visualizer.dto';
 
 /* ApplicationVisualizerDto is reachable only through an additionalProperties
@@ -259,10 +261,69 @@ export class ClientConfigDto {
 
   @ApiProperty({
     description:
+      "Additional content locales (canonical BCP-47 tags) a toolset's or application's Name/Description can be translated into. Sourced from ADDITIONAL_CONTENT_LOCALES, or the deprecated AVAILABLE_LOCALES when that is absent; empty when neither is set. May include the primary locale, which the client drops.",
+    type: [String],
+    example: ['de', 'fr-FR'],
+  })
+  additionalContentLocales!: string[];
+
+  @ApiProperty({
+    description:
       'Maximum attachment/upload file size in bytes. Sourced from FILE_UPLOAD_MAX_BYTES — the same variable that bounds the POST /api/v1/files Multer limit — so the client can reject an oversized file before attempting to upload it.',
     example: 536870912,
   })
   maxAttachmentFileSizeBytes!: number;
+
+  @ApiProperty({
+    description:
+      'Percentage (1–99) of a capped day/week/month usage limit at which the composer shows its usage banner. Sourced from USAGE_LIMITS_WARNING_THRESHOLD_PERCENT; governs the banner only, not the usage dial.',
+    example: 75,
+  })
+  usageLimitsWarningThresholdPercent!: number;
+
+  @ApiProperty({
+    type: Boolean,
+    description:
+      'Operator default for the seasonal-celebrations switch, applied to users who have not saved a choice of their own; a saved choice overrides it. Sourced from UI_EVENT_ENABLED_BY_DEFAULT; true unless it is false, 0 or no. Has no visible effect while activeEventId is null.',
+    example: true,
+  })
+  celebrationsEnabledByDefault!: boolean;
+
+  @ApiProperty({
+    description:
+      'Operator policy for external celebration packs, from UI_EVENT_DELIVERY_MODE, UI_EVENT_DELIVERY_REVISION, UI_EVENT_EXTERNAL_SCENES and UI_EVENT_EXTERNAL_EVENTS. The default is bundled with empty lists, in which case the client makes no celebration request.',
+    type: CelebrationDeliveryDto,
+  })
+  celebrationDelivery!: CelebrationDeliveryDto;
+
+  @ApiProperty({
+    description:
+      'Maximum size in bytes of one project context file. Sourced from PROJECT_CONTEXT_FILE_MAX_BYTES, which POST /api/v1/projects enforces.',
+    example: 1048576,
+  })
+  projectContextFileMaxBytes!: number;
+
+  @ApiProperty({
+    description:
+      "Maximum combined size in bytes of a project's context files. Sourced from PROJECT_CONTEXT_TOTAL_MAX_BYTES, which POST /api/v1/projects enforces.",
+    example: 10485760,
+  })
+  projectContextTotalMaxBytes!: number;
+
+  @ApiProperty({
+    description:
+      'Lower-case file extensions, without a dot, accepted as project context files. Sourced from PROJECT_CONTEXT_ALLOWED_EXTENSIONS, which POST /api/v1/projects enforces.',
+    type: [String],
+    example: ['csv', 'pdf', 'xlsx'],
+  })
+  projectContextAllowedExtensions!: string[];
+
+  @ApiProperty({
+    description:
+      "The caller's resolved catalog creation permissions, evaluated from the server-only CATALOG_CREATION_ROLES and the session roles. Independent of enabledUiFeatures, which it never filters. Never carries role names or the raw policy.",
+    type: CatalogCreationPermissionsDto,
+  })
+  catalogCreationPermissions!: CatalogCreationPermissionsDto;
 }
 
 export class ClientConfigMetadataDto {

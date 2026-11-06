@@ -55,14 +55,24 @@ export interface MetadataFormProps {
   avatarPicker?: MetadataFormAvatarPicker;
   /** Locale options offered by the "Add locale" popup. Defaults to an empty list. */
   availableLocaleOptions?: DeploymentCreationFormLocaleOption[];
+  /** Labels a stored locale code that is not in `availableLocaleOptions`. Defaults to `code.toUpperCase()`. */
+  formatLocaleLabel?: (code: string) => string;
   /** Fields to render, in fixed order. Defaults to every field. */
   fields?: readonly MetadataField[];
-  /** Renders the Name field read-only. Defaults to `false`. */
+  /** Renders the Name field disabled. Defaults to `false`. */
   isNameReadOnly?: boolean;
+  /** Tooltip shown over the Name field while `isNameReadOnly` is set. Defaults to the field value. */
+  nameReadOnlyTooltip?: string;
+  /** Renders the Version field read-only (still focusable); typing and `onVersionBlur` are ignored. Defaults to `false`. */
+  isVersionReadOnly?: boolean;
+  /** Tooltip shown over the Version field while `isVersionReadOnly` is set. Defaults to `'The version is changed with "Save as new version"'`. */
+  versionReadOnlyTooltip?: string;
   /** Helper text rendered under the Name field. */
   nameCaption?: string;
   /** Marks the Description field as required. Defaults to `false`. */
   isDescriptionRequired?: boolean;
+  /** Helper text rendered under the Description field, e.g. a character counter. */
+  descriptionCaption?: string;
   /** Wraps the Description textarea, which then renders without its own label; see `DeploymentCreationFormProps.renderDescription`. */
   renderDescription?: (textarea: ReactNode, fieldId: string) => ReactNode;
   /** Changes on every submit attempt to move focus to the first invalid field; see `DeploymentCreationFormProps.focusRequestKey`. */

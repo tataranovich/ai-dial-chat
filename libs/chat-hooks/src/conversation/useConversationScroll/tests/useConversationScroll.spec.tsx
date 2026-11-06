@@ -8,17 +8,36 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useConversationScroll } from '../useConversationScroll';
 
-/* jsdom has no ResizeObserver; a no-op stub is enough since these tests
- * drive content-growth checks via `fireEvent.scroll`, not resize callbacks. */
+/*
+ * jsdom has no ResizeObserver; the stub records each observer's targets so a
+ * test can simulate a resize with `triggerResize` — of every observed element,
+ * or only of `target` when one is given.
+ */
+const resizeObservers = new Set<ResizeObserverMock>();
+const triggerResize = (target?: Element) => {
+  act(() => {
+    resizeObservers.forEach((observer) => {
+      if (target == null || observer.targets.has(target)) observer.callback();
+    });
+  });
+};
+
 class ResizeObserverMock {
-  observe() {
-    // No-op in JSDOM.
+  readonly callback: () => void;
+  readonly targets = new Set<Element>();
+  constructor(callback: () => void) {
+    this.callback = callback;
   }
-  unobserve() {
-    // No-op in JSDOM.
+  observe(target: Element) {
+    this.targets.add(target);
+    resizeObservers.add(this);
+  }
+  unobserve(target: Element) {
+    this.targets.delete(target);
   }
   disconnect() {
-    // No-op in JSDOM.
+    this.targets.clear();
+    resizeObservers.delete(this);
   }
 }
 vi.stubGlobal('ResizeObserver', ResizeObserverMock);
@@ -316,6 +335,106 @@ describe('useConversationScroll', () => {
     expect(scrollToMock).toHaveBeenCalledWith({
       top: 800,
       behavior: 'smooth',
+    });
+  });
+
+  describe('content growth after a history load', () => {
+    /* Renders a loaded conversation, then puts scrollTop mid-way through the smooth scroll to the bottom. */
+    const renderMidSmoothScroll = () => {
+      const messages = makeMessages(6);
+      const view = render(
+        <ScrollHarness conversationId="conversation-a" messages={messages} />,
+      );
+      const scrollContainer = getScrollContainer(view.container);
+      scrollContainer.scrollTop = 325;
+      fireEvent.scroll(scrollContainer);
+      scrollToMock.mockClear();
+      return { ...view, messages, scrollContainer };
+    };
+
+    it('follows the content to its new bottom when it grows during the smooth scroll', () => {
+      const { rerender, messages } = renderMidSmoothScroll();
+
+      rerender(
+        <ScrollHarness
+          conversationId="conversation-a"
+          messages={messages}
+          contentHeight={1_500}
+        />,
+      );
+      triggerResize();
+
+      expect(scrollToMock).toHaveBeenCalledWith({
+        top: 1_100,
+        behavior: 'instant',
+      });
+    });
+
+    it('stops following the content once the user scrolls up', () => {
+      const { rerender, messages, scrollContainer } = renderMidSmoothScroll();
+
+      scrollContainer.scrollTop = 200;
+      fireEvent.scroll(scrollContainer);
+      rerender(
+        <ScrollHarness
+          conversationId="conversation-a"
+          messages={messages}
+          contentHeight={1_500}
+        />,
+      );
+      triggerResize();
+
+      expect(scrollToMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('viewport shrink after a history load', () => {
+    /* The message input below the list grows after the open, shrinking the scroller by 154px (#9701). */
+    const SHRUNK_CONTAINER_HEIGHT = CONTAINER_HEIGHT - 154;
+
+    const shrinkViewport = (scrollContainer: HTMLDivElement) => {
+      Object.defineProperty(scrollContainer, 'clientHeight', {
+        configurable: true,
+        value: SHRUNK_CONTAINER_HEIGHT,
+      });
+      triggerResize(scrollContainer);
+    };
+
+    it('keeps the content bottom in view when the scroller shrinks after reaching the bottom', () => {
+      const view = render(
+        <ScrollHarness
+          conversationId="conversation-a"
+          messages={makeMessages(6)}
+        />,
+      );
+      const scrollContainer = getScrollContainer(view.container);
+      fireEvent.scroll(scrollContainer);
+      scrollToMock.mockClear();
+
+      shrinkViewport(scrollContainer);
+
+      expect(scrollToMock).toHaveBeenCalledWith({
+        top: 1_200 - SHRUNK_CONTAINER_HEIGHT,
+        behavior: 'instant',
+      });
+    });
+
+    it('leaves the position alone when the scroller shrinks after the user scrolled up', () => {
+      const view = render(
+        <ScrollHarness
+          conversationId="conversation-a"
+          messages={makeMessages(6)}
+        />,
+      );
+      const scrollContainer = getScrollContainer(view.container);
+      fireEvent.scroll(scrollContainer);
+      scrollContainer.scrollTop = 200;
+      fireEvent.scroll(scrollContainer);
+      scrollToMock.mockClear();
+
+      shrinkViewport(scrollContainer);
+
+      expect(scrollToMock).not.toHaveBeenCalled();
     });
   });
 

@@ -3,6 +3,7 @@ import {
   attachmentsToDtos,
   findDeploymentByIdOrReference,
   getApiErrorDetails,
+  getCleanedLocationTarget,
   getConversationPath,
   getQuickAppConversationStarters,
   getStarterConversationText,
@@ -16,16 +17,11 @@ import type {
   StarterOption,
 } from '@epam/ai-dial-chat-shared';
 import {
-  useComposerSeed,
-  useComposerSeedSource,
-} from '@epam/ai-dial-conversation-input';
-import {
-  BASE_ICON_SIZE,
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   NoDataContent,
 } from '@epam/ai-dial-ui-kit';
-import { IconPrompt, IconTelescope } from '@tabler/icons-react';
+import { IconTelescope } from '@tabler/icons-react';
 import {
   FC,
   memo,
@@ -38,23 +34,18 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router';
+import CustomViewerFrame from '../../components/CustomViewer/CustomViewerFrame';
+import CustomViewerStartGate from '../../components/CustomViewer/CustomViewerStartGate';
 import { useDeploymentSelectorOverlay } from '../../components/DeploymentSelector/useDeploymentSelectorOverlay';
 import NewConversationComposer, {
   type NewConversationChatSettings,
 } from '../../components/NewConversationComposer/NewConversationComposer';
-import {
-  PendingParametersPrompt,
-  usePromptSelectorOverlay,
-} from '../../components/PromptSelector/usePromptSelectorOverlay';
+import type { PendingParametersPrompt } from '../../components/PromptSelector/usePromptSelectorOverlay';
 import RouteFallback from '../../components/RouteFallback/RouteFallback';
-import { useSkillSelectorOverlay } from '../../components/SkillSelector/useSkillSelectorOverlay';
 import StarterButtons from '../../components/StarterButtons/StarterButtons';
 import { getConversationRoute } from '../../constants/routes';
-import {
-  ChatI18nKeys,
-  PromptSelectorI18nKeys,
-  ToolsI18nKeys,
-} from '../../constants/translation-keys';
+import { ChatI18nKeys, ToolsI18nKeys } from '../../constants/translation-keys';
+import { useConversations } from '../../context/ConversationsContext';
 import { useDeployments } from '../../context/DeploymentsContext';
 import {
   sanitizeIsolatedModelId,
@@ -62,12 +53,16 @@ import {
 } from '../../context/IsolatedModelViewContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useOptionalOverlay } from '../../context/overlay/OverlayContext';
+import { useComposerMenus } from '../../hooks/conversation/useComposerMenus';
+import { useCustomViewer } from '../../hooks/custom-viewer/useCustomViewer';
 import { useLanguage } from '../../hooks/language/useLanguage';
+import { useUrlEntityPreselection } from '../../hooks/useUrlEntityPreselection/useUrlEntityPreselection';
 import {
   createConversation as apiCreateConversation,
   renameConversation,
   saveConversation,
 } from '../../server-api/conversations.api';
+import { ROUTES } from '../../types/routes';
 import { resolveCatalogIconUrl } from '../../utils/icon-path';
 import { resolveLocalizedText } from '../../utils/locale';
 
@@ -79,7 +74,7 @@ const ConversationRoute: FC = () => {
   const { t } = useTranslation();
   const { language } = useLanguage();
   const navigate = useNavigate();
-  const { pathname, state } = useLocation();
+  const { state, key: locationKey } = useLocation();
   const routeDeploymentId = (state as { deploymentId?: string } | null)
     ?.deploymentId;
   const routePromptContent = (state as { promptContent?: string } | null)
@@ -88,58 +83,6 @@ const ConversationRoute: FC = () => {
     state as { pendingPrompt?: PendingParametersPrompt } | null
   )?.pendingPrompt;
   const routeSkillId = (state as { skillId?: string } | null)?.skillId;
-  /*
-   * Merges every one-shot "seed the composer" source — a picked prompt's
-   * route state, a non-submitting starter selection, and the skill hook's
-   * own message/messageRevision push (a mention insertion) — into the one
-   * message/messageRevision pair `NewConversationComposer` accepts.
-   */
-  const {
-    message: composerSeedText,
-    messageRevision: composerSeedRevision,
-    seedMessage: seedComposerText,
-  } = useComposerSeed();
-  /*
-   * A picked prompt is inserted at the caret rather than written to
-   * `composerSeed`, so it cannot discard a draft the user has already typed
-   * on this screen ([#8754](https://github.com/epam/ai-dial-chat/issues/8754)). The route-state seeding below still
-   * replaces, because it arrives with a fresh navigation onto an empty
-   * composer.
-   */
-  const [inputInsertion, setInputInsertion] = useState({
-    revision: 0,
-    text: '',
-  });
-
-  const handleInsertText = useCallback((text: string) => {
-    setInputInsertion((prev) => ({ revision: prev.revision + 1, text }));
-  }, []);
-  const {
-    renderOverlay: renderPromptsOverlay,
-    promptCatalogModal,
-    parametersPopup: promptParametersPopup,
-    openParametersPopup,
-  } = usePromptSelectorOverlay({ onInsertText: handleInsertText });
-  const promptsMenuOverlays = useMemo(
-    () =>
-      renderPromptsOverlay
-        ? [
-            {
-              key: 'prompts',
-              title: t(PromptSelectorI18nKeys.AddMenuLabel),
-              icon: (
-                <IconPrompt
-                  size={BASE_ICON_SIZE}
-                  aria-hidden
-                  stroke={DIAL_KIT_ICON_STROKE}
-                />
-              ),
-              renderOverlay: renderPromptsOverlay,
-            },
-          ]
-        : undefined,
-    [renderPromptsOverlay, t],
-  );
   const {
     items,
     selectedItemId,
@@ -156,47 +99,35 @@ const ConversationRoute: FC = () => {
     [items, selectedItemId],
   );
 
+  const { refreshConversations } = useConversations();
+
+  const handleCustomViewerConversationCreated = useCallback(
+    (createdId: string) => {
+      void refreshConversations([createdId]);
+      const route = getConversationRoute(createdId);
+      if (route !== ROUTES.Root) navigate(route);
+    },
+    [refreshConversations, navigate],
+  );
+
   const {
-    skillMenuOverlay,
-    commandMenu,
-    skillCatalogModal,
-    skillDetailsPanel,
-    message: skillMessage,
-    messageRevision: skillMessageRevision,
-    activeMentions,
-    onDraftChange,
-    onBackspaceAtCaret,
-    caretPositionOverride,
+    composerProps,
+    modals: composerModals,
     selectedSkills,
-    isSkillUnsupported,
-    selectSkillByUrl,
     resetSkillMentions,
     seedSkillMentions,
-  } = useSkillSelectorOverlay({
+    selectSkillByUrl,
+    seedComposerText,
+    openParametersPopup,
+  } = useComposerMenus({
     isSkillsSupported: selectedDeployment?.features?.skillsSupported === true,
   });
-
-  useComposerSeedSource(skillMessageRevision, () =>
-    seedComposerText(skillMessage),
-  );
   /*
    * The first message's skills payload comes from the overlay hook. On a
    * successful create this route navigates away and unmounts (clearing the
    * selection with it); on failure the create promise rejects and the
    * selection survives for the retry.
    */
-  /*
-   * The Skills entry joins the Prompts entry in array order, so it renders
-   * below Prompts in the `+` menu; `undefined` when both are flag-disabled
-   * keeps the `+` button's empty-menu rule intact.
-   */
-  const menuOverlays = useMemo(() => {
-    const entries = [
-      ...(promptsMenuOverlays ?? []),
-      ...(skillMenuOverlay ? [skillMenuOverlay] : []),
-    ];
-    return entries.length > 0 ? entries : undefined;
-  }, [promptsMenuOverlays, skillMenuOverlay]);
   const { showErrorNotification } = useNotification();
   const overlay = useOptionalOverlay();
   // TODO: remove in next release
@@ -205,6 +136,52 @@ const ConversationRoute: FC = () => {
     isNotFound: isIsolatedModelNotFound,
     resolvedDeploymentId: isolatedModelId,
   } = useIsolatedModelView();
+
+  /*
+   * Clears one-shot router state while keeping the URL's query string and hash
+   * as they are right now (see `getCleanedLocationTarget`), so it can neither
+   * wipe a URL parameter that is still pending nor bring back one just removed.
+   */
+  const clearRouteState = useCallback(() => {
+    navigate(getCleanedLocationTarget([]), { replace: true, state: null });
+  }, [navigate]);
+
+  const { isDeploymentOverrideActive, isDeploymentPending } =
+    useUrlEntityPreselection({
+      restoreSelectedItemId,
+      selectSkillByUrl,
+      seedSkillMentions,
+      seedComposerText,
+      openParametersPopup,
+      routeState: {
+        hasDeploymentId: routeDeploymentId != null,
+        hasSkillId: routeSkillId != null,
+        hasPrompt: routePromptContent != null || routePendingPrompt != null,
+      },
+      isDisabled: isIsolatedView || overlay != null,
+    });
+  /*
+   * The provider resolves its default in the same commit the listing loads,
+   * one commit before a pending `deployment-id` is applied. Until then the
+   * selection counts as unknown, so that default neither flashes in the model
+   * selector nor fetches viewer or tool data.
+   */
+  const visibleSelectedItemId = isDeploymentPending ? null : selectedItemId;
+
+  const { viewer: customViewer } = useCustomViewer(visibleSelectedItemId);
+  /*
+   * Keyed by the deployment and the navigation the user started it in, so
+   * selecting another deployment — or pressing New chat again on this same
+   * route — drops back to the gate or composer without an effect.
+   */
+  const customViewerStartKey = `${locationKey}:${visibleSelectedItemId}`;
+  const [startedViewerKey, setStartedViewerKey] = useState<string | null>(null);
+  const isCustomViewerStarted =
+    !!customViewer && startedViewerKey === customViewerStartKey;
+
+  const handleStartCustomViewer = useCallback(() => {
+    setStartedViewerKey(customViewerStartKey);
+  }, [customViewerStartKey]);
 
   const hasConsumedRouteDeploymentRef = useRef(false);
   // TODO: remove in next release
@@ -230,7 +207,7 @@ const ConversationRoute: FC = () => {
     if (routeDeploymentId) {
       hasConsumedRouteDeploymentRef.current = true;
       restoreSelectedItemId(routeDeploymentId);
-      navigate(pathname, { replace: true, state: null });
+      clearRouteState();
       return;
     }
     /*
@@ -241,6 +218,12 @@ const ConversationRoute: FC = () => {
      * route, resetting the flag, and the default resolves normally again.
      */
     if (hasConsumedRouteDeploymentRef.current) return;
+    /*
+     * A `deployment-id` URL parameter owns the selection while it is pending
+     * and after a known id was applied; the default must neither flash first
+     * nor undo it. An unknown id settles with the flag off and falls through.
+     */
+    if (isDeploymentOverrideActive) return;
     /*
      * TODO: remove in next release. Isolated view pins the deployment once it
      * resolves, and must never fall through to the default selection even
@@ -262,8 +245,8 @@ const ConversationRoute: FC = () => {
     restoreDefaultSelection,
     routeDeploymentId,
     overlay?.pendingModelId,
-    navigate,
-    pathname,
+    clearRouteState,
+    isDeploymentOverrideActive,
     isIsolatedView,
     isolatedModelId,
   ]);
@@ -277,8 +260,8 @@ const ConversationRoute: FC = () => {
   useEffect(() => {
     if (routePromptContent == null) return;
     seedComposerText(routePromptContent);
-    navigate(pathname, { replace: true, state: null });
-  }, [routePromptContent, navigate, pathname, seedComposerText]);
+    clearRouteState();
+  }, [routePromptContent, clearRouteState, seedComposerText]);
 
   /*
    * Seeds the "Prompt parameters" popup from a parameterized prompt the user
@@ -288,8 +271,8 @@ const ConversationRoute: FC = () => {
   useEffect(() => {
     if (routePendingPrompt == null) return;
     openParametersPopup(routePendingPrompt);
-    navigate(pathname, { replace: true, state: null });
-  }, [routePendingPrompt, openParametersPopup, navigate, pathname]);
+    clearRouteState();
+  }, [routePendingPrompt, openParametersPopup, clearRouteState]);
 
   /*
    * Seeds the composer's selected skill from a skill the user picked via the
@@ -311,8 +294,8 @@ const ConversationRoute: FC = () => {
     if (routeSkillId == null || hasConsumedRouteSkillIdRef.current) return;
     hasConsumedRouteSkillIdRef.current = true;
     selectSkillByUrl(routeSkillId);
-    navigate(pathname, { replace: true, state: null });
-  }, [routeSkillId, selectSkillByUrl, navigate, pathname]);
+    clearRouteState();
+  }, [routeSkillId, selectSkillByUrl, clearRouteState]);
 
   /*
    * This is the "no conversation selected" empty state. Overlay mode must
@@ -327,7 +310,7 @@ const ConversationRoute: FC = () => {
 
   const { toolsMenuItems, onToolToggle, toolConfigurationValue } = useToolsMenu(
     {
-      selectedItemId,
+      selectedItemId: visibleSelectedItemId,
       selectedDeploymentConfiguration,
       toolIcon: (
         <IconTelescope
@@ -386,10 +369,13 @@ const ConversationRoute: FC = () => {
 
   const isInputDisabled = useMemo(
     () =>
-      usingQuickAppStarters
+      /* A Custom Viewer owns conversation creation, so the chat input stays off. */
+      !!customViewer ||
+      (usingQuickAppStarters
         ? quickAppStarters.isChatMessageInputDisabled
-        : !!selectedDeploymentConfiguration?.isChatMessageInputDisabled,
+        : !!selectedDeploymentConfiguration?.isChatMessageInputDisabled),
     [
+      customViewer,
       usingQuickAppStarters,
       selectedDeploymentConfiguration,
       quickAppStarters.isChatMessageInputDisabled,
@@ -402,7 +388,9 @@ const ConversationRoute: FC = () => {
       attachments: Attachment[],
       chatSettingsValues: NewConversationChatSettings,
     ) => {
-      if (!selectedItemId) return;
+      /* A disabled input still sends an already-populated message; a Custom
+       * Viewer creates its own conversations, so the chat never does. */
+      if (!selectedItemId || customViewer) return;
       const attachmentDtos = attachmentsToDtos(attachments || []);
       const hasToolConfig = hasActiveToolConfig(toolConfigurationValue);
       const skillsForSend = selectedSkills;
@@ -466,6 +454,7 @@ const ConversationRoute: FC = () => {
     [
       navigate,
       selectedItemId,
+      customViewer,
       toolConfigurationValue,
       isIsolatedView,
       isolatedModelId,
@@ -537,7 +526,11 @@ const ConversationRoute: FC = () => {
     ],
   );
 
-  const { renderOverlay, catalogModal } = useDeploymentSelectorOverlay();
+  const {
+    renderOverlay,
+    catalogModal,
+    onOpenChange: onModelPickerOpenChange,
+  } = useDeploymentSelectorOverlay();
 
   // TODO: remove in next release
   if (isIsolatedModelNotFound) {
@@ -552,30 +545,34 @@ const ConversationRoute: FC = () => {
     );
   }
 
+  if (customViewer && isCustomViewerStarted) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden">
+        <CustomViewerFrame
+          viewer={customViewer}
+          shouldAutoFocus
+          onConversationCreated={handleCustomViewerConversationCreated}
+        />
+      </div>
+    );
+  }
+
   return (
     <Suspense fallback={<RouteFallback />}>
       <NewConversationComposer
         deployments={deploymentItems}
-        selectedDeploymentId={selectedItemId}
+        selectedDeploymentId={visibleSelectedItemId}
         onDeploymentChange={setSelectedItemId}
-        isModelSelectorLoading={isLoading}
+        isModelSelectorLoading={isLoading || isDeploymentPending}
         modelSelectorError={error}
         selectedDeployment={selectedDeployment}
         isInputDisabled={isInputDisabled}
         placeholder={t(ChatI18nKeys.Placeholder)}
         introText={starterIntroText}
-        message={composerSeedText}
-        messageRevision={composerSeedRevision}
-        onChange={onDraftChange}
-        inputInsertion={inputInsertion}
+        {...composerProps}
         onCreateConversation={handleCreateConversation}
         modelPickerOverlay={renderOverlay}
-        menuOverlays={menuOverlays}
-        activeMentions={activeMentions}
-        onBackspaceAtCaret={onBackspaceAtCaret}
-        caretPositionOverride={caretPositionOverride}
-        isSkillUnsupported={isSkillUnsupported}
-        commandMenu={commandMenu}
+        onModelPickerOpenChange={onModelPickerOpenChange}
         toolsMenuItems={toolsMenuItems}
         onToolToggle={onToolToggle}
         toolsMenuTitle={t(ToolsI18nKeys.MenuTitle)}
@@ -585,16 +582,20 @@ const ConversationRoute: FC = () => {
           stateOffLabel: t(ToolsI18nKeys.StateOff),
         }}
       >
-        <StarterButtons
-          starters={activeStarters}
-          onSelect={handleStarterSelect}
-        />
+        {customViewer ? (
+          <CustomViewerStartGate
+            viewerTitle={customViewer.title}
+            onStart={handleStartCustomViewer}
+          />
+        ) : (
+          <StarterButtons
+            starters={activeStarters}
+            onSelect={handleStarterSelect}
+          />
+        )}
       </NewConversationComposer>
       {catalogModal}
-      {promptCatalogModal}
-      {promptParametersPopup}
-      {skillCatalogModal}
-      {skillDetailsPanel}
+      {composerModals}
     </Suspense>
   );
 };

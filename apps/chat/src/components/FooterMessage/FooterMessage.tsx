@@ -44,11 +44,11 @@ const FooterMessage: FC = () => {
   return (
     <section
       aria-label={t(FooterMessageI18nKeys.RegionAriaLabel)}
-      className="dial-tiny-text relative w-full px-4 pb-4 pt-1 text-center text-secondary desktop:px-8"
+      className="dial-tiny-text relative w-full px-4 pt-1 pb-4 text-center text-secondary desktop:px-8"
     >
       {isMessageVisible && (
         <div
-          className="[&_a:hover]:opacity-75 [&_a]:text-primary [&_a]:underline"
+          className="[&_a]:text-primary [&_a]:underline [&_a:hover]:opacity-75"
           // eslint-disable-next-line react/no-danger
           dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
         />
@@ -57,7 +57,11 @@ const FooterMessage: FC = () => {
         <p
           className={mergeClasses(
             'pointer-events-none text-end',
-            isMessageVisible && 'absolute bottom-4 end-4 desktop:end-8',
+            /* On a phone the message wraps under the version's corner, so the
+               version gets its own line instead of floating over the text
+               ([#9618](https://github.com/epam/ai-dial-chat/issues/9618)). */
+            isMessageVisible &&
+              'mt-1 desktop:absolute desktop:inset-e-8 desktop:bottom-4 desktop:mt-0',
           )}
         >
           <span className="sr-only">

@@ -1,5 +1,6 @@
 import {
   BadGatewayException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -11,10 +12,14 @@ const CONVERSATION_PATH = 'my-conversation-abc';
 const SOURCE_URL = 'conversations/bucket-123/my-conversation-abc';
 
 const okResponse = (data: unknown) =>
-  ({ data, response: {} as Response }) as never;
+  ({ data, response: { ok: true, status: 200 } as Response }) as never;
 
 const errResponse = (status: number) =>
-  ({ error: {}, response: { status } as Response }) as never;
+  ({ error: {}, response: { ok: false, status } as Response }) as never;
+
+// `openapi-fetch` leaves `error` undefined when the error body is empty.
+const emptyErrResponse = (status: number) =>
+  ({ response: { ok: false, status } as Response }) as never;
 
 const makeCacheManager = () => ({
   get: vi.fn(),
@@ -22,7 +27,7 @@ const makeCacheManager = () => ({
   del: vi.fn(),
 });
 
-const makeService = () => {
+const makeService = (publishedFolders?: string[]) => {
   const dialClient = {
     client: {
       getConversation: vi.fn(),
@@ -31,11 +36,36 @@ const makeService = () => {
     },
   } as unknown as DialClientService;
   const cacheManager = makeCacheManager();
+  const deploymentsService = {
+    resolveDeploymentItem: vi.fn().mockResolvedValue(null),
+  };
+  const attachmentsService = {
+    buildAddResources: vi.fn().mockResolvedValue([]),
+    buildDeleteResources: vi.fn().mockResolvedValue([]),
+  };
   const service = new ConversationPublishService(
     dialClient,
     cacheManager as never,
+    deploymentsService as never,
+    attachmentsService as never,
   );
-  return { service, dialClient, cacheManager };
+  if (publishedFolders != null) {
+    vi.spyOn(service, 'getPublishHistory').mockResolvedValue(
+      publishedFolders.map((folderPath) => ({
+        path: 'conversations/bucket-123/my-conversation-abc',
+        folderPath,
+        publishedAt: '2026-07-15T10:00:00.000Z',
+        publishedBy: 'Test User',
+      })),
+    );
+  }
+  return {
+    service,
+    dialClient,
+    cacheManager,
+    deploymentsService,
+    attachmentsService,
+  };
 };
 
 const createPublicationBody = (dialClient: DialClientService, call = 0) =>
@@ -48,7 +78,7 @@ describe('ConversationPublishService.unpublish', () => {
   });
 
   it('re-fetches the title and calls createPublication with a single DELETE resource', async () => {
-    const { service, dialClient, cacheManager } = makeService();
+    const { service, dialClient, cacheManager } = makeService([]);
     vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
       okResponse({ name: 'Q3 planning notes' }),
     );
@@ -92,7 +122,7 @@ describe('ConversationPublishService.unpublish', () => {
   });
 
   it('derives a targetUrl character-for-character identical to the one publish sent', async () => {
-    const { service, dialClient } = makeService();
+    const { service, dialClient } = makeService([]);
     vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
       okResponse({ name: 'Q3 planning notes' }),
     );
@@ -127,7 +157,7 @@ describe('ConversationPublishService.unpublish', () => {
   });
 
   it('never forwards a rules array', async () => {
-    const { service, dialClient } = makeService();
+    const { service, dialClient } = makeService([]);
     vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
       okResponse({ name: 'Q3 planning notes' }),
     );
@@ -147,7 +177,7 @@ describe('ConversationPublishService.unpublish', () => {
   });
 
   it('aborts before createPublication when the title fetch fails, leaving the cache intact', async () => {
-    const { service, dialClient, cacheManager } = makeService();
+    const { service, dialClient, cacheManager } = makeService([]);
     vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
       errResponse(404),
     );
@@ -167,7 +197,7 @@ describe('ConversationPublishService.unpublish', () => {
   });
 
   it('maps a Core 403 on createPublication to ForbiddenException without invalidating the cache', async () => {
-    const { service, dialClient, cacheManager } = makeService();
+    const { service, dialClient, cacheManager } = makeService([]);
     vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
       okResponse({ name: 'Q3 planning notes' }),
     );
@@ -187,8 +217,29 @@ describe('ConversationPublishService.unpublish', () => {
     expect(cacheManager.del).not.toHaveBeenCalled();
   });
 
+  it('maps a Core 409 with an empty body on createPublication to ConflictException without invalidating the cache', async () => {
+    const { service, dialClient, cacheManager } = makeService([]);
+    vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
+      okResponse({ name: 'Q3 planning notes' }),
+    );
+    vi.spyOn(dialClient.client, 'createPublication').mockResolvedValue(
+      emptyErrResponse(409),
+    );
+
+    await expect(
+      service.unpublish(
+        'token-abc',
+        'bucket-123',
+        CONVERSATION_PATH,
+        'Organization/Shared chats',
+        'Test User',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(cacheManager.del).not.toHaveBeenCalled();
+  });
+
   it('surfaces a thrown SDK error as BadGatewayException', async () => {
-    const { service, dialClient } = makeService();
+    const { service, dialClient } = makeService([]);
     vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
       okResponse({ name: 'Q3 planning notes' }),
     );
@@ -205,6 +256,78 @@ describe('ConversationPublishService.unpublish', () => {
         'Test User',
       ),
     ).rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  it('adds a DELETE for every published attachment file when the history confirms the folder', async () => {
+    const { service, dialClient, attachmentsService } = makeService([
+      'Organization/Shared chats',
+    ]);
+    vi.mocked(dialClient.client.getConversation).mockResolvedValue(
+      okResponse({ name: 'My conversation' }),
+    );
+    vi.mocked(dialClient.client.createPublication).mockResolvedValue(
+      okResponse({ createdAt: 1_700_000_000_000 }),
+    );
+    attachmentsService.buildDeleteResources.mockResolvedValue([
+      {
+        action: 'DELETE',
+        targetUrl:
+          'files/public/Organization/Shared%20chats/my-conversation-abc/docs/a.pdf',
+      },
+    ]);
+
+    await service.unpublish(
+      'token',
+      'bucket-123',
+      CONVERSATION_PATH,
+      'Organization/Shared chats',
+      'Test User',
+    );
+
+    expect(attachmentsService.buildDeleteResources).toHaveBeenCalledWith(
+      'token',
+      'files/public/Organization/Shared%20chats/my-conversation-abc/',
+    );
+    const body = vi.mocked(dialClient.client.createPublication).mock
+      .calls[0][0] as { body: { resources: unknown[] } };
+    expect(body.body.resources).toEqual([
+      {
+        action: 'DELETE',
+        sourceUrl: SOURCE_URL,
+        targetUrl:
+          'conversations/public/Organization/Shared%20chats/my-conversation-abc',
+      },
+      {
+        action: 'DELETE',
+        targetUrl:
+          'files/public/Organization/Shared%20chats/my-conversation-abc/docs/a.pdf',
+      },
+    ]);
+  });
+
+  it('names no attachment files when the history does not show the conversation in that folder', async () => {
+    const { service, dialClient, attachmentsService } = makeService([
+      'Another folder',
+    ]);
+    vi.mocked(dialClient.client.getConversation).mockResolvedValue(
+      okResponse({ name: 'My conversation' }),
+    );
+    vi.mocked(dialClient.client.createPublication).mockResolvedValue(
+      okResponse({ createdAt: 1_700_000_000_000 }),
+    );
+
+    await service.unpublish(
+      'token',
+      'bucket-123',
+      CONVERSATION_PATH,
+      'Organization/Shared chats',
+      'Test User',
+    );
+
+    expect(attachmentsService.buildDeleteResources).not.toHaveBeenCalled();
+    const body = vi.mocked(dialClient.client.createPublication).mock
+      .calls[0][0] as { body: { resources: unknown[] } };
+    expect(body.body.resources).toHaveLength(1);
   });
 });
 

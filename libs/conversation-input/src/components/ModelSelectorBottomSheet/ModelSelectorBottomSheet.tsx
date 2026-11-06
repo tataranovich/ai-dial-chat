@@ -9,6 +9,7 @@ import {
   DIAL_KIT_ICON_STROKE,
   ElementSize,
   Highlight,
+  LiveRegion,
   Search,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck } from '@tabler/icons-react';
@@ -138,6 +139,10 @@ const ModelRow = ({
 
 /** Props for the mobile bottom-sheet model selector. */
 export interface ModelSelectorBottomSheetProps {
+  /** Controlled query shared with an alternate selector presentation. */
+  searchQuery?: string;
+  /** Reports query edits when controlled. */
+  onSearchQueryChange?: (query: string) => void;
   /** Controls sheet visibility. */
   isOpen: boolean;
   /** Title displayed in the sheet header and used as the dialog accessible name. */
@@ -154,7 +159,7 @@ export interface ModelSelectorBottomSheetProps {
   selectedDeploymentId?: string | null;
   /** Called when the user taps a deployment; the sheet closes automatically after. */
   onSelect: (id: string) => void;
-  /** Label shown as a disabled item while deployments are loading. */
+  /** Text announced through the sheet's always-mounted status region while deployments load; while set, skeleton rows replace the list. */
   loadingLabel?: string;
   /** Label shown as a disabled item when the deployments fetch failed. */
   errorLabel?: string;
@@ -190,12 +195,16 @@ export const ModelSelectorBottomSheet: FC<ModelSelectorBottomSheetProps> = ({
   labelClassName = 'dial-small-text',
   colors,
   menuStyles,
+  searchQuery,
+  onSearchQueryChange,
 }) => {
-  const [query, setQuery] = useState('');
+  const [localQuery, setLocalQuery] = useState('');
+  const query = searchQuery ?? localQuery;
+  const setQuery = onSearchQueryChange ?? setLocalQuery;
 
-  // Reset search query each time the sheet closes
+  /* Controlled query belongs to the selector, including while changing presentation. */
   useEffect(() => {
-    if (!isOpen) setQuery('');
+    if (!isOpen) setLocalQuery('');
   }, [isOpen]);
 
   const hasDeployments = deployments && deployments.length > 0;
@@ -241,6 +250,11 @@ export const ModelSelectorBottomSheet: FC<ModelSelectorBottomSheetProps> = ({
       colors={colors?.shell}
     >
       <div className="contents" style={cssVars}>
+        {/* Mounted with the sheet rather than with the skeleton, so the loading
+            text lands in a region that already exists and is announced. */}
+        <LiveRegion visuallyHidden>
+          {isLoading ? loadingLabel : null}
+        </LiveRegion>
         {/* Search */}
         {hasDeployments && !isLoading && (
           <>
@@ -250,7 +264,7 @@ export const ModelSelectorBottomSheet: FC<ModelSelectorBottomSheetProps> = ({
                   menuStyles?.colors?.searchHeaderBackground,
               })}
               className={mergeClasses(
-                'flex-shrink-0 px-4 py-[10px]',
+                'shrink-0 px-4 py-[10px]',
                 styles.search,
                 menuStyles?.searchHeaderClassName,
                 CONVERSATION_INPUT_CLASS.modelMenuSearch,
@@ -263,15 +277,13 @@ export const ModelSelectorBottomSheet: FC<ModelSelectorBottomSheetProps> = ({
                 onChange={(value) => setQuery(value ?? '')}
               />
             </div>
-            <div
-              className={mergeClasses(styles.divider, 'h-px flex-shrink-0')}
-            />
+            <div className={mergeClasses(styles.divider, 'h-px shrink-0')} />
           </>
         )}
 
         {/* List */}
         {isLoading ? (
-          <ModelSelectorSkeletonRows loadingLabel={loadingLabel} />
+          <ModelSelectorSkeletonRows />
         ) : stateLabel ? (
           <div
             role="list"

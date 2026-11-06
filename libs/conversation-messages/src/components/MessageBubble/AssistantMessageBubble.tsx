@@ -15,6 +15,7 @@ import { useInlineStartIndent } from '../../hooks/useInlineStartIndent/useInline
 import type { AssistantMessageBubbleProps } from '../../models/message-bubble';
 import { copySelectionWithoutStyles } from '../../utils/clipboard';
 import { MessageActions } from '../MessageActions/MessageActions';
+import { MessageTimestamp } from '../MessageTimestamp/MessageTimestamp';
 import styles from './MessageBubble.module.scss';
 
 /*
@@ -32,6 +33,8 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
   styles: bubbleStyles,
   actions,
   hasAlwaysVisibleActions,
+  timestamp,
+  locale,
   isStreaming,
   attachments,
   beforeContent,
@@ -47,13 +50,23 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
   markdownUrlTransform,
   onAttachmentClick,
   onDownloadAll,
+  isAttachmentDownloadable,
   onAttachmentRetry,
   codeBlockTheme,
   tableOnOpenInCanvas,
   labels,
   selectedAttachmentId,
 }) => {
-  const { colors, typography, className, bubbleClassName } = bubbleStyles ?? {};
+  const { colors, typography, className, bubbleClassName, timestampClassName } =
+    bubbleStyles ?? {};
+  const timestampNode =
+    timestamp != null ? (
+      <MessageTimestamp
+        timestamp={timestamp}
+        locale={locale}
+        className={timestampClassName}
+      />
+    ) : undefined;
   const {
     attachmentClickLabel,
     attachmentDownloadLabel,
@@ -91,12 +104,20 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
   const visibleAttachments = isStreaming
     ? (attachments ?? []).filter((a) => a.type !== AttachmentType.Audio)
     : (attachments ?? []);
+  /*
+   * Whitespace-only content (e.g. `\n\n` streamed before the stages) renders
+   * nothing, but an empty text container would still take a column gap and
+   * push the content below it out of line with the deployment icon.
+   */
+  const hasText = !!text?.trim();
+  const isTextRegionEmpty = !hasText && !hasThinkingPlaceholder;
   const { slotRef, firstLineIndent } = useInlineStartIndent(
-    beforeContent != null && !!text,
+    beforeContent != null && hasText,
   );
   const cssVars = buildCssVars({
     '--cm-bubble-text': colors?.text,
     '--cm-starters-divider': colors?.startersDivider,
+    '--cm-timestamp-text': colors?.timestampText,
     '--cm-bubble-first-line-indent': firstLineIndent,
   });
 
@@ -110,7 +131,10 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
       aria-label={assistantMessageAriaLabel}
       style={cssVars}
       onCopy={copySelectionWithoutStyles}
-      className={mergeClasses('flex w-full items-start gap-3', className)}
+      className={mergeClasses(
+        'group/message flex w-full items-start gap-3',
+        className,
+      )}
     >
       {hasDeploymentIcon && (
         <DeploymentIcon
@@ -122,10 +146,10 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
           }}
         />
       )}
-      <div className="flex w-full min-w-0 max-w-full flex-col items-start gap-5">
+      <div className="flex w-full max-w-full min-w-0 flex-col items-start gap-5">
         <div
           className={mergeClasses(
-            'flex w-full min-w-0 max-w-full flex-col items-start gap-4',
+            'flex w-full max-w-full min-w-0 flex-col items-start gap-4',
             bubbleClassName,
           )}
         >
@@ -142,16 +166,25 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
            * is empty, or above the streaming placeholder while the first
            * token has not arrived yet.
            */}
-          {beforeContent != null && !text && (
+          {beforeContent != null && !hasText && (
             <div className="min-w-0">{beforeContent}</div>
           )}
-          {(text || (isStreaming && hasThinkingPlaceholder)) && (
+          {/*
+           * The live region mounts with the stream, before its first token,
+           * and stays the same node until the text settles: a region created
+           * in the same commit as its text is read late or not at all. With
+           * nothing to show yet (no text, no placeholder) it is taken out of
+           * flow, so it adds no column gap and `afterContent` stays level
+           * with the avatar.
+           */}
+          {(hasText || isStreaming) && (
             <div
               aria-live="polite"
               aria-atomic="false"
               className={mergeClasses(
                 textClass,
-                'relative min-w-0 max-w-full text-start',
+                isTextRegionEmpty ? 'absolute' : 'relative',
+                'max-w-full min-w-0 text-start',
                 /*
                  * `text-indent` inherits, so the indent targets the markdown
                  * container's first block child (a leading list indents its
@@ -163,42 +196,49 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
                  * host-supplied slot content of any element type must never
                  * receive the indent.
                  */
-                beforeContent != null && text && FIRST_LINE_INDENT_CLASS_NAME,
+                beforeContent != null &&
+                  hasText &&
+                  FIRST_LINE_INDENT_CLASS_NAME,
                 CONVERSATION_MESSAGES_CLASS.assistantContent,
               )}
             >
-              {beforeContent != null && text && (
-                <div ref={slotRef} className="absolute start-0 top-0">
+              {beforeContent != null && hasText && (
+                <div ref={slotRef} className="absolute inset-s-0 top-0">
                   {beforeContent}
                 </div>
               )}
               {/*
                * The plain marker class (not a CSS-module hash) keeps the
                * indent selector above a static string Tailwind can generate.
+               * `overflow-wrap` inherits, so one class here breaks an
+               * unbreakable token in every markdown element — including ones
+               * whose per-element class (or a host override) carries none.
                */}
-              <div
-                ref={contentRef}
-                className="cm-bubble-markdown min-w-0 max-w-full"
-              >
-                <MDMessageViewer
-                  content={text ?? ''}
-                  isPlainText={responseFormat === ResponseFormat.PlainText}
-                  isStreaming={isStreaming}
-                  thinkingLabel={thinkingLabel}
-                  components={markdownComponents}
-                  classNames={markdownClassNames}
-                  urlTransform={markdownUrlTransform}
-                  codeBlockCopyLabel={codeBlockCopyLabel}
-                  codeBlockCopiedLabel={codeBlockCopiedLabel}
-                  codeBlockDownloadLabel={codeBlockDownloadLabel}
-                  codeBlockTheme={codeBlockTheme}
-                  tableActionLabels={tableActionLabels}
-                  tableDownloadFilename={tableDownloadFilename}
-                  tableOnOpenInCanvas={tableOnOpenInCanvas}
-                  tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
-                  mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
-                />
-              </div>
+              {!isTextRegionEmpty && (
+                <div
+                  ref={contentRef}
+                  className="cm-bubble-markdown max-w-full min-w-0 wrap-anywhere"
+                >
+                  <MDMessageViewer
+                    content={text ?? ''}
+                    isPlainText={responseFormat === ResponseFormat.PlainText}
+                    isStreaming={isStreaming}
+                    thinkingLabel={thinkingLabel}
+                    components={markdownComponents}
+                    classNames={markdownClassNames}
+                    urlTransform={markdownUrlTransform}
+                    codeBlockCopyLabel={codeBlockCopyLabel}
+                    codeBlockCopiedLabel={codeBlockCopiedLabel}
+                    codeBlockDownloadLabel={codeBlockDownloadLabel}
+                    codeBlockTheme={codeBlockTheme}
+                    tableActionLabels={tableActionLabels}
+                    tableDownloadFilename={tableDownloadFilename}
+                    tableOnOpenInCanvas={tableOnOpenInCanvas}
+                    tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
+                    mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
+                  />
+                </div>
+              )}
             </div>
           )}
           <AttachmentGroup
@@ -212,6 +252,7 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
                 : undefined
             }
             onDownloadAll={onDownloadAll}
+            isAttachmentDownloadable={isAttachmentDownloadable}
             onRetry={onAttachmentRetry}
             labels={{
               clickLabel: attachmentClickLabel,
@@ -225,6 +266,16 @@ export const AssistantMessageBubble: FC<AssistantMessageBubbleProps> = ({
           <MessageActions
             {...actions}
             isAlwaysVisible={hasAlwaysVisibleActions}
+            trailingContent={
+              timestampNode != null ? (
+                <>
+                  {actions?.trailingContent}
+                  {timestampNode}
+                </>
+              ) : (
+                actions?.trailingContent
+              )
+            }
             role={MessageRole.Assistant}
           />
         </div>

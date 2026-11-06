@@ -13,8 +13,8 @@ import {
  * them in the same change as any `OverlayFeature` addition, removal, or rename.
  */
 describe('KNOWN_UI_FEATURES', () => {
-  it('has exactly 51 members, one per OverlayFeature key', () => {
-    expect(KNOWN_UI_FEATURES.size).toBe(51);
+  it('has exactly 56 members, one per OverlayFeature key', () => {
+    expect(KNOWN_UI_FEATURES.size).toBe(56);
   });
 
   it('includes representative transferable keys', () => {
@@ -26,6 +26,7 @@ describe('KNOWN_UI_FEATURES', () => {
   it('includes the chat-input keys', () => {
     expect(KNOWN_UI_FEATURES.has('chat-settings')).toBe(true);
     expect(KNOWN_UI_FEATURES.has('removable-tools')).toBe(true);
+    expect(KNOWN_UI_FEATURES.has('conversation-drafts')).toBe(true);
   });
 
   it('includes the catalog keys under their current names', () => {
@@ -66,12 +67,24 @@ describe('KNOWN_UI_FEATURES', () => {
     expect(KNOWN_UI_FEATURES.has('hide-conversation-export')).toBe(true);
   });
 
+  it('includes the conversation-import key', () => {
+    expect(KNOWN_UI_FEATURES.has('hide-conversation-import')).toBe(true);
+  });
+
   it('includes the settings-page key', () => {
     expect(KNOWN_UI_FEATURES.has('hide-settings-page')).toBe(true);
   });
 
+  it('includes the usage-page key', () => {
+    expect(KNOWN_UI_FEATURES.has('hide-usage-page')).toBe(true);
+  });
+
   it('includes the header-logo key', () => {
     expect(KNOWN_UI_FEATURES.has('show-header-logo')).toBe(true);
+  });
+
+  it('includes the starter-icon key', () => {
+    expect(KNOWN_UI_FEATURES.has('hide-starter-icon')).toBe(true);
   });
 
   it('includes both agent-selector keys', () => {

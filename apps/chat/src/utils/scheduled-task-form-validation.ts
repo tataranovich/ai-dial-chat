@@ -7,7 +7,6 @@ import {
   DESCRIPTION_MAX_LENGTH,
   ScheduledTaskCreateFormErrors,
   ScheduledTaskCreateFormValues,
-  TIME_OF_DAY_PATTERN,
 } from '@epam/ai-dial-scheduled-tasks';
 import {
   ScheduledTaskValidationErrorCode,
@@ -22,21 +21,6 @@ import {
   ScheduledTasksI18nKeys,
   SkillSelectorI18nKeys,
 } from '../constants/translation-keys';
-
-/**
- * Validates a time-of-day value against the 24-hour `HH:mm` pattern; shared
- * by the form's submit pass and the lib-owned time field's blur pass.
- */
-export const validateScheduledTaskTime = (
-  time: string,
-  t: TFunction,
-): string | undefined =>
-  TIME_OF_DAY_PATTERN.test(time)
-    ? undefined
-    : t(ScheduledTasksI18nKeys.CreateTimeInvalid);
-
-/** Minimum lead time a one-shot `runAt` must be ahead of "now" to be accepted. */
-export const RUN_AT_MIN_LEAD_MS = 60_000;
 
 const VALIDATION_ERROR_KEYS: Record<
   ScheduledTaskValidationErrorCode,
@@ -67,6 +51,8 @@ const VALIDATION_ERROR_KEYS: Record<
     ScheduledTasksI18nKeys.CreateMinuteInvalid,
   [ScheduledTaskValidationErrorCode.DayOfWeekInvalid]:
     ScheduledTasksI18nKeys.CreateDayOfWeekRequired,
+  [ScheduledTaskValidationErrorCode.DaysOfWeekInvalid]:
+    ScheduledTasksI18nKeys.CreateDaysOfWeekRequired,
   [ScheduledTaskValidationErrorCode.DayOfMonthInvalid]:
     ScheduledTasksI18nKeys.CreateDayOfMonthRequired,
   [ScheduledTaskValidationErrorCode.StartDateInvalid]:
@@ -157,9 +143,6 @@ export const validateScheduledTaskForm = (
   t: TFunction,
 ): ScheduledTaskCreateFormErrors =>
   mapScheduledTaskValidationErrors(
-    validateScheduledTaskFormValues(data, {
-      now: new Date(),
-      minimumLeadMs: RUN_AT_MIN_LEAD_MS,
-    }),
+    validateScheduledTaskFormValues(data, { now: new Date() }),
     t,
   );

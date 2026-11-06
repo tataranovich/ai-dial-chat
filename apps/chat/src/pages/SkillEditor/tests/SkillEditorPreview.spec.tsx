@@ -23,12 +23,22 @@ import {
 } from '../../../server-api/skills.api';
 import SkillEditor from '../SkillEditor';
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({ status: 'ready', config: {} }),
-}));
+/*
+ * Every test in this file drives the full upload pipeline (dialog, file
+ * input, upload, zip re-pack of the skill bundle) before asserting. Under a
+ * fully parallel suite run the worker can be loaded enough that the 5s
+ * default test timeout is exceeded on otherwise-green tests (observed on
+ * the unsupported-binary-extension case, which passes standalone 3/3) —
+ * double the budget for this file only.
+ */
+vi.setConfig({ testTimeout: 10_000 });
+
 vi.mock('react-router', () => ({
   useNavigate: () => vi.fn(),
   useSearchParams: () => [mockSearchParams, vi.fn()],
+}));
+vi.mock('../../../hooks/unsaved-changes/useBuilderLeaveGuard', () => ({
+  useBuilderLeaveGuard: () => ({ allowNextNavigation: vi.fn() }),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -43,15 +53,24 @@ vi.mock('../../../context/ThemeContext', () => ({
   useTheme: () => ({ currentTheme: 'light' }),
 }));
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({ config: { allowedConnectOrigins: [] } }),
-}));
+vi.mock('../../../context/AppConfigContext', async () => {
+  const { useCatalogCreationState } =
+    await import('../../../context/tests/catalog-creation-state');
+  return {
+    useAppConfig: () => ({
+      status: 'ready',
+      config: { allowedConnectOrigins: [] },
+      ...useCatalogCreationState(),
+    }),
+  };
+});
 
 vi.mock('../../../context/NotificationContext', () => ({
   useNotification: vi.fn(),
 }));
 
 vi.mock('../../../server-api/skills.api', () => ({
+  moveSkill: vi.fn(),
   createSkill: vi.fn(),
   updateSkill: vi.fn(),
   downloadSkill: vi.fn(),
@@ -380,8 +399,9 @@ describe('SkillEditor page — supporting file preview', () => {
  * last one consulted and a `null` from it closes the canvas outright.
  */
 /*
- * Name stays in Metadata while a supporting file is selected, and the kit
- * renders its helper caption with role="alert" too, so pick the preview error.
+ * Name stays in Metadata while a supporting file is selected, and other
+ * assertive regions (the editor's own LiveRegion) may render role="alert"
+ * too, so pick the preview error.
  */
 const findPreviewAlert = async () => {
   const alerts = await screen.findAllByRole('alert');

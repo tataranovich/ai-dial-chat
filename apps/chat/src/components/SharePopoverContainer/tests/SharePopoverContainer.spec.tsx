@@ -1,4 +1,3 @@
-import { type CatalogItem } from '@epam/ai-dial-catalog';
 import * as chatHooksModule from '@epam/ai-dial-chat-hooks';
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import { ShareLinkAccess, type SharePopoverProps } from '@epam/ai-dial-share';
@@ -31,17 +30,6 @@ vi.mock('@epam/ai-dial-share', () => ({
   SharePopover: mockSharePopover,
 }));
 
-const makeItem = (type: CatalogEntityType): CatalogItem => ({
-  id: 'item-1',
-  type,
-  name: 'Claude',
-  version: '1',
-  lastUsed: 'now',
-  description: '',
-  folder: [],
-  topics: [],
-});
-
 const mockUseShareLink = (
   overrides: Partial<ReturnType<typeof chatHooksModule.useShareLink>> = {},
 ) => {
@@ -70,7 +58,10 @@ describe('SharePopoverContainer', () => {
 
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Agent)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Agent,
+        )}
         onClose={vi.fn()}
       />,
     );
@@ -104,7 +95,10 @@ describe('SharePopoverContainer', () => {
 
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Agent)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Agent,
+        )}
         onClose={vi.fn()}
       />,
     );
@@ -133,19 +127,54 @@ describe('SharePopoverContainer', () => {
 
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Agent)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Agent,
+        )}
         onClose={vi.fn()}
       />,
     );
 
-    expect(mockT).toHaveBeenCalledWith(ShareI18nKeys.ExpiryNote, { days: 7 });
+    expect(mockT).toHaveBeenCalledWith(ShareI18nKeys.ExpiryNote, { count: 7 });
+  });
+
+  it('builds the expiry note in hours when the link expires in under a day', () => {
+    mockUseShareLink({
+      data: {
+        url: 'https://example.com/marketplace/share/item-1',
+        expiresInDays: 1,
+        expiresInHours: 1,
+        access: [ShareLinkAccess.View],
+      },
+    });
+
+    render(
+      <SharePopoverContainer
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Agent,
+        )}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(mockT).toHaveBeenCalledWith(ShareI18nKeys.ExpiryNoteHours, {
+      count: 1,
+    });
+    expect(mockT).not.toHaveBeenCalledWith(
+      ShareI18nKeys.ExpiryNote,
+      expect.anything(),
+    );
   });
 
   it('passes canEditAccess true for an Application item', () => {
     mockUseShareLink();
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Agent)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Agent,
+        )}
         onClose={vi.fn()}
       />,
     );
@@ -160,7 +189,10 @@ describe('SharePopoverContainer', () => {
     mockUseShareLink();
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Model)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Model,
+        )}
         onClose={vi.fn()}
       />,
     );
@@ -175,7 +207,10 @@ describe('SharePopoverContainer', () => {
     mockUseShareLink();
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Prompt)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Prompt,
+        )}
         onClose={vi.fn()}
       />,
     );
@@ -190,7 +225,10 @@ describe('SharePopoverContainer', () => {
     mockUseShareLink();
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Agent)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Agent,
+        )}
         onClose={vi.fn()}
       />,
     );
@@ -207,7 +245,10 @@ describe('SharePopoverContainer', () => {
     mockUseShareLink();
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Agent)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Agent,
+        )}
         isQuickApp
         onClose={vi.fn()}
       />,
@@ -227,7 +268,10 @@ describe('SharePopoverContainer', () => {
     mockUseShareLink();
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Prompt)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Prompt,
+        )}
         onClose={vi.fn()}
       />,
     );
@@ -242,7 +286,10 @@ describe('SharePopoverContainer', () => {
     mockUseShareLink();
     render(
       <SharePopoverContainer
-        item={makeItem(CatalogEntityType.Model)}
+        itemId="item-1"
+        canEditAccess={chatHooksModule.canEditShareAccess(
+          CatalogEntityType.Model,
+        )}
         onClose={vi.fn()}
       />,
     );
@@ -254,6 +301,46 @@ describe('SharePopoverContainer', () => {
           qrCopiedButtonLabel: ShareI18nKeys.CopiedButtonLabel,
           qrDownloadButtonLabel: ButtonsI18nKeys.Download,
           qrDownloadFileName: ShareI18nKeys.QrDownloadFileName,
+        }),
+      }),
+      undefined,
+    );
+  });
+
+  it('passes the default deployment-worded visibility notes', () => {
+    mockUseShareLink();
+    render(
+      <SharePopoverContainer itemId="item-1" canEditAccess onClose={vi.fn()} />,
+    );
+
+    expect(mockSharePopover).toHaveBeenCalledWith(
+      expect.objectContaining({
+        labels: expect.objectContaining({
+          visibilityNote: ShareI18nKeys.VisibilityNote,
+          visibilityNoteEdit: ShareI18nKeys.VisibilityNoteEdit,
+        }),
+      }),
+      undefined,
+    );
+  });
+
+  it('passes the visibility notes the host supplies instead of the defaults', () => {
+    mockUseShareLink();
+    render(
+      <SharePopoverContainer
+        itemId="projects/a1b2c3/q4"
+        canEditAccess
+        visibilityNote="Project view note"
+        visibilityNoteEdit="Project edit note"
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(mockSharePopover).toHaveBeenCalledWith(
+      expect.objectContaining({
+        labels: expect.objectContaining({
+          visibilityNote: 'Project view note',
+          visibilityNoteEdit: 'Project edit note',
         }),
       }),
       undefined,

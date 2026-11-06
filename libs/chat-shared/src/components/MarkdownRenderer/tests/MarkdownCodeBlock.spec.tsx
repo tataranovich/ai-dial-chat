@@ -52,6 +52,20 @@ describe('MarkdownCodeBlock', () => {
     },
   );
 
+  it('exposes the code as a named, keyboard-focusable scroll region', () => {
+    render(
+      <MarkdownCodeBlock
+        language=""
+        value="a,b,c"
+        scrollRegionAriaLabel="Scrollable code"
+      />,
+    );
+
+    const region = screen.getByRole('region', { name: 'Scrollable code' });
+    expect(region.getAttribute('tabindex')).toBe('0');
+    expect(region.textContent).toContain('a,b,c');
+  });
+
   it('copies and downloads the complete text when highlighting is bypassed', async () => {
     const user = userEvent.setup();
     const value = JSON.stringify({ contentBytes: 'A'.repeat(175_052) });
@@ -125,6 +139,19 @@ describe('MarkdownCodeBlock', () => {
       selector: 'span.dial-tiny-lead-semi-text',
     });
     expect(label.textContent).toBe('');
+  });
+
+  /* Padding is a class on the plain <pre>; no semantic query reaches it. */
+  it('keeps the code top padding by default and drops it with hasContentTopPadding={false}', () => {
+    const { rerender } = render(<MarkdownCodeBlock language="" value="x" />);
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(screen.getByText('x').closest('pre')?.className).toBe('p-4');
+
+    rerender(
+      <MarkdownCodeBlock language="" value="x" hasContentTopPadding={false} />,
+    );
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(screen.getByText('x').closest('pre')?.className).toContain('pt-0');
   });
 
   it('renders the copy button when isStreaming is false', () => {

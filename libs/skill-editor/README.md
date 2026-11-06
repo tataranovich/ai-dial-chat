@@ -25,7 +25,7 @@ file it is its preview.
 
 ## Installation
 
-Requires UI Kit ^0.15.0-dev.20 or later with the public `/editors` entry.
+Requires UI Kit ^0.16.0-dev.20 or later with the public `/editors` entry.
 The Markdown loader uses that entry, and library builds keep UI Kit subpaths
 external to preserve the editor's dynamic boundary in consuming applications.
 
@@ -46,8 +46,8 @@ import '@epam/ai-dial-skill-editor/styles.css';
 ## Peer Dependencies
 
 - `react` `^19.2.8`
-- `@epam/ai-dial-ui-kit` `^0.15.0-dev.39`
-- `@epam/ai-dial-react-file-manager` `^0.3.0-dev.25`
+- `@epam/ai-dial-ui-kit` `^0.16.0`
+- `@epam/ai-dial-react-file-manager` `^0.4.1`
 - `@epam/ai-dial-chat-shared` `*`
 
 ## Components
@@ -147,33 +147,66 @@ once the data has arrived. The root `SKILL.md` node is synthesised internally
 and is always present, first, and selected by default — it never appears in
 the `files` prop and never exposes a rename/move/delete affordance.
 
+### Folder preview
+
+Selecting a folder fills the main pane with a breadcrumb trail
+(`Skill › agents › reviewers`) and the folder's direct children: folders first,
+then files, each sorted by name, with an item count on each folder row. A
+folder that exists only through deeper file paths is listed too. An empty folder
+shows an empty state instead of a list. Activating a row or a crumb selects that
+node and expands the folders leading to it in the Files tree; the root crumb
+returns to `SKILL.md`. Text comes from `labels.folderPreviewRootLabel`,
+`folderPreviewBreadcrumbAriaLabel`, `folderPreviewOverflowAriaLabel`,
+`folderPreviewListAriaLabel`, `folderEmptyTitle`, `folderEmptyDescription` and
+`folderItemCountLabel`; colors from `colors.folderRowBorder` and
+`colors.folderRowHoverBackground` (the count text takes `colors.helperText`);
+the count's type step from `typography.folderItemCountClassName` (default
+`'dial-tiny-text'`).
+
 ### Adding files and folders
 
 The Files pane header renders an **Add** dropdown (ui-kit `ButtonDropdown`), and
-every node except `SKILL.md` has a context menu of **Add child** (folders
-only), **Add sibling** and **Delete**. Add child and Add sibling are submenus
-holding the same entries as the Add dropdown. An entry appears only when its
-host capability is supplied:
+every folder has a context menu. A folder lists the Add dropdown's entries
+directly (adding into that folder), then **Delete**. There is no Add sibling
+submenu: adding next to a folder goes through its parent folder's menu, or the
+header Add for the root. A file has no menu, only an inline **Delete** button
+shown on row hover; `SKILL.md` has neither. An entry appears only when its host
+capability is supplied:
 
 | Entry                      | Requires                         | Behaviour                                                                                                             |
 | -------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Create folder              | `fileActions.onCreateFolder`     | Inline-named draft folder; confirmed names reach `onCreateFolder(path)`                                               |
+| Create folder              | `fileActions.onCreateFolder`     | Inline-named draft folder on desktop, a Create folder dialog on mobile; confirmed names reach `onCreateFolder(path)`  |
 | Upload files from device   | —                                | Opens the upload dialog (`SkillFileUploadMode.Files`)                                                                 |
 | Upload archive from device | `fileActions.extractArchive`     | Opens the upload dialog in `SkillFileUploadMode.Archive`; each `.zip` is expanded by the host and staged              |
 | Open DIAL file system      | `fileActions.pickFromFileSystem` | Awaits the host picker; resolved `SkillFileSourceEntry[]` open the upload dialog pre-staged (`undefined` = cancelled) |
 
 Every add action targets a folder: from the header, the selected folder (or
-the root when a file or `SKILL.md` is selected); from Add child, that folder;
-from Add sibling, the node's parent. Staged paths are prefixed with it. Files
+the root when a file or `SKILL.md` is selected); from a folder's own menu
+entries, that folder. Staged paths are prefixed with it. Files
 from every source go through `fileActions.validateBatch` and
 `fileActions.commitBatch`, so per-file errors look the same whatever the source.
 
-An inline folder name is rejected when it is empty, contains `/` or `\`, is
+On mobile, Create folder opens a dialog with a required Name field instead of a
+tree draft; the same rules apply, shown under the field once Create is pressed.
+
+A folder name is rejected when it is empty, contains `/` or `\`, is
 `.`/`..`, or matches a sibling (or `SKILL.md` at the root); after that,
 `fileActions.validateFolderPath` may reject it with a host message. The library
 treats a folder as a plain node in `files` whether or not anything is under it;
 persisting it is the host's concern. The DIAL Chat host keeps an empty folder
 across Save and reload through a storage marker the library never sees.
+
+An upload whose path already holds a supporting file (never `SKILL.md`, which
+is a metadata import) is not staged straight away: the dialog first asks
+**Replace** or **Duplicate**, one file at a time. Replace stages it with
+`replacesExisting: true` on its `SkillFileUploadCandidate`, so the host
+validates and commits it as an overwrite; Duplicate stages it as the first free
+`name (n).ext` beside the original; Cancel drops it. Pass the dialog nothing
+extra — the editor reads the existing paths from `files`.
+
+Below the `desktop` breakpoint the upload, Replace-or-duplicate and Create
+folder dialogs render as a ui-kit `BottomSheet` with Confirm and Cancel pinned
+at the bottom; on desktop they stay a centred `Popup`.
 
 **Delete** removes the node (a folder with everything under it) immediately,
 with no confirmation, and calls `fileActions.onRemoveNode(path)`. The library
@@ -210,7 +243,15 @@ move to a fixed bottom bar. The primary button reads `labels.createLabel`
 label there.
 
 On mobile the column stacks the Files pane as a collapsed "Editing file"
-accordion, then the selected file. Its heading is `SKILL.md` for the manifest,
+card — the caption, the selected file's type icon and name, and a down caret —
+which expands in place to show the Files heading, the Add menu and the tree,
+then the selected file. The caret points down while collapsed and up while
+expanded. The caption stays aligned to the inline start when selection changes.
+The card uses Layer-sunken (`#EEF1F7` without a theme), an 8px radius and Shadow/XS;
+its expanded file list scrolls within the card. Supporting-file previews have a
+definite mobile height of `max(320px, 60dvh)` so document pages and spreadsheet
+sheets remain visible; on desktop they fill the available column height.
+Its heading is `SKILL.md` for the manifest,
 or `labels.selectedFileHeading(name)` for a supporting file; Name and
 Description show only while `SKILL.md` is selected. `submitError` and
 `conflict` (with its "Reload latest" action) render in a `role="alert"` region
@@ -243,19 +284,26 @@ with `path` relative to the folder being added to. `SkillFileUploadMode`
 
 `labels` (`SkillEditorLabels`) gives every string an English default. The
 file-tree entries are `addLabel`, `createFolderLabel`, `uploadFilesLabel`,
-`uploadArchiveLabel`, `openFileSystemLabel`, `addChildLabel`,
-`addSiblingLabel`, `deleteLabel`, `newFolderDefaultName`,
+`uploadArchiveLabel`, `openFileSystemLabel`, `deleteLabel`, `newFolderDefaultName`,
 `folderNameRequiredError`, `folderNameInvalidError`,
 `folderNameDuplicateError`, and the archive dialog's
 `uploadArchiveDialogTitle`, `uploadArchiveDropZoneLabel`,
 `uploadArchiveDropZoneMobileLabel`, `uploadArchiveErrorMessage`,
-`uploadArchiveEmptyMessage` and `uploadArchiveExtractingAriaLabel`.
-`styles.typography.menuIconClassName`
-colors the Add-menu icons (`'text-secondary'` by default);
+`uploadArchiveEmptyMessage` and `uploadArchiveExtractingAriaLabel`. The
+optional `uploadDropZoneDescription` and `uploadArchiveDropZoneDescription` add
+a second drop-zone line (e.g. accepted formats) and are hidden when unset. The
+Replace-or-duplicate step reads `uploadConflictTitle`,
+`uploadConflictMessage(path)`, `uploadConflictReplaceLabel`,
+`uploadConflictDuplicateLabel`, `uploadConflictConfirmLabel` and
+`uploadReplaceRowNote`; the mobile Create folder dialog reads
+`createFolderNameLabel`, `createFolderNamePlaceholder`,
+`createFolderConfirmLabel` and `createFolderCloseAriaLabel`.
+`styles.colors.menuIcon`
+colors the Add-menu icons (`--text-secondary` by default);
 the Delete entry renders as a danger (red) item, and `removeIconClassName`
 overrides its icon color.
 
-`styles.colors` (`SkillEditorColors`) overrides the heading, Instructions-label, and border colors as CSS custom properties, falling back to this app's theme tokens (`--text-primary`, `--text-secondary`, `--stroke-tertiary`) and then to a hard-coded hex when no theme is present:
+`styles.colors` (`SkillEditorColors`) overrides the heading, Instructions-label, and border colors, plus the mobile "Editing file" card's `filesCardBackground` and `filesCardBorder` the mobile upload and create-folder sheet footer's `dialogFooterBackground` and `dialogFooterBorder`, the file-drop overlay's `dropOverlayIcon`, the Add-menu `menuIcon`, and the upload dialog's `uploadInvalidDropZoneBorder` and `uploadRowBorder`, as CSS custom properties, falling back to this app's theme tokens (`--text-primary`, `--text-secondary`, `--text-accent-primary`, `--stroke-tertiary`, `--stroke-error`, `--bg-layer-sunken`, `--bg-layer-raised`) and then to a hard-coded hex when no theme is present. `styles.typography.editingFileLabelClassName` (`'dial-tiny-lead-text'`) and `editingFileNameClassName` (`'dial-small-text'`) set the card's caption and file-name type:
 
 ```tsx
 <SkillEditor
@@ -266,6 +314,10 @@ overrides its icon color.
   }}
 />
 ```
+
+`styles.typography.dropOverlayTitleClassName` (`'dial-h3-text'`) and
+`dropOverlaySubtitleClassName` (`'dial-small-text'`) set the file-drop
+overlay's title and subtitle type.
 
 ## Public class names
 
@@ -301,23 +353,25 @@ Write host overrides with CSS logical properties (`margin-inline-start`,
 
 ## AI text refinement
 
-The form accepts optional `onRefineDescription` and `onRefineInstructions` callbacks, each `(value: string, signal: AbortSignal) => Promise<string>`. Each callback independently opts its field into refinement; omit it to hide the action. The host owns transport, availability, purpose selection, and translations. Success and Undo call `onValuesChange` and participate in dirty tracking. Changing `initialValues` identity cancels requests and resets Undo, even for equal text.
+The form accepts optional `onRefineDescription` and `onRefineInstructions` callbacks, each `(value: string, signal: AbortSignal) => Promise<string>`. Each callback independently opts its field into refinement; omit it to hide the action. The host owns transport, availability, purpose selection, and translations. Success and Restore original call `onValuesChange` and participate in dirty tracking. Changing `initialValues` identity cancels requests and resets Undo, even for equal text.
 
-Both fields stay editable while pending. Editing the active field (including Markdown toolbar edits) aborts and invalidates its request. Both Refine actions and Save are disabled during a request; Cancel/Back abort before invoking the host. Late responses are ignored even if the callback ignores its signal. Repeated refinement retains the original baseline; Undo restores it exactly. Manual/external edits, callback removal, submission, and leaving the editor clear the baseline. Errors preserve text and allow retry. Identical output announces no change without writing the value.
+While a field refines, its control is read-only and keeps showing the text that was sent, and its action reads "Refining" with a spinner; the other field stays editable. An edit that still reaches the refining field (a Markdown toolbar action) aborts and invalidates its request. Both Refine actions and Save are disabled during a request; Cancel/Back abort before invoking the host. Late responses are ignored even if the callback ignores its signal. After a result the field offers "Restore original" and "Regenerate" instead of "Refine with AI"; Regenerate refines the original draft again for a fresh variant, and Restore original restores that draft exactly. Manual/external edits, callback removal, submission, and leaving the editor clear the baseline. Errors preserve text and allow retry. Identical output announces no change without writing the value.
 
 Optional label overrides (English defaults):
 
 | Label                      | Default                                       |
 | -------------------------- | --------------------------------------------- |
 | `refineWithAiLabel`        | Refine with AI                                |
-| `refineUndoLabel`          | Undo                                          |
+| `refineRefiningLabel`      | Refining                                      |
+| `refineRegenerateLabel`    | Regenerate                                    |
+| `refineUndoLabel`          | Restore original                              |
 | `refineErrorLabel`         | Could not refine this text. Please try again. |
 | `refinePendingAriaLabel`   | Refining text                                 |
-| `refineSuccessAriaLabel`   | Text refined. Undo is available.              |
+| `refineSuccessAriaLabel`   | Text refined                                  |
 | `refineUndoAriaLabel`      | Original text restored.                       |
 | `refineUnchangedAriaLabel` | No changes were needed.                       |
 
-`styles.colors.refineActionText` and `refineErrorText` set `--se-refine-action-text` and `--se-refine-error-text`; `refineErrorText` defaults to `--text-error` with standalone fallback `#ae2f2f`. `refineActionText` colors the status feedback; unset, the status keeps the kit `CaptionText` styling (`dial-tiny-text`, `--text-secondary`), the same as input captions. The Refine and Undo buttons are kit `GhostButton`s and keep the kit's styling. `styles.typography.refineFeedbackClassName` has no default; the kit caption class applies when it is unset. Direction is inherited; label rows wrap, and feedback uses live regions.
+`styles.colors.refineActionText` and `refineErrorText` set `--se-refine-action-text` and `--se-refine-error-text`; `refineErrorText` defaults to `--text-error` with standalone fallback `#ae2f2f`. `refineActionText` colors the visible status feedback (the no-change message; success and restore are announced only); unset, the status keeps the kit `CaptionText` styling (`dial-tiny-text`, `--text-secondary`), the same as input captions. The Refine with AI, Restore original, and Regenerate buttons are kit `GhostButton`s and keep the kit's styling. `styles.typography.refineFeedbackClassName` has no default; the kit caption class applies when it is unset. Direction is inherited; label rows wrap, and feedback uses live regions.
 
 | Public class key | Class                               | Element        |
 | ---------------- | ----------------------------------- | -------------- |

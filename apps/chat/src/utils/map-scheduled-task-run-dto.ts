@@ -3,61 +3,70 @@ import type {
   ScheduledTaskRunDto,
 } from '@epam/ai-dial-chat-api-client';
 import {
-  ScheduledTaskRunStatus,
-  type ScheduledTaskRunItem,
-} from '@epam/ai-dial-scheduled-tasks';
+  formatScheduledTaskRunDuration,
+  formatScheduledTaskRunTimestamp,
+  toScheduledTaskRunItem,
+  type ScheduledTaskRunDurationLabels,
+  type ScheduledTaskRunItemOptions,
+  type ScheduledTaskRunTimestampLabels,
+} from '@epam/ai-dial-chat-hooks/scheduled-tasks';
+import type { ScheduledTaskRunItem } from '@epam/ai-dial-scheduled-tasks';
 import type { TFunction } from 'i18next';
 import { ScheduledTasksI18nKeys } from '../constants/translation-keys';
 import { conversationIdsMatch } from './conversation-id-match';
 
-const UPSTREAM_STATUS_MAP: Record<string, ScheduledTaskRunStatus> = {
-  Success: ScheduledTaskRunStatus.Success,
-  Error: ScheduledTaskRunStatus.Error,
-  InProgress: ScheduledTaskRunStatus.InProgress,
-  Missed: ScheduledTaskRunStatus.Missed,
-};
+const buildRunDurationLabels = (
+  t: TFunction,
+): ScheduledTaskRunDurationLabels => ({
+  hours: (count) =>
+    t(ScheduledTasksI18nKeys.DetailHistoryDurationHours, { count }),
+  minutes: (count) =>
+    t(ScheduledTasksI18nKeys.DetailHistoryDurationMinutes, { count }),
+  seconds: (count) =>
+    t(ScheduledTasksI18nKeys.DetailHistoryDurationSeconds, { count }),
+  suffix: (duration) =>
+    t(ScheduledTasksI18nKeys.DetailHistoryDurationSuffix, { duration }),
+});
 
-const isSameDay = (a: Date, b: Date): boolean =>
-  a.getFullYear() === b.getFullYear() &&
-  a.getMonth() === b.getMonth() &&
-  a.getDate() === b.getDate();
+const buildRunTimestampLabels = (
+  t: TFunction,
+): ScheduledTaskRunTimestampLabels => ({
+  todayAt: (time) => t(ScheduledTasksI18nKeys.DetailHistoryTodayAt, { time }),
+  dateAt: (date, time) =>
+    t(ScheduledTasksI18nKeys.DetailHistoryDateAt, { date, time }),
+});
 
-/**
- * Formats a run's `startTime` as "today at 9:01 AM" when it falls on the
- * current calendar day, or "Jul 17 at 9:01 AM" otherwise, then appends a
- * `(99s)` duration suffix when `durationSeconds` is present.
- */
+const buildRunItemOptions = (
+  t: TFunction,
+  conversations: ConversationListItemDto[],
+): ScheduledTaskRunItemOptions => ({
+  timestampLabels: buildRunTimestampLabels(t),
+  durationLabels: buildRunDurationLabels(t),
+  conversations,
+  conversationIdsMatch,
+});
+
+/** Formats a run's duration as `(45s)`, `(1m 1s)` or `(1h 2m 3s)`, or returns `undefined` when it is absent. */
+export const formatRunDuration = (
+  durationSeconds: number | undefined,
+  t: TFunction,
+): string | undefined =>
+  formatScheduledTaskRunDuration(durationSeconds, buildRunDurationLabels(t));
+
+/** Formats a run's `startTime` as "today at 9:01 AM" or "Jul 17 at 9:01 AM", then appends a `(1m 1s)` duration suffix when `durationSeconds` is present. */
 export const formatRunTimestamp = (
   startTime: string,
   durationSeconds: number | undefined,
   t: TFunction,
-): string => {
-  const start = new Date(startTime);
-  const timeLabel = new Intl.DateTimeFormat(undefined, {
-    timeStyle: 'short',
-  }).format(start);
+): string =>
+  formatScheduledTaskRunTimestamp(
+    startTime,
+    durationSeconds,
+    buildRunTimestampLabels(t),
+    { durationLabels: buildRunDurationLabels(t) },
+  );
 
-  const dateLabel = isSameDay(start, new Date())
-    ? t(ScheduledTasksI18nKeys.DetailHistoryTodayAt, { time: timeLabel })
-    : t(ScheduledTasksI18nKeys.DetailHistoryDateAt, {
-        date: new Intl.DateTimeFormat(undefined, {
-          month: 'short',
-          day: 'numeric',
-        }).format(start),
-        time: timeLabel,
-      });
-
-  if (durationSeconds == null) return dateLabel;
-
-  return `${dateLabel} ${t(ScheduledTasksI18nKeys.DetailHistoryDurationSuffix, { seconds: durationSeconds })}`;
-};
-
-/**
- * Finds the loaded conversation-list item matching a run's `conversationId`,
- * tolerating id-format differences (e.g. a `conversations/` resource-path
- * prefix) via `conversationIdsMatch`. Returns `undefined` when the run has no
- * conversation id or no match is loaded yet.
- */
+/** Finds the loaded conversation-list item matching a run's `conversationId`, tolerating id-format differences via `conversationIdsMatch`. */
 export const findMatchingConversation = (
   conversationId: string | undefined,
   conversations: ConversationListItemDto[],
@@ -71,20 +80,15 @@ export const mapScheduledTaskRunDtoToItem = (
   run: ScheduledTaskRunDto,
   t: TFunction,
   conversations: ConversationListItemDto[],
-): ScheduledTaskRunItem => ({
-  id: run.id,
-  status: UPSTREAM_STATUS_MAP[run.status] ?? ScheduledTaskRunStatus.Missed,
-  timestampLabel: formatRunTimestamp(run.startTime, run.durationSeconds, t),
-  conversationId: run.conversationId,
-  isUnread:
-    findMatchingConversation(run.conversationId, conversations)?.isUnread ===
-    true,
-});
+): ScheduledTaskRunItem =>
+  toScheduledTaskRunItem(run, buildRunItemOptions(t, conversations));
 
 /** Maps a list of `ScheduledTaskRunDto` to lib-facing run items, preserving order. */
 export const mapScheduledTaskRunDtosToItems = (
   runs: ScheduledTaskRunDto[],
   t: TFunction,
   conversations: ConversationListItemDto[],
-): ScheduledTaskRunItem[] =>
-  runs.map((run) => mapScheduledTaskRunDtoToItem(run, t, conversations));
+): ScheduledTaskRunItem[] => {
+  const options = buildRunItemOptions(t, conversations);
+  return runs.map((run) => toScheduledTaskRunItem(run, options));
+};

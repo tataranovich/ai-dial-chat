@@ -30,8 +30,8 @@ const HalloweenSkeletons: FC = () => {
   );
   const [plan, setPlan] = useState<SkeletonPlan | null>(null);
   const [ended, setEnded] = useState(false);
-  const stopped = useRef(false),
-    host = useRef<HTMLDivElement>(null);
+  const stopped = useRef(false);
+  const host = useRef<HTMLDivElement>(null);
   const stop = useCallback(() => {
     stopped.current = true;
     setEnded(true);
@@ -109,7 +109,7 @@ const HalloweenSkeletons: FC = () => {
   return (
     <div
       ref={host}
-      className="pointer-events-none absolute inset-0 select-none overflow-clip"
+      className="pointer-events-none absolute inset-0 overflow-clip select-none"
       aria-hidden="true"
       inert
       data-halloween-scene={HalloweenScene.Skeletons}

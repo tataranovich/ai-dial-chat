@@ -9,11 +9,18 @@ import {
   ToolsetSigninI18nKeys,
 } from '../../constants/translation-keys';
 import {
+  buildScheduleLabel,
+  getDeleteErrorMessageKey,
   mapScheduledTaskDtoToItem,
   mapScheduledTaskDtosToItems,
   resolveScheduledTaskErrorMessage,
 } from '../map-scheduled-task-dto';
 
+/*
+ * The schedule rules themselves are covered by
+ * libs/chat-hooks/src/scheduled-task/tests/scheduled-task-display.spec.ts;
+ * these cases prove each formatter reaches `t` with the app's key and options.
+ */
 const fakeT = ((key: string, options?: Record<string, unknown>): string =>
   options ? `${key}:${JSON.stringify(options)}` : key) as TFunction;
 
@@ -24,38 +31,25 @@ const buildDto = (overrides?: Partial<ScheduledTaskDto>): ScheduledTaskDto => ({
   ...overrides,
 });
 
-describe('mapScheduledTaskDtoToItem', () => {
+const cron = (fields: Record<string, string>): Partial<ScheduledTaskDto> => ({
+  trigger: { cron: { fields } },
+});
+
+describe('buildScheduleLabel', () => {
   beforeEach(() => {
-    vi.stubEnv('TZ', 'UTC');
+    const options = new Intl.DateTimeFormat().resolvedOptions();
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      ...options,
+      timeZone: 'UTC',
+    });
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
-  it('formats a date trigger via the once translation key with a locale-formatted date', () => {
-    const result = mapScheduledTaskDtoToItem(buildDto(), fakeT);
-
-    expect(result.id).toBe('sched_1');
-    expect(result.displayName).toBe('Daily summary');
-    expect(result.scheduleLabel).toMatch(
-      new RegExp(`^${ScheduledTasksI18nKeys.CardScheduleOnceAt}:`),
-    );
-  });
-
-  it('uses the supplied locale for dates and weekdays throughout list mapping', () => {
-    const dateTask = buildDto();
-    const weeklyTask = buildDto({
-      trigger: {
-        cron: { fields: { hour: '9', minute: '0', day_of_week: 'Monday' } },
-      },
-    });
-    const items = mapScheduledTaskDtosToItems(
-      [dateTask, weeklyTask],
-      fakeT,
-      'fr',
-    );
-    expect(items[0].scheduleLabel).toBe(
+  it('passes a locale-formatted date to the once key', () => {
+    expect(buildScheduleLabel(buildDto(), fakeT, 'fr')).toBe(
       `${ScheduledTasksI18nKeys.CardScheduleOnceAt}:${JSON.stringify({
         date: new Intl.DateTimeFormat('fr', {
           dateStyle: 'medium',
@@ -63,253 +57,107 @@ describe('mapScheduledTaskDtoToItem', () => {
         }).format(new Date('2026-07-24T09:00:00.000Z')),
       })}`,
     );
-    expect(items[1].scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleWeeklyAt}:${JSON.stringify({ day: 'lundi', time: '09:00' })}`,
-    );
   });
 
-  it('formats a weekly cron trigger via the weekly translation key', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({
-        trigger: {
-          cron: { fields: { hour: '9', minute: '0', day_of_week: 'Monday' } },
-        },
-      }),
-      fakeT,
-    );
+  it.each([
+    [
+      cron({ minute: '*/15' }),
+      ScheduledTasksI18nKeys.CardScheduleEveryNMinutes,
+      { count: 15 },
+    ],
+    [
+      cron({ minute: '0' }),
+      ScheduledTasksI18nKeys.CardScheduleHourlyAt,
+      { minute: '00' },
+    ],
+    [
+      cron({ hour: '9', minute: '0' }),
+      ScheduledTasksI18nKeys.CardScheduleDailyAt,
+      { time: '09:00' },
+    ],
+    [
+      cron({ hour: '9', minute: '0', day_of_week: 'Monday' }),
+      ScheduledTasksI18nKeys.CardScheduleWeeklyAt,
+      { day: 'Monday', time: '09:00' },
+    ],
+    [
+      cron({ hour: '9', minute: '0', day_of_week: '0,2,4' }),
+      ScheduledTasksI18nKeys.CardScheduleWeeklyAt,
+      { day: 'Monday, Wednesday, and Friday', time: '09:00' },
+    ],
+    [
+      cron({ hour: '9', minute: '0', day: '15' }),
+      ScheduledTasksI18nKeys.CardScheduleMonthlyAt,
+      { day: '15', time: '09:00' },
+    ],
+  ])(
+    'renders a recurring trigger through %#: its key and options',
+    (overrides, key, options) => {
+      expect(buildScheduleLabel(buildDto(overrides), fakeT, 'en')).toBe(
+        `${key}:${JSON.stringify(options)}`,
+      );
+    },
+  );
 
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleWeeklyAt}:${JSON.stringify({ day: 'Monday', time: '09:00' })}`,
-    );
-  });
-
-  it('formats a monthly cron trigger via the monthly translation key', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({
-        trigger: {
-          cron: { fields: { hour: '9', minute: '0', day: '15' } },
-        },
-      }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleMonthlyAt}:${JSON.stringify({ day: '15', time: '09:00' })}`,
-    );
-  });
-
-  it('formats a plain daily cron trigger via the daily translation key', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ trigger: { cron: { fields: { hour: '9', minute: '0' } } } }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleDailyAt}:${JSON.stringify({ time: '09:00' })}`,
-    );
-  });
-
-  it('shows invalid schedule when cron fields are empty', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ trigger: { cron: { fields: {} } } }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
+  it('renders an unreadable trigger with the invalid key', () => {
+    expect(buildScheduleLabel(buildDto(cron({})), fakeT)).toBe(
       ScheduledTasksI18nKeys.EditInvalidScheduleLabel,
     );
   });
 
-  it('formats an hourly cron trigger (no hour field) via the hourly translation key', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ trigger: { cron: { fields: { minute: '0' } } } }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleHourlyAt}:${JSON.stringify({ minute: '00' })}`,
-    );
-  });
-
-  it('formats an every-N-minutes cron trigger via the every-N-minutes translation key', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ trigger: { cron: { fields: { minute: '*/15' } } } }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleEveryNMinutes}:${JSON.stringify({ count: 15 })}`,
-    );
-  });
-
-  it('falls back to the generic recurring label when hour is a wildcard with no minute', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ trigger: { cron: { fields: { hour: '*' } } } }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
+  it('renders an unrecognized trigger with the recurring fallback key', () => {
+    expect(buildScheduleLabel(buildDto(cron({ hour: '*' })), fakeT)).toBe(
       ScheduledTasksI18nKeys.CardScheduleRecurringFallback,
     );
   });
-
-  it('leaves missing optional fields undefined with no thrown errors', () => {
-    const result = mapScheduledTaskDtoToItem(buildDto(), fakeT);
-
-    expect(result.descriptionPreview).toBeUndefined();
-    expect(result.locationSegments).toBeUndefined();
-  });
-
-  it('maps description to descriptionPreview unmodified', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ description: 'Summarizes unread inbox items every morning' }),
-      fakeT,
-    );
-
-    expect(result.descriptionPreview).toBe(
-      'Summarizes unread inbox items every morning',
-    );
-  });
-
-  it('maps isActive false to the item unmodified', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ isActive: false }),
-      fakeT,
-    );
-
-    expect(result.isActive).toBe(false);
-  });
-
-  it('maps isActive true to the item unmodified', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ isActive: true }),
-      fakeT,
-    );
-
-    expect(result.isActive).toBe(true);
-  });
-
-  it('maps a missing isActive to undefined without throwing', () => {
-    const result = mapScheduledTaskDtoToItem(buildDto(), fakeT);
-
-    expect(result.isActive).toBeUndefined();
-  });
-
-  it('maps isCompleted true to the item unmodified', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ isCompleted: true, isActive: false }),
-      fakeT,
-    );
-
-    expect(result.isCompleted).toBe(true);
-    expect(result.isActive).toBe(false);
-  });
-
-  it('maps isCompleted false to the item unmodified', () => {
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({ isCompleted: false }),
-      fakeT,
-    );
-
-    expect(result.isCompleted).toBe(false);
-  });
-
-  it('maps a missing isCompleted to undefined without throwing', () => {
-    const result = mapScheduledTaskDtoToItem(buildDto(), fakeT);
-
-    expect(result.isCompleted).toBeUndefined();
-  });
 });
 
-describe('mapScheduledTaskDtoToItem — recurring schedule timezone conversion', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it('shows the local equivalent of a stored UTC daily time', () => {
-    vi.stubEnv('TZ', 'Europe/Warsaw'); // UTC+2 in summer: local = UTC + 2h
-
+describe('mapScheduledTaskDtoToItem', () => {
+  it('builds the item with the translated schedule label', () => {
     const result = mapScheduledTaskDtoToItem(
-      buildDto({ trigger: { cron: { fields: { hour: '7', minute: '0' } } } }),
+      buildDto({ description: 'Summary', isActive: true }),
       fakeT,
     );
 
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleDailyAt}:${JSON.stringify({ time: '09:00' })}`,
+    expect(result).toMatchObject({
+      id: 'sched_1',
+      displayName: 'Daily summary',
+      descriptionPreview: 'Summary',
+      isActive: true,
+    });
+    expect(result.scheduleLabel).toMatch(
+      new RegExp(`^${ScheduledTasksI18nKeys.CardScheduleOnceAt}:`),
     );
-  });
-
-  it.skip('shows the local weekday when the stored UTC day rolls back a day', () => {
-    vi.stubEnv('TZ', 'Europe/Warsaw'); // UTC+2 in summer: local = UTC + 2h
-
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({
-        trigger: {
-          cron: { fields: { hour: '23', minute: '0', day_of_week: '6' } }, // UTC Sunday
-        },
-      }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleWeeklyAt}:${JSON.stringify({ day: 'Monday', time: '01:00' })}`, // local Monday 01:00
-    );
-  });
-
-  it('leaves a non-numeric day_of_week untouched', () => {
-    vi.stubEnv('TZ', 'Europe/Warsaw');
-
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({
-        trigger: {
-          cron: { fields: { hour: '9', minute: '0', day_of_week: 'Monday' } },
-        },
-      }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleWeeklyAt}:${JSON.stringify({ day: 'Monday', time: '11:00' })}`,
-    );
-  });
-
-  it('shows the local day-of-month when the stored UTC day rolls forward a day', () => {
-    vi.stubEnv('TZ', 'Europe/Warsaw'); // UTC+2 in summer: local = UTC + 2h
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'));
-
-    const result = mapScheduledTaskDtoToItem(
-      buildDto({
-        trigger: {
-          cron: { fields: { hour: '23', minute: '0', day: '14' } }, // UTC day 14
-        },
-      }),
-      fakeT,
-    );
-
-    expect(result.scheduleLabel).toBe(
-      `${ScheduledTasksI18nKeys.CardScheduleMonthlyAt}:${JSON.stringify({ day: '15', time: '01:00' })}`, // local day 15
-    );
-
-    vi.useRealTimers();
   });
 });
 
 describe('mapScheduledTaskDtosToItems', () => {
   it('maps every dto in the list, preserving order', () => {
-    const result = mapScheduledTaskDtosToItems(
-      [buildDto({ id: '1' }), buildDto({ id: '2' })],
-      fakeT,
-    );
+    expect(
+      mapScheduledTaskDtosToItems(
+        [buildDto({ id: '1' }), buildDto({ id: '2' })],
+        fakeT,
+      ).map((item) => item.id),
+    ).toEqual(['1', '2']);
+  });
+});
 
-    expect(result.map((item) => item.id)).toEqual(['1', '2']);
+describe('getDeleteErrorMessageKey', () => {
+  it.each([
+    [404, ScheduledTasksI18nKeys.DetailDeleteNotFoundError],
+    [409, ScheduledTasksI18nKeys.DetailDeleteNotFoundError],
+    [502, ScheduledTasksI18nKeys.DetailDeleteRetryableError],
+    [500, ScheduledTasksI18nKeys.DetailDeleteGenericError],
+    [undefined, ScheduledTasksI18nKeys.DetailDeleteGenericError],
+  ])('maps status %s to %s', (status, key) => {
+    expect(getDeleteErrorMessageKey(status)).toBe(key);
   });
 });
 
 describe('resolveScheduledTaskErrorMessage', () => {
   const t = ((key: string) => key) as TFunction;
 
-  it('prefers the admin-consent message over any upstream reason', () => {
+  it('translates the admin-consent message for a revoked consent', () => {
     expect(
       resolveScheduledTaskErrorMessage(
         {
@@ -325,26 +173,20 @@ describe('resolveScheduledTaskErrorMessage', () => {
   it("shows DIAL Scheduler's reason when there is no known code", () => {
     expect(
       resolveScheduledTaskErrorMessage(
-        {
-          code: ScheduledTaskErrorCode.ScheduledTaskSkillUnsupported,
-          upstreamMessage: ' Quota exceeded for schedules ',
-        },
+        { upstreamMessage: ' Quota exceeded for schedules ' },
         ScheduledTasksI18nKeys.EditErrorNotification,
         t,
       ),
     ).toBe('Quota exceeded for schedules');
   });
 
-  it.each([undefined, '', '   '])(
-    'falls back to the localized page message for upstream reason %j',
-    (upstreamMessage) => {
-      expect(
-        resolveScheduledTaskErrorMessage(
-          { upstreamMessage },
-          ScheduledTasksI18nKeys.EditErrorNotification,
-          t,
-        ),
-      ).toBe(ScheduledTasksI18nKeys.EditErrorNotification);
-    },
-  );
+  it('translates the page fallback key when the scheduler gave no reason', () => {
+    expect(
+      resolveScheduledTaskErrorMessage(
+        { upstreamMessage: '   ' },
+        ScheduledTasksI18nKeys.EditErrorNotification,
+        t,
+      ),
+    ).toBe(ScheduledTasksI18nKeys.EditErrorNotification);
+  });
 });

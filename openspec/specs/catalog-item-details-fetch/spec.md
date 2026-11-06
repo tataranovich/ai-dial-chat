@@ -184,6 +184,12 @@ limit" per row (e.g. "0 / Follows cost limit"), with zero `role="progressbar"`
 nodes and the word `Unlimited` nowhere on screen. That is the correct rendering, not a fixture in
 an unexpected shape.
 
+#### Scenario: Limits tab points to the full Usage page
+
+- **WHEN** a model's Limits tab renders and the `HideUsagePage` overlay feature is off
+- **THEN** `CatalogView` passes `detailsLimitsFooterNote` to `Catalog`: the `catalog.details.limits.footerNote` translation ("Model-specific limits only. To view your full usage limits, go to the Usage limits page."), whose `<link>` tag becomes a router link to `ROUTES.Usage`
+- **AND** when `HideUsagePage` is on, `CatalogView` passes no footer note, so the tab shows no footer at all
+
 #### Scenario: Limit stat with no usable total
 
 - **WHEN** a limit stat's `total` is zero, negative, or not finite
@@ -268,7 +274,7 @@ The `getDeploymentDetails` endpoint SHALL satisfy the following generated-client
 
 - **State ownership**: no new React Context or hook is introduced. The fetch is triggered by `libs/catalog`'s `Catalog` component (owns `isDetailsLoading`/fetched-details state) and resolved by the `onFetchDetails` callback of `useCatalogItemDetails` in `libs/chat-hooks` (owns the DTO→domain mapping), which `CatalogView` receives through `useCatalogItems`; no state is lifted into `DeploymentsContext` since detail data is panel-scoped and not shared across the app.
 - **Generated-client impact**: OpenAPI `operationId: 'getDeploymentDetails'` on the new controller method, exposed on the generated `DeploymentsApi` as `getDeploymentDetails({ deployment })`. Request: path param `deployment: string`. Response DTO: `DeploymentDetailsDto`. The frontend wrapper uses the normal (non-`Raw`) generated method, matching the existing `getDeploymentConfiguration`/`getDeploymentLimits` wrapper pattern. Model usage limits reuse the already-existing `getDeploymentLimits` generated method through `apps/chat/src/server-api/deployment-limits.ts`; no generated client changes are required for the UI tab.
-- **i18n**: the Limits tab's user-visible strings are `catalog.details.tabLimits` and `catalog.details.limits.*` — `tokenGroup`, `value`, `followsCostLimit`, `followsCostLimitAriaLabel`, and `progressAriaLabel` (there is no `unlimitedValue` or `spentLabel` key). These keys MUST live in `apps/chat/src/i18n/locales/en.json` and be referenced via `CatalogI18nKeys`. The day/week/month row labels (`DeploymentLimitsLabels.tokensPerDay`/`tokensPerWeek`/`tokensPerMonth`) reuse the Usage page's `UsageI18nKeys.TodayTitle`/`ThisWeekTitle`/`ThisMonthTitle`, resolved in `useCatalogItems`.
+- **i18n**: the Limits tab's user-visible strings are `catalog.details.tabLimits` and `catalog.details.limits.*` — `tokenGroup`, `value`, `followsCostLimit`, `followsCostLimitAriaLabel`, `progressAriaLabel`, and `footerNote` (there is no `unlimitedValue` or `spentLabel` key). These keys MUST live in `apps/chat/src/i18n/locales/en.json` and be referenced via `CatalogI18nKeys`. The day/week/month row labels (`DeploymentLimitsLabels.tokensPerDay`/`tokensPerWeek`/`tokensPerMonth`) reuse the Usage page's `UsageI18nKeys.TodayTitle`/`ThisWeekTitle`/`ThisMonthTitle`, resolved in `useCatalogItems`.
 - **RTL / direction impact**: the Limits tab UI MUST use logical/flexible layout utilities only; it MUST NOT introduce physical left/right classes or directional icons. Progress rows contain text and a progress bar, so no icon mirroring is required.
 - **Feature flag**: not gated behind `ENABLED_FEATURES` / `ENABLED_FEATURES_ROLES` — this is a data-completeness fix for an existing, already-shipped catalog details panel, not a new feature surface.
 - **Memoisation**: `onFetchDetails` in `useCatalogItemDetails` MUST be wrapped in `useCallback`, and the `CatalogDetailsApi` adapter and labels objects in `useCatalogItems` in `useMemo`; the DTO-to-`EntitySpecificDetails` mapping functions and deployment-limits mapper MUST remain pure functions (no new memoisation needed beyond the callback itself, consistent with `mapEntityDetailsToCatalogDetails` today).
@@ -676,3 +682,226 @@ field from `DeploymentItemDto`/`DialToolsetDto`.
   `DeploymentItemDto`/`DialToolsetDto` into a `CatalogItem`
 - **THEN** the resulting `CatalogItem` has no `intro` property
 
+### Requirement: The details header's entity type label is host-supplied
+
+`EntityTypeLabel` (`libs/chat-shared/src/components/EntityTypeLabel/EntityTypeLabel.tsx`) SHALL accept `label?: string` and render it in place of the raw `type`, keeping the color derived from `type`. `EntityHeader` (`libs/chat-shared/src/components/EntityHeader/EntityHeader.tsx`) SHALL accept `typeLabel?: string` and forward it.
+
+`ItemDetailsTexts` (`libs/catalog/src/models/item-details-props.ts`) SHALL accept `entityTypeLabels?: Partial<Record<CatalogEntityType, string>>`. The details header (`libs/catalog/src/components/Details/Header/Header.tsx`), rendered by `DetailsPanel` and exported as `DetailsHeader`, SHALL pass `texts.entityTypeLabels[item.type]` to `EntityHeader` as `typeLabel`. A type without an entry SHALL keep the raw value. The lib performs no translation; no app currently passes `entityTypeLabels`, so this introduces no i18n key, and the label is plain inline text with no direction impact.
+
+#### Scenario: A host translates the type
+
+- **WHEN** `DetailsHeader` renders a toolset with `texts={{ entityTypeLabels: { TOOLSET: 'Toolset' } }}`
+- **THEN** the header shows "Toolset" and not "TOOLSET"
+
+#### Scenario: Default unchanged
+
+- **WHEN** no `entityTypeLabels` entry exists for the item's type
+- **THEN** the header shows the raw type value, as before
+### Requirement: About, Overview, Pricing and Tools tabs are public, reusable exports of `@epam/ai-dial-catalog`
+
+`libs/catalog/src/index.ts` SHALL export these, so a host can render a `CatalogItem`'s details inside its own surface, without `DetailsPanel`:
+
+- `AboutTab` (`libs/catalog/src/components/Details/TabsContent/About.tsx`);
+- `OverviewTab`, a public alias of the internal `Overview` (`libs/catalog/src/components/Details/TabsContent/Overview.tsx`);
+- `PricingTab`, a public alias of the internal `Pricing` (`libs/catalog/src/components/Details/TabsContent/Pricing.tsx`);
+- `ToolsTab`, a public alias of the internal `Tools` (`libs/catalog/src/components/Details/TabsContent/Tools/Tools.tsx`);
+- the props types `AboutTabProps`, `OverviewTabProps`, `PricingTabProps`, `ToolsTabProps`, and `ToolsLabels`.
+
+`ContentTab` and `LimitsTab` stay exported as before. The module-private `AboutTabProps` interface SHALL become exported.
+
+`ToolsTab` SHALL accept `labels?: Partial<ToolsLabels>` for the grid column headings that are hardcoded today:
+
+- `inputName`, `inputType` and `inputRequired`, defaulting to `'Name'`, `'Type'` and `'Required'`;
+- `annotationKey` and `annotationValue`, defaulting to `'Key'` and `'Value'`.
+
+The defaults SHALL leave the details panel's rendered output unchanged.
+
+The four components SHALL remain presentation-only. They SHALL NOT import a generated API client, a DIAL Core DTO, an endpoint path, `react-i18next`, a locale, or a date/time `Intl` constructor, and SHALL receive every visible string from their props (with English defaults where a default exists today).
+
+`libs/catalog/README.md` SHALL document the four exports with a minimal, compiling usage example, and `npm run validate:docs` SHALL pass.
+
+#### Scenario: A host renders the details content without the panel
+
+- **WHEN** an application imports `AboutTab`, `OverviewTab`, `PricingTab` and `ToolsTab` from `@epam/ai-dial-catalog` and passes them a `CatalogItem`'s `description`/`topics` and `details.overview`/`details.pricing`/`details.tools`
+- **THEN** each renders its content with no `DetailsPanel`, catalog shell or catalog item callback involved
+
+#### Scenario: Tools column headings are host-supplied
+
+- **WHEN** `ToolsTab` is rendered with `labels={{ inputName: 'Nom' }}` for a tool with input parameters
+- **THEN** the parameters grid heading reads "Nom", and the other headings keep their English defaults
+
+#### Scenario: The details panel is unchanged
+
+- **WHEN** `DetailsPanel` renders a toolset with tools
+- **THEN** its Tools tab output is identical to before the change, including the "Name", "Type", "Required", "Key" and "Value" headings
+
+#### Scenario: Architecture guard — the tabs stay presentation-only
+
+- **WHEN** `libs/catalog`'s details tab components are linted and type-checked
+- **THEN** none of them imports a generated API client, a backend DTO, `react-i18next` or a date/time `Intl` constructor, and the module-boundary lint passes
+
+### Requirement: The details tab list is a public rule shared with `DetailsPanel`
+
+`libs/catalog/src/utils/details-tabs.ts` SHALL export `getCatalogDetailsTabs(item: CatalogItem, options?: { isConnectHidden?: boolean }): CatalogDetailsTab[]`. It SHALL be re-exported from `@epam/ai-dial-catalog/mapping` (`libs/catalog/src/entry-points/mapping.ts`) and from the package root. It SHALL return, in this order:
+
+1. `About`, unless the item's type is content-first (`Prompt`, `Skill`);
+2. `Content`, when the item is content-first or `details.promptContent` is present;
+3. `Overview`, when `details.overview` is present;
+4. `Pricing`, when `details.pricing` is present;
+5. `Limits`, when `details.limits` is present;
+6. `Tools`, when `details.tools` is present;
+7. `Api` (Connect), when `details.api` names a connectable endpoint (an `endpointUrl` or a non-empty `endpoints` list), unless `options.isConnectHidden` is `true`.
+
+`DetailsPanel` SHALL build its tab list from `getCatalogDetailsTabs`, keeping only the labels and the first-tab selection logic local. The function SHALL be pure and SHALL import no UI component, so `/mapping` stays headless.
+
+#### Scenario: Toolset with tools
+
+- **WHEN** `getCatalogDetailsTabs` receives a toolset item whose details carry `overview` and `tools`
+- **THEN** it returns `[About, Overview, Tools]`
+
+#### Scenario: Model with everything
+
+- **WHEN** it receives a model item whose details carry `overview`, `pricing`, `limits` and a connectable `api`
+- **THEN** it returns `[About, Overview, Pricing, Limits, Api]`, and `[About, Overview, Pricing, Limits]` with `{ isConnectHidden: true }`
+
+#### Scenario: Skill before details resolve
+
+- **WHEN** it receives a skill item with no `details`
+- **THEN** it returns `[Content]`, so the tab a skill opens on never shifts as its details load
+
+#### Scenario: The panel and the helper agree
+
+- **WHEN** `DetailsPanel` renders any item
+- **THEN** the ids of its tabs, in order, equal `getCatalogDetailsTabs(item)`
+
+### Requirement: Entity-details Overview labels are host-supplied
+
+`libs/chat-hooks/src/catalog/map-entity-details-to-catalog.ts` SHALL export:
+
+- an `EntityDetailsLabels` interface with one field per Overview section title and spec label it renders:
+  - section titles: `capabilitiesTitle`, `specificationTitle`, `configurationTitle`;
+  - spec labels: `tools`, `parallelToolCalls`, `reasoningEfforts`, `skills`, `provider`, `vendor`, `license`, `knowledgeCutoffDate`, `parameters`, `hostedBy`, `releaseDate`, `contextWindow`, `maxOutputTokens`, `inputModalities`, `inputAttachments`, `routes`, `configurationSchema`, `authentication`, `authorizationEndpoint`, `tokenEndpoint`, `oauthScopes`;
+- `DEFAULT_ENTITY_DETAILS_LABELS`, holding today's English strings.
+
+`mapEntityDetailsToCatalogDetails(details, labels?)` SHALL accept `labels?: Partial<EntityDetailsLabels>` and merge it over the defaults. `useCatalogItemDetails` (`libs/chat-hooks/src/catalog/useCatalogItemDetails.ts`) SHALL accept `entityDetailsLabels?: Partial<EntityDetailsLabels>` in its options and forward it. Callers that pass nothing SHALL get output identical to today.
+
+The labels SHALL be the only strings the host supplies: section and row order, omit-when-absent rules, value formatting and the input-modality and pricing-key labels stay as they are. The chat app SHALL keep passing nothing; translating its Overview is a follow-up.
+
+#### Scenario: Defaults are unchanged
+
+- **WHEN** `mapEntityDetailsToCatalogDetails(details)` runs on the existing test fixtures
+- **THEN** every section title and spec label equals today's English output
+
+#### Scenario: A host overrides one label
+
+- **WHEN** a host passes `{ specificationTitle: 'Spécification', hostedBy: 'Hébergé par' }`
+- **THEN** only those two strings change in the returned Overview sections
+
+#### Scenario: The hook forwards labels
+
+- **WHEN** `useCatalogItemDetails` is called with `entityDetailsLabels` and its `onFetchDetails` resolves a toolset
+- **THEN** the returned `overview` uses the supplied labels
+### Requirement: Connect tab, details header and credentials views are public exports of `@epam/ai-dial-catalog`
+
+`libs/catalog/src/index.ts` SHALL export these, so a host can render a `CatalogItem`'s Connect tab, header actions and toolset credentials UI in its own surface, without `DetailsPanel`:
+
+- `ApiTab`, a public alias of the internal `ApiDetails` (`libs/catalog/src/components/Details/ApiDetails.tsx`), and `ApiTabProps`;
+- `DetailsHeader`, a public alias of the internal `Header` (`libs/catalog/src/components/Details/Header/Header.tsx`), and `DetailsHeaderProps`;
+- `CredentialsBanner` (`libs/catalog/src/components/Details/Credentials/CredentialsBanner/CredentialsBanner.tsx`) and `CredentialsBannerProps`;
+- `CredentialsApiKeyOverlay` (`libs/catalog/src/components/Details/Header/CredentialsApiKeyOverlay/CredentialsApiKeyOverlay.tsx`) and `CredentialsApiKeyOverlayProps`;
+- `CredentialsManagementPanel` (`libs/catalog/src/components/Details/Credentials/CredentialsManagementPanel/CredentialsManagementPanel.tsx`) and `CredentialsManagementPanelProps`.
+
+`libs/catalog/src/entry-points/mapping.ts` SHALL export `CredentialsBannerState` and `getCredentialsBannerState`, and the package root SHALL re-export them.
+
+The components SHALL keep their current behaviour and props; `DetailsPanel`'s rendered output SHALL be unchanged. `libs/catalog/README.md` SHALL document the exports with compiling examples, and `npm run validate:docs` SHALL pass.
+
+#### Scenario: A host renders the Connect tab
+
+- **WHEN** an application imports `ApiTab` from `@epam/ai-dial-catalog` and passes it a `CatalogItem`'s `details.api`
+- **THEN** it renders the endpoint and code snippets with no `DetailsPanel` involved
+
+#### Scenario: A host renders the credentials banner
+
+- **WHEN** an application calls `getCredentialsBannerState(item.credentials)` from `@epam/ai-dial-catalog/mapping` and passes a defined result to `CredentialsBanner`
+- **THEN** the banner shows the same copy `DetailsPanel` shows for that item
+
+#### Scenario: The details panel is unchanged
+
+- **WHEN** `DetailsPanel` renders a toolset with credentials and a connectable API
+- **THEN** its header, banner and Connect tab are identical to before the change
+### Requirement: The Tools tab offers a search field and a tool count
+
+`Tools` (`libs/catalog/src/components/Details/TabsContent/Tools/Tools.tsx`, public as `ToolsTab`) SHALL render, above the tool list, whenever `tools` is defined:
+
+- a search field (ui-kit `Search`) whose placeholder and accessible name are `labels.searchPlaceholder` (default `'Search...'`) and whose clear button is named `labels.searchClearLabel` (default `'Clear search'`);
+- the text `labels.toolCount(n)` (default `` `${n} tools` ``), where `n` is the number of tools currently shown, in a `role="status"` polite live region.
+
+The list SHALL show only the tools whose `name` or `description` contains the trimmed search query, ignoring case; with an empty query every tool shows. When a non-empty query matches no tool, the tab SHALL show `labels.noResults` (default `'No results found'`).
+
+`DetailsPanel` SHALL forward `ItemDetailsTexts.toolsSearchPlaceholder`, `toolsSearchClearLabel`, `toolsCountLabel` and `toolsNoResultsLabel` to these labels, leaving the defaults in place for any it is not given. The chat app's catalog SHALL pass translated strings, using `catalog.details.toolCount` (pluralised) for the count.
+
+The tab SHALL stay presentation-only: the query is local state and no string is read from i18n inside the lib.
+
+#### Scenario: The tab shows the total and a search field
+
+- **WHEN** `ToolsTab` renders a toolset with 27 tools and an empty query
+- **THEN** a search field labelled "Search..." is shown, all 27 tools are listed, and the status reads "27 tools"
+
+#### Scenario: Search narrows by name or description
+
+- **WHEN** the user types "NOTION" into the search field
+- **THEN** only tools whose name or description contains "notion" (any case) are listed, and the status reports how many
+
+#### Scenario: Nothing matches
+
+- **WHEN** the query matches no tool
+- **THEN** no tool is listed, the status reads "0 tools", and "No results found" is shown
+
+#### Scenario: Host-supplied strings
+
+- **WHEN** `DetailsPanel` receives `texts.toolsSearchPlaceholder: 'Rechercher'` and a `texts.toolsCountLabel` returning "1 outil" for one tool
+- **THEN** the Tools tab's search field is labelled "Rechercher" and its count uses the host's function, while unset strings keep their English defaults
+
+### Requirement: Model pricing renders every DIAL Core price, including conditional tiers
+
+`mapDeploymentDetailsDtoToEntityDetails` and `mapEntityDetailsToCatalogDetails` (`libs/chat-hooks/src/catalog/map-entity-details-to-catalog.ts`) SHALL turn `modelDetails.pricing` into `CatalogItemPricing.prices` rows as follows. The state is owned by `useCatalogItemDetails`, which already returns the mapped tab data; no new context or hook is introduced.
+
+- Every key except `unit` yields rows. A value SHALL be read in any of DIAL Core's three shapes: a per-unit price string, `{ rate }`, or a conditional tree `{ test: { field, operator, value }, ifTrue, ifFalse }` whose branches are themselves any of the three shapes, to any depth.
+- A conditional tree SHALL yield one row per leaf price. The row's `label` is the key's existing label (`Input tokens`, `Output tokens`, `Cached input`, a humanized unknown key) followed by ` (<conditions>)`, where `<conditions>` lists the condition on each step of the path from the root, joined with `, `.
+- A condition reads `<field> <operator> <value>`: `field` humanized to lower-case words (`promptTokens` → `prompt tokens`), `operator` shown as `=`, `≠`, `>`, `<`, `≥`, `≤`, and a numeric `value` of at least 1 000 shortened to `K`/`M` (`200000` → `200K`). The `ifFalse` branch shows the negated operator (`>` ↔ `≤`, `<` ↔ `≥`, `=` ↔ `≠`).
+- When a test's operator is `>` or `>=`, the `ifFalse` (lower) tier SHALL be listed before the `ifTrue` tier; otherwise `ifTrue` comes first. Rows of one key stay together, and keys keep the existing order (`prompt`, `completion`, `cache_read`/`cacheRead`, `cache_write`/`cacheWrite`, then the rest).
+- Every leaf price is formatted with `formatUnitPrice` (`libs/chat-shared/src/utils/format-price.ts`) exactly as a flat price is.
+- A tree whose `test` lacks a non-empty string `field` or a recognized `operator` SHALL contribute its `rate` when present and otherwise no row; a missing branch contributes no row. Neither case throws.
+- `ModelPriceRow` (`libs/chat-hooks/src/catalog/entity-details.ts`) carries the joined conditions as an optional `condition?: string`; a flat price leaves it unset and its label unchanged.
+
+`libs/catalog` is unchanged: it still receives preformatted `label`/`price` strings. Condition text is English, like the pricing-key labels, and introduces no i18n key; translating pricing labels stays the follow-up recorded under "Entity-details Overview labels are host-supplied". No new UI surface is added, so RTL, accessibility, feature-flag and caching behavior are those of the existing Pricing tab.
+
+#### Scenario: A model priced only by tiers shows its Pricing tab
+
+- **WHEN** a model's `pricing` is `{ unit: 'token', prompt: { test: { field: 'promptTokens', operator: '>', value: '200000' }, ifTrue: '0.000004', ifFalse: '0.000002' } }`
+- **THEN** the Pricing tab is present with the rows `Input tokens (prompt tokens ≤ 200K)` — `$2/M tokens`, then `Input tokens (prompt tokens > 200K)` — `$4/M tokens`
+
+#### Scenario: Several tiered keys keep their key order
+
+- **WHEN** `prompt`, `completion` and `cache_read` are all tiered on `promptTokens > 200000`, with `cache_read` branches `'4.000000000000003e-7'` and `'2.0000000000000002e-7'`
+- **THEN** the six rows are both `Input tokens` tiers, then both `Output tokens` tiers, then `Cached input (prompt tokens ≤ 200K)` — `$0.2/M tokens` and `Cached input (prompt tokens > 200K)` — `$0.4/M tokens`
+
+#### Scenario: Nested conditions join along the path
+
+- **WHEN** `prompt` is `{ test: { field: 'promptTokens', operator: '<=', value: 128000 }, ifTrue: '0.000001', ifFalse: { test: { field: 'completionTokens', operator: '==', value: 0 }, ifTrue: { rate: '0.000002' }, ifFalse: '0.000003' } }`
+- **THEN** the rows are `Input tokens (prompt tokens ≤ 128K)`, `Input tokens (prompt tokens > 128K, completion tokens = 0)` and `Input tokens (prompt tokens > 128K, completion tokens ≠ 0)`, priced `$1`, `$2` and `$3` per 1M tokens
+
+#### Scenario: A `{ rate }` price renders as a flat row
+
+- **WHEN** `cache_read` is `{ rate: '0.000001' }`
+- **THEN** a `Cached input` row with `$1/M tokens` and no condition suffix is shown
+
+#### Scenario: An unreadable test is skipped without failing the mapping
+
+- **WHEN** `prompt` is `'0.000003'` and `completion` is `{ test: { field: 'promptTokens', operator: '~' }, ifTrue: '0.000004' }`
+- **THEN** only the `Input tokens` — `$3/M tokens` row is shown
+
+#### Scenario: Flat prices are unchanged
+
+- **WHEN** a model's `pricing` holds only price strings
+- **THEN** the rows and labels equal the output before this requirement, with no condition suffix

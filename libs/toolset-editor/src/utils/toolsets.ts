@@ -4,9 +4,7 @@ import {
 } from '@epam/ai-dial-builder-form';
 import { ToolsetAuthTypes, WithLogin } from '@epam/ai-dial-chat-hooks';
 import {
-  DEFAULT_TOOLSET_NAME,
   DEFAULT_TOOLSET_VERSION,
-  TOOLSET_METADATA_VALIDATION_OPTIONS,
   ToolsetTransportType,
 } from '../constants/toolsets';
 import type {
@@ -14,38 +12,15 @@ import type {
   ToolsetFormData,
 } from '../models/toolset-form';
 
-/**
- * Returns a storage-safe toolset name that does not collide with any existing
- * name, appending a numeric suffix when the default name is taken.
- */
-export const getStorageSafeUniqueToolsetName = ({
-  defaultName = DEFAULT_TOOLSET_NAME,
-  existingNames,
-}: {
-  /** Candidate name to make unique. Defaults to `DEFAULT_TOOLSET_NAME`. */
-  defaultName?: string;
-  /** Names already taken by the user's toolsets. */
-  existingNames: string[];
-}): string => {
-  const taken = new Set(existingNames);
-  if (!taken.has(defaultName)) return defaultName;
-
-  let suffix = 1;
-  while (taken.has(`${defaultName} ${suffix}`)) suffix += 1;
-  return `${defaultName} ${suffix}`;
-};
-
 const getDefaultAuthFormData = (): ToolsetAuthFormData => ({
   authenticationType: ToolsetAuthTypes.None,
   withLogin: WithLogin.WithoutLogin,
   isLoggedIn: false,
 });
 
-/** Returns the form state a brand-new toolset editor opens with. */
-export const getDefaultToolsetForm = (
-  existingNames: string[] = [],
-): ToolsetFormData => ({
-  name: getStorageSafeUniqueToolsetName({ existingNames }),
+/** Returns the form state a brand-new toolset editor opens with: an empty name and the default version. */
+export const getDefaultToolsetForm = (): ToolsetFormData => ({
+  name: '',
   version: DEFAULT_TOOLSET_VERSION,
   iconUrl: '',
   description: '',
@@ -78,6 +53,32 @@ const isValidEndpointUrlCandidate = (trimmed: string): boolean => {
 export const isValidEndpointUrl = (value: string): boolean =>
   isValidEndpointUrlCandidate(value.trim());
 
+/*
+ * RFC 8707: an absolute URI without a fragment. Any scheme is allowed — DIAL
+ * Core applies the same rule and sends the value on the token exchange as is.
+ * The pattern and length cap match what the backend accepts, so a value the
+ * editor lets through is never rejected on save.
+ */
+const OAUTH_RESOURCE_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:[^\s#]+$/;
+const OAUTH_RESOURCE_MAX_LENGTH = 2048;
+
+/** Returns whether an OAuth resource indicator is blank or an absolute URI without whitespace or a fragment. */
+export const isValidOAuthResource = (value?: string): boolean => {
+  const trimmed = value?.trim() ?? '';
+  if (!trimmed) return true;
+  if (
+    trimmed.length > OAUTH_RESOURCE_MAX_LENGTH ||
+    !OAUTH_RESOURCE_PATTERN.test(trimmed)
+  ) {
+    return false;
+  }
+  try {
+    return Boolean(new URL(trimmed));
+  } catch {
+    return false;
+  }
+};
+
 const repairSingleSlashUrlScheme = (value: string): string =>
   value.replace(/^(https?):\/([^/])/, '$1://$2');
 
@@ -106,9 +107,6 @@ export const normalizeReturnedEndpointUrl = (value?: string): string => {
   return trimmed;
 };
 
-const isOptionalValidEndpointUrl = (value?: string): boolean =>
-  !value?.trim() || isValidEndpointUrl(value);
-
 /**
  * Returns whether the auth form state can be saved without surfacing
  * validation errors. `isEditMode` relaxes the OAuth `clientSecret`
@@ -134,8 +132,9 @@ export const isToolsetAuthValid = (
     return (
       Boolean(auth.clientId?.trim()) &&
       (isEditMode || Boolean(auth.clientSecret?.trim())) &&
-      isOptionalValidEndpointUrl(auth.authorizationEndpoint) &&
-      isOptionalValidEndpointUrl(auth.tokenEndpoint)
+      isValidEndpointUrl(auth.authorizationEndpoint ?? '') &&
+      isValidEndpointUrl(auth.tokenEndpoint ?? '') &&
+      isValidOAuthResource(auth.resource)
     );
   }
   return true;
@@ -147,7 +146,7 @@ export const isToolsetFormValid = (
   isEditMode = false,
 ): boolean =>
   Object.keys(
-    validateDeploymentCreationFields(form, TOOLSET_METADATA_VALIDATION_OPTIONS),
+    validateDeploymentCreationFields(form, { validateVersionPattern: true }),
   ).length === 0 &&
   isValidEndpointUrl(form.endpoint) &&
   isToolsetAuthValid(form.auth, isEditMode);

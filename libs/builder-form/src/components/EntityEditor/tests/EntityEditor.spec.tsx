@@ -150,6 +150,29 @@ describe('EntityEditor', () => {
     );
   });
 
+  it('keeps an empty alert region mounted before any alert arrives', () => {
+    const { rerender } = renderEditor();
+
+    const region = screen.getByRole('alert');
+    expect(region.textContent).toBe('');
+
+    rerender(
+      <EntityEditor
+        title="Create toolset"
+        onBack={vi.fn()}
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+        submitLabel="Create"
+        metadata={<p>metadata fields</p>}
+        setup={<p>setup fields</p>}
+        alert="Failed to create application"
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toBe(region);
+    expect(region.textContent).toBe('Failed to create application');
+  });
+
   it('uses setupTitle and custom labels over the defaults', () => {
     renderEditor({
       setupTitle: 'SKILL.md',
@@ -229,5 +252,74 @@ describe('EntityEditor', () => {
     expect(
       closestWithClass(screen.getByText('setup fields'), 'host-setup'),
     ).toBeTruthy();
+  });
+});
+
+describe('EntityEditor asideData', () => {
+  it('renders no aside by default', () => {
+    renderEditor();
+
+    expect(screen.queryByText('quality check')).toBeNull();
+  });
+
+  it('renders the host content inside its own section', () => {
+    renderEditor({ asideData: <p>quality check</p> });
+
+    expect(
+      closestWithClass(
+        screen.getByText('quality check'),
+        BUILDER_FORM_CLASS.asideSection,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('renders the section after the Metadata and Setup sections without a heading by default', () => {
+    renderEditor({ asideData: <p>quality check</p> });
+
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(2);
+  });
+
+  it('renders the section heading when asideTitle is set', () => {
+    renderEditor({
+      asideData: <p>quality check</p>,
+      asideTitle: 'Quality check',
+    });
+
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Quality check' }),
+    ).toBeTruthy();
+  });
+
+  it('merges asideSectionClassName onto the section', () => {
+    renderEditor({
+      asideData: <p>quality check</p>,
+      asideSectionClassName: 'host-aside',
+    });
+
+    const section = closestWithClass(
+      screen.getByText('quality check'),
+      BUILDER_FORM_CLASS.asideSection,
+    );
+    expect(section?.classList.contains('host-aside')).toBe(true);
+    expect(section?.classList.contains(BUILDER_FORM_CLASS.section)).toBe(true);
+  });
+
+  it('forwards the resizable column and its labels to the layout', () => {
+    renderEditor({
+      resizableLeftColumn: { width: 450, onWidthChange: vi.fn() },
+      labels: { resizeHandleLabel: 'Resize columns now' },
+    });
+
+    expect(
+      screen
+        .getByRole('separator', { name: 'Resize columns now' })
+        .getAttribute('aria-valuenow'),
+    ).toBe('450');
+  });
+
+  it('renders no separator unless the host opts in', () => {
+    renderEditor();
+
+    expect(screen.queryByRole('separator')).toBeNull();
   });
 });

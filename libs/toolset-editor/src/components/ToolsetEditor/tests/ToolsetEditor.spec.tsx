@@ -1,8 +1,12 @@
-import type { EntityEditorProps } from '@epam/ai-dial-builder-form';
+import type {
+  EntityEditorProps,
+  MetadataFormAvatarPicker,
+  MetadataFormProps,
+} from '@epam/ai-dial-builder-form';
 import { ToolsetAuthTypes, WithLogin } from '@epam/ai-dial-chat-hooks';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TOOLSET_EDITOR_CLASS } from '../../../constants/public-class-names';
 import { ToolsetTransportType } from '../../../constants/toolsets';
@@ -12,6 +16,7 @@ import type {
   ToolsetAuthFormData,
   ToolsetFormData,
 } from '../../../models/toolset-form';
+import { getDefaultToolsetForm } from '../../../utils/toolsets';
 import { ToolsetEditor } from '../ToolsetEditor';
 
 vi.mock('@epam/ai-dial-builder-form', async (importOriginal) => {
@@ -57,45 +62,60 @@ vi.mock('@epam/ai-dial-builder-form', async (importOriginal) => {
         </div>
       </div>
     ),
+    MetadataForm: ({
+      values,
+      errors,
+      onChange,
+      renderDescription,
+      avatarPicker,
+      labels,
+      isVersionReadOnly,
+      versionReadOnlyTooltip,
+    }: MetadataFormProps) => (
+      <div>
+        <span>
+          {`version-read-only-${String(Boolean(isVersionReadOnly))}-${versionReadOnlyTooltip ?? 'default'}`}
+        </span>
+        {renderDescription?.(
+          <textarea
+            id="toolset-description"
+            value={values.description}
+            onChange={(event) => onChange({ description: event.target.value })}
+          />,
+          'toolset-description',
+        )}
+        <span>{`metadata-name-${values.name}`}</span>
+        <span>{`name-label-${labels?.form?.name.label}`}</span>
+        {errors.name && <p className="field-error">{errors.name}</p>}
+        {errors.version && <p className="field-error">{errors.version}</p>}
+        <button type="button" onClick={() => onChange({ name: '' })}>
+          clear-name
+        </button>
+        <button type="button" onClick={() => onChange({ name: 'Renamed' })}>
+          rename
+        </button>
+        <button type="button" onClick={() => onChange({ name: 'My toolset' })}>
+          restore-name
+        </button>
+        <button type="button" onClick={() => onChange({ version: 'v 1' })}>
+          type-invalid-version
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const iconUrl = avatarPicker?.resolveAttachedIconUrl({
+              files: [],
+              folderPaths: [],
+            });
+            if (iconUrl) onChange({ iconUrl });
+          }}
+        >
+          pick-avatar
+        </button>
+      </div>
+    ),
   };
 });
-
-vi.mock('../../GeneralForm/GeneralForm', () => ({
-  GeneralForm: ({
-    form,
-    errors,
-    onChange,
-    renderDescription,
-  }: {
-    form: ToolsetFormData;
-    errors: { name?: string; version?: string };
-    onChange: (patch: Partial<ToolsetFormData>) => void;
-    renderDescription?: (textarea: ReactNode, fieldId: string) => ReactNode;
-  }) => (
-    <div>
-      {renderDescription?.(
-        <textarea
-          id="toolset-description"
-          value={form.description}
-          onChange={(event) => onChange({ description: event.target.value })}
-        />,
-        'toolset-description',
-      )}
-      <span>{`metadata-name-${form.name}`}</span>
-      {errors.name && <p role="alert">{errors.name}</p>}
-      {errors.version && <p role="alert">{errors.version}</p>}
-      <button type="button" onClick={() => onChange({ name: '' })}>
-        clear-name
-      </button>
-      <button type="button" onClick={() => onChange({ name: 'Renamed' })}>
-        rename
-      </button>
-      <button type="button" onClick={() => onChange({ version: 'v 1' })}>
-        type-invalid-version
-      </button>
-    </div>
-  ),
-}));
 
 vi.mock('../../SettingsForm/SettingsForm', () => ({
   SettingsForm: ({
@@ -109,6 +129,7 @@ vi.mock('../../SettingsForm/SettingsForm', () => ({
       endpoint?: string;
       authorizationEndpoint?: string;
       tokenEndpoint?: string;
+      resource?: string;
     };
     isSaving?: boolean;
     toolsetId?: string;
@@ -134,11 +155,20 @@ vi.mock('../../SettingsForm/SettingsForm', () => ({
         {ensureSavedResult != null && (
           <span>{`ensure-saved-result-${ensureSavedResult}`}</span>
         )}
-        {errors?.endpoint && <p role="alert">{errors.endpoint}</p>}
+        {errors?.endpoint && <p className="field-error">{errors.endpoint}</p>}
         {errors?.authorizationEndpoint && (
-          <p role="alert">{errors.authorizationEndpoint}</p>
+          <p className="field-error">{errors.authorizationEndpoint}</p>
         )}
-        {errors?.tokenEndpoint && <p role="alert">{errors.tokenEndpoint}</p>}
+        {errors?.tokenEndpoint && (
+          <p className="field-error">{errors.tokenEndpoint}</p>
+        )}
+        {errors?.resource && <p className="field-error">{errors.resource}</p>}
+        <label>
+          resource
+          <input
+            onChange={(event) => onAuthChange({ resource: event.target.value })}
+          />
+        </label>
         <button type="button" onClick={() => onChange({ endpoint: '' })}>
           touch-empty-endpoint
         </button>
@@ -211,6 +241,14 @@ vi.mock('../../SettingsForm/SettingsForm', () => ({
           }}
         >
           fill-oauth-toolset-without-endpoints
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            onAuthChange({ authorizationEndpoint: '', tokenEndpoint: '' })
+          }
+        >
+          clear-oauth-endpoints
         </button>
         <button
           type="button"
@@ -289,6 +327,18 @@ const onBack = vi.fn();
 const onNotifySuccess = vi.fn();
 const onNotifyError = vi.fn();
 
+const resolveAttachedIconUrl =
+  vi.fn<MetadataFormAvatarPicker['resolveAttachedIconUrl']>();
+
+const avatarPicker: MetadataFormAvatarPicker = {
+  bucket: 'bucket',
+  FileManagerModal: () => null,
+  resolveIconUrl: (url) => url,
+  resolveAttachedIconUrl,
+  allowedMimeTypes: ['image/png'],
+  maxFileSizeBytes: 1024,
+};
+
 const authActions: ToolsetAuthActions = {
   login: vi.fn(),
   logout: vi.fn(),
@@ -328,17 +378,19 @@ const makeProps = (
   onOAuthLogin: vi.fn(),
   onNotifySuccess,
   onNotifyError,
-  bucket: 'bucket',
-  FileManagerModal: () => null,
-  resolveIconUrl: (url) => url,
-  allowedMimeTypes: ['image/png'],
-  maxFileSizeBytes: 1024,
+  avatarPicker,
   availableLocaleOptions: [],
   ...props,
 });
 
 const renderEditor = (props: Partial<ToolsetEditorProps> = {}) =>
   render(<ToolsetEditor {...makeProps(props)} />);
+
+/* The stubs render field errors as plain paragraphs, like the real kit captions (no live-region role). */
+const fieldErrors = () =>
+  screen
+    .queryAllByText(/.+/, { selector: '.field-error' })
+    .map((element) => element.textContent ?? '');
 
 describe('ToolsetEditor', () => {
   const user = userEvent.setup({ delay: null });
@@ -348,6 +400,21 @@ describe('ToolsetEditor', () => {
     onPersist.mockResolvedValue(NEW_TOOLSET_ID);
     onPostSaveLogin.mockResolvedValue(undefined);
     onToolsetsChanged.mockResolvedValue(undefined);
+  });
+
+  it('keeps the Version editable by default', () => {
+    renderEditor();
+    expect(screen.getByText('version-read-only-false-default')).toBeTruthy();
+  });
+
+  it('forwards a read-only Version and its tooltip to the metadata form', () => {
+    renderEditor({
+      isVersionReadOnly: true,
+      labels: { versionReadOnlyTooltip: 'Use Save as new version' },
+    });
+    expect(
+      screen.getByText('version-read-only-true-Use Save as new version'),
+    ).toBeTruthy();
   });
 
   it('renders the create title and actions with the default labels', () => {
@@ -390,10 +457,63 @@ describe('ToolsetEditor', () => {
     expect(onPersist).not.toHaveBeenCalled();
   });
 
+  it('keeps Create disabled on a default form until a name is entered, then persists it with version 1.0.0', async () => {
+    renderEditor({ initialForm: getDefaultToolsetForm() });
+
+    await user.click(
+      screen.getByRole('button', { name: 'fill-api-key-toolset' }),
+    );
+    const createButton = screen.getByRole('button', {
+      name: 'Create',
+    }) as HTMLButtonElement;
+    expect(createButton.disabled).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'rename' }));
+    await waitFor(() => expect(createButton.disabled).toBe(false));
+    await user.click(createButton);
+
+    await waitFor(() =>
+      expect(onPersist).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Renamed', version: '1.0.0' }),
+        '',
+      ),
+    );
+  });
+
+  it('renders the toolset default metadata labels when the host omits them', () => {
+    renderEditor();
+
+    expect(screen.getByText('name-label-Name')).toBeTruthy();
+  });
+
+  it('uses the host resolver for a picked avatar and persists the URL it returns', async () => {
+    resolveAttachedIconUrl.mockReturnValue('files/bucket/avatar.png');
+    renderEditor({ initialForm: getDefaultToolsetForm() });
+
+    await user.click(
+      screen.getByRole('button', { name: 'fill-api-key-toolset' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'rename' }));
+    await user.click(screen.getByRole('button', { name: 'pick-avatar' }));
+    const createButton = screen.getByRole('button', {
+      name: 'Create',
+    }) as HTMLButtonElement;
+    await waitFor(() => expect(createButton.disabled).toBe(false));
+    await user.click(createButton);
+
+    expect(resolveAttachedIconUrl).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect(onPersist).toHaveBeenCalledWith(
+        expect.objectContaining({ iconUrl: 'files/bucket/avatar.png' }),
+        '',
+      ),
+    );
+  });
+
   it('shows validation errors after an invalid field becomes dirty', async () => {
     renderEditor();
 
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/Endpoint is required/)).toBeNull();
 
     await user.click(
       screen.getByRole('button', {
@@ -401,9 +521,7 @@ describe('ToolsetEditor', () => {
       }),
     );
 
-    expect(screen.getByRole('alert').textContent).toContain(
-      'Endpoint is required',
-    );
+    expect(screen.getByText(/Endpoint is required/)).toBeTruthy();
   });
 
   it('keeps the create action disabled when OAuth endpoint URLs are invalid', async () => {
@@ -420,9 +538,7 @@ describe('ToolsetEditor', () => {
     );
 
     expect(saveButton.disabled).toBe(true);
-    expect(screen.getByRole('alert').textContent).toContain(
-      'Enter a valid http(s) URL',
-    );
+    expect(fieldErrors()).toContain('Enter a valid http(s) URL');
 
     await user.click(
       screen.getByRole('button', {
@@ -433,7 +549,7 @@ describe('ToolsetEditor', () => {
     await waitFor(() => expect(saveButton.disabled).toBe(false));
   });
 
-  it('enables the create action for configured OAuth without authorization/token endpoints', async () => {
+  it('keeps the create action disabled for configured OAuth without authorization/token endpoints', async () => {
     renderEditor();
 
     const saveButton = (await screen.findByRole('button', {
@@ -446,7 +562,57 @@ describe('ToolsetEditor', () => {
       }),
     );
 
+    await waitFor(() => expect(saveButton.disabled).toBe(true));
+  });
+
+  it('blocks saving with an inline error while the OAuth resource is not an absolute URI without a fragment', async () => {
+    renderEditor();
+
+    const saveButton = (await screen.findByRole('button', {
+      name: 'Create',
+    })) as HTMLButtonElement;
+    await user.click(
+      screen.getByRole('button', { name: 'fill-oauth-toolset' }),
+    );
     await waitFor(() => expect(saveButton.disabled).toBe(false));
+
+    for (const invalid of [
+      'mcp.example.com/mcp',
+      'https://mcp.example.com/mcp#tools',
+    ]) {
+      await user.clear(screen.getByLabelText('resource'));
+      await user.type(screen.getByLabelText('resource'), invalid);
+
+      await waitFor(() => expect(saveButton.disabled).toBe(true));
+      expect(
+        screen.getByText('Enter an absolute URI without a fragment'),
+      ).toBeTruthy();
+    }
+
+    await user.clear(screen.getByLabelText('resource'));
+    await user.type(
+      screen.getByLabelText('resource'),
+      'https://mcp.example.com/mcp',
+    );
+    await waitFor(() => expect(saveButton.disabled).toBe(false));
+    expect(
+      screen.queryByText('Enter an absolute URI without a fragment'),
+    ).toBeNull();
+  });
+
+  it('shows required errors once the OAuth endpoints are cleared', async () => {
+    renderEditor();
+
+    await user.click(
+      await screen.findByRole('button', { name: 'fill-oauth-toolset' }),
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'clear-oauth-endpoints' }),
+    );
+
+    const errors = fieldErrors();
+    expect(errors).toContain('Authorization endpoint is required');
+    expect(errors).toContain('Token endpoint is required');
   });
 
   it('runs the post-save login for a newly created API-key toolset using the returned id', async () => {
@@ -605,11 +771,11 @@ describe('ToolsetEditor', () => {
     await user.click(
       screen.getByRole('button', { name: 'touch-empty-endpoint' }),
     );
-    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(fieldErrors()).toHaveLength(1);
 
     rerender(<ToolsetEditor {...makeProps()} />);
 
-    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    await waitFor(() => expect(fieldErrors()).toHaveLength(0));
   });
 
   it('calls onToolsetsChanged after a successful create so the host list stays in sync', async () => {
@@ -705,11 +871,11 @@ describe('ToolsetEditor — shared editor shell', () => {
   it('shows no metadata error until the user edits the field', async () => {
     renderEditor();
 
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(fieldErrors()).toHaveLength(0);
 
     await user.click(screen.getByRole('button', { name: 'clear-name' }));
 
-    expect(screen.getByRole('alert').textContent).toBe('Name is required');
+    expect(fieldErrors()).toEqual(['Name is required']);
   });
 
   it('shows the invalid-version error only for the edited version field', async () => {
@@ -719,22 +885,20 @@ describe('ToolsetEditor — shared editor shell', () => {
       screen.getByRole('button', { name: 'type-invalid-version' }),
     );
 
-    const alerts = screen.getAllByRole('alert');
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0].textContent).toContain(
-      'Version must follow semantic versioning',
-    );
+    const errors = fieldErrors();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('Version may only contain');
   });
 
   it('clears the metadata error once the field becomes valid again', async () => {
     renderEditor();
 
     await user.click(screen.getByRole('button', { name: 'clear-name' }));
-    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(fieldErrors()).toHaveLength(1);
 
     await user.click(screen.getByRole('button', { name: 'rename' }));
 
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(fieldErrors()).toHaveLength(0);
     expect(screen.getByText('metadata-name-Renamed')).toBeTruthy();
   });
 
@@ -762,12 +926,89 @@ describe('ToolsetEditor — shared editor shell', () => {
     const { rerender } = renderEditor();
 
     await user.click(screen.getByRole('button', { name: 'clear-name' }));
-    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(fieldErrors()).toHaveLength(1);
 
     rerender(<ToolsetEditor {...makeProps()} />);
 
-    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    await waitFor(() => expect(fieldErrors()).toHaveLength(0));
     expect(screen.getByText('metadata-name-My toolset')).toBeTruthy();
+  });
+});
+
+describe('ToolsetEditor — dirty state', () => {
+  const user = userEvent.setup({ delay: null });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onPersist.mockResolvedValue(NEW_TOOLSET_ID);
+    onPostSaveLogin.mockResolvedValue(undefined);
+    onToolsetsChanged.mockResolvedValue(undefined);
+  });
+
+  it('reports clean on mount', () => {
+    const onDirtyChange = vi.fn();
+    renderEditor({ onDirtyChange });
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('reports dirty after a Metadata edit and clean once it is reverted', async () => {
+    const onDirtyChange = vi.fn();
+    renderEditor({ onDirtyChange });
+
+    await user.click(screen.getByRole('button', { name: 'rename' }));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    await user.click(screen.getByRole('button', { name: 'restore-name' }));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('reports dirty after a Setup edit', async () => {
+    const onDirtyChange = vi.fn();
+    renderEditor({ onDirtyChange });
+
+    await user.click(
+      screen.getByRole('button', { name: 'fill-api-key-toolset' }),
+    );
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('reports clean once the Log In draft persist succeeds, before the login continues', async () => {
+    const onDirtyChange = vi.fn();
+    renderEditor({ onDirtyChange });
+    await user.click(
+      screen.getByRole('button', { name: 'fill-api-key-toolset' }),
+    );
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    let dirtyAtToolsetRefresh: boolean | undefined;
+    onToolsetsChanged.mockImplementation(async () => {
+      dirtyAtToolsetRefresh = onDirtyChange.mock.lastCall?.[0];
+    });
+
+    await user.click(
+      screen.getByRole('button', { name: 'invoke-ensure-saved' }),
+    );
+    await screen.findByText(`ensure-saved-result-${NEW_TOOLSET_ID}`);
+
+    expect(dirtyAtToolsetRefresh).toBe(false);
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('stays dirty when the Log In draft persist fails', async () => {
+    const onDirtyChange = vi.fn();
+    onPersist.mockResolvedValue(null);
+    renderEditor({ onDirtyChange });
+    await user.click(
+      screen.getByRole('button', { name: 'fill-api-key-toolset' }),
+    );
+
+    await user.click(
+      screen.getByRole('button', { name: 'invoke-ensure-saved' }),
+    );
+
+    await waitFor(() => expect(onPersist).toHaveBeenCalledOnce());
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
   });
 });
 
@@ -819,6 +1060,15 @@ describe('ToolsetEditor — public class names', () => {
         expect.any(AbortSignal),
       );
       expect(
+        screen.getByRole<HTMLTextAreaElement>('textbox', {
+          name: 'Description',
+        }).readOnly,
+      ).toBe(true);
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Refining' })
+          .disabled,
+      ).toBe(true);
+      expect(
         screen.getByRole<HTMLButtonElement>('button', { name: 'Create' })
           .disabled,
       ).toBe(true);
@@ -836,7 +1086,9 @@ describe('ToolsetEditor — public class names', () => {
         screen.getByRole<HTMLButtonElement>('button', { name: 'Create' })
           .disabled,
       ).toBe(false);
-      expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+      expect(
+        screen.getByRole('button', { name: 'Restore original' }),
+      ).toBeTruthy();
     });
   });
 });

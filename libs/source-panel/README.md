@@ -91,8 +91,10 @@ const labels: ConversationSourcesPanelLabels = {
   closeLabel: t('Close'),
   searchPlaceholder: t('Search sources...'),
   searchClearLabel: t('Clear search'),
-  noDataLabel: t('Empty'),
-  noResultsLabel: t('No results'),
+  noDataLabel: t('No files or sources yet'),
+  noDataDescription: t('Files and sources from this chat will appear here.'),
+  noResultsLabel: t('No files or sources found'),
+  noResultsDescription: t('Try a different search term or check your filters.'),
   downloadAllLabel: t('Download all'),
   uploadedSectionTitle: t('Uploaded files'),
   generatedSectionTitle: t('Generated files'),
@@ -110,6 +112,10 @@ const labels: ConversationSourcesPanelLabels = {
   mathScrollRegionAriaLabel: t('Scrollable formula'),
 };
 ```
+
+### ConversationSourcesPanelStyles
+
+Optional style overrides: `colors` (CSS custom properties for the sources section), `typography` (heading/link/quote classes), and `sectionClassName` — extra class name(s) merged onto each files/sources section root, e.g. `'px-4'` to line the sections up with host-rendered accordions inside `additionalSections`.
 
 ## Public class names
 
@@ -150,3 +156,7 @@ SOURCE_PANEL_CLASS.panel; // 'dial-source-panel-panel'
 
 Write host overrides with CSS logical properties (`margin-inline-start`,
 `inset-inline-end`) so they keep working under `dir="rtl"`.
+
+## Tablet presentation
+
+Pass `isBoundedOverlay={useIsTablet()}` to opt into a bounded inline-end overlay. The parent containing block must be positioned. Existing `isMobile` remains supported; bounded overlays keep resizing available and ignore the mobile full-width override. Width, labels, close/resize callbacks and persistence remain host-owned; no app routing or storage is read by this library.

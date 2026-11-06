@@ -56,14 +56,14 @@ The application SHALL expose a lazy-loaded Scheduled Task Detail page at `ROUTES
 
 ### Requirement: Detail page header shows back navigation and title, plus Active/Delete/Edit actions once loaded
 
-The detail page header SHALL render a back-navigation control and the task's `displayName` as its title on the start side. Activating the back control SHALL navigate to `ROUTES.ScheduledTasks`. Once the task has loaded successfully and `task.isDeleted` is not `true`, the header SHALL additionally render, on the inline-end side, in this order:
+The detail page header SHALL render a back-navigation control and the task's `displayName` as its title on the start side. The title SHALL ellipsize instead of stretching the header: capped at 600px on every breakpoint (phones never reach the cap and truncate at the row edge; tablets and the desktop header stop the line at 600px), shrinking below the cap on narrower viewports, and rendering its text through the kit's `EllipsisTooltip` (`@epam/ai-dial-ui-kit`) so the full name appears in a tooltip only when actually clipped and remains the heading's accessible name while clipped. Exactly one copy of the title is visible at any width — inline in the header at the desktop breakpoint, in a standalone row below it on mobile/tablet. Activating the back control SHALL navigate to `ROUTES.ScheduledTasks`. Once the task has loaded successfully and `task.isDeleted` is not `true`, the header SHALL additionally render, on the inline-end side, in this order:
 
 1. an **Active** switch (`Switch` from `@epam/ai-dial-ui-kit`) with a visible localized "Active" label, rendered only when `isActive !== undefined` on the loaded task, never an unchecked switch while the active state is unknown;
 2. a destructive **Delete** action (`GhostButton` from `@epam/ai-dial-ui-kit` with `variant={ButtonVariant.Danger}`, a leading `IconTrashX` marked `aria-hidden`, and a visible localized "Delete" label). Activating Delete SHALL open the confirmation dialog described in the "Delete confirmation dialog gates the delete request" requirement — it SHALL NOT call any API directly;
-3. a `NeutralButton` (`@epam/ai-dial-ui-kit`) with a pencil icon (`IconPencilMinus` from `@tabler/icons-react`) and a localized "Edit" label. Activating Edit SHALL navigate to `getScheduledTaskEditRoute(scheduleId)` for the task currently being viewed;
+3. a `NeutralButton` (`@epam/ai-dial-ui-kit`) with a pencil icon (`IconPencilMinus` from `@tabler/icons-react`) and a localized "Edit" label, rendered only when the route-scoped offline-credentials status check does not report `schedulerServiceConsent: 'signed_out'`. Activating Edit SHALL navigate to `getScheduledTaskEditRoute(scheduleId)` for the task currently being viewed;
 4. a localized **Start now** button with a decorative play icon, invoking the manual-run action described above.
 
-When `task.isDeleted` is `true`, the header SHALL render none of the Active switch, Delete action, Edit button, or Start now button — only the back control, title, and the read-only deleted-state indicator described in the "Soft-deleted task renders as a read-only deleted state" requirement. The header SHALL render a localized Start now button after Edit as specified by the manual-run requirements, and SHALL NOT render Start now, the Edit button, Active switch, or Delete action while the task is loading or failed to load. While a delete request is in flight (`isDeleting` is `true`), the Active switch, Delete action, Edit button, and Start now button SHALL all render disabled rather than absent.
+When `task.isDeleted` is `true`, the header SHALL render none of the Active switch, Delete action, Edit button, or Start now button — only the back control, title, and the read-only deleted-state indicator described in the "Soft-deleted task renders as a read-only deleted state" requirement. The header SHALL render a localized Start now button after Edit as specified by the manual-run requirements, and SHALL NOT render Start now, the Edit button, Active switch, or Delete action while the task is loading or failed to load. While a delete request is in flight (`isDeleting` is `true`), the Active switch, Delete action, Edit button, and Start now button SHALL all render disabled rather than absent. The Edit button and the Start now button SHALL also not render while `schedulerServiceConsent` is `signed_out` — an absent consent makes editing and starting pointless (the BFF rejects each with `scheduledTaskAdminConsentRequired`), and hiding the affordances matches the list page's withdrawn "New task" button. While the consent is `signed_out`, the Active switch of a paused task (`isActive: false`) SHALL render disabled with no reason label of its own — just the disabled control (the limited-access reason label is a product decision not to render), while an active task's switch stays enabled — pausing and deleting still work (the BFF checks consent on neither), so a user can always stop, remove, or inspect a schedule. A `schedulerServiceConsent` of `signed_in` or `unknown` (including a not-yet-resolved check, which the page treats as fail-open) changes nothing.
 
 #### Scenario: Back control returns to the list
 
@@ -72,13 +72,28 @@ When `task.isDeleted` is `true`, the header SHALL render none of the Active swit
 
 #### Scenario: Header shows back, title, Active switch, Delete, and Edit in order once the task has loaded
 
-- **WHEN** the detail page renders with a successfully loaded, non-deleted task whose `isActive` is defined
+- **WHEN** the detail page renders with a successfully loaded, non-deleted task whose `isActive` is defined and `schedulerServiceConsent` is `signed_in` or `unknown`
 - **THEN** the header contains a back control and the task's `displayName` on the start side, and on the end side — in order — the Active switch, a destructive Delete action with a visible "Delete" label, and a `NeutralButton` with `IconPencilMinus` and a localized "Edit" label
+
+#### Scenario: Long title ellipsizes with a tooltip instead of stretching the header
+
+- **WHEN** the loaded task's `displayName` is longer than the title's 600px cap (or longer than the width remaining in a narrower header)
+- **THEN** the title renders on one line with an ellipsis, the action buttons stay in place, and hovering the clipped title shows the full name in a tooltip — while a title that fits its line shows no tooltip
 
 #### Scenario: Edit, Active, and Delete are absent while loading or on error
 
 - **WHEN** the detail page is still fetching the task, or the task fetch has failed
 - **THEN** the header does not render the Edit button, the Active switch, or the Delete action
+
+#### Scenario: Revoked consent hides the Edit and Start now buttons and disables a paused task's Active switch
+
+- **WHEN** the status check reports `schedulerServiceConsent: 'signed_out'` and the loaded task is not deleted
+- **THEN** the header renders the Delete action as before, no Edit button and no Start now button render, and the Active switch renders disabled with no reason label while the task is paused — while the task is active, the Active switch stays enabled for pausing
+
+#### Scenario: Not-yet-resolved consent keeps the Edit button
+
+- **WHEN** the route's status check has not yet resolved (the fail-open window) and the task has loaded
+- **THEN** the Edit button renders as before until the check resolves to `signed_out`
 
 #### Scenario: Activating Edit navigates to the edit route for the current task
 
@@ -107,7 +122,7 @@ When `task.isDeleted` is `true`, the header SHALL render none of the Active swit
 
 #### Scenario: Start now follows Edit
 
-- **WHEN** the loaded task is not deleted and the host supplies the start action
+- **WHEN** the loaded task is not deleted, `schedulerServiceConsent` is `signed_in` or `unknown`, and the host supplies the start action
 - **THEN** the header displays Start now after Edit, with eligibility and pending behavior defined by the manual-run requirements
 
 #### Scenario: Start now is absent during task load failure or deletion
@@ -117,29 +132,44 @@ When `task.isDeleted` is `true`, the header SHALL render none of the Active swit
 
 ### Requirement: Details and Configuration sections render read-only task metadata
 
-The detail page SHALL render a Details section showing the task's description, a "Model or Agent" value (resolved to a display name via the deployments context when possible, falling back to the raw model id), and a "Repeats" schedule label produced by the same formatter logic already used by the list page's `map-scheduled-task-dto.ts` (not duplicated inside `libs/scheduled-tasks`). The detail page SHALL render a Configuration section whose "Instructions" content is the task's `prompt` field, rendered through the same markdown stack chat assistant messages use (`MarkdownRenderer`/`MDMessageViewer` from `@epam/ai-dial-chat-shared`), as static content with no streaming/typewriter effect, and with the same default markdown class names so headings, lists, code blocks, and GFM match chat rendering.
+The detail page SHALL render a Details section showing the task's description, a "Model or Agent" value (resolved to a display name via the deployments context when possible, waiting during catalog loading, marking absence from a successfully loaded catalog unavailable, and falling back to the raw id only on catalog failure), and a "Repeats" schedule label produced by the same formatter logic already used by the list page's `map-scheduled-task-dto.ts` (not duplicated inside `libs/scheduled-tasks`). The description SHALL preserve the author's line breaks and wrap ordinary words whole, breaking a token only when it cannot fit a line by itself (`overflow-wrap: anywhere`, not `break-all`, which would chop ordinary words at the column edge); it renders at the field-value step (`dial-small-text`) with its own ink chained through the theme's `--text-primary` (dark-theme safe, `#161b2d` as the last-resort fallback) and overridable through the view's `styles.colors.descriptionText`. The detail page SHALL render a Configuration section whose "Instructions" content is the task's `prompt` field, rendered through the same markdown stack chat assistant messages use (`MarkdownRenderer`/`MDMessageViewer` from `@epam/ai-dial-chat-shared`), as static content with no streaming/typewriter effect, at the compact prose step — paragraphs and list items alike at `dial-small-paragraph-text` (14px/24px) — via a lib-scoped `MarkdownRendererClassNames` record spread from `COMPACT_MARKDOWN_CLASS_NAMES` (see `libs/scheduled-tasks/src/components/ScheduledTaskConfigurationSection/ScheduledTaskConfigurationSection.tsx`); the shared presets in `libs/chat-shared/src/components/MarkdownRenderer/markdown-class-names.ts` SHALL remain untouched so chat rendering is unaffected. A host-supplied `renderInstructions` owns its own classNames, and these are ignored.
 
 #### Scenario: Details section shows description, model, and schedule
 
 - **WHEN** the task detail loads with `description`, `model`, and a schedule
 - **THEN** the Details section shows that description text, a model/agent display value, and a "Repeats" label produced by the shared schedule-label formatter
 
-#### Scenario: Instructions render through the shared markdown stack
+#### Scenario: Description wraps words whole and breaks only unbreakable tokens
+
+- **WHEN** the task's `description` contains ordinary multi-word prose and a token longer than the column width (a long URL)
+- **THEN** the prose wraps at word boundaries with no mid-word breaks, the long token breaks only where it cannot fit a line by itself, and the author's line breaks are preserved
+
+#### Scenario: Instructions render through the shared markdown stack at the compact prose step
 
 - **WHEN** the task's `prompt` contains markdown (headings, lists, a code block, and GFM syntax)
-- **THEN** the Configuration section's Instructions render that markdown through `MarkdownRenderer`/`MDMessageViewer`, matching how the same markdown renders in a chat assistant message, with no streaming/typewriter animation applied
+- **THEN** the Configuration section's Instructions render that markdown through `MarkdownRenderer`/`MDMessageViewer` with no streaming/typewriter animation, with paragraphs and list items at the 14px/24px prose step, and with the shared default presets unchanged so the same markdown renders identically in chat assistant messages
+
+#### Scenario: Host-supplied renderInstructions owns the rendering
+
+- **WHEN** the host passes `renderInstructions`
+- **THEN** the instructions render through that callback and the lib's scoped classNames record is not applied
 
 #### Scenario: Unresolvable model id falls back to raw id
 
-- **WHEN** the task's `model` id has no matching entry in the deployments context
-- **THEN** the Details section displays the raw model id string as the "Model or Agent" value, without throwing
+- **WHEN** the deployments catalog fails to load and the task's `model` cannot be resolved
+- **THEN** the Details section displays the raw model id without falsely claiming deletion
 
-The Configuration section SHALL render an optional Skill field above Instructions using a host-resolved display name or full raw reference. It SHALL hide Skill only when no reference is saved, and hide empty Instructions for a skill-only task. The existing Model location and schedule formatting remain unchanged.
+#### Scenario: Model missing from a successfully loaded catalog
+
+- **WHEN** catalog loading succeeds but the stored model has no ID or reference match
+- **THEN** the Details section displays the decoded final segment with ` (unavailable)`, error text color, pointer cursor and an explanatory tooltip
+
+The Configuration section SHALL render an optional Skill field above Instructions using host-resolved names and availability from the scheduled-task-resource-availability capability. It SHALL hide Skill while its selected references are resolving or when none are saved, and hide empty Instructions for a skill-only task. The existing Model location and schedule formatting remain unchanged.
 
 #### Scenario: Read-only skill is independent of metadata availability
 
 - **WHEN** a saved skill cannot be resolved
-- **THEN** Configuration displays the raw reference and retains the rest of the task without a broken link or error screen
+- **THEN** Configuration waits for metadata, distinguishes confirmed unavailability from a temporary lookup failure, and retains the rest of the task without a broken link or error screen
 
 ### Requirement: History panel paginates runs via a "Show more" button inside its own scroll container
 
@@ -147,7 +177,7 @@ The detail page SHALL render a History panel listing the task's runs, fetched vi
 
 The hook SHALL additionally keep the History panel fresh without a manual reload, via two background-refresh triggers that merge into `items` rather than resetting them (`refetch()`'s existing full-reset-to-page-0 behavior is unchanged and is never invoked by either trigger):
 
-- **Poll while a run is in progress**: while any entry in `items` has `status === ScheduledTaskRunDtoStatusEnum.InProgress`, the hook SHALL re-fetch page 0 (`offset: 0, limit: 10`) every 15 seconds and merge the response into `items` by `id` — an existing `id` is updated in place at its current array position (no reordering), an unseen `id` is prepended, and no entry absent from the response is removed. Polling SHALL stop as soon as no entry has `InProgress` status, or after 20 consecutive polls that each either leave the merge unchanged or fail outright (5 minutes total), whichever happens first — a poll that errors counts toward the stop threshold the same as one that resolves with no change, so a permanently-failing upstream does not poll indefinitely.
+- **Poll while a run is in progress**: while any entry in `items` has `status === ScheduledTaskRunDtoStatusEnum.InProgress`, or the caller passes `pollWhileActive: true` (for a run it started itself and tracks outside `items`, such as the detail page's accepted Start now run, which is not yet in `items`), the hook SHALL re-fetch page 0 (`offset: 0, limit: 10`) every 15 seconds and merge the response into `items` by `id` — an existing `id` is updated in place at its current array position (no reordering), an unseen `id` is prepended, and no entry absent from the response is removed. Polling SHALL stop as soon as no entry has `InProgress` status and `pollWhileActive` is not set, or after 48 consecutive polls that each either leave the merge unchanged or fail outright (12 minutes total, past the 10-minute backend run timeout), whichever happens first — a poll that errors counts toward the stop threshold the same as one that resolves with no change, so a permanently-failing upstream does not poll indefinitely.
 - **One-shot refresh at the next scheduled run**: when `nextRunTime` is a future instant, the hook SHALL schedule exactly one refresh for 5 seconds after that instant, merged the same way as the poll trigger. When `nextRunTime` is already in the past when the hook first receives it, it SHALL refresh once immediately instead of scheduling a future timer.
 
 Both triggers SHALL run only while `document.visibilityState === 'visible'`; while hidden, no refresh fires, and on returning to visible the hook SHALL perform at most one catch-up refresh if a scheduled one was missed while hidden. Neither trigger SHALL fire while `isLoading` or `isLoadingMore` is `true` — this includes the one-shot trigger for an already-past `nextRunTime`: if `nextRunTime` is supplied (or first found to be past) while the initial fetch is still in flight, the immediate refresh SHALL be deferred until that fetch settles, issuing a second, distinct `listScheduledTaskRuns({ offset: 0 })` request rather than racing or replacing the initial one. Each background-refresh request (poll tick or one-shot) SHALL use its own `AbortController`, exactly as the initial fetch and `loadMore` already do. A background refresh that fails SHALL leave `items` and the foreground `error`/`loadMoreError` state untouched — it SHALL NOT surface the failure to the user — and SHALL simply be retried on the next tick. All timers and listeners created by either trigger, and any in-flight background-refresh request, SHALL be cleared/aborted on unmount and on `scheduleId` change, alongside the existing initial-fetch `AbortController` cleanup.
@@ -201,15 +231,20 @@ Below the desktop breakpoint (mobile and tablet, where the body renders as tabs)
 - **WHEN** `items` contains a run with `status === ScheduledTaskRunDtoStatusEnum.InProgress`
 - **THEN** the hook re-fetches page 0 every 15 seconds and merges the response into `items`; once a subsequent merge leaves no entry with `InProgress` status, no further poll is scheduled
 
-#### Scenario: Polling stops after 20 consecutive polls with no status change
+#### Scenario: Polling continues for a started run that is not yet in the loaded history
 
-- **WHEN** a run stays `InProgress` across 20 consecutive 15-second polls with no status change in the merged response
+- **WHEN** the caller passes `pollWhileActive: true` and no entry in `items` has `InProgress` status (for example after Start now, once the 2-second status poll has given up)
+- **THEN** the hook still re-fetches page 0 every 15 seconds, merges the started run into `items`, and stops once `pollWhileActive` is cleared and no entry is `InProgress`
+
+#### Scenario: Polling stops after 48 consecutive polls with no status change
+
+- **WHEN** a run stays `InProgress` across 48 consecutive 15-second polls with no status change in the merged response
 - **THEN** the hook stops polling entirely for that run without further requests, even though the run is still `InProgress`
 
 #### Scenario: A poll that errors counts toward the stop threshold the same as one with no change
 
-- **WHEN** a run stays `InProgress` and 20 consecutive 15-second polls each either resolve with no status change or reject outright, in any mix
-- **THEN** the hook stops polling entirely once the 20th such poll completes, without waiting for a poll that never resolves successfully
+- **WHEN** a run stays `InProgress` and 48 consecutive 15-second polls each either resolve with no status change or reject outright, in any mix
+- **THEN** the hook stops polling entirely once the 48th such poll completes, without waiting for a poll that never resolves successfully
 
 #### Scenario: A background refresh merges without resetting pagination or scroll position
 
@@ -253,9 +288,72 @@ Below the desktop breakpoint (mobile and tablet, where the body renders as tabs)
 
 ### Requirement: History rows show skeleton loading, status icon, timestamp, and duration
 
-While the initial runs page is loading (`isLoading === true`, no items yet), the History panel SHALL render exactly 6 skeleton run rows. While a subsequent page is loading (`isLoadingMore === true`), the History panel SHALL render exactly 6 skeleton run rows appended below the already-loaded rows. Each loaded run row SHALL show: a human-readable relative/absolute timestamp derived from `startTime` (e.g. "today at 9:01 AM", "Jul 17 at 9:01 AM"); a duration suffix (e.g. `(99s)`) when `durationSeconds` is present or derivable from `startTime`/`endTime`; and a status icon reflecting the run's status — a spinner for `InProgress`, a green check for `Success`, a red X for `Error`, and a visually distinct treatment for `Missed`. Status icons SHALL be marked `aria-hidden`, and each row's accessible name SHALL include both the status and the timestamp so the status is conveyed to assistive technology without relying on icon color/shape alone.
+While the initial runs page is loading (`isLoading === true`, no items yet), the History panel SHALL render exactly 6 skeleton run rows. While a subsequent page is loading (`isLoadingMore === true`), the History panel SHALL render exactly 6 skeleton run rows appended below the already-loaded rows.
 
-A row whose run has a non-empty `conversationId` and for which the page supplies `onRunClick` SHALL render as interactive (`role="button"`, `tabIndex={0}`, activatable via click, Enter, or Space, `cursor-pointer`) and, on activation, invoke `onRunClick` with that run. A row whose run has no `conversationId` — regardless of whether `onRunClick` is supplied — SHALL render exactly as a non-interactive row: no button role, no `tabIndex`, no pointer cursor, and activating it (click or keyboard) SHALL have no effect and SHALL NOT invoke `onRunClick`. When a row is interactive, activating it SHALL NOT navigate directly from within `libs/scheduled-tasks` — only the host-supplied `onRunClick` callback fires.
+Each loaded run row SHALL show:
+
+- a human-readable relative or absolute timestamp derived from `startTime` (e.g. "today at 9:01 AM", "Jul 17 at 9:01 AM");
+- a duration (e.g. `(45s)`, `(1m 39s)`, `(1h 2m 3s)`) after the timestamp, in the secondary text color, when `durationSeconds` is present or can be derived from `startTime`/`endTime`;
+- a status icon at the row start: a spinner for `InProgress`, a grey check for `Success`, a red circle-X for `Error`, and a visually distinct treatment for `Missed`.
+
+Status icons SHALL be marked `aria-hidden`. Each row's accessible name SHALL include both the status and the timestamp, so the status does not depend on icon color or shape alone.
+
+A row is interactive when its run has a non-empty `conversationId`, the page supplies `onRunClick`, and it is not an expandable error row (see below). An interactive row SHALL render as a native `<button type="button">` nested inside the row's `<li>`, so the list keeps its `listitem` children. It SHALL be activatable by click, Enter or Space, use `cursor-pointer`, and call `onRunClick` with that run on activation.
+
+A row whose run has no `conversationId`, and which is not an expandable error row, SHALL render as a non-interactive row whether or not `onRunClick` is supplied. It has no button, no `tabIndex` and no pointer cursor. Clicking it or pressing a key on it SHALL have no effect and SHALL NOT call `onRunClick`.
+
+Activating an interactive row SHALL NOT navigate from within `libs/scheduled-tasks`. Only the host-supplied `onRunClick` callback fires.
+
+**Row states.** `ScheduledTaskRunHistoryList` (`libs/scheduled-tasks/src/components/ScheduledTaskRunHistoryList/ScheduledTaskRunHistoryList.tsx`) SHALL render each row as a full-width rounded pill with the states below. Every color is read through a `var(--strhl-*, fallback)` custom property in its `.module.scss`.
+
+- **Default**: no background. The timestamp uses `typography.runTimestampClassName` (default `'dial-small-paragraph-text'`).
+- **Hover**: every interactive row, navigable or expandable, SHALL tint to `rowHoverBackground` (default `--bg-control-accent-alpha-hover-subtle`). `:focus-visible` SHALL apply the same tint plus the `rowFocusOutline` outline. Static rows SHALL NOT change on hover.
+- **Selected**: the row whose `id` equals `currentRunId` keeps the existing `currentRunBackground` highlight and `aria-current="true"`. Hovering it SHALL still look different from the highlight.
+- **Not read**: when `isUnread` is `true`, the timestamp uses `typography.runTimestampUnreadClassName` (default `'dial-small-paragraph-semi-text'`) and the end slot shows the unread dot (see below).
+- **Error**: an `Error` run shows the red circle-X status icon. When the row is expandable, the end slot shows a chevron.
+- **Expanded**: an expanded error row's header SHALL use `rowExpandedBackground` (default `--bg-control-accent-alpha-active`, the same token as the Selected highlight, as in the design).
+
+**End slot.** Every row SHALL reserve a fixed `size-3` slot at its inline end, so timestamps keep the same width across rows. The slot SHALL show, in order of precedence:
+
+1. the chevron, on an expandable error row;
+2. otherwise the unread dot, when `isUnread` is `true`: a `size-[5.33px] rounded-full` disk filled with `var(--strhl-unread-dot, var(--text-accent, #1d4ed8))`, marked `aria-hidden`;
+3. otherwise nothing.
+
+An expandable error row that is also unread SHALL keep the semibold timestamp and the unread suffix in its accessible name, but SHALL NOT draw the dot.
+
+**Accessible name.** A row's accessible name is its status label, timestamp and duration, joined by spaces. Per the ARIA accessible-name algorithm, this name overrides all descendant text. So the unread state MUST be added by appending `unreadIndicatorLabel` (default `'Unread'`) to that name, and the current-run state by appending `currentRunLabel`, each after a ` — ` separator. A nested `sr-only` span would not be heard. When `item.isUnread` is `false` or omitted, no dot renders and the name has no unread suffix. `errorText` SHALL NOT be part of any row's accessible name.
+
+**Expandable failed runs.** A row SHALL be expandable exactly when `status === ScheduledTaskRunStatus.Error` and `errorText` is a non-empty string. An `Error` row without `errorText` follows the interactive/non-interactive rules above and shows no chevron.
+
+An expandable row SHALL render as a native `<button type="button">` disclosure header followed by its details region. The kit 2.0 `Accordion` is not used, because its caret glyph and content spacing cannot be set to the design (see the change's design.md, D1). `ScheduledTaskRunHistoryList` SHALL control the row from component-local state: a `Set` of expanded run ids, with no context, no host state and no persistence. Rows start collapsed.
+
+- **Toggling.** Clicking the header, or pressing Enter or Space while it is focused, SHALL toggle the row. The header SHALL expose `aria-expanded` and an `aria-controls` that points at the details region, which is a `role="region"` element labelled by the header. The header's accessible name SHALL be the row's accessible name above, set as its `aria-label`. Its chevron SHALL point down when collapsed and up when expanded. Toggling SHALL NOT call `onRunClick`, SHALL NOT mark the run viewed, and SHALL NOT move focus.
+- **Details text.** The details region SHALL show `errorText` under the header, starting at the same edge as the timestamp. It uses `typography.errorDetailsClassName` (default `'dial-tiny-text'`) and `colors.errorDetailsTextColor` (default `var(--text-secondary, #57647a)`). It SHALL keep line breaks and wrap long unbroken strings (`whitespace-pre-wrap wrap-break-word`), so it never widens the row or the History card.
+- **Collapsed and animation.** While collapsed, the region SHALL stay mounted and `inert`. Its text and any control inside are then out of the tab order and the accessibility tree. Opening and closing SHALL animate the region's height, moving the rows below by no more than the region's own height. Under `prefers-reduced-motion: reduce` it SHALL open and close instantly.
+- **Open conversation link.** When the expandable run also has a non-empty `conversationId` and the host supplies `onRunClick`, the region SHALL also show a kit `LinkButton` labelled `labels.openConversationLabel` (default `'Open conversation'`). Each activation SHALL call `onRunClick` with the run exactly once. Without a `conversationId`, or without `onRunClick`, no link renders.
+- **Tooltip removed.** The former hover/focus `Tooltip` on the error status icon SHALL be removed. No status icon is focusable.
+- **Stability.** Expanded state SHALL survive "Show more" pages and re-renders with the same run ids. When a run id leaves `items`, that row simply stops rendering.
+
+**Label wiring.** `ScheduledTaskHistorySection`, `ScheduledTaskDetailView` and `ScheduledTaskConversationHistorySection` SHALL pass `labels.openConversationLabel` through unchanged. The chat app SHALL fill it with `t(ScheduledTasksI18nKeys.DetailHistoryOpenConversationLabel)` in both `apps/chat/src/pages/ScheduledTaskDetailPage/ScheduledTaskDetailPage.tsx` and `apps/chat/src/components/ConversationSourcesPanel/TaskHistorySection/TaskHistorySection.tsx`. The i18n key is `scheduledTasks.detail.historyOpenConversationLabel`, English "Open conversation".
+
+**RTL, accessibility, gating.**
+
+- RTL: the row uses logical padding and `text-start`, and the end slot follows `dir`. The chevron is a vertical expand/collapse glyph and SHALL NOT be mirrored.
+- Accessibility: focus-visible SHALL match hover plus an outline (WCAG 2.4.7). Fallback colors SHALL meet the repository AAA target for the timestamp text.
+- Memoisation: none required, beyond keeping row-render callbacks stable enough that toggling one row does not remount the others.
+- Gating and telemetry: no `ENABLED_FEATURES` key beyond the existing Scheduled Tasks gate, and no telemetry.
+
+**Duration format.** The host SHALL format the duration with `formatRunDuration` (`apps/chat/src/utils/map-scheduled-task-run-dto.ts`) and pass the result to `libs/scheduled-tasks` as the pre-formatted `ScheduledTaskRunItem.durationLabel`. The lib SHALL NOT format durations.
+
+`formatRunDuration` SHALL split `durationSeconds` into whole hours (`Math.floor(s / 3600)`), minutes (`Math.floor((s % 3600) / 60)`) and seconds (`s % 60`). It SHALL render each non-zero unit, largest first, through its own translation key:
+
+- `scheduledTasks.detail.historyDurationHours` (`{{count}}h`)
+- `scheduledTasks.detail.historyDurationMinutes` (`{{count}}m`)
+- `scheduledTasks.detail.historyDurationSeconds` (`{{count}}s`)
+
+It SHALL join the rendered units with a single space and wrap them with the translation key `scheduledTasks.detail.historyDurationSuffix` (`({{duration}})`). A `durationSeconds` of `0` SHALL render `(0s)`. A duration of 24 hours or more SHALL stay in hours; there is no days unit. No unit letter SHALL be hard-coded outside `apps/chat/src/i18n/locales/en.json`.
+
+The scheduled-task conversation banner's timestamp SHALL use the same format, because `formatRunTimestamp` builds its suffix with `formatRunDuration`. The duration is plain text in the row's existing duration slot, so it adds no RTL impact beyond the row's own. It sits behind no `ENABLED_FEATURES` gate other than the one that already guards Scheduled Tasks.
 
 When `item.isUnread` is `true`, the row SHALL additionally render the shared unread-dot treatment (a reserved `size-3` slot immediately before the timestamp, a `size-[5.33px] rounded-full` disk filled with `var(--text-accent, #1d4ed8)` by default — overridable via an `unreadDotColor` style — marked `aria-hidden`) so timestamps stay aligned across unread and read rows. Because the row's own `aria-label` (built from the status label and timestamp per the requirement above) overrides all descendant text per the ARIA accessible-name algorithm, the unread state MUST be conveyed by appending the row's `unreadIndicatorLabel` to that same `aria-label` — not by a nested `sr-only` span, which an ancestor `aria-label` renders unreachable to assistive technology. When `item.isUnread` is `false` or omitted, no dot renders and the accessible name carries no unread suffix.
 
@@ -272,37 +370,130 @@ When `item.isUnread` is `true`, the row SHALL additionally render the shared unr
 #### Scenario: Status icon and accessible name reflect each status value
 
 - **WHEN** rows with `status` values `Success`, `Error`, `InProgress`, and `Missed` render
-- **THEN** each shows its distinct status icon (green check, red X, spinner, and a distinct `Missed` treatment respectively), each icon is `aria-hidden`, and each row's accessible name includes the status and the row's timestamp
+- **THEN** each shows its distinct status icon (grey check, red X, spinner, and a distinct `Missed` treatment respectively), each icon is `aria-hidden`, and each row's accessible name includes the status and the row's timestamp
 
 #### Scenario: Duration renders when available
 
 - **WHEN** a run has `durationSeconds: 99` (or derivable `startTime`/`endTime` values yielding the same duration)
-- **THEN** the row's timestamp text includes a `(99s)` duration suffix
+- **THEN** the row shows a `(1m 39s)` duration after its timestamp, in the secondary text color
+
+#### Scenario: Duration under one minute stays in seconds
+
+- **WHEN** a run has `durationSeconds: 45`
+- **THEN** the row's duration reads `(45s)`, and a run with `durationSeconds: 0` reads `(0s)`
+
+#### Scenario: Duration over 60 seconds is shown in minutes and seconds
+
+- **WHEN** a run has `durationSeconds: 61`
+- **THEN** the row's duration reads `(1m 1s)` rather than `(61s)`
+
+#### Scenario: Zero-valued units are omitted
+
+- **WHEN** runs have `durationSeconds` values `60`, `3600`, and `3605`
+- **THEN** their durations read `(1m)`, `(1h)`, and `(1h 5s)` respectively
+
+#### Scenario: Duration of an hour or more includes hours
+
+- **WHEN** a run has `durationSeconds: 3723`
+- **THEN** the row's duration reads `(1h 2m 3s)`, and a run with `durationSeconds: 90180` reads `(25h 3m)`
+
+#### Scenario: Absent duration renders nothing
+
+- **WHEN** a run has no `durationSeconds` (for example an `InProgress` run)
+- **THEN** `formatRunDuration` returns `undefined` and the row shows no duration
 
 #### Scenario: Row with a conversation id and onRunClick is interactive and invokes the callback
 
-- **WHEN** a row's run has `conversationId: "conversations/bucket/.scheduler/sched_123/run_9f2a"` and the panel was given `onRunClick`
-- **THEN** the row exposes `role="button"`, `tabIndex={0}`, and a pointer cursor, and clicking it (or pressing Enter/Space while it is focused) calls `onRunClick` exactly once with that run
+- **WHEN** a `Success` row's run has `conversationId: "conversations/bucket/.scheduler/sched_123/run_9f2a"` and the panel was given `onRunClick`
+- **THEN** the row renders a native button with a pointer cursor and the hover tint
+- **AND** clicking it, or pressing Enter or Space while it is focused, calls `onRunClick` exactly once with that run
 
 #### Scenario: Row without a conversation id stays static even when onRunClick is supplied
 
-- **WHEN** a row's run has no `conversationId` (absent or `undefined`) and the panel was given `onRunClick`
-- **THEN** the row renders with no button role, no `tabIndex`, and no pointer-cursor affordance, and clicking it or pressing Enter/Space while it is focused does not call `onRunClick`
+- **WHEN** a non-expandable row's run has no `conversationId` (absent or `undefined`) and the panel was given `onRunClick`
+- **THEN** the row renders with no button, no `tabIndex`, no pointer cursor and no hover tint
+- **AND** clicking it, or pressing Enter or Space, does not call `onRunClick`
 
 #### Scenario: Row with a conversation id stays static when onRunClick is omitted
 
-- **WHEN** a row's run has `conversationId` set but the panel was not given `onRunClick`
-- **THEN** the row renders as a static, non-interactive row identical to today's behavior
+- **WHEN** a non-expandable row's run has `conversationId` set but the panel was not given `onRunClick`
+- **THEN** the row renders as a static, non-interactive row
 
-#### Scenario: Unread row shows the dot and folds the label into the accessible name
+#### Scenario: Unread row shows the dot at the row end and folds the label into the accessible name
 
-- **WHEN** a row's item has `isUnread: true`
-- **THEN** the row renders the unread dot (`aria-hidden`) immediately before the timestamp, the timestamp's horizontal position matches a read row's timestamp position, and the row's `aria-label` ends with the row's `unreadIndicatorLabel` text (e.g. `"Succeeded today at 9:01 AM (99s) — Unread"`)
+- **WHEN** a non-expandable row's item has `isUnread: true`
+- **THEN** the row renders the unread dot (`aria-hidden`) in the reserved end slot
+- **AND** its timestamp carries `dial-small-paragraph-semi-text`, at the same horizontal position as a read row's timestamp
+- **AND** the row's accessible name ends with the `unreadIndicatorLabel` text (e.g. `"Succeeded today at 9:01 AM (1m 39s) — Unread"`)
 
 #### Scenario: Read row renders no dot and no unread suffix
 
 - **WHEN** a row's item has `isUnread: false` or `isUnread` is omitted
-- **THEN** no unread dot renders, and the row's `aria-label` contains no unread suffix
+- **THEN** no unread dot renders, and the row's accessible name contains no unread suffix
+
+#### Scenario: Failed run with error text renders collapsed with a chevron
+
+- **WHEN** a row has `status: Error` and `errorText: "The scheduled task failed to complete due to a connection timeout."`
+- **THEN** the row shows the red circle-X at its start and a chevron in its end slot
+- **AND** its header exposes `aria-expanded="false"` and an accessible name made of status, timestamp and duration, without the error text
+- **AND** the error text cannot be reached by Tab and is not in the accessibility tree
+
+#### Scenario: Activating a failed row toggles its details
+
+- **WHEN** the user clicks that row's header, or focuses it and presses Enter or Space
+- **THEN** the header's `aria-expanded` becomes `"true"`, the chevron flips, and the error text appears under the row, starting at the same edge as the timestamp
+- **AND** activating the header again collapses the region
+- **AND** the header never calls `onRunClick`
+
+#### Scenario: Expanded failed run with a conversation offers an Open conversation link
+
+- **WHEN** an expanded `Error` row has `errorText` and `conversationId: "conversations/bucket/.scheduler/sched_123/run_9f2a"`, and the panel was given `onRunClick`
+- **THEN** the region renders a `LinkButton` named by `labels.openConversationLabel` (default "Open conversation")
+- **AND** activating it calls `onRunClick` exactly once with that run
+
+#### Scenario: Expanded failed run without a conversation renders no link
+
+- **WHEN** an expanded `Error` row has `errorText` but no `conversationId`, or the panel was not given `onRunClick`
+- **THEN** the region renders only the error text
+
+#### Scenario: Error run without error text is not expandable
+
+- **WHEN** a row has `status: Error` and `errorText` is absent or empty
+- **THEN** no chevron and no details region render
+- **AND** the row is interactive or static according to its `conversationId`
+
+#### Scenario: Error text on a non-error run is ignored
+
+- **WHEN** a row has `status: Success` and a non-empty `errorText`
+- **THEN** the row is not expandable and the text is not rendered anywhere
+
+#### Scenario: Unread failed run keeps the chevron
+
+- **WHEN** an expandable `Error` row also has `isUnread: true`
+- **THEN** the end slot shows the chevron and no dot
+- **AND** the timestamp is semibold, and the accessible name ends with the `unreadIndicatorLabel` text
+
+#### Scenario: Long error text wraps without breaking the layout
+
+- **WHEN** an expanded row's `errorText` is 600 characters long, includes a 120-character run with no spaces, and renders in a 360px-wide History panel
+- **THEN** the text wraps inside the region, and neither the row nor the History card scrolls horizontally
+
+#### Scenario: Expanded state survives loading more runs
+
+- **WHEN** a failed row is expanded and the user activates "Show more", which appends new rows
+- **THEN** the same row stays expanded and the appended rows render collapsed
+- **AND** no other row's expanded state changes
+
+#### Scenario: Reduced motion opens instantly
+
+- **WHEN** `prefers-reduced-motion: reduce` is set and the user toggles a failed row
+- **THEN** the region opens and closes without a height transition
+
+#### Scenario: RTL places the status icon and chevron on logical edges
+
+- **WHEN** the History panel renders under `dir="rtl"`
+- **THEN** the status icon sits at the right (inline start), and the chevron or unread dot at the left (inline end)
+- **AND** the chevron glyph is not mirrored
 
 ### Requirement: Presentational ScheduledTaskDetailView stays host-agnostic
 
@@ -452,6 +643,24 @@ The app's history adapter and accepted-run effects SHALL separately refresh shar
 - **WHEN** a `deleteScheduledTask` call is in flight
 - **THEN** activating `Cancel`, pressing `Escape`, or otherwise attempting to close the dialog has no effect until the request settles
 
+### Requirement: Delete confirmation dialog is capped at the design's 440px width
+
+The scheduled-task delete confirmation dialog SHALL be capped at a **440px maximum width**, overriding the shared `ConfirmationDialog`'s `PopupSize.Sm` default (400px, owned by the `shared-delete-confirmation` spec and unchanged by this requirement). The cap SHALL be applied by `ScheduledTaskDeleteModal` passing `styles.popupClassName` down to the shared dialog chain (`ScheduledTaskDeleteConfirmation` → `ConfirmationDialog` → the kit `Popup`'s `className`), backed by `apps/chat/src/components/ScheduledTaskDeleteModal/ScheduledTaskDeleteModal.module.scss`:
+
+- Because the ui kit caps popup widths with unlayered `div .dial-sm-popup` rules (max-width 400px), a layered Tailwind `max-w-*` utility loses to them regardless of class order; the stylesheet therefore pins the cap with a doubled class selector (`.modal.modal { max-width: 440px; }`), which raises the rule above the kit's deterministically without `!important` or kit-internal class names.
+- The rule is a cap, not a fixed width: the kit's `.dial-popup` is `width: 100%`, so narrower viewports still shrink the dialog below 440px.
+
+The regression SHALL be guarded by a unit test asserting the dialog element carries the stylesheet's class (`apps/chat/src/components/ScheduledTaskDeleteModal/tests/ScheduledTaskDeleteModal.spec.tsx`). No new state, i18n, routing, feature gating, or observability is introduced; RTL/direction impact: none — a max-width cap is direction-agnostic.
+
+#### Scenario: The dialog carries the 440px cap class
+
+- **WHEN** the delete confirmation dialog renders
+- **THEN** the dialog element's class list includes the `ScheduledTaskDeleteModal.module.scss` class applied through `styles.popupClassName`, pinning the shared dialog's maximum width at 440px
+
+#### Scenario: Narrower viewports still shrink the dialog
+
+- **WHEN** the delete confirmation dialog renders in a viewport narrower than 440px
+- **THEN** the dialog's width follows the viewport (the kit popup is width 100% with the 440px rule acting only as a cap)
 ### Requirement: Delete action calls the BFF and handles success/failure
 
 `ScheduledTaskDetailPage` SHALL call `deleteScheduledTask(scheduleId)` (via `apps/chat/src/server-api/scheduled-tasks.api.ts`) exactly once per confirmed delete, setting `isDeleting: true` for the call's duration. On a successful `204` response, the page SHALL close the confirmation dialog, invalidate or refresh any Scheduled Task queries it holds, show a localized success notification, and navigate to `ROUTES.ScheduledTasks`, leaving no browser-visible application state referencing the deleted task's detail page. On failure, the page SHALL keep the user on the detail page with the previously loaded task data intact, set `isDeleting: false`, allow the user to retry, and show an actionable error notification that distinguishes an already-deleted/not-found failure (upstream 404/409) from a retryable scheduler-unregistration failure (upstream 502) with their localized messages; for any other failure it SHALL show the response's `upstreamMessage` from DIAL Scheduler when present, else a third localized generic message. The page SHALL NOT navigate away from the detail page, and SHALL NOT remove or mark the task as deleted in its own state, before receiving a successful `204` response.
@@ -671,16 +880,16 @@ ScheduledTaskDetailView SHALL expose className, backIcon, typed column layout an
 #### Scenario: History interactions and empty label are configurable
 
 - **WHEN** a history row is hovered or keyboard-focused, or there are no runs
-- **THEN** the configured interaction background/focus treatment is visible, falling back to `--bg-control-accent-alpha` when the host configures none; an empty panel renders the host label, including 'No tasks runs yet' when supplied.
+- **THEN** the configured interaction background/focus treatment is visible, falling back to `--bg-control-accent-alpha-hover-subtle` when the host configures none; an empty panel renders the host label, including 'No tasks runs yet' when supplied.
 
 ### Requirement: Details show independent metadata and load states
 
-The app SHALL use trigger-only descriptions and host-resolved model display names with stored-id fallback. It SHALL preserve explicit not-found/retry states already required by the detail specification. History initial and incremental errors SHALL be separate from task loading; later-page failure SHALL preserve runs.
+The app SHALL use trigger-only descriptions and host-resolved model display names with unavailable presentation after a successful catalog lookup and stored-id fallback only on catalog failure. It SHALL preserve explicit not-found/retry states already required by the detail specification. History initial and incremental errors SHALL be separate from task loading; later-page failure SHALL preserve runs.
 
 #### Scenario: Model name is resolved for display
 
 - **WHEN** a task model id resolves to a deployment with a display name
-- **THEN** details show that name; unresolved ids remain visible as raw-id fallback.
+- **THEN** details show that name; catalog loading hides the field, a confirmed missing model uses unavailable presentation, and catalog failure preserves the raw-id fallback.
 
 #### Scenario: Task not-found never becomes a blank page
 
@@ -694,12 +903,12 @@ The app SHALL use trigger-only descriptions and host-resolved model display name
 
 ### Requirement: Delete confirmation presentation is reusable and host-configurable
 
-`@epam/ai-dial-scheduled-tasks` SHALL export `ScheduledTaskDeleteConfirmation`, a thin composition of the shared `ConfirmationDialog`, `ConfirmationIdentityCard`, and `ConfirmationIdentityRow` from `@epam/ai-dial-chat-shared` (see the `shared-delete-confirmation` spec), always in the `ConfirmationPopupVariant.Danger` variant. Its props are the controlled `open` and `isDeleting` state; `taskName`; a host-supplied `icon` and `typeLabel` for the identity card; host-provided `title` (a `string`, not a `ReactNode`, because the kit names the dialog only from a string header), `body` (`ReactNode`, so the host can bold the task name), `consequences`, `cancelLabel`, `confirmLabel`, and `pendingLabel`; `onConfirm` / `onClose`; and `styles` (`popupClassName`, `titleClassName`, `messageClassName` defaulting to `'dial-body-paragraph-text'`, and `colors.typeLabelText`). It SHALL NOT carry its own Tailwind colors, its own button row, or a cancel-appearance switch — Cancel is always the shared footer's text button. It SHALL render safe React content and contain no API, routing or i18n imports. The parent SHALL retain mutation, notification and navigation ownership.
+`@epam/ai-dial-scheduled-tasks` SHALL export `ScheduledTaskDeleteConfirmation`, a thin composition of the shared `ConfirmationDialog`, `ResourceSummary` (the plain neutral surface, not the red-tinted catalog card), and `ConfirmationIdentityRow` from `@epam/ai-dial-chat-shared` (see the `shared-delete-confirmation` spec), always in the `ConfirmationPopupVariant.Danger` variant. Its props are the controlled `open` and `isDeleting` state; `taskName`; a host-supplied `icon` and `typeLabel` for the identity card; host-provided `title` (a `string`, not a `ReactNode`, because the kit names the dialog only from a string header), `body` (`ReactNode`, so the host can bold the task name), `consequences`, `cancelLabel`, `confirmLabel`, and `pendingLabel`; `onConfirm` / `onClose`; and `styles` (`popupClassName`, `titleClassName`, `messageClassName` defaulting to `'dial-body-paragraph-text'`, and `colors.typeLabelText`). It SHALL NOT carry its own Tailwind colors, its own button row, or a cancel-appearance switch — Cancel is always the shared footer's text button. It SHALL render safe React content and contain no API, routing or i18n imports. The parent SHALL retain mutation, notification and navigation ownership.
 
 #### Scenario: Host supplies the complete deletion design
 
 - **WHEN** the host passes the title 'Delete task', a clock icon, the type label 'Scheduled task', a body with the bolded task name, and the consequence bullets
-- **THEN** the confirmation renders the danger identity card (icon, uppercased type, name), the body, the bullets, a text Cancel, and a danger Delete with a leading trash icon, without private selectors or hardcoded package English.
+- **THEN** the confirmation renders the plain neutral identity row (icon, uppercased type, name), the body, the bullets, a text Cancel, and a danger Delete with a leading trash icon, without private selectors or hardcoded package English.
 
 #### Scenario: Cancel and confirm have distinct effects
 
@@ -732,9 +941,9 @@ When the loaded task has `isCompleted: true` (a finished one-time schedule, or a
 
 ### Requirement: Skill display covers reusable summaries and the active Configuration view
 
-`ScheduledTaskDetailsSummary` and `ScheduledTaskConfigurationSection` SHALL accept optional localized `skillLabel` and resolved `skillDisplayNames: string[]`; `ScheduledTaskDetailView` SHALL forward its optional skill value and label to Configuration. The host SHALL pass the skill's resolved display name or full raw reference, independent of catalog loading/failure. No skill SHALL produce no Skill field. Values SHALL be plain text, without a details link. Libraries SHALL perform no lookup or navigation.
+`ScheduledTaskDetailsSummary` and `ScheduledTaskConfigurationSection` SHALL accept optional localized `skillLabel` and resolved `skillDisplayNames: string[]`; `ScheduledTaskDetailView` SHALL forward its optional skill value and label to Configuration. The host SHALL pass resolved names with optional `renderSkillName` and `renderModelName` callbacks for availability presentation; it SHALL pass an empty skill array while any selected reference is resolving. Confirmed unavailable references and temporary failures SHALL be distinguished as defined by scheduled-task-resource-availability. No skill SHALL produce no Skill field. Values SHALL have no details link; unavailable values SHALL include localized tooltips. Libraries SHALL perform no lookup or navigation.
 
-The full detail page SHALL render Skill above Instructions in Configuration on desktop and in the mobile Configuration tab, preserving Model in Details. The conversation sources panel SHALL pass the same saved-task metadata to the reusable summary, ordered Model, Skill, Instructions. Skill-only tasks SHALL render without an empty Instructions block or an empty Configuration section. Lookup failure SHALL NOT replace task content with an error screen. The page root SHALL clip overflow: the active mobile tab owns the body scrollbar, while the desktop body is a non-wrapping clipped row whose Details, Configuration, and History columns scroll independently beneath the fixed header. The existing detail task state remains the source of truth; no new context is added.
+The full detail page SHALL render Skill above Instructions in Configuration on desktop and in the mobile Configuration tab, preserving Model in Details. Below 1280px the Details/Configuration/History tab bar SHALL stay pinned to the top of the tab scroller (sticky, on the page background) while the active panel scrolls beneath it, and the title row, tab bar and tab panel SHALL use 16px inline gutters. The conversation sources panel SHALL pass the same saved-task metadata to the reusable summary, ordered Model, Skill, Instructions. Skill-only tasks SHALL render without an empty Instructions block or an empty Configuration section. Lookup failure SHALL NOT replace task content with an error screen. The page root SHALL clip overflow: the active mobile tab owns the body scrollbar, while the desktop body is a non-wrapping clipped row whose Details, Configuration, and History columns scroll independently beneath the fixed header. The existing detail task state remains the source of truth; no new context is added.
 
 #### Scenario: Present skill resolves to a readable name
 
@@ -744,7 +953,7 @@ The full detail page SHALL render Skill above Instructions in Configuration on d
 #### Scenario: Deleted unreadable or loading skill metadata
 
 - **WHEN** the saved reference cannot be resolved because it is deleted, unreadable, loading, or lookup failed
-- **THEN** the full reference is displayed as text, other task metadata remains visible, and no broken details link appears
+- **THEN** pending skill metadata hides the Skill field; HTTP 400/403/404 produces the unavailable presentation; other settled failures retain the full-reference fallback; other task metadata remains visible and no broken details link appears
 
 #### Scenario: No skill preserves the established view
 
@@ -755,6 +964,7 @@ The full detail page SHALL render Skill above Instructions in Configuration on d
 
 - **WHEN** a skill-only task is viewed in a narrow RTL Configuration tab
 - **THEN** the Skill field remains visible, wraps its name/reference, inherits direction, and no empty instructions field is shown
+
 ### Requirement: Detail view body renders section tabs at mobile and tablet
 
 `ScheduledTaskDetailView` SHALL branch its body layout on the app-wide mobile boundary (`useIsMobile` from `@epam/ai-dial-chat-shared`, `(max-width: 1279px)`), mounting exactly one layout's subtree at a time — never mounting both layouts and hiding one with CSS.
@@ -802,7 +1012,7 @@ The three section bodies (Details fields, Configuration instructions, History ru
 
 ### Requirement: Start now immediately exposes the accepted run in History
 
-`ScheduledTaskDetailPage` SHALL use a page-scoped app hook `useStartScheduledTask` in `apps/chat/src/hooks/scheduled-tasks/` for manual-run mutation state, accepted run DTOs and status tracking; the existing `useScheduledTaskRuns` SHALL retain history pagination ownership. No new context SHALL be introduced. The feature SHALL inherit `scheduledTasksEnabled` and its existing role policy.
+`ScheduledTaskDetailPage` SHALL use the page-scoped hook `useStartScheduledTask` from `libs/chat-hooks/src/scheduled-task/useStartScheduledTask.ts` (root and `./scheduled-tasks`), bound to the app's `startScheduledTask`/`getScheduledTaskRun` server-api functions through its `api` option, for manual-run mutation state, accepted run DTOs and status tracking; the existing `useScheduledTaskRuns` SHALL retain history pagination ownership. No new context SHALL be introduced. The feature SHALL inherit `scheduledTasksEnabled` and its existing role policy.
 
 For a loaded, non-deleted task, Start now SHALL execute the saved definition through `startScheduledTask(scheduleId)` exactly once per activation, with no confirmation dialog or payload override. The action SHALL be disabled while its POST is pending, deletion or Active mutation is pending, or any known run is InProgress. A synchronous guard SHALL prevent duplicate dispatch before the disabled state renders. Paused, completed and expired schedules SHALL remain manually runnable; the operation SHALL NOT resume or edit them.
 
@@ -906,7 +1116,7 @@ An Error run with `resultStage === 'credentials'` SHALL retain its History row a
 
 The app SHALL translate all new UI strings using the `scheduledTasks.detail` keys `startNow`, `starting`, `startAccepted`, `startBusy`, `startNotFound`, `startDeleted`, `startError`, `runStatusUnavailable`, `runStatusDelayed`, `refreshRunStatus`, `runCredentialsRequired` and `runFinished`, plus existing status/login labels. Libraries SHALL receive resolved strings as props. The action SHALL use a generation-2 UI Kit button and a decorative Tabler play icon with `DIAL_KIT_ICON_STROKE`.
 
-Desktop SHALL show Start now after Edit. Below 1280px, header actions SHALL wrap as needed, retain the Start now text, and use at least 44-by-44px touch targets without horizontal overflow at 360px; existing Details/Configuration/History tabs and selection SHALL remain. Acceptance SHALL be announced even when the History tab is not selected, without switching tabs or stealing focus. RTL SHALL inherit direction, use logical properties and mirror navigation arrows; the media-play symbol SHALL remain direction-independent.
+Desktop SHALL show Start now after Edit. Below 1280px, Delete and Edit SHALL render icon-only (Edit as a round button) while keeping their localized labels as accessible names, header actions SHALL wrap as needed, retain the Start now text, and use at least 44-by-44px touch targets without horizontal overflow at 360px; existing Details/Configuration/History tabs and selection SHALL remain. Acceptance SHALL be announced even when the History tab is not selected, without switching tabs or stealing focus. RTL SHALL inherit direction, use logical properties and mirror navigation arrows; the media-play symbol SHALL remain direction-independent.
 
 Keyboard Enter/Space SHALL invoke the same guarded action. Decorative icons SHALL be aria-hidden. Pending controls SHALL expose disabled/busy state, acceptance/completion SHALL use a polite live region with no repeated announcements on unchanged polls, and errors SHALL use an alert. The delayed-status Refresh status control SHALL use a generation-2 `GhostButton` with a minimum 44px touch target; the status text itself SHALL not create a second live announcement. Completion announcements SHALL interpolate the localized run-status label, never the raw Scheduler status enum. Focus visibility and text contrast SHALL satisfy the repository AAA target. Existing HTTP observability suffices; no new analytics or client cache SHALL be introduced.
 
@@ -924,3 +1134,33 @@ Keyboard Enter/Space SHALL invoke the same guarded action. Decorative icons SHAL
 
 - **WHEN** a host renders ScheduledTaskDetailView without the optional start props
 - **THEN** no Start now control is rendered and its established detail/history behavior is preserved
+
+### Requirement: Repeats field renders the every-N-weeks custom schedule label
+
+The detail page's Details section "Repeats" value SHALL render the label produced by the same shared formatter the list page uses — `describeScheduledTaskTrigger` (extended per `scheduled-tasks-page-ui`'s "Custom schedule label renders every-N-weeks copy") consumed through `formatScheduledTaskScheduleLabel` (`libs/chat-hooks/src/scheduled-task/scheduled-task-display.ts`) via `buildScheduleLabel` in `apps/chat/src/utils/map-scheduled-task-dto.ts` — with no formatter duplication inside the detail page or `libs/scheduled-tasks`: the weekday-list label for Custom tasks with several days, and the generic "Recurring schedule" label for tasks written by the former, never released every-N-weeks Custom option. A custom task's "Next run" value continues to come from the server's `nextRunTime` with no client-side cron evaluation. A Custom task may now carry an activity window: the active-window label and the active-switch disabling read `trigger.cron.startDate`/`endDate` exactly as for Weekly, and `getNextCronOccurrence` (`libs/chat-hooks/src/scheduled-task/scheduled-task-next-occurrence.ts`) — invoked only when the window has an `endDate`, no `startDate`, and the server has no `nextRunTime` — SHALL accept a comma-separated `day_of_week` list and return the earliest matching day.
+
+#### Scenario: Custom task's Repeats value shows the structured label
+
+- **WHEN** the detail page loads a task whose `trigger.cron.fields` is `{ week: '*/2', day_of_week: '1', hour: '7', minute: '0' }`
+- **THEN** the Details section's "Repeats" value shows the same "Recurring schedule" fallback label the card shows (the scenario name is historical: the every-N-weeks label was removed)
+
+#### Scenario: Multi-day Custom task's Repeats value
+
+- **WHEN** the detail page loads a task whose `trigger.cron.fields` is `{ day_of_week: '0,2,4', hour: '7', minute: '0' }` in a UTC+2 browser
+- **THEN** the "Repeats" value shows "Every Monday, Wednesday and Friday at 9:00 AM", the same label the card shows
+
+#### Scenario: Custom task's next run comes from the server
+
+- **WHEN** the detail page loads an active custom task whose `nextRunTime` is set by the BFF
+- **THEN** the "Next run" value renders that server-provided instant formatted with `Intl.DateTimeFormat`, with no client-side computation of the next occurrence
+
+#### Scenario: No active-window label renders for a custom task
+
+- **WHEN** the detail page loads a custom task whose `trigger.cron` has no `endDate`
+- **THEN** no active-window label renders — `getNextCronOccurrence` is never called for the task
+
+#### Scenario: A Custom task's window drives the label and the switch
+
+- **WHEN** the detail page loads an inactive Custom task with `day_of_week: '0,2'`, an `endDate`, no `startDate` and no `nextRunTime`
+- **THEN** the active-window label starts at the earliest upcoming Monday or Wednesday occurrence returned by `getNextCronOccurrence`, and a past `endDate` disables the active switch exactly as for Weekly
+

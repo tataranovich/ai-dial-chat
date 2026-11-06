@@ -1,4 +1,9 @@
-import { BadGatewayException, ForbiddenException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  ConflictException,
+  ForbiddenException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DialClientService } from '../../dial/dial-client.service';
 import { PublishRuleFunction } from '../../publish/dto/publish-rule.dto';
@@ -6,12 +11,17 @@ import {
   ConversationPublishService,
   PUBLISH_WHILE_GENERATING_MESSAGE,
 } from '../conversation-publish.service';
+import { ConversationErrorCode } from '../types/conversation-error-code.enum';
 
 const okResponse = (data: unknown) =>
-  ({ data, response: {} as Response }) as never;
+  ({ data, response: { ok: true, status: 200 } as Response }) as never;
 
 const errResponse = (status: number) =>
-  ({ error: {}, response: { status } as Response }) as never;
+  ({ error: {}, response: { ok: false, status } as Response }) as never;
+
+// `openapi-fetch` leaves `error` undefined when the error body is empty.
+const emptyErrResponse = (status: number) =>
+  ({ response: { ok: false, status } as Response }) as never;
 
 const makeCacheManager = () => ({
   get: vi.fn(),
@@ -29,11 +39,26 @@ const makeService = () => {
     },
   } as unknown as DialClientService;
   const cacheManager = makeCacheManager();
+  const deploymentsService = {
+    resolveDeploymentItem: vi.fn().mockResolvedValue(null),
+  };
+  const attachmentsService = {
+    buildAddResources: vi.fn().mockResolvedValue([]),
+    buildDeleteResources: vi.fn().mockResolvedValue([]),
+  };
   const service = new ConversationPublishService(
     dialClient,
     cacheManager as never,
+    deploymentsService as never,
+    attachmentsService as never,
   );
-  return { service, dialClient, cacheManager };
+  return {
+    service,
+    dialClient,
+    cacheManager,
+    deploymentsService,
+    attachmentsService,
+  };
 };
 
 describe('ConversationPublishService', () => {
@@ -254,6 +279,33 @@ describe('ConversationPublishService', () => {
       expect(dialClient.client.createPublication).not.toHaveBeenCalled();
     });
 
+    it('refuses with conversationModelHidden when the conversation model is hidden, and publishes nothing', async () => {
+      const { service, dialClient, deploymentsService } = makeService();
+      vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
+        okResponse({ name: 'Chat', messages: [], model: { id: 'gpt-4o' } }),
+      );
+      deploymentsService.resolveDeploymentItem.mockResolvedValue({
+        id: 'gpt-4o',
+        isHidden: true,
+      });
+
+      const error = await service
+        .publish(
+          'token-abc',
+          'bucket-123',
+          'my-conversation-abc',
+          'Organization/Data Science',
+          'Test User',
+        )
+        .catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(ForbiddenException);
+      expect((error as ForbiddenException).getResponse()).toMatchObject({
+        code: ConversationErrorCode.ModelHidden,
+      });
+      expect(dialClient.client.createPublication).not.toHaveBeenCalled();
+    });
+
     it('publishes a conversation whose background answer already finished', async () => {
       const { service, dialClient } = makeService();
       vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
@@ -324,6 +376,26 @@ describe('ConversationPublishService', () => {
           'Test User',
         ),
       ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('maps a Core 409 with an empty body on createPublication to ConflictException', async () => {
+      const { service, dialClient } = makeService();
+      vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
+        okResponse({ name: 'Q3 planning notes' }),
+      );
+      vi.spyOn(dialClient.client, 'createPublication').mockResolvedValue(
+        emptyErrResponse(409),
+      );
+
+      await expect(
+        service.publish(
+          'token-abc',
+          'bucket-123',
+          'my-conversation-abc',
+          'Organization/Production',
+          'Test User',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('maps an unexpected thrown error on createPublication to BadGatewayException', async () => {
@@ -520,5 +592,106 @@ describe('ConversationPublishService', () => {
         ),
       ).rejects.toBeInstanceOf(BadGatewayException);
     });
+  });
+});
+
+describe('ConversationPublishService.publish attachment files', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sends the attachment files as additional ADD resources after the conversation', async () => {
+    const { service, dialClient, attachmentsService } = makeService();
+    vi.mocked(dialClient.client.getConversation).mockResolvedValue(
+      okResponse({ name: 'Q3 planning notes', messages: [] }),
+    );
+    vi.mocked(dialClient.client.createPublication).mockResolvedValue(
+      okResponse({ createdAt: 1_700_000_000_000 }),
+    );
+    attachmentsService.buildAddResources.mockResolvedValue([
+      {
+        action: 'ADD',
+        sourceUrl: 'files/bucket-123/docs/report.pdf',
+        targetUrl:
+          'files/public/Organization/Data%20Science/my-conversation-abc/docs/report.pdf',
+      },
+    ]);
+
+    await service.publish(
+      'token',
+      'bucket-123',
+      'my-conversation-abc',
+      'Organization/Data Science',
+      'Test User',
+    );
+
+    expect(attachmentsService.buildAddResources).toHaveBeenCalledWith(
+      'token',
+      'bucket-123',
+      expect.objectContaining({ name: 'Q3 planning notes' }),
+      'Organization/Data Science',
+      'my-conversation-abc',
+    );
+    const call = vi.mocked(dialClient.client.createPublication).mock
+      .calls[0][0] as { body: { resources: unknown[] } };
+    expect(call.body.resources).toEqual([
+      {
+        action: 'ADD',
+        sourceUrl: 'conversations/bucket-123/my-conversation-abc',
+        targetUrl:
+          'conversations/public/Organization/Data%20Science/my-conversation-abc',
+      },
+      {
+        action: 'ADD',
+        sourceUrl: 'files/bucket-123/docs/report.pdf',
+        targetUrl:
+          'files/public/Organization/Data%20Science/my-conversation-abc/docs/report.pdf',
+      },
+    ]);
+  });
+
+  it('sends only the conversation resource when there are no attachment files', async () => {
+    const { service, dialClient } = makeService();
+    vi.mocked(dialClient.client.getConversation).mockResolvedValue(
+      okResponse({ name: 'Notes', messages: [] }),
+    );
+    vi.mocked(dialClient.client.createPublication).mockResolvedValue(
+      okResponse({ createdAt: 1_700_000_000_000 }),
+    );
+
+    await service.publish(
+      'token',
+      'bucket-123',
+      'my-conversation-abc',
+      'Org',
+      'Test User',
+    );
+
+    const call = vi.mocked(dialClient.client.createPublication).mock
+      .calls[0][0] as { body: { resources: unknown[] } };
+    expect(call.body.resources).toHaveLength(1);
+  });
+
+  it('does not call createPublication when an attachment is missing', async () => {
+    const { service, dialClient, attachmentsService, cacheManager } =
+      makeService();
+    vi.mocked(dialClient.client.getConversation).mockResolvedValue(
+      okResponse({ name: 'Notes', messages: [] }),
+    );
+    attachmentsService.buildAddResources.mockRejectedValue(
+      new UnprocessableEntityException('missing'),
+    );
+
+    await expect(
+      service.publish(
+        'token',
+        'bucket-123',
+        'my-conversation-abc',
+        'Org',
+        'Test User',
+      ),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(dialClient.client.createPublication).not.toHaveBeenCalled();
+    expect(cacheManager.del).not.toHaveBeenCalled();
   });
 });

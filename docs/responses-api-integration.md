@@ -40,19 +40,22 @@ Browser
   |
   | POST /api/v1/conversations/completions
   v
-ConversationController
+ConversationGenerationController
   |
   v
-ConversationService
+ConversationStreamingService
   |
-  | retrieves current deployment details from DIAL Core
-  | and reads features.responsesApi
+  v
+GenerationApiSelector
+  |
+  | retrieves current deployment details from DIAL Core,
+  | reads features.responsesApi and the feature flags
   v
 resolveGenerationApi()
   |                              |
   | true                         | false / absent
   v                              v
-ResponsesAdapter             ConversationStreamingService
+ResponsesAdapter             ChatCompletionsAdapter
   |                              |
   | POST /openai/v1/responses    | Chat Completions request
   v                              v
@@ -65,9 +68,10 @@ DIAL Core                    DIAL Core
        status, and generation stop handling
 ```
 
-The Responses mode is isolated in `ResponsesAdapter`. The active Chat Completions
-relay remains in `ConversationStreamingService.relayModelCompletion`; the dormant
-`ChatCompletionsAdapter` refactor is not used for runtime dispatch. Both modes
+`GenerationApiSelector.select` chooses the generation API for each completion.
+The Responses mode is isolated in `ResponsesAdapter` and the Chat Completions
+mode in `ChatCompletionsAdapter`; `ConversationStreamingService.streamCompletion`
+calls `buildRequest` and `stream` on whichever one was selected. Both modes
 preserve the existing external Chat contract and shared conversation-history
 logic.
 
@@ -167,7 +171,7 @@ The streaming frontend deliberately continues to use raw `fetch` for
 `xTimezone?: string`, neither that method nor its `Raw` variant exposes the live
 response body needed by the existing SSE reader.
 
-`ConversationController` validates a present header before generation starts.
+`ConversationGenerationController` validates a present header before generation starts.
 It must be a single IANA timezone string, no longer than 255 characters, match
 the safe timezone-segment syntax, and be accepted by `Intl.DateTimeFormat`.
 Malformed, unknown, oversized, or multi-value input returns `400 Bad Request`
@@ -177,13 +181,40 @@ compatibility.
 The validated value stays request-local. The BFF forwards it unchanged as
 `X-Timezone` through both active upstream paths:
 
-- Chat Completions via
-  `ConversationStreamingService.relayModelCompletion` and
+- Chat Completions via `ChatCompletionsAdapter.stream` and
   `sendChatCompletionRequest`;
 - Responses via `ResponsesAdapter` and `createResponse`.
 
 The timezone is context for DIAL Core only. Chat does not persist it, cache it,
 put it into metrics, or include it in logs.
+
+### Browser language context
+
+The same pipeline carries the app's current UI language. For each completion
+request, the frontend resolves the active i18n locale (`i18n.language`, the
+user's chosen UI language — the best predictor of the language they expect
+documents and names in, even when it has no registered translation bundle and
+the UI renders English) and sends it as the optional request header:
+
+```http
+X-Lang: en
+```
+
+`ConversationController` validates a present header before generation starts
+(`assertValidOptionalLang`, `apps/chat-api/src/conversations/utils/lang-header.ts`):
+a single BCP-47-like string of at most 35 characters
+(`^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$`). Malformed, oversized, or multi-value
+input returns `400 Bad Request` without calling DIAL Core; an absent header is
+accepted for backward compatibility. The validated value stays request-local
+and the BFF forwards it unchanged as `X-Lang` through both upstream paths
+(Chat Completions and Responses) for language-sensitive tools and agents.
+Deployments whose DIAL Core reads a language header must set DIAL Core's own
+`PROXY_LANGUAGE_HEADER` setting to `X-Lang`; note that
+`PROXY_LANGUAGE_HEADER` is a DIAL Core setting, not a legacy chat variable —
+the legacy chat's same-named variable (default `accept-language` since #8377)
+is gone, and 1.0 always sends `X-Lang` with no configuration of its own (see
+[`legacy-chat-migration-guide.md`](./legacy-chat-migration-guide.md)). Chat
+does not persist, cache, or log the value.
 
 ## Responses API Request
 
@@ -226,9 +257,9 @@ Mapping rules:
 
 The request also includes the user's Bearer token, `Accept: text/event-stream`,
 an AbortSignal, the stable persisted conversation id in `X-CONVERSATION-ID`,
-`X-DIAL-CLIENT-CHANNEL-ID` when available, and the validated `X-Timezone` when
-supplied by the browser. The Chat Completions adapter forwards the same
-conversation and timezone headers.
+`X-DIAL-CLIENT-CHANNEL-ID` when available, and the validated `X-Timezone` and
+`X-Lang` when supplied by the browser. The Chat Completions adapter forwards
+the same conversation, timezone and language headers.
 
 Both adapters build the conversation header through
 `buildConversationIdHeaders` (`apps/chat-api/src/common/utils/header-value.ts`),
@@ -507,7 +538,7 @@ Possible `generation.api` values:
 | Responses request and SSE parser            | `apps/chat-api/src/conversations/generation/responses.adapter.ts`                                                                                                                 |
 | Active Chat Completions flow                | `apps/chat-api/src/conversations/streaming/conversation-streaming.service.ts`                                                                                                     |
 | Browser timezone resolution and SSE request | `apps/chat/src/utils/browser-timezone.ts`, `apps/chat/src/server-api/chat-stream.api.ts`                                                                                          |
-| Timezone header validation                  | `apps/chat-api/src/conversations/utils/timezone-header.ts`, `apps/chat-api/src/conversations/conversation.controller.ts`                                                          |
+| Timezone header validation                  | `apps/chat-api/src/conversations/utils/timezone-header.ts`, `apps/chat-api/src/conversations/conversation-generation.controller.ts`                                               |
 | Metrics                                     | `apps/chat-api/src/conversations/generation/generation-metrics.ts`                                                                                                                |
 | Orchestration and conversation persistence  | `apps/chat-api/src/conversations/conversation.service.ts`                                                                                                                         |
 | Deployment-details retrieval and caching    | `apps/chat-api/src/deployments/deployments.service.ts`                                                                                                                            |

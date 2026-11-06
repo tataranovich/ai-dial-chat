@@ -6,6 +6,8 @@ import {
   GhostButton,
   NeutralButton,
   Spinner,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import { IconTrashX } from '@tabler/icons-react';
 import { FC } from 'react';
@@ -91,25 +93,30 @@ export const ConfirmationFooter: FC<ConfirmationFooterProps> = ({
     <div
       style={cssVars}
       className={mergeClasses(
-        'flex items-center justify-end gap-2 px-6 py-4 rtl:flex-row-reverse rtl:justify-start',
+        'flex items-center justify-end gap-2 px-4 py-4 rtl:flex-row-reverse rtl:justify-start desktop:px-6',
         styles.footer,
       )}
     >
+      {/* Below the desktop breakpoint Cancel and the confirm action split the row
+          in half, as the mobile design puts it. */}
       <GhostButton
         label={cancelLabel}
+        className="mobile:flex-1"
         disabled={isLoading}
         onClick={onCancel}
       />
       <ConfirmButton
         label={confirmLabel}
+        className="mobile:flex-1"
         disabled={isLoading || isConfirmDisabled}
         iconBefore={iconBefore}
         onClick={onConfirm}
       />
-      {isLoading && loadingStatusLabel != null && (
-        <span role="status" aria-live="polite" className="sr-only">
-          {loadingStatusLabel}
-        </span>
+      {/* Mounted whenever a label is supplied, so the region exists before loading starts. */}
+      {loadingStatusLabel != null && (
+        <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
+          {isLoading ? loadingStatusLabel : ''}
+        </LiveRegion>
       )}
     </div>
   );

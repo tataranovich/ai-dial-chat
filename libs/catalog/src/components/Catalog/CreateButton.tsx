@@ -1,4 +1,4 @@
-import { mergeClasses } from '@epam/ai-dial-chat-shared';
+import { mergeClasses, useIsPhone } from '@epam/ai-dial-chat-shared';
 import {
   Button,
   ButtonAppearance,
@@ -6,21 +6,18 @@ import {
   ButtonVariant,
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
-  Dropdown,
   DropdownItem,
-  DropdownItemType,
-  ElementSize,
   PrimaryButton,
-  Search,
 } from '@epam/ai-dial-ui-kit';
 import { IconChevronDown, IconPlus } from '@tabler/icons-react';
-import { FC, useRef, useState } from 'react';
+import { FC, MouseEvent, useState } from 'react';
 import {
   CREATE_MENU_LIST_CLASS_NAME,
-  CREATE_MENU_MAX_HEIGHT_PX,
+  CREATE_MENU_VISIBLE_ROWS,
 } from '../../constants/create-menu';
 import type { CatalogCreateSearch } from '../../models/catalog-props';
-import { highlightDropdownLabels } from '../../utils/create-menu';
+import type { CreateMenuColors } from '../../models/catalog-styles';
+import { CreateMenuSheet } from './CreateMenuSheet';
 
 /** Props for the catalog Create button. */
 export interface CreateButtonProps {
@@ -32,7 +29,7 @@ export interface CreateButtonProps {
    */
   options?: DropdownItem[];
   /** Called when the button is clicked and no `options` are present. */
-  onClick?: () => void;
+  onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
   /** When provided, the dropdown shows a search field above `options`; the host filters `options` by its value. */
   search?: CatalogCreateSearch;
   /** Placeholder and accessible name of the search field. Defaults to `'Search'`. */
@@ -41,9 +38,21 @@ export interface CreateButtonProps {
   searchClearLabel?: string;
   /** Text shown when a search leaves no options. Defaults to `'No results found'`. */
   noResultsLabel?: string;
+  /** Accessible name of the mobile menu sheet's back button. Defaults to `'Back'`. */
+  backLabel?: string;
+  /** Accessible name of the mobile menu sheet's close button. Defaults to `'Close'`. */
+  closeLabel?: string;
+  /** Colour variant of the button. Defaults to `ButtonVariant.Primary`. */
+  variant?: ButtonVariant;
+  /** Colors of the mobile menu sheet's divider and section-header rows. */
+  colors?: CreateMenuColors;
+  /** Typography class of a section header in the mobile menu sheet. Defaults to `'dial-caption-text'`. */
+  sectionHeaderClassName?: string;
+  /** Renders a round icon-only `+` button, named by `label`, whose menu follows the phone-menu breakpoint; the caller positions it. Defaults to `false`. */
+  isFloating?: boolean;
 }
 
-/** Renders a plain primary button, a split-chevron dropdown, or a searchable dropdown. */
+/** Renders a plain primary button, a split-chevron dropdown, a searchable dropdown, or — on mobile — a menu sheet; optionally as a round floating button. */
 export const CreateButton: FC<CreateButtonProps> = ({
   label,
   options,
@@ -52,90 +61,138 @@ export const CreateButton: FC<CreateButtonProps> = ({
   searchPlaceholder = 'Search',
   searchClearLabel = 'Clear search',
   noResultsLabel = 'No results found',
+  backLabel = 'Back',
+  closeLabel = 'Close',
+  variant = ButtonVariant.Primary,
+  colors,
+  sectionHeaderClassName,
+  isFloating = false,
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const isPhone = useIsPhone();
 
-  if (search) {
-    const searchItems: DropdownItem[] = options?.length
-      ? highlightDropdownLabels(options, search.value)
-      : [
-          {
-            key: 'no-results',
-            type: DropdownItemType.PlainText,
-            label: <span role="status">{noResultsLabel}</span>,
-          },
-        ];
-    const handleOpenChange = (open: boolean) => {
-      setIsOpen(open);
-      if (!open) search.onChange('');
+  const chevron = (
+    <IconChevronDown
+      size={DIAL_ICON_SIZE.SM}
+      stroke={DIAL_KIT_ICON_STROKE}
+      aria-hidden
+      className={mergeClasses('transition-transform', isOpen && 'rotate-180')}
+    />
+  );
+
+  /* The kit's FabButton is a neutral surface; the floating Create keeps the
+   * header button's colour variant, so it is that Button shaped as a circle. */
+  const floatingShapeProps = {
+    iconBefore: (
+      <IconPlus
+        size={DIAL_ICON_SIZE.LG}
+        stroke={DIAL_KIT_ICON_STROKE}
+        aria-hidden
+      />
+    ),
+    'aria-label': label,
+    className: 'size-12 rounded-full px-0',
+  };
+
+  /* Side flyouts do not fit phone screens. Floating triggers retain their
+   * shape on tablets but use the same anchored menu as other triggers. */
+  if (isPhone && (search || options?.length)) {
+    const handleSheetClose = () => {
+      setIsOpen(false);
+      search?.onChange('');
     };
 
     return (
-      <div ref={containerRef}>
-        <Dropdown
-          items={searchItems}
-          maxDropdownHeight={CREATE_MENU_MAX_HEIGHT_PX}
-          placement="bottom-end"
-          matchReferenceWidth={false}
-          listClassName={CREATE_MENU_LIST_CLASS_NAME}
-          menuHeader={
-            <div className="sticky -top-1 z-10 bg-layer-raised px-2 pb-1 pt-2">
-              <Search
-                value={search.value}
-                placeholder={searchPlaceholder}
-                aria-label={searchPlaceholder}
-                clearLabel={searchClearLabel}
-                size={ElementSize.Small}
-                onChange={(value) => search.onChange(value ?? '')}
-              />
-            </div>
-          }
-          onOpenChange={handleOpenChange}
-        >
-          <Button
-            label={label}
-            variant={ButtonVariant.Primary}
-            appearance={ButtonAppearance.Solid}
-            iconAfter={
-              <IconChevronDown
-                size={DIAL_ICON_SIZE.SM}
-                stroke={DIAL_KIT_ICON_STROKE}
-                aria-hidden
-                className={mergeClasses(
-                  'transition-transform',
-                  isOpen && 'rotate-180',
-                )}
-              />
-            }
-            aria-haspopup="menu"
-            aria-expanded={isOpen}
-          />
-        </Dropdown>
-      </div>
+      <>
+        <Button
+          {...(isFloating ? floatingShapeProps : { label, iconAfter: chevron })}
+          variant={variant}
+          appearance={ButtonAppearance.Solid}
+          aria-haspopup="dialog"
+          aria-expanded={isOpen}
+          onClick={() => setIsOpen(true)}
+        />
+        <CreateMenuSheet
+          open={isOpen}
+          onClose={handleSheetClose}
+          title={label}
+          options={options ?? []}
+          search={search}
+          searchPlaceholder={searchPlaceholder}
+          searchClearLabel={searchClearLabel}
+          noResultsLabel={noResultsLabel}
+          backLabel={backLabel}
+          closeLabel={closeLabel}
+          colors={colors}
+          sectionHeaderClassName={sectionHeaderClassName}
+        />
+      </>
+    );
+  }
+
+  if (isFloating && !search && !options?.length) {
+    return (
+      <Button
+        {...floatingShapeProps}
+        variant={variant}
+        appearance={ButtonAppearance.Solid}
+        onClick={onClick}
+      />
+    );
+  }
+
+  if (search || (isFloating && options?.length)) {
+    return (
+      <ButtonDropdown
+        {...(isFloating
+          ? { ...floatingShapeProps, iconAfter: null }
+          : { label })}
+        variant={variant}
+        appearance={ButtonAppearance.Solid}
+        items={options ?? []}
+        open={isOpen}
+        onOpenChange={setIsOpen}
+        dropdownProps={{
+          searchable: !!search,
+          searchValue: search?.value,
+          onSearchChange: search?.onChange,
+          searchPlaceholder,
+          searchClearLabel,
+          noResultsLabel,
+          maxVisibleItems: CREATE_MENU_VISIBLE_ROWS,
+          placement: 'bottom-end',
+          matchReferenceWidth: false,
+          listClassName: CREATE_MENU_LIST_CLASS_NAME,
+        }}
+      />
     );
   }
 
   if (!options?.length) {
-    return (
-      <PrimaryButton
+    const plusIcon = (
+      <IconPlus size={DIAL_ICON_SIZE.SM} stroke={DIAL_KIT_ICON_STROKE} />
+    );
+    return variant === ButtonVariant.Primary ? (
+      <PrimaryButton label={label} iconBefore={plusIcon} onClick={onClick} />
+    ) : (
+      <Button
         label={label}
-        iconBefore={
-          <IconPlus size={DIAL_ICON_SIZE.SM} stroke={DIAL_KIT_ICON_STROKE} />
-        }
+        variant={variant}
+        appearance={ButtonAppearance.Solid}
+        iconBefore={plusIcon}
         onClick={onClick}
       />
     );
   }
 
   return (
-    <div ref={containerRef}>
-      <ButtonDropdown
-        appearance={ButtonAppearance.Solid}
-        label={label}
-        variant={ButtonVariant.Primary}
-        items={options}
-      />
-    </div>
+    <ButtonDropdown
+      appearance={ButtonAppearance.Solid}
+      label={label}
+      variant={variant}
+      items={options}
+      open={isOpen}
+      onOpenChange={setIsOpen}
+    />
   );
 };

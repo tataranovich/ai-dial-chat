@@ -1,9 +1,10 @@
 import { DialFile, DialFileNodeType } from '@epam/ai-dial-react-file-manager';
 import { DropdownItem } from '@epam/ai-dial-ui-kit';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { FolderDestinationRoot } from '../../../models/folder-destination';
 import { PublishFolderNode } from '../../../models/publish';
 import { PublishFoldersTree } from '../PublishFoldersTree';
 import styles from '../PublishFoldersTree.module.scss';
@@ -129,6 +130,16 @@ describe('PublishFoldersTree', () => {
     expect(
       capturedProps.current?.items[0]?.items?.[0]?.items?.map((f) => f.path),
     ).toEqual(['Shared/Data Science']);
+  });
+
+  it('passes the trimmed query to the tree for highlighting while filtering', () => {
+    renderTree({ searchQuery: '  data  ' });
+    expect(capturedProps.current?.searchQuery).toBe('data');
+  });
+
+  it('passes no highlight query without a search', () => {
+    renderTree({ searchQuery: '   ' });
+    expect(capturedProps.current?.searchQuery).toBeUndefined();
   });
 
   it('passes a no-results empty state title when search matches nothing, and omits the root node', () => {
@@ -381,6 +392,36 @@ describe('PublishFoldersTree', () => {
     expect(onCreateFolder).not.toHaveBeenCalled();
   });
 
+  it('drops the commits the editor raises on a Cancel press and on its own removal', async () => {
+    const onCreateFolder = vi.fn();
+    renderTree({ onCreateFolder });
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Create new folder' }),
+    );
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    fireEvent.pointerDown(cancel);
+    act(() => capturedProps.current?.onCreateFolderSave?.('New folder'));
+    await userEvent.click(cancel);
+    act(() => capturedProps.current?.onCreateFolderSave?.('New folder'));
+    expect(onCreateFolder).not.toHaveBeenCalled();
+    expect(capturedProps.current?.createdFolderPath).toBeNull();
+  });
+
+  it('creates a folder again after a cancelled creation', async () => {
+    const onCreateFolder = vi.fn();
+    renderTree({ onCreateFolder, selectedPath: ['Shared'] });
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Create new folder' }),
+    );
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Cancel' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Create new folder' }),
+    );
+    act(() => capturedProps.current?.onCreateFolderSave?.('Model releases'));
+    expect(onCreateFolder).toHaveBeenCalledWith(['Shared'], 'Model releases');
+  });
+
   it('supports a custom folder-creation cancel label', async () => {
     renderTree({ cancelCreatingFolderLabel: 'Discard folder' });
     await userEvent.click(
@@ -497,6 +538,257 @@ describe('PublishFoldersTree', () => {
       expect(capturedProps.current?.createdFolderPath).toBe('Shared');
       expect(capturedProps.current?.expandedPaths).toEqual(
         new Set(['', 'Shared']),
+      );
+    });
+  });
+
+  describe('multi-root mode', () => {
+    const roots: FolderDestinationRoot[] = [
+      {
+        key: 'personal',
+        label: 'Personal',
+        items: [
+          { path: ['zeta'], name: 'zeta' },
+          {
+            path: ['Design'],
+            name: 'Design',
+            children: [{ path: ['Design', 'Audit'], name: 'Audit' }],
+          },
+        ],
+      },
+      {
+        key: 'organization',
+        label: 'Organization',
+        items: [{ path: ['EPAM'], name: 'EPAM' }],
+      },
+    ];
+
+    const renderMultiRoot = (
+      props?: Partial<ComponentProps<typeof PublishFoldersTree>>,
+    ) =>
+      render(
+        <PublishFoldersTree
+          roots={roots}
+          searchQuery=""
+          onDestinationChange={vi.fn()}
+          onCreateDestinationFolder={vi.fn()}
+          {...props}
+        />,
+      );
+
+    const rootFile = (key: string, name: string): DialFile => ({
+      path: `:${key}`,
+      name,
+      folderId: `:${key}`,
+      nodeType: DialFileNodeType.FOLDER,
+    });
+
+    it('renders one top-level node per root in the given order, with folders sorted inside each', () => {
+      renderMultiRoot();
+      expect(capturedProps.current?.items.map((file) => file.name)).toEqual([
+        'Personal',
+        'Organization',
+      ]);
+      expect(
+        capturedProps.current?.items[0]?.items?.map((file) => file.name),
+      ).toEqual(['Design', 'zeta']);
+    });
+
+    it('keeps every root expanded', () => {
+      renderMultiRoot();
+      expect(capturedProps.current?.expandedPaths).toEqual(
+        new Set([':personal', ':organization']),
+      );
+    });
+
+    it('reports a folder selection as a destination under its root', async () => {
+      const onDestinationChange = vi.fn();
+      renderMultiRoot({ onDestinationChange });
+      await userEvent.click(screen.getByRole('button', { name: 'EPAM' }));
+      expect(onDestinationChange).toHaveBeenCalledWith({
+        rootKey: 'organization',
+        path: ['EPAM'],
+      });
+    });
+
+    it('reports a root selection as an empty path', async () => {
+      const onDestinationChange = vi.fn();
+      renderMultiRoot({ onDestinationChange });
+      await userEvent.click(screen.getByRole('button', { name: 'Personal' }));
+      expect(onDestinationChange).toHaveBeenCalledWith({
+        rootKey: 'personal',
+        path: [],
+      });
+    });
+
+    it('highlights the selected destination', () => {
+      renderMultiRoot({
+        destination: { rootKey: 'personal', path: ['Design', 'Audit'] },
+      });
+      expect(capturedProps.current?.selectedPath).toBe(
+        ':personal/Design/Audit',
+      );
+    });
+
+    it('filters across all roots', () => {
+      renderMultiRoot({ searchQuery: 'aud' });
+      expect(capturedProps.current?.items.map((file) => file.name)).toEqual([
+        'Personal',
+      ]);
+    });
+
+    it('creates a folder under the selected root and reports it with the root key', async () => {
+      const onCreateDestinationFolder = vi.fn();
+      const onDestinationChange = vi.fn();
+      renderMultiRoot({
+        destination: { rootKey: 'personal', path: ['Design'] },
+        onCreateDestinationFolder,
+        onDestinationChange,
+      });
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Create new folder' }),
+      );
+      expect(capturedProps.current?.createdFolderPath).toBe(':personal/Design');
+      act(() => capturedProps.current?.onCreateFolderSave?.('Reviews'));
+      expect(onCreateDestinationFolder).toHaveBeenCalledWith(
+        'personal',
+        ['Design'],
+        'Reviews',
+      );
+      expect(onDestinationChange).toHaveBeenCalledWith({
+        rootKey: 'personal',
+        path: ['Design', 'Reviews'],
+      });
+    });
+
+    it('validates a new name against siblings inside the same root', async () => {
+      renderMultiRoot({ destination: { rootKey: 'personal', path: [] } });
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Create new folder' }),
+      );
+      expect(
+        capturedProps.current?.onRenameValidate?.('design', {} as never),
+      ).toBe('A folder with this name already exists.');
+      expect(
+        capturedProps.current?.onRenameValidate?.('EPAM', {} as never),
+      ).toBeNull();
+    });
+
+    it('rejects a nested duplicate whose sibling loads after the editor opened', async () => {
+      const onCreateDestinationFolder = vi.fn();
+      const unloaded: FolderDestinationRoot[] = [
+        {
+          key: 'personal',
+          label: 'Personal',
+          items: [{ path: ['Design'], name: 'Design' }],
+        },
+      ];
+      const { rerender } = renderMultiRoot({
+        roots: unloaded,
+        destination: { rootKey: 'personal', path: ['Design'] },
+        onCreateDestinationFolder,
+      });
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Create new folder' }),
+      );
+      // The editor keeps the callbacks it opened with.
+      const { onRenameValidate, onCreateFolderSave } = capturedProps.current!;
+
+      rerender(
+        <PublishFoldersTree
+          searchQuery=""
+          roots={[
+            {
+              ...unloaded[0],
+              items: [
+                {
+                  path: ['Design'],
+                  name: 'Design',
+                  children: [{ path: ['Design', 'Audit'], name: 'Audit' }],
+                },
+              ],
+            },
+          ]}
+          destination={{ rootKey: 'personal', path: ['Design'] }}
+          onDestinationChange={vi.fn()}
+          onCreateDestinationFolder={onCreateDestinationFolder}
+        />,
+      );
+
+      expect(onRenameValidate?.('audit', {} as never)).toBe(
+        'A folder with this name already exists.',
+      );
+      act(() => onCreateFolderSave?.('Audit'));
+      expect(onCreateDestinationFolder).not.toHaveBeenCalled();
+    });
+
+    it('omits "Add sibling" on a root node', () => {
+      renderMultiRoot();
+      const menuItems = capturedProps.current?.getContextMenuItems?.(
+        rootFile('organization', 'Organization'),
+      );
+      expect(menuItems?.map((item) => item.key)).toEqual(['add-child']);
+    });
+
+    it('offers no creation under a root that does not accept folders', () => {
+      renderMultiRoot({
+        roots: [roots[0], { ...roots[1], canCreateFolders: false }],
+        destination: { rootKey: 'organization', path: ['EPAM'] },
+      });
+      expect(
+        capturedProps.current?.getContextMenuItems?.(
+          rootFile('organization', 'Organization'),
+        ),
+      ).toEqual([]);
+      // The trailing button falls back to the first root that accepts folders.
+      expect(
+        screen.getByRole('button', { name: 'Create new folder' }),
+      ).toHaveProperty('disabled', false);
+    });
+
+    it('disables the trailing create button when no root accepts folders', () => {
+      renderMultiRoot({
+        roots: roots.map((root) => ({ ...root, canCreateFolders: false })),
+      });
+      expect(
+        screen.getByRole('button', { name: 'Create new folder' }),
+      ).toHaveProperty('disabled', true);
+    });
+
+    it("splits expanded keys back to each root's own handler", () => {
+      const onPersonalExpanded = vi.fn();
+      const onOrganizationExpanded = vi.fn();
+      renderMultiRoot({
+        roots: [
+          { ...roots[0], onExpandedPathsChange: onPersonalExpanded },
+          { ...roots[1], onExpandedPathsChange: onOrganizationExpanded },
+        ],
+      });
+      act(() =>
+        capturedProps.current?.onExpandedPathsChange?.(
+          new Set([':personal', ':personal/Design', ':organization/EPAM']),
+        ),
+      );
+      expect(onPersonalExpanded).toHaveBeenCalledWith(new Set(['Design']));
+      expect(onOrganizationExpanded).toHaveBeenCalledWith(new Set(['EPAM']));
+    });
+
+    it("joins each root's loading and expanded keys", () => {
+      renderMultiRoot({
+        roots: [
+          {
+            ...roots[0],
+            expandedPaths: new Set(['Design']),
+            loadingPaths: new Set(['Design']),
+          },
+          roots[1],
+        ],
+      });
+      expect(capturedProps.current?.loadingPaths).toEqual(
+        new Set([':personal/Design']),
+      );
+      expect(capturedProps.current?.expandedPaths).toEqual(
+        new Set([':personal', ':organization', ':personal/Design']),
       );
     });
   });

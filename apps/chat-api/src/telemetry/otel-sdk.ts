@@ -27,9 +27,13 @@ import {
   ATTR_SERVICE_VERSION,
 } from '@opentelemetry/semantic-conventions';
 import packageJson from '../../package.json';
+import { stopCoreRequestTiming } from './core-request-timing';
 import { isExcludedFromTelemetry } from './excluded-paths';
-import type { MetricsExporter, SingleSignalExporter } from './otel-config';
-import { parseOtelConfig } from './otel-config';
+import {
+  MetricsExporter,
+  parseOtelConfig,
+  SingleSignalExporter,
+} from './otel-config';
 import { initializeRuntimeMetrics } from './runtime-metrics';
 
 /*
@@ -60,7 +64,7 @@ export const buildSpanProcessors = (
   tracesExporter: SingleSignalExporter,
   exporterOverride?: SpanExporter,
 ): SpanProcessor[] => {
-  if (tracesExporter === 'none') return [];
+  if (tracesExporter === SingleSignalExporter.None) return [];
   return [new BatchSpanProcessor(exporterOverride ?? new OTLPTraceExporter())];
 };
 
@@ -68,7 +72,7 @@ export const buildLogRecordProcessors = (
   logsExporter: SingleSignalExporter,
   exporterOverride?: LogRecordExporter,
 ): LogRecordProcessor[] => {
-  if (logsExporter === 'none') return [];
+  if (logsExporter === SingleSignalExporter.None) return [];
   return [
     new BatchLogRecordProcessor({
       exporter: exporterOverride ?? new OTLPLogExporter(),
@@ -81,7 +85,7 @@ export const buildMetricReaders = (
   env: NodeJS.ProcessEnv,
 ): IMetricReader[] =>
   metricsExporters.map((exporter) => {
-    if (exporter === 'prometheus') {
+    if (exporter === MetricsExporter.Prometheus) {
       return new PrometheusExporter({
         /*
          * Default to loopback-only: the scrape port has no authentication, so
@@ -134,6 +138,7 @@ export const shutdownOpenTelemetry = async (
   timeoutMs = 5000,
   shutdownFn: () => Promise<void> = () => sdk?.shutdown() ?? Promise.resolve(),
 ): Promise<void> => {
+  stopCoreRequestTiming();
   stopRuntimeMetrics?.();
   stopRuntimeMetrics = undefined;
   await Promise.race([

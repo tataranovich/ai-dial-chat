@@ -50,12 +50,16 @@ export interface ModelPriceRow {
   key: string;
   /** Per-unit price formatted for display, e.g. `$3/M tokens`. */
   price: string;
+  /** Condition under which a tiered price applies, formatted for display, e.g. `prompt tokens > 200K`; absent for a flat price. */
+  condition?: string;
 }
 
 /** A model deployment's full price list. */
 export interface ModelPricing {
   /** Every price DIAL Core reports for the deployment, `unit` excluded. */
   prices?: ModelPriceRow[];
+  /** DIAL Core billing unit the prices are quoted in, e.g. `token` or `char_without_whitespace`; absent means tokens. */
+  unit?: string;
 }
 
 /** API-resource identifiers for a model deployment. */

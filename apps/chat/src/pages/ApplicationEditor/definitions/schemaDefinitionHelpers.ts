@@ -1,4 +1,7 @@
-import type { DeploymentCreationFormValues } from '@epam/ai-dial-builder-form';
+import {
+  DEFAULT_DEPLOYMENT_VERSION,
+  type DeploymentCreationFormValues,
+} from '@epam/ai-dial-builder-form';
 import {
   appendLocaleCode,
   composeLocalePayload,
@@ -15,11 +18,11 @@ import { PRIMARY_LOCALE } from '../../../utils/locale';
 /* Shared by the schema-based kinds (the embedded-editor quick app and the
    schema form), which differ only in their Setup and how they persist it. */
 
-export const SCHEMA_APP_EMPTY_METADATA: DeploymentCreationFormValues = {
+export const SCHEMA_APP_DEFAULT_METADATA: DeploymentCreationFormValues = {
   name: '',
   description: '',
   iconUrl: '',
-  version: '',
+  version: DEFAULT_DEPLOYMENT_VERSION,
   topics: [],
   otherLocales: [],
 };
@@ -42,14 +45,24 @@ export const getSchemaId = ({
 }: ApplicationEditorContext): string =>
   searchParams.get(AppsEditorQuery.Schema) ?? '';
 
+/** Returns the schema's display name, or the default type name when it is unknown. */
+export const getSchemaAppTypeName = (ctx: ApplicationEditorContext): string => {
+  const schemaId = getSchemaId(ctx);
+  const schema = ctx.schemas.find((item) => item.id === schemaId);
+  return schema?.displayName || ctx.t(AppsEditorI18nKeys.DefaultTypeName);
+};
+
+/** Keeps the version read-only while editing: it changes only through the Save panel's "Save as new version". */
+export const getVersionLockedInEditMode = (isEditMode: boolean) => ({
+  isVersionReadOnly: isEditMode,
+});
+
 /** Returns the page title naming the schema's display name, or the default type name when it is unknown. */
 export const getSchemaAppTitle = (
   ctx: ApplicationEditorContext,
   isEditMode: boolean,
 ) => {
-  const schemaId = getSchemaId(ctx);
-  const schema = ctx.schemas.find((item) => item.id === schemaId);
-  const type = schema?.displayName || ctx.t(AppsEditorI18nKeys.DefaultTypeName);
+  const type = getSchemaAppTypeName(ctx);
   return isEditMode
     ? ctx.t(AppsEditorI18nKeys.EditTitle, { type })
     : ctx.t(AppsEditorI18nKeys.CreateTitle, { type });

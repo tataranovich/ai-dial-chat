@@ -1,12 +1,21 @@
 import {
+  type DeploymentCreationFormValues,
   EntityEditor,
   MetadataField,
   MetadataForm,
   useMetadataForm,
 } from '@epam/ai-dial-builder-form';
 import { TextRefinementPurpose } from '@epam/ai-dial-chat-api-client';
-import { getApiErrorDetails } from '@epam/ai-dial-chat-hooks';
 import {
+  createEmbeddedApplicationSaveAdapter,
+  createHostApplicationSaveAdapter,
+  getApiErrorDetails,
+  parseResourceFolderPath,
+  type ResourceSaveAdapter,
+  type ResourceSaveResult,
+} from '@epam/ai-dial-chat-hooks';
+import {
+  CatalogEntityType,
   mergeClasses,
   TextRefinementField,
   useTextRefinement,
@@ -17,11 +26,15 @@ import {
   DIAL_KIT_ICON_STROKE,
   GhostButton,
   Spinner,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import { IconEye } from '@tabler/icons-react';
 import type { FC, ReactNode } from 'react';
 import {
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -32,14 +45,20 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
+  AppsEditorI18nKeys,
   ButtonsI18nKeys,
+  CatalogI18nKeys,
   EditorI18nKeys,
+  ResourceSavePanelI18nKeys,
 } from '../../constants/translation-keys';
+import { useAppConfig } from '../../context/AppConfigContext';
 import { useDeployments } from '../../context/DeploymentsContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useApplicationAvatarPicker } from '../../hooks/application-editor/useApplicationAvatarPicker';
 import { useEditedApplication } from '../../hooks/application-editor/useEditedApplication';
 import { useMetadataLabels } from '../../hooks/application-editor/useMetadataLabels';
+import { useCatalogCreationDecision } from '../../hooks/catalog/useCatalogCreationDecision';
+import { useBuilderLeaveGuard } from '../../hooks/unsaved-changes/useBuilderLeaveGuard';
 import { useOperationNotification } from '../../hooks/useOperationNotification';
 import { useTextRefinementCallback } from '../../hooks/useTextRefinementCallback';
 import { useTextRefinementLabels } from '../../hooks/useTextRefinementLabels';
@@ -50,20 +69,41 @@ import type {
   ApplicationSetupHandle,
   ApplicationSetupValues,
 } from '../../models/application-editor';
+import type { CatalogCreationCheck } from '../../models/catalog-creation';
+import { applicationsApi } from '../../server-api/api-client';
+import { listApplicationFolders } from '../../server-api/applications';
 import { ApplicationCreateStrategy } from '../../types/application-editor';
+import { CatalogCreationDecision } from '../../types/catalog-creation';
 import { EntityOperation } from '../../types/entity-notification';
 import { ROUTES } from '../../types/routes';
-import { deploymentToMetadata } from '../../utils/application-editor';
+import {
+  areSetupValuesEqual,
+  deploymentToMetadata,
+} from '../../utils/application-editor';
 import { translateDeploymentCreationErrors } from '../../utils/entity-field-validation';
-import { buildAdditionalLocaleOptions } from '../../utils/locale';
+import {
+  buildAdditionalLocaleOptions,
+  getLocaleDisplayName,
+} from '../../utils/locale';
+
+/* Loaded on the first Save of an edit session, so opening the editor fetches no folder listing. */
+const ResourceSavePanelContainer = lazy(
+  async () =>
+    import('../../components/ResourceSavePanelContainer/ResourceSavePanelContainer'),
+);
 
 interface Props {
   definition: ApplicationEditorFormDefinition<ApplicationSetupValues>;
+  /** What creating a new application is checked against, re-read right before each create. */
+  creationCheck: CatalogCreationCheck;
 }
 
 type SetupErrors = ApplicationSetupErrors<Record<string, unknown>>;
 
-const ApplicationFormEditor: FC<Props> = ({ definition }) => {
+/* Matches the fixed Metadata column width the editor had before it became resizable. */
+const DEFAULT_METADATA_COLUMN_WIDTH = 400;
+
+const ApplicationFormEditor: FC<Props> = ({ definition, creationCheck }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -75,6 +115,7 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
   const isEditMode = Boolean(appId);
   const isMetadataFirst =
     definition.createStrategy === ApplicationCreateStrategy.MetadataFirst;
+  const creationDecision = useCatalogCreationDecision(creationCheck);
   const returnUrl = ROUTES.Catalog;
   const context = useMemo<ApplicationEditorContext>(
     () => ({ searchParams, schemas, t }),
@@ -116,6 +157,14 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
   const [setup, setSetup] = useState<ApplicationSetupValues>(
     definition.defaultSetup,
   );
+  /*
+   * The Setup values the editor was opened with — defaults, the loaded setup,
+   * or what the Setup applied while initialising itself — against which
+   * unsaved changes are measured.
+   */
+  const [setupBaseline, setSetupBaseline] = useState<ApplicationSetupValues>(
+    definition.defaultSetup,
+  );
   // Latest setup values, so a blur in the same event cycle as a change validates the new value.
   const latestSetupRef = useRef(setup);
   const [setupErrors, setSetupErrors] = useState<SetupErrors>({});
@@ -123,6 +172,7 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
     isEditMode && Boolean(definition.loadSetup),
   );
   const [isSetupReady, setIsSetupReady] = useState(true);
+  const [isEmbeddedEditorLoaded, setIsEmbeddedEditorLoaded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
   /*
@@ -150,6 +200,7 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
         if (!cancelled) {
           latestSetupRef.current = loaded;
           setSetup(loaded);
+          setSetupBaseline(loaded);
         }
       } catch {
         if (!cancelled) {
@@ -172,6 +223,14 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
   }, [appId, definition]);
 
   const { avatarPicker, avatarPickerLabels } = useApplicationAvatarPicker();
+  /* View preference only: it is not persisted, so every editor open starts at the default. */
+  const [metadataWidth, setMetadataWidth] = useState(
+    DEFAULT_METADATA_COLUMN_WIDTH,
+  );
+  const resizableMetadata = useMemo(
+    () => ({ width: metadataWidth, onWidthChange: setMetadataWidth }),
+    [metadataWidth],
+  );
   const metadataFormLabels = useMetadataLabels(
     definition.getMetadataLabelOverrides,
   );
@@ -179,7 +238,13 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
     () => ({ form: metadataFormLabels, avatarPicker: avatarPickerLabels }),
     [metadataFormLabels, avatarPickerLabels],
   );
-  const localeOptions = useMemo(() => buildAdditionalLocaleOptions(), []);
+  const {
+    config: { additionalContentLocales },
+  } = useAppConfig();
+  const localeOptions = useMemo(
+    () => buildAdditionalLocaleOptions(additionalContentLocales),
+    [additionalContentLocales],
+  );
 
   const onRefineDescription = useTextRefinementCallback(
     TextRefinementPurpose.ApplicationDescription,
@@ -208,10 +273,29 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
       )
     : undefined;
 
-  const metadataErrors = useMemo(
-    () => translateDeploymentCreationErrors(metadata.visibleErrorCodes, t),
-    [metadata.visibleErrorCodes, t],
-  );
+  /*
+   * The name/version pair a create was rejected for with 409. The conflict
+   * error stays on the Name field until the user changes either value.
+   */
+  const [conflictedIdentity, setConflictedIdentity] = useState<{
+    name: string;
+    version: string;
+  } | null>(null);
+  const isNameConflicted =
+    conflictedIdentity != null &&
+    conflictedIdentity.name === metadata.values.name.trim() &&
+    conflictedIdentity.version === metadata.values.version.trim();
+
+  const metadataErrors = useMemo(() => {
+    const errors = translateDeploymentCreationErrors(
+      metadata.visibleErrorCodes,
+      t,
+    );
+    if (isNameConflicted && !errors.name) {
+      errors.name = t(AppsEditorI18nKeys.ErrorNameConflict);
+    }
+    return errors;
+  }, [isNameConflicted, metadata.visibleErrorCodes, t]);
 
   const { markTouched } = metadata;
   const handleNameBlur = useCallback(
@@ -237,6 +321,24 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
     [],
   );
 
+  const handleSetupInitialize = useCallback(
+    (patch: Partial<ApplicationSetupValues>) => {
+      handleSetupChange(patch);
+      setSetupBaseline((prev) => ({ ...prev, ...patch }));
+    },
+    [handleSetupChange],
+  );
+
+  /* Unsaved edits a Setup tracks outside `setup`: the Quick App iframe's. */
+  const [isSetupEditorDirty, setIsSetupEditorDirty] = useState(false);
+  const isSetupDirty = useMemo(
+    () => !areSetupValuesEqual(setup, setupBaseline),
+    [setup, setupBaseline],
+  );
+  const { allowNextNavigation } = useBuilderLeaveGuard({
+    isDirty: metadata.isDirty || isSetupDirty || isSetupEditorDirty,
+  });
+
   const handleSetupFieldBlur = useCallback(
     (field: string) => {
       const fieldError = (
@@ -256,9 +358,15 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
     navigate(returnUrl);
   }, [navigate, returnUrl]);
 
+  const { reset: resetMetadata } = metadata;
   const switchToCreatedApp = useCallback(
-    (newAppId: string) => {
+    (newAppId: string, createdMetadata: DeploymentCreationFormValues) => {
       setWasCreatedThisSession(true);
+      /* What was just created is the new baseline: the session goes on in
+       * edit mode, so leaving without further edits must not ask. */
+      resetMetadata(createdMetadata);
+      setSetupBaseline(latestSetupRef.current);
+      allowNextNavigation();
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
@@ -270,10 +378,33 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
       // Best-effort: brings the new deployment into the list for the preview and the catalog.
       void refetchDeployments().catch(() => undefined);
     },
-    [definition.idQueryParam, refetchDeployments, setSearchParams],
+    [
+      allowNextNavigation,
+      definition.idQueryParam,
+      refetchDeployments,
+      resetMetadata,
+      setSearchParams,
+    ],
   );
 
+  /* The form may have opened under a permission the current config no
+   * longer grants; nothing is created then. */
+  const isCreationBlocked = useCallback(() => {
+    if (isEditMode || creationDecision === CatalogCreationDecision.Allowed) {
+      return false;
+    }
+    showErrorNotification({
+      message: t(
+        creationDecision === CatalogCreationDecision.Denied
+          ? CatalogI18nKeys.CreationDenied
+          : CatalogI18nKeys.CreationUnavailable,
+      ),
+    });
+    return true;
+  }, [creationDecision, isEditMode, showErrorNotification, t]);
+
   const persist = useCallback(async () => {
+    if (isCreationBlocked()) return;
     setIsSaving(true);
     try {
       if (!isEditMode) {
@@ -285,7 +416,7 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
             name: metadata.values.name,
             type: notificationType,
           });
-          switchToCreatedApp(newAppId);
+          switchToCreatedApp(newAppId, metadata.values);
           return;
         }
       } else if (definition.update) {
@@ -298,15 +429,30 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
           return;
         }
       }
-      await refetchDeployments();
+      // Not awaited: the catalog picks the saved application up when the listing lands.
+      void refetchDeployments().catch(() => undefined);
+      allowNextNavigation();
+      navigate(returnUrl);
       notifyOperationSuccess(
         notifiableEntity,
         isEditMode ? EntityOperation.Edited : EntityOperation.Created,
         { name: metadata.values.name, type: notificationType },
       );
-      navigate(returnUrl);
     } catch (error) {
-      const { message, traceId } = await getApiErrorDetails(error);
+      const { message, status, traceId } = await getApiErrorDetails(error);
+      if (!isEditMode && status === 409) {
+        /* Inline on Name, plus a notification: an all-at-once create may be
+         * submitted from the Setup step, where the Name field is not visible. */
+        setConflictedIdentity({
+          name: metadata.values.name.trim(),
+          version: metadata.values.version.trim(),
+        });
+        showErrorNotification({
+          message: t(AppsEditorI18nKeys.ErrorNameConflict),
+          requestId: traceId,
+        });
+        return;
+      }
       showErrorNotification({
         message:
           message ??
@@ -321,9 +467,11 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
       setIsSaving(false);
     }
   }, [
+    allowNextNavigation,
     appId,
     context,
     definition,
+    isCreationBlocked,
     isEditMode,
     isMetadataFirst,
     metadata.values,
@@ -338,6 +486,116 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
     switchToCreatedApp,
     t,
   ]);
+
+  /*
+   * Save of a kind that opts in goes through the Save panel, which picks the
+   * folder and may also move, fork or publish the application. A new
+   * application always qualifies; an existing one only when it is the user's
+   * own, because moving and forking act on the caller's bucket, so a shared
+   * application keeps saving in place.
+   */
+  const isSavePanelFlow =
+    definition.savePanel != null &&
+    (!isEditMode || wasCreatedThisSession || deployment?.isMy === true);
+  /* A metadata-first create only starts the application; it is set up, and can be published, once it exists. */
+  const canPublishFromPanel = isEditMode || !isMetadataFirst;
+  const [isSavePanelOpen, setIsSavePanelOpen] = useState(false);
+  const savedVersion = metadata.values.version;
+  /*
+   * Built when the panel opens, never during render: its save reads the Setup
+   * handle ref. The panel is modal, so the Metadata it captures cannot change
+   * while it is open.
+   */
+  const [saveAdapter, setSaveAdapter] = useState<ResourceSaveAdapter>();
+  const openSavePanel = useCallback(() => {
+    const values = metadata.values;
+    const { update } = definition;
+    if (!isEditMode) {
+      setSaveAdapter({
+        publishEntityType: 'application',
+        isVersioned: false,
+        createIn: async (folderPath) => {
+          const created = await definition.create(values, setup, context, {
+            folderPath,
+          });
+          if (!created?.id) throw new Error('Created application has no id');
+          return { id: created.id };
+        },
+      });
+      setIsSavePanelOpen(true);
+      return;
+    }
+    setSaveAdapter(
+      update
+        ? createHostApplicationSaveAdapter({
+            applicationsApi,
+            applicationId: appId,
+            update: () => update(appId, values, setup),
+            createVersion: (version, folderPath) =>
+              definition.create({ ...values, version }, setup, context, {
+                folderPath,
+              }),
+          })
+        : createEmbeddedApplicationSaveAdapter({
+            applicationsApi,
+            applicationId: appId,
+            // The embedded editor is the single writer; it shows its own save error inline.
+            runEmbeddedSave: async () => {
+              await setupRef.current?.save(values);
+            },
+            getCommitFailedMessage: (version) =>
+              t(ResourceSavePanelI18nKeys.CommitFailed, {
+                version,
+                currentVersion: values.version,
+              }),
+          }),
+    );
+    setIsSavePanelOpen(true);
+  }, [appId, context, definition, isEditMode, metadata.values, setup, t]);
+  const handleSavePanelClose = useCallback(() => setIsSavePanelOpen(false), []);
+  const currentFolderPath = useMemo(
+    () => parseResourceFolderPath(appId),
+    [appId],
+  );
+  const savePanelIconUrl = useMemo(
+    () => avatarPicker?.resolveIconUrl?.(metadata.values.iconUrl),
+    [avatarPicker, metadata.values.iconUrl],
+  );
+
+  /* Every outcome reaching here saved the application; the panel notifies once this returns. */
+  const handleSavePanelSaved = useCallback(
+    (result: ResourceSaveResult) => {
+      if (result.isCreated && isMetadataFirst) {
+        setIsSavePanelOpen(false);
+        switchToCreatedApp(result.savedId, metadata.values);
+        return;
+      }
+      /* Best-effort and not awaited: a full uncached listing can take seconds,
+       * and the catalog picks the saved application up when it lands. */
+      void refetchDeployments().catch(() => undefined);
+      setIsSavePanelOpen(false);
+      allowNextNavigation();
+      navigate(returnUrl);
+    },
+    [
+      allowNextNavigation,
+      isMetadataFirst,
+      metadata.values,
+      navigate,
+      refetchDeployments,
+      returnUrl,
+      switchToCreatedApp,
+    ],
+  );
+
+  const proceedWithSave = useCallback(() => {
+    if (isSavePanelFlow) {
+      if (isCreationBlocked()) return;
+      openSavePanel();
+      return;
+    }
+    void persist();
+  }, [isCreationBlocked, isSavePanelFlow, openSavePanel, persist]);
 
   const { attemptSubmit } = metadata;
   const handleSubmit = useCallback(() => {
@@ -354,13 +612,13 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
       setIsConfirmOpen(true);
       return;
     }
-    void persist();
-  }, [attemptSubmit, definition, persist, setup, t]);
+    proceedWithSave();
+  }, [attemptSubmit, definition, proceedWithSave, setup, t]);
 
   const handleConfirm = useCallback(() => {
     setIsConfirmOpen(false);
-    void persist();
-  }, [persist]);
+    proceedWithSave();
+  }, [proceedWithSave]);
 
   const handleConfirmClose = useCallback(() => setIsConfirmOpen(false), []);
 
@@ -440,6 +698,7 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
       />
     ) : undefined;
 
+  const metadataFieldState = definition.getMetadataFieldState?.(isEditMode);
   const isLoading = isLoadingSetup || isResolving;
   const isBusy = isSaving || isLoading;
   const overlayLabel = t(
@@ -476,11 +735,14 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
           isSubmitting={isSaving}
           isSubmitDisabled={!isSetupReady || descriptionRefinement.isPending}
           extraActions={extraActions}
+          resizableLeftColumn={resizableMetadata}
           labels={{
             backAriaLabel: t(EditorI18nKeys.BackAriaLabel),
-            savingStatusLabel: t(EditorI18nKeys.SavingStatus),
+            savingStatusLabel: t(ButtonsI18nKeys.Saving),
             metadataTitle: t(EditorI18nKeys.MetadataSectionTitle),
             setupTitle: t(EditorI18nKeys.SetupSectionTitle),
+            resizeHandleLabel: t(EditorI18nKeys.ResizeHandleAriaLabel),
+            resizeHandleTooltip: t(EditorI18nKeys.ResizeHandleTooltip),
             cancelLabel: t(ButtonsI18nKeys.Cancel),
           }}
           setupTitle={
@@ -488,6 +750,7 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
               ? null
               : undefined
           }
+          hasSetupSectionPadding={!isEmbeddedEditorLoaded}
           metadata={
             <MetadataForm
               values={metadata.values}
@@ -495,8 +758,13 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
               onChange={metadata.setValues}
               onNameBlur={handleNameBlur}
               onVersionBlur={handleVersionBlur}
+              isVersionReadOnly={metadataFieldState?.isVersionReadOnly}
+              versionReadOnlyTooltip={t(
+                ResourceSavePanelI18nKeys.VersionReadOnlyTooltip,
+              )}
               avatarPicker={avatarPicker}
               availableLocaleOptions={localeOptions}
+              formatLocaleLabel={getLocaleDisplayName}
               renderDescription={renderRefinableDescription}
               labels={metadataLabels}
               focusRequestKey={metadata.submitAttemptCount}
@@ -508,6 +776,8 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
               value={setup}
               errors={setupErrors}
               onChange={handleSetupChange}
+              onInitialize={handleSetupInitialize}
+              onDirtyChange={setIsSetupEditorDirty}
               onFieldBlur={handleSetupFieldBlur}
               isEditMode={isEditMode}
               appId={appId || undefined}
@@ -516,6 +786,7 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
               onSubmit={handleSubmit}
               isSubmitting={isSaving}
               onReadyChange={setIsSetupReady}
+              onEmbeddedEditorLoadedChange={setIsEmbeddedEditorLoaded}
             />
           }
         />
@@ -540,19 +811,35 @@ const ApplicationFormEditor: FC<Props> = ({ definition }) => {
         </div>
       )}
       {/* Always mounted so screen readers announce the label when it is filled in. */}
-      <span role="status" aria-live="polite" className="sr-only">
+      <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
         {isBusy ? overlayLabel : ''}
-      </span>
+      </LiveRegion>
       {isBusy && (
-        <div
-          className="absolute inset-0 flex items-center justify-center bg-backdrop"
-          aria-hidden="true"
-        >
-          <div className="flex items-center gap-3 rounded-lg bg-layer-sunken px-4 py-3 shadow-lg">
-            <Spinner />
-            <span className="dial-small-text text-primary">{overlayLabel}</span>
-          </div>
+        /* The LiveRegion above announces the state, so the overlay is visual only. */
+        <div className="absolute inset-0 bg-backdrop" aria-hidden="true">
+          <Spinner fullWidth ariaLabel={overlayLabel} />
         </div>
+      )}
+      {saveAdapter && definition.savePanel && (
+        <Suspense fallback={null}>
+          <ResourceSavePanelContainer
+            isOpen={isSavePanelOpen}
+            onClose={handleSavePanelClose}
+            adapter={saveAdapter}
+            listPersonalFolders={listApplicationFolders}
+            resourceId={appId}
+            currentFolderPath={currentFolderPath}
+            resourceName={metadata.values.name}
+            currentVersion={savedVersion}
+            resourceType={CatalogEntityType.Agent}
+            iconUrl={savePanelIconUrl}
+            typeLabel={definition.savePanel.getTypeLabel(context)}
+            notifiableEntity={notifiableEntity}
+            notificationType={notificationType}
+            canPublish={canPublishFromPanel}
+            onSaved={handleSavePanelSaved}
+          />
+        </Suspense>
       )}
       {confirmation && (
         <ConfirmationPopup

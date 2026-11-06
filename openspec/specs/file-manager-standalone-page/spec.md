@@ -3,7 +3,9 @@
 ## Purpose
 
 Specifies the standalone `/files` route: its registration (`apps/chat/src/types/routes.ts`, `apps/chat/src/app/app.tsx`), its navigation entry, and `DialFileManagerPage` (`apps/chat/src/pages/DialFileManagerPage/DialFileManagerPage.tsx`) — a thin host that reuses `DialFileManagerShell` and `useDialFileManager`'s `standalone`/`browse` variant (from the `file-manager-shell` capability) to browse and manage files outside the conversation attach flow, with no page chrome of its own.
+
 ## Requirements
+
 ### Requirement: File Manager route registration
 
 `apps/chat/src/types/routes.ts` SHALL define `ROUTES.FileManager = '/files'`. `apps/chat/src/app/app.tsx` SHALL register a lazy-loaded route at `ROUTES.FileManager` rendering `DialFileManagerPage`, wrapped in `RouteErrorBoundary` and `Suspense` with `fallback={<RouteFallback />}`, following the same pattern as the existing `ROUTES.Catalog` route registration. The route SHALL render the page only while `useUiFeature(OverlayFeature.FileManager)` is enabled; otherwise it SHALL render `<Navigate to={ROUTES.Root} replace />`, so a direct `/files` URL cannot bypass the hidden navigation entry.
@@ -55,13 +57,14 @@ Specifies the standalone `/files` route: its registration (`apps/chat/src/types/
 
 **Rendering:**
 
-- Renders `DialFileManagerShell` fed by the composer's result, including its `sectionTab`, filling the full page with no additional chrome.
-- For `DialFileManagerVariant.Standalone`, the shell paints its content wrapper and `<DialFileManager>` (search, grid and the rest of the right-hand area) with `bg-layer-base`. The attach modal keeps `bg-layer-sunken`.
+- Renders `DialFileManagerShell` fed by the composer's result, including its `sectionTab`.
+- The page frames the shell at every width (PRs #9544, #9553; this replaced an earlier full-bleed layout below 1280px): a header row with the page title `t('dialFileManager.page.title')` as its `h1` (`dial-h1-text`), then the shell inside a raised card (`rounded-xl bg-layer-raised shadow-sm`). Below the `desktop` band (1279px and narrower) the frame is tighter: a 48px-minimum header row, 12px of horizontal and bottom margin around the card, and 8px of vertical card padding with no horizontal card padding, so the grid's shadow is not clipped. From 1280px the header row is at least 72px tall, the margins are 32px horizontally and 16px at the bottom, and the card has 20px of inner padding. The frame is the same in both navigation layouts.
+- For `DialFileManagerVariant.Standalone`, the shell paints its content wrapper and `<DialFileManager>` (search, grid and the rest of the right-hand area) with `--dfms-surface`, which defaults to `--bg-layer-base` (`DialFileManagerShellStyles.colors.surface` overrides it). The page sets `--dfms-surface: transparent` on a wrapper around the shell at every width, so they are transparent inside the card. The attach modal keeps `bg-layer-sunken`. The folders panel is divided from the grid by a line on its inline-end edge (`border-e border-tertiary`, no shadow), and the grid is a flat table: the shell passes `gridOptions` with `containerClassName: 'rounded-none shadow-none'`, `filterable: false` and `withoutHeaderBorders: true`.
 - `treeHeaderByTab[All]` is `t(DialFileManagerI18nKeys.MyFilesTreeHeader)`.
 - Clears the grid selection whenever the active tab or the composer's `sectionTab` changes.
 - Forwards `maxSelectableFileSize` (for existing-file selection and grid `isRowSelectable`; see `dial-file-manager-attach-validation`) and a translated `oversizedUploadMessage` (built from the i18n key `dialFileManager.uploadFileTooLarge`) to `DialFileManagerShell`. The shell forwards them to `<DialFileManager>` as `maxSelectableFileSize` and as `maxFileSize`/`uploadValidationMessages.oversizedFiles` respectively.
 
-**Exclusions:** the page SHALL NOT render `DialPopup`, any attach footer, or a page title/header. It SHALL NOT pass `allowedTypes`, `maximumAttachmentsAmount`, `canAttachFolders`, or `onAttach`.
+**Exclusions:** the page SHALL NOT render `DialPopup` or any attach footer. It SHALL NOT pass `allowedTypes`, `maximumAttachmentsAmount`, `canAttachFolders`, or `onAttach`.
 
 #### Scenario: Page opens on the All tab
 
@@ -79,10 +82,16 @@ Specifies the standalone `/files` route: its registration (`apps/chat/src/types/
 - **WHEN** `DialFileManagerPage` is rendered
 - **THEN** there is no "Attach" button, no attach footer, and no attach-selection-limit messaging anywhere on the page
 
-#### Scenario: Page content sits on the base layer
+#### Scenario: Phone page is framed
 
-- **WHEN** `DialFileManagerPage` is rendered
-- **THEN** `<DialFileManager>` carries `bg-layer-base` and not `bg-layer-sunken`
+- **WHEN** `DialFileManagerPage` is rendered below 1280px (for example at 360×800)
+- **THEN** a level-1 heading "File manager" renders above a raised card that holds the file manager, with 12px margins around the card
+- **AND** `<DialFileManager>` is transparent inside the card and never carries `bg-layer-sunken`
+
+#### Scenario: Desktop page is framed
+
+- **WHEN** `DialFileManagerPage` is rendered at 1280px or wider, with either navigation layout
+- **THEN** a level-1 heading "File manager" renders above a raised card that holds the file manager, and `<DialFileManager>` is transparent inside it
 
 #### Scenario: Tabs and CRUD match the attach modal
 
@@ -120,3 +129,11 @@ Specifies the standalone `/files` route: its registration (`apps/chat/src/types/
 - **WHEN** the active language is Arabic
 - **THEN** the page flips direction correctly via inherited `dir="rtl"` and logical-property classes, with no visually mirrored physical-class artifacts
 
+### Requirement: The page wires Preview for files
+
+`DialFileManagerPage` SHALL call `useDialFilePreview` with the composer's `items`, the user's `bucket` and the composer's search results, SHALL set `labels.previewLabel` to `t(BasicI18nKeys.Preview)` and SHALL pass `onPreview`, `onTableFileClick` and `previewExtensions` to `DialFileManagerShell`. The behavior behind those props is specified by the `file-manager-preview` capability. The page's exclusions are unchanged: it still renders no attach footer and passes no attach-only props.
+
+#### Scenario: The page passes the preview props to the shell
+
+- **WHEN** `DialFileManagerPage` is rendered
+- **THEN** `DialFileManagerShell` receives `labels.previewLabel`, `onPreview`, `onTableFileClick` and `previewExtensions`

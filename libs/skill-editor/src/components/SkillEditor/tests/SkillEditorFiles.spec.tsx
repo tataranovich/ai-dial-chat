@@ -1,6 +1,12 @@
 import type { DialFile } from '@epam/ai-dial-react-file-manager';
 import type { DropdownItem } from '@epam/ai-dial-ui-kit';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type {
   ComponentProps,
@@ -102,6 +108,7 @@ const renderFileNode = (file: DialFile, props: TreeProps): ReactNode => (
       <button onClick={() => props.onItemClick?.(file)}>{file.name}</button>
     )}
     {renderMenuItems(props.getContextMenuItems?.(file) ?? [])}
+    {props.renderItemActions?.(file)}
     {file.items?.map((child) => renderFileNode(child, props))}
   </li>
 );
@@ -119,7 +126,18 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
   };
 });
 
-vi.mock('@epam/ai-dial-ui-kit', () => ({
+vi.mock('@epam/ai-dial-ui-kit', async () => ({
+  /* The real live region and ErrorText: a hand-rolled stub would hide the always-mounted region `announce` renders. */
+  ...(await vi
+    .importActual<typeof import('@epam/ai-dial-ui-kit')>('@epam/ai-dial-ui-kit')
+    .then(
+      ({ ErrorText, LiveRegion, LiveRegionElement, LiveRegionPoliteness }) => ({
+        ErrorText,
+        LiveRegion,
+        LiveRegionElement,
+        LiveRegionPoliteness,
+      }),
+    )),
   ButtonDropdown: ({
     label,
     items,
@@ -166,20 +184,106 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   EditorThemes: { dark: 'dark', light: 'light' },
   TextareaResize: { Vertical: 'vertical' },
   TagInput: () => null,
+  DialItemType: { File: 'file', Folder: 'folder' },
+  FileIcon: () => null,
   Accordion: ({
     title,
+    description,
+    expanded,
+    onToggle,
     children,
   }: {
     title: ReactNode;
-    children: ReactNode;
+    description?: ReactNode;
+    expanded?: boolean;
+    onToggle?: (expanded: boolean) => void;
+    children?: ReactNode;
   }) => (
-    <section>
-      <h3>{title}</h3>
-      {children}
-    </section>
+    <div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => onToggle?.(!expanded)}
+      >
+        {title} {description}
+      </button>
+      <div inert={!expanded}>{children}</div>
+    </div>
+  ),
+  FileName: ({ name, details }: { name: string; details?: ReactNode }) => (
+    <span>
+      {name}
+      {details}
+    </span>
+  ),
+  Breadcrumbs: ({
+    items,
+    ariaLabel,
+    overflowAriaLabel,
+  }: {
+    items: { label: string; onClick?: () => void }[];
+    ariaLabel?: string;
+    overflowAriaLabel?: string;
+  }) => (
+    <nav aria-label={ariaLabel} data-overflow-label={overflowAriaLabel}>
+      {items.map((item) =>
+        item.onClick ? (
+          <button key={item.label} type="button" onClick={item.onClick}>
+            {item.label}
+          </button>
+        ) : (
+          <span key={item.label}>{item.label}</span>
+        ),
+      )}
+    </nav>
+  ),
+  NoDataContent: ({
+    title,
+    description,
+  }: {
+    title: ReactNode;
+    description?: ReactNode;
+  }) => (
+    <div>
+      <span>{title}</span>
+      <span>{description}</span>
+    </div>
+  ),
+  RadioGroup: ({
+    items,
+    value,
+    onChange,
+  }: {
+    items: { value: string; label?: ReactNode }[];
+    value?: string;
+    onChange: (value: string) => void;
+  }) => (
+    <div role="radiogroup">
+      {items.map((item) => (
+        <label key={item.value}>
+          <input
+            type="radio"
+            checked={item.value === value}
+            onChange={() => onChange(item.value)}
+          />
+          {item.label}
+        </label>
+      ))}
+    </div>
   ),
   CaptionText: ({ text }: { text?: string }) => <span>{text}</span>,
-  ErrorText: ({ text }: { text?: string }) => <span>{text}</span>,
+  ErrorMessageNotification: ({
+    message,
+    action,
+  }: {
+    message: ReactNode;
+    action?: ReactNode;
+  }) => (
+    <div role="alert">
+      {message}
+      {action}
+    </div>
+  ),
   FileDropzone: ({
     label,
     ariaLabel,
@@ -358,6 +462,7 @@ vi.mock('@epam/ai-dial-ui-kit/editors', () => ({
 
 vi.mock('@tabler/icons-react', () => ({
   IconArrowNarrowLeft: () => <svg />,
+  IconChevronDown: () => <svg />,
   IconDatabase: () => <svg />,
   IconFileText: () => <svg />,
   IconFileZip: () => <svg />,
@@ -381,6 +486,16 @@ type User = ReturnType<typeof userEvent.setup>;
 const openAddMenu = async (user: User) => {
   await user.click(screen.getAllByRole('button', { name: 'Add' })[0]);
   return screen.getAllByRole('menu')[0];
+};
+
+/* Context-menu entries rendered directly on a row, not inside a submenu list. */
+const queryDirectMenuItems = (name: string) => {
+  const nested = screen
+    .queryAllByRole('list')
+    .flatMap((list) => within(list).queryAllByRole('menuitem'));
+  return screen
+    .queryAllByRole('menuitem', { name })
+    .filter((item) => !nested.includes(item));
 };
 
 const openUploadDialog = async (user: User) => {
@@ -435,7 +550,7 @@ describe('SkillEditor — files pane', () => {
     expect(screen.getAllByRole('button', { name: 'SKILL.md' })[0]).toBeTruthy();
   });
 
-  it('exposes no menu for the protected SKILL.md node', () => {
+  it('gives a file an inline Delete button and no menu, and SKILL.md neither', () => {
     renderEditor({
       files: [
         { path: 'notes.md', name: 'notes.md', kind: SkillFileNodeKind.File },
@@ -443,10 +558,8 @@ describe('SkillEditor — files pane', () => {
     });
 
     // One Delete per rendered pane (mobile + desktop) for notes.md; none for SKILL.md.
-    expect(screen.getAllByRole('menuitem', { name: 'Delete' })).toHaveLength(2);
-    expect(screen.getAllByRole('list', { name: 'Add sibling' })).toHaveLength(
-      2,
-    );
+    expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(2);
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
   });
 
   it('commits a staged file when the batch validates and the user confirms', async () => {
@@ -473,12 +586,20 @@ describe('SkillEditor — files pane', () => {
     await openUploadDialog(user);
     stageFile(file);
     expect(await screen.findByText('analyzer.md')).toBeTruthy();
+    // Staging renders the row before the async validation settles; Add stays disabled until it does.
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('dialog')).getByRole('button', { name: 'Add' }),
+      ).toHaveProperty('disabled', false),
+    );
 
     await confirmDialog(user);
 
-    expect(commitBatch).toHaveBeenCalledWith([
-      expect.objectContaining({ file, path: 'analyzer.md' }),
-    ]);
+    await waitFor(() =>
+      expect(commitBatch).toHaveBeenCalledWith([
+        expect.objectContaining({ file, path: 'analyzer.md' }),
+      ]),
+    );
   });
 
   it('shows the validation error and disables confirm for a rejected staged file', async () => {
@@ -653,7 +774,7 @@ describe('SkillEditor — files pane', () => {
       buildFileActions({ onRemoveNode }),
     );
 
-    await user.click(screen.getAllByRole('menuitem', { name: 'Delete' })[0]);
+    await user.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
 
     expect(onRemoveNode).toHaveBeenCalledWith('notes.md');
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -670,7 +791,7 @@ describe('SkillEditor — files pane', () => {
     });
 
     await user.click(screen.getAllByRole('button', { name: 'notes.md' })[0]);
-    await user.click(screen.getAllByRole('menuitem', { name: 'Delete' })[0]);
+    await user.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
 
     expect(onSelectedPathChange).toHaveBeenLastCalledWith('SKILL.md');
     expect(
@@ -723,8 +844,8 @@ describe('SkillEditor — files pane', () => {
   it('orders the Editing file accordion, then the SKILL.md heading, then Name in the stacked mobile column', () => {
     renderEditor();
 
-    const filesAccordion = screen.getByRole('heading', {
-      name: 'Editing file',
+    const filesAccordion = screen.getByRole('button', {
+      name: /Editing file/,
     });
     const manifestHeading = screen.getByRole('heading', { name: 'SKILL.md' });
     const nameField = screen.getByRole('textbox', { name: /Name/ });
@@ -807,6 +928,128 @@ describe('SkillEditor — files pane', () => {
     await user.click(screen.getAllByRole('button', { name: 'agents' })[0]);
     expect(screen.queryByText('Preview goes here')).toBeNull();
   });
+
+  describe('folder preview', () => {
+    const nestedFiles = [
+      {
+        path: 'agents/reviewers/lint.md',
+        name: 'lint.md',
+        kind: SkillFileNodeKind.File,
+      },
+      {
+        path: 'agents/planner.md',
+        name: 'planner.md',
+        kind: SkillFileNodeKind.File,
+      },
+    ];
+
+    it('lists the direct children of the selected folder under a breadcrumb trail', () => {
+      renderEditor({ files: nestedFiles, selectedPath: 'agents' });
+
+      const trail = screen.getByRole('navigation', { name: 'Folder path' });
+      expect(within(trail).getByRole('button', { name: 'Skill' })).toBeTruthy();
+      const list = screen.getByRole('list', { name: 'Folder content' });
+      expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+      expect(within(list).getByText('1 item')).toBeTruthy();
+    });
+
+    it('shows the empty state for a folder without children', () => {
+      renderEditor({
+        files: [{ path: 'docs', name: 'docs', kind: SkillFileNodeKind.Folder }],
+        selectedPath: 'docs',
+      });
+
+      expect(screen.getByText('This folder is empty')).toBeTruthy();
+      expect(screen.queryByRole('list', { name: 'Folder content' })).toBeNull();
+    });
+
+    it('selects a nested folder and expands the path to it when its row is activated', async () => {
+      const user = userEvent.setup({ delay: null });
+      const onSelectedPathChange = vi.fn();
+      const onExpandedPathsChange = vi.fn();
+      renderEditor({
+        files: nestedFiles,
+        selectedPath: 'agents',
+        expandedPaths: [],
+        onSelectedPathChange,
+        onExpandedPathsChange,
+      });
+
+      const list = screen.getByRole('list', { name: 'Folder content' });
+      await user.click(within(list).getByRole('button', { name: /reviewers/ }));
+
+      expect(onSelectedPathChange).toHaveBeenCalledWith('agents/reviewers');
+      expect(onExpandedPathsChange).toHaveBeenCalledWith(
+        expect.arrayContaining(['agents', 'agents/reviewers']),
+      );
+    });
+
+    it('passes the overflow label to the breadcrumb trail', () => {
+      const view = renderEditor({
+        files: nestedFiles,
+        selectedPath: 'agents',
+      });
+      expect(
+        screen
+          .getByRole('navigation', { name: 'Folder path' })
+          .getAttribute('data-overflow-label'),
+      ).toBe('Show hidden path segments');
+      view.unmount();
+
+      renderEditor({
+        files: nestedFiles,
+        selectedPath: 'agents',
+        labels: { folderPreviewOverflowAriaLabel: 'Pfadteile anzeigen' },
+      });
+      expect(
+        screen
+          .getByRole('navigation', { name: 'Folder path' })
+          .getAttribute('data-overflow-label'),
+      ).toBe('Pfadteile anzeigen');
+    });
+
+    it('renders no folder preview for a path whose folder no longer exists', () => {
+      renderEditor({ files: nestedFiles, selectedPath: 'removed/x.md' });
+
+      expect(screen.queryByText('This folder is empty')).toBeNull();
+      expect(screen.queryByRole('list', { name: 'Folder content' })).toBeNull();
+    });
+
+    it('falls back to SKILL.md when an ancestor of the selection is deleted', async () => {
+      const user = userEvent.setup({ delay: null });
+      const onSelectedPathChange = vi.fn();
+      renderEditor(
+        {
+          files: [docsFolder, docsFile],
+          selectedPath: docsFile.path,
+          onSelectedPathChange,
+        },
+        fullFileActions(),
+      );
+
+      await user.click(screen.getAllByRole('menuitem', { name: 'Delete' })[0]);
+
+      expect(onSelectedPathChange).toHaveBeenCalledWith('SKILL.md');
+    });
+
+    it('returns to SKILL.md from the root crumb', async () => {
+      const user = userEvent.setup({ delay: null });
+      const onSelectedPathChange = vi.fn();
+      renderEditor({
+        files: nestedFiles,
+        selectedPath: 'agents',
+        onSelectedPathChange,
+      });
+
+      await user.click(
+        within(
+          screen.getByRole('navigation', { name: 'Folder path' }),
+        ).getByRole('button', { name: 'Skill' }),
+      );
+
+      expect(onSelectedPathChange).toHaveBeenCalledWith('SKILL.md');
+    });
+  });
 });
 
 const docsFolder = {
@@ -883,6 +1126,41 @@ describe('SkillEditor — Add dropdown', () => {
     expect(stagedPaths(actions.commitBatch)).toEqual(['docs/a.md']);
   });
 
+  it('expands the target folder once its upload is committed', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onExpandedPathsChange = vi.fn();
+    renderEditor(
+      { files: [docsFolder], selectedPath: 'docs', onExpandedPathsChange },
+      fullFileActions(),
+    );
+
+    await openUploadDialog(user);
+    stageFile(new File(['x'], 'a.md'));
+    await screen.findByText('docs/a.md');
+    expect(onExpandedPathsChange).not.toHaveBeenCalled();
+    await confirmDialog(user);
+
+    expect(onExpandedPathsChange).toHaveBeenCalledWith(['docs']);
+  });
+
+  it('leaves the target folder collapsed when the upload commit fails', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onExpandedPathsChange = vi.fn();
+    renderEditor(
+      { files: [docsFolder], selectedPath: 'docs', onExpandedPathsChange },
+      fullFileActions({
+        commitBatch: vi.fn(async () => ({ error: 'Upload failed' })),
+      }),
+    );
+
+    await openUploadDialog(user);
+    stageFile(new File(['x'], 'a.md'));
+    await screen.findByText('docs/a.md');
+    await confirmDialog(user);
+
+    expect(onExpandedPathsChange).not.toHaveBeenCalled();
+  });
+
   it('stages header uploads at the root when a file is selected', async () => {
     const user = userEvent.setup({ delay: null });
     renderEditor(
@@ -906,17 +1184,24 @@ describe('SkillEditor — Add dropdown', () => {
 });
 
 describe('SkillEditor — node menu', () => {
-  it('offers Add child, Add sibling and Delete on a folder', () => {
+  it('lists the add entries directly, then Delete, on a folder — with no Add child or Add sibling submenu', () => {
     renderEditor({ files: [docsFolder] }, fullFileActions());
 
-    expect(screen.getAllByRole('list', { name: 'Add child' })).toHaveLength(2);
-    expect(screen.getAllByRole('list', { name: 'Add sibling' })).toHaveLength(
-      2,
-    );
+    for (const name of [
+      'Create folder',
+      'Upload files from device',
+      'Upload archive from device',
+      'Open DIAL file system',
+    ]) {
+      expect(queryDirectMenuItems(name)).toHaveLength(2);
+    }
+    expect(screen.queryByRole('list', { name: 'Add child' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Add sibling' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Add sibling' })).toBeNull();
     expect(screen.getAllByRole('menuitem', { name: 'Delete' })).toHaveLength(2);
   });
 
-  it('offers no Add child on a file', () => {
+  it('gives a file no menu, only the inline Delete button', () => {
     renderEditor(
       {
         files: [
@@ -926,30 +1211,15 @@ describe('SkillEditor — node menu', () => {
       fullFileActions(),
     );
 
-    expect(screen.queryByRole('list', { name: 'Add child' })).toBeNull();
-    expect(screen.getAllByRole('list', { name: 'Add sibling' })).toHaveLength(
-      2,
-    );
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
+    expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(2);
   });
 
-  it('stages an Add sibling upload next to a nested file', async () => {
+  it('stages an upload from a folder menu inside that folder', async () => {
     const user = userEvent.setup({ delay: null });
-    renderEditor({ files: [docsFile] }, fullFileActions());
+    renderEditor({ files: [docsFolder] }, fullFileActions());
 
-    // Scope to a.md's own row; the implied docs folder has an Add sibling of its own.
-    const [fileRow] = screen
-      .getAllByRole('listitem')
-      .filter(
-        (row) =>
-          within(row).queryByRole('button', { name: 'a.md' }) &&
-          within(row).queryAllByRole('listitem').length === 0,
-      );
-    const sibling = within(fileRow).getByRole('list', { name: 'Add sibling' });
-    await user.click(
-      within(sibling).getByRole('menuitem', {
-        name: 'Upload files from device',
-      }),
-    );
+    await user.click(queryDirectMenuItems('Upload files from device')[0]);
     stageFile(new File(['x'], 'c.md'));
 
     expect(await screen.findByText('docs/c.md')).toBeTruthy();
@@ -970,14 +1240,7 @@ describe('SkillEditor — node menu', () => {
   });
 
   it('renders Delete as a danger item and leaves the Add entries neutral', () => {
-    renderEditor(
-      {
-        files: [
-          { path: 'notes.md', name: 'notes.md', kind: SkillFileNodeKind.File },
-        ],
-      },
-      fullFileActions(),
-    );
+    renderEditor({ files: [docsFolder] }, fullFileActions());
 
     for (const item of screen.getAllByRole('menuitem', { name: 'Delete' })) {
       expect(item.className).toBe('text-error');
@@ -989,10 +1252,11 @@ describe('SkillEditor — node menu', () => {
     }
   });
 
-  it('labels the Delete entry with a host deleteLabel', () => {
+  it('labels the folder Delete entry and the file Delete button with a host deleteLabel', () => {
     renderEditor(
       {
         files: [
+          docsFolder,
           { path: 'notes.md', name: 'notes.md', kind: SkillFileNodeKind.File },
         ],
         labels: { deleteLabel: 'Entfernen' },
@@ -1003,12 +1267,18 @@ describe('SkillEditor — node menu', () => {
     expect(screen.getAllByRole('menuitem', { name: 'Entfernen' })).toHaveLength(
       2,
     );
+    expect(screen.getAllByRole('button', { name: 'Entfernen' })).toHaveLength(
+      2,
+    );
   });
 });
 
 describe('SkillEditor — Create folder', () => {
+  /* The inline draft belongs to the desktop pane, which renders after the mobile one. */
   const startCreateFromHeader = async (user: User) => {
-    const menu = await openAddMenu(user);
+    const addTriggers = screen.getAllByRole('button', { name: 'Add' });
+    await user.click(addTriggers[addTriggers.length - 1]);
+    const menu = screen.getAllByRole('menu')[0];
     await user.click(
       within(menu).getByRole('menuitem', { name: 'Create folder' }),
     );
@@ -1031,7 +1301,7 @@ describe('SkillEditor — Create folder', () => {
     expect(screen.queryByLabelText('Folder name')).toBeNull();
   });
 
-  it('creates a nested folder from Add child and expands its parent', async () => {
+  it('creates a nested folder from the folder menu and expands its parent', async () => {
     const user = userEvent.setup({ delay: null });
     const onCreateFolder = vi.fn();
     const onExpandedPathsChange = vi.fn();
@@ -1040,10 +1310,8 @@ describe('SkillEditor — Create folder', () => {
       fullFileActions({ onCreateFolder }),
     );
 
-    const child = screen.getAllByRole('list', { name: 'Add child' })[0];
-    await user.click(
-      within(child).getByRole('menuitem', { name: 'Create folder' }),
-    );
+    const createFolderItems = queryDirectMenuItems('Create folder');
+    await user.click(createFolderItems[createFolderItems.length - 1]);
 
     expect(onExpandedPathsChange).toHaveBeenCalledWith(['docs']);
     const input = screen.getAllByLabelText('Folder name')[0];
@@ -1143,14 +1411,78 @@ describe('SkillEditor — Create folder', () => {
   });
 });
 
+describe('SkillEditor — Create folder (mobile pane)', () => {
+  /* The mobile pane renders first; its Create folder asks in a dialog instead of a tree draft. */
+  const openCreateFolderDialog = async (user: User) => {
+    const menu = await openAddMenu(user);
+    await user.click(
+      within(menu).getByRole('menuitem', { name: 'Create folder' }),
+    );
+    return screen.getByRole('dialog', { name: 'Create folder' });
+  };
+
+  it('opens a Create folder dialog instead of an inline draft', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderEditor({}, fullFileActions());
+
+    const dialog = await openCreateFolderDialog(user);
+
+    expect(within(dialog).getByLabelText('Name')).toBeTruthy();
+    expect(screen.queryByLabelText('Folder name')).toBeNull();
+  });
+
+  it('creates the named folder inside the target folder and closes', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onCreateFolder = vi.fn();
+    const onSelectedPathChange = vi.fn();
+    renderEditor(
+      { files: [docsFolder], selectedPath: 'docs', onSelectedPathChange },
+      fullFileActions({ onCreateFolder }),
+    );
+
+    const dialog = await openCreateFolderDialog(user);
+    await user.type(within(dialog).getByLabelText('Name'), 'img');
+    await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    expect(onCreateFolder).toHaveBeenCalledWith('docs/img');
+    expect(onSelectedPathChange).toHaveBeenLastCalledWith('docs/img');
+    expect(screen.queryByRole('dialog', { name: 'Create folder' })).toBeNull();
+  });
+
+  it('shows the name error on Create and keeps the dialog open', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onCreateFolder = vi.fn();
+    renderEditor({ files: [docsFolder] }, fullFileActions({ onCreateFolder }));
+
+    const dialog = await openCreateFolderDialog(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+    expect(within(dialog).getByText('Enter a folder name')).toBeTruthy();
+
+    // The kit mock renders the error inside the label, so the field is found by role.
+    await user.type(within(dialog).getByRole('textbox'), 'docs');
+    expect(
+      within(dialog).getByText('An item with this name already exists here'),
+    ).toBeTruthy();
+    expect(onCreateFolder).not.toHaveBeenCalled();
+  });
+
+  it('closes on Cancel without calling the host', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onCreateFolder = vi.fn();
+    renderEditor({}, fullFileActions({ onCreateFolder }));
+
+    const dialog = await openCreateFolderDialog(user);
+    await user.type(within(dialog).getByLabelText('Name'), 'scripts');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Create folder' })).toBeNull();
+    expect(onCreateFolder).not.toHaveBeenCalled();
+  });
+});
+
 describe('SkillEditor — Upload archive', () => {
   const openArchiveDialogFor = async (user: User) => {
-    const child = screen.getAllByRole('list', { name: 'Add child' })[0];
-    await user.click(
-      within(child).getByRole('menuitem', {
-        name: 'Upload archive from device',
-      }),
-    );
+    await user.click(queryDirectMenuItems('Upload archive from device')[0]);
   };
 
   it('stages archive entries under the target folder with their structure', async () => {
@@ -1220,10 +1552,10 @@ describe('SkillEditor — Upload archive', () => {
     await openArchiveDialogFor(user);
     stageFile(new File(['zip'], 'bundle.zip'));
 
-    const alert = await screen.findByRole('alert');
+    await screen.findByText("Couldn't read this archive");
     expect(
-      await within(alert).findByText("Couldn't read this archive"),
-    ).toBeTruthy();
+      screen.getAllByRole('alert').map((alert) => alert.textContent),
+    ).toContain("Couldn't read this archive");
     expect(
       within(screen.getByRole('dialog')).queryByRole('listitem'),
     ).toBeNull();
@@ -1237,6 +1569,31 @@ describe('SkillEditor — Upload archive', () => {
     stageFile(new File(['zip'], 'empty.zip'));
 
     expect(await screen.findByText('This archive has no files')).toBeTruthy();
+  });
+});
+
+describe('SkillEditor — replacing an existing file', () => {
+  it('reports the editor dirty once a replacing upload is committed', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onDirtyChange = vi.fn();
+    const notes = {
+      path: 'notes.md',
+      name: 'notes.md',
+      kind: SkillFileNodeKind.File,
+    };
+    renderEditor({ files: [notes], onDirtyChange }, fullFileActions());
+
+    await openUploadDialog(user);
+    stageFile(new File(['new'], 'notes.md'));
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Confirm',
+      }),
+    );
+    await screen.findByText('Will replace the existing file');
+    await confirmDialog(user);
+
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
   });
 });
 

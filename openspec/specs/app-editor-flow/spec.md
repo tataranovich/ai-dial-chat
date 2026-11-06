@@ -70,69 +70,20 @@ The editor SHALL read all params exclusively via `useSearchParams` from `react-r
 
 ---
 
-### Requirement: A Settings-step save reasserts features.skills_supported via a follow-up updateApplication call
-
-The embedded Setup editor (loaded from `schema.editorUrl`) SHALL persist a Setup save entirely
-on its own — the chat host never calls the backend `updateApplication` endpoint for the
-configuration itself, it only posts `TriggerSave` to the iframe and reacts to the `SAVE_SUCCESS`/
-`SAVE_ERROR` postMessage the iframe posts back. That embedded editor is a separate application,
-not owned by this repository, and has no reason to know about the chat-side `skills_supported`
-hack described in the `applications-write-api` spec's "Quick Apps always get
-features.skills_supported: true" requirement — its own save may leave the flag unset or
-overwrite it back to its prior value.
-
-To close that gap without changing the embedded editor's protocol, `QuickAppSetup`
-(`apps/chat/src/pages/ApplicationEditor/setup/QuickAppSetup.tsx`) SHALL, in both its `save(values)`
-and `startPreview(values)` handles and immediately after the iframe save resolves with
-`SAVE_SUCCESS`, call `reassertSkillsSupport(values)`: the frontend `updateApplication(appId, …)` API
-with the current Metadata values (`name`, `description`, `iconUrl`, `topics`, `locales`,
-`primaryLocale`, derived through `toTriggerSaveGeneral(values)`), and **await** it. This call's only
-purpose is to re-trigger the backend's unconditional `skills_supported` force-merge on every
-update — the Metadata values are sent unchanged (a no-op for those fields), so for a non-Quick-App
-schema, where the backend's `isQuickAppSchema` check makes the force-merge a no-op too, the call
-has no visible effect.
-
-The save only counts as successful once this call settles. On success, `save`/`startPreview`
-resolve and the page's success path runs (`ApplicationFormEditor`'s `persist`: `refetchDeployments()`,
-`notifyOperationSuccess`, navigation to `ROUTES.Catalog`; or, for Preview, `isPreviewing` becoming
-true). On failure, `QuickAppSetup` SHALL set its inline `saveError` to `appsEditor.error.saveFailed`
-(rendered through `ErrorMessageNotification` above the iframe) and rethrow, so the page stops
-before any of those side effects — no `refetchDeployments`, no `notifyOperationSuccess`, no
-navigation, no entering preview — and the page clears `isSaving` and stays open.
-
-#### Scenario: Reassertion call runs before Save's side effects
-
-- **WHEN** the iframe posts `SAVE_SUCCESS` for a Save trigger
-- **THEN** `updateApplication(appId, { name, description, iconUrl, topics, locales, primaryLocale })` is called and awaited before `refetchDeployments()`, `notifyOperationSuccess`, and navigation to `ROUTES.Catalog`
-
-#### Scenario: Reassertion call runs before Preview's side effects
-
-- **WHEN** the iframe posts `SAVE_SUCCESS` for a Preview trigger
-- **THEN** the reassertion `updateApplication` call is awaited before `refetchDeployments()` and before `isPreviewing` becomes true
-- **AND** `refetchDeployments()` itself is awaited too when the save reported `hasChanges: true`; it remains fire-and-forget when the save reported `hasChanges: false`
-
-#### Scenario: A failed reassertion call blocks the rest of the success path
-
-- **WHEN** the reassertion `updateApplication` call rejects
-- **THEN** `isSaving` becomes false, the Setup section's inline `saveError` is set to the generic save-failed message, and no `refetchDeployments`, `notifyOperationSuccess`, navigation, or `isPreviewing` transition occurs
-
-#### Scenario: A successful reassertion call does not alter General-step data
-
-- **WHEN** the reassertion call succeeds
-- **THEN** the `name`/`description`/`iconUrl`/`topics`/`locales`/`primaryLocale` values it sent are identical to the Metadata values already passed to `save`/`startPreview`, so the update is a no-op for every field except the backend's forced `features.skills_supported`
-
 ---
 
 ### Requirement: App editor iframe component
 
 `apps/chat/src/pages/ApplicationEditor/setup/AppEditorIframe.tsx` SHALL:
 
-- Build the iframe URL with encoded `authProvider`, `id`, `theme`, and `applicationCredentials` query parameters.
+- Build the iframe URL with encoded `authProvider`, `id`, `theme`, `applicationCredentials`, and `applicationName` query parameters.
+  - `applicationName` SHALL be `schema.displayName`, URL-encoded (e.g. `Quick app 2.0` becomes `Quick+app+2.0`), and SHALL be omitted entirely when `schema.displayName` is missing or empty. It is the same value used as the `${displayName}/` prefix when matching incoming postMessage types, so the embedded editor can name its own messages with it instead of being configured separately.
   - `providerId` from `useUser().user?.providerId`
   - `theme` from `useTheme().currentTheme`
   - `applicationCredentials` SHALL be `true` only when both `useFeatureFlag('liveChatInteraction')` and `useUiFeature(OverlayFeature.LiveChatInteraction)` are enabled, otherwise `false`
 - Render a full-height `<iframe>` (`className="size-full border-none"`) with `allow="local-network-access=*"` so the embedded app — and any window it opens via `window.open` (e.g. an identity-provider login popup) — can request and receive the Local Network Access permission when the embedded app's or its identity provider's origin resolves to a private/internal IP address.
 - Show a `<Spinner />` overlay until the iframe dispatches `load` or fires a `readyToInteract` postMessage event; after either, hide the spinner.
+- Report the embedded editor as not responding when no postMessage from its origin arrives within `EDITOR_RESPONSE_TIMEOUT_MS` (15 seconds) of the iframe (re)loading. A `load` event does not count, because the browser fires it for its own error page when the editor host is unreachable. While not responding, hide the spinner and render a `WarningMessageNotification` above the iframe titled `appsEditor.settingsStep.unresponsiveTitle`, with the message `appsEditor.settingsStep.unresponsiveMessage` naming the editor origin and a `buttons.reload` action that remounts the iframe with the same URL and restarts the wait. The iframe stays visible and interactive. Any later message from the editor origin clears the state. Report every change through the optional `onUnresponsiveChange` prop.
 - Add a `window.addEventListener('message', handleMessage)` listener on mount and remove it on unmount (`useEffect` cleanup).
 - In `handleMessage`, after verifying `event.origin` matches `schema.editorUrl`'s origin:
   - `event.data.type === \`${displayName}/${AppsEditorEvent.ReadyToInteract}\`` → set loading=false
@@ -158,14 +109,32 @@ interface Props {
   onSaveError?: (error: string) => void;
   onReadyChange?: (isReady: boolean) => void;
   onLoggedOutChange?: (isLoggedOut: boolean) => void;
+  onUnresponsiveChange?: (isUnresponsive: boolean) => void;
 }
 ```
+
+`QuickAppSetup` SHALL treat a not-responding editor like a logged-out one: it does not surface the generic `appsEditor.error.settingsNotReady` error and clears one already shown.
 
 **Memoisation**: `handleMessage` SHALL be wrapped in `useCallback`. The `iframeUrl` string SHALL be wrapped in `useMemo`. `triggerSave` (inside `useImperativeHandle`) is memoised on `[schema.editorUrl]`.
 
 **Accessibility**: The `<iframe>` SHALL have `title={schema.displayName}`. The loading overlay SHALL expose exactly one status region: the kit `Spinner` (itself `role="status"`, wrapping a `role="img"`) SHALL receive `ariaLabel` from `appsEditor.settingsStep.loadingLabel`. The overlay container SHALL NOT carry its own `aria-label`/`aria-live` — a name on a role-less `div` is not exposed, and adding `role="status"` there would nest a second live region around the Spinner's.
 
 **RTL / UI impact**: The embedded editor handles its own directionality. The host-owned credentials dialog SHALL inherit the host direction and use the shared forms' logical spacing and wrapping, as specified in `catalog-application-credentials`.
+
+#### Scenario: Iframe src includes applicationName
+
+- **WHEN** `AppEditorIframe` renders with `schema.displayName = "Quick app 2.0"`
+- **THEN** the iframe URL carries `applicationName=Quick+app+2.0`, which decodes to `Quick app 2.0` via `URLSearchParams`
+
+#### Scenario: applicationName omitted when displayName is empty
+
+- **WHEN** `AppEditorIframe` renders with `schema.displayName` empty or undefined
+- **THEN** the iframe URL contains no `applicationName` parameter
+
+#### Scenario: Iframe reloads when the schema display name changes
+
+- **WHEN** `schema.displayName` changes while `AppEditorIframe` stays mounted
+- **THEN** the iframe URL changes, the iframe reloads, and readiness (`ReadyToSave`) re-gates to false as for any other URL change
 
 #### Scenario: Iframe src includes auth params
 
@@ -192,6 +161,21 @@ interface Props {
 
 - **WHEN** a `message` event arrives with `data.type = "<displayName>/readyToInteract"`
 - **THEN** the `Spinner` is no longer rendered
+
+#### Scenario: Unreachable editor is reported as not responding
+
+- **WHEN** no message arrives from the editor origin within 15 seconds of the iframe loading, even if the iframe fired `load`
+- **THEN** the spinner is hidden, a warning naming the editor origin with a Reload button is shown above the iframe, and `onUnresponsiveChange(true)` is called
+
+#### Scenario: Late editor message clears the not-responding warning
+
+- **WHEN** the warning is shown and a message then arrives from the editor origin
+- **THEN** the warning is removed and `onUnresponsiveChange(false)` is called
+
+#### Scenario: Reload remounts the editor
+
+- **WHEN** the user activates Reload in the not-responding warning
+- **THEN** the iframe is remounted with the same URL, the spinner is shown again, and the 15-second wait restarts
 
 #### Scenario: onUpdated called on updatedApplicationSuccess
 
@@ -351,15 +335,14 @@ A create failure raises an error notification with the API detail, falling back 
 
 - Save arms the save timeout and calls `QuickAppSetup`'s `save(metadata)` handle, which posts `TriggerSave` with the `general` payload.
 - On `SaveSuccess`, the page does the following, in order:
-  1. Awaits the `features.skills_supported` `updateApplication` reassertion (see "A Settings-step save reasserts features.skills_supported via a follow-up updateApplication call").
-  2. Awaits `refetchDeployments()`.
-  3. Raises `EntityOperation.Edited`.
-  4. Navigates to `returnUrl`, which is always `ROUTES.Catalog`.
+  1. Awaits `refetchDeployments()`.
+  2. Raises `EntityOperation.Edited`.
+  3. Navigates to `returnUrl`, which is always `ROUTES.Catalog`.
 - On `SaveError`, the page clears `isSaving`, the Setup section shows the error or `appsEditor.error.saveFailed` inline above the embedded editor, and the page stays open.
 
 **Preview** (edit mode only):
 
-- Preview triggers a save with no `general` payload. On `SaveSuccess`, `isPreviewing` becomes true.
+- Preview triggers a save carrying the same `general` payload as Save, and the host makes no follow-up `updateApplication` call. On `SaveSuccess`, `isPreviewing` becomes true.
 - When `hasChanges` is true, the page first awaits `refetchDeployments()`, with the saving overlay kept visible. A rejected refetch is logged and does not block preview.
 - While previewing, the whole `EntityEditor` is hidden (still mounted, `inert`) and the definition's `Preview` component (`QuickAppPreview`) fills the page. Its "Back to setup" button returns to the editor (see `app-preview-chat` "Preview is a full-page mode").
 
@@ -387,7 +370,7 @@ A create failure raises an error notification with the API detail, falling back 
 
 #### Scenario: Save triggers iframe save and navigates on success
 - **WHEN** in edit mode the user clicks Save and the iframe posts `SAVE_SUCCESS`
-- **THEN** the page awaits the `updateApplication` reassertion and `refetchDeployments()`, shows the edited notification, and navigates to `ROUTES.Catalog`
+- **THEN** the page awaits `refetchDeployments()` (and makes no further `updateApplication` call), shows the edited notification, and navigates to `ROUTES.Catalog`
 
 #### Scenario: Save failure shows inline error and stays on the page
 - **WHEN** the iframe posts `SAVE_ERROR`
@@ -407,11 +390,11 @@ A create failure raises an error notification with the API detail, falling back 
 
 ### Requirement: Quick-app Setup section
 
-`QuickAppSetup` (`apps/chat/src/pages/ApplicationEditor/setup/QuickAppSetup.tsx`, which replaces `SettingsStep.tsx`) SHALL be a function component that receives `ref` as a prop (React 19, no `forwardRef`) and exposes `ApplicationSetupHandle` through `useImperativeHandle`. Its `save(metadata)` forwards to the inner `AppEditorIframe`'s `triggerSave(general)`, and its `startPreview(metadata)` forwards to `triggerSave()` with no payload.
+`QuickAppSetup` (`apps/chat/src/pages/ApplicationEditor/setup/QuickAppSetup.tsx`, which replaces `SettingsStep.tsx`) SHALL be a function component that receives `ref` as a prop (React 19, no `forwardRef`) and exposes `ApplicationSetupHandle` through `useImperativeHandle`. Its `save(metadata)` forwards to the inner `AppEditorIframe`'s `triggerSave(general)`, and its `startPreview(metadata)` forwards to `triggerSave(general)`, carrying the same metadata `general` payload as `save`.
 
 It SHALL render the following:
 
-- Without `appId` (create mode): the `applicationEditor.setupPendingCreate` placeholder, with a `PrimaryButton` Create that calls `onSubmit` (disabled while `isSubmitting`).
+- Without `appId` (create mode): the `applicationEditor.setupPendingCreate` placeholder, with a `NeutralButton` Create that calls `onSubmit` (neutral, so the header's `PrimaryButton` stays the one primary action) (disabled while `isSubmitting`).
 - With `appId` and `schema.editorUrl`: `AppEditorIframe` only. `QuickAppSetup` SHALL NOT render `AppPreviewChat`. The preview chat is rendered at page level by `QuickAppPreview` (see `app-preview-chat` "Preview is a full-page mode"), and the iframe stays mounted while preview is shown because the whole `EntityEditor` is only hidden.
 - With `appId` but no `schema.editorUrl`: the `appsEditor.settingsStep.noEditorPlaceholder` placeholder.
 
@@ -432,7 +415,7 @@ The Setup section SHALL give the iframe container a minimum height of 640 px (`m
 - **THEN** the pending-create placeholder renders and no iframe is mounted
 
 #### Scenario: A real change requests a preview reset
-- **WHEN** `startPreview` or `save` receives `SaveSuccess` with `hasChanges: true` and the reassertion succeeds
+- **WHEN** `startPreview` or `save` receives `SaveSuccess` with `hasChanges: true`
 - **THEN** `onPreviewReset` is called exactly once
 - **AND** with `hasChanges: false` it is not called
 
@@ -450,3 +433,117 @@ The Setup section SHALL give the iframe container a minimum height of 640 px (`m
 #### Scenario: Unit test — empty name shows error
 - **WHEN** Create is clicked with an empty name field
 - **THEN** the validation error message is visible in the DOM and `createApplication` is not called
+
+### Requirement: App editor iframe reports dirty state
+
+`AppsEditorEvent` (`apps/chat/src/types/apps-editor.ts`) SHALL gain the member `DirtyState = 'DIRTY_STATE'`.
+
+`AppEditorIframe` (`apps/chat/src/pages/ApplicationEditor/setup/AppEditorIframe.tsx`) SHALL handle `DIRTY_STATE` messages whose payload carries a boolean `isDirty`. It SHALL accept such a message only from the embedded editor's own window, under the same origin and source checks as `VALIDITY_STATE`, and SHALL report the value to its parent through a new optional `onDirtyChange?: (isDirty: boolean) => void` prop. The Setup section forwards that value to `ApplicationFormEditor`. Messages with a non-boolean `isDirty` SHALL be ignored.
+
+The iframe's dirty state SHALL be treated as `false`:
+
+- until the first `DIRTY_STATE` message arrives;
+- after `SAVE_SUCCESS`;
+- when the iframe reloads for a different app or schema.
+
+`ApplicationFormEditor` OR's this value into its `isDirty` for `useBuilderLeaveGuard` (see `builder-unsaved-changes-guard`).
+
+#### Scenario: Iframe reports unsaved edits
+- **WHEN** the embedded editor posts `{ type: 'DIRTY_STATE', isDirty: true }` from its own window
+- **THEN** `onDirtyChange(true)` is called
+
+#### Scenario: Message from another window is ignored
+- **WHEN** a `DIRTY_STATE` message arrives from a window other than the embedded editor
+- **THEN** `onDirtyChange` is not called
+
+#### Scenario: Save success clears dirtiness
+- **WHEN** the iframe was dirty and `SAVE_SUCCESS` arrives
+- **THEN** `onDirtyChange(false)` is called
+
+#### Scenario: Reload for another app resets dirtiness
+- **WHEN** the iframe reloads for a different app id or schema
+- **THEN** the reported dirty state is `false` until the new editor posts `DIRTY_STATE`
+
+### Requirement: Application editor Metadata column is resizable
+`ApplicationFormEditor` (`apps/chat/src/pages/ApplicationEditor/ApplicationFormEditor.tsx`) SHALL enable the `EntityEditor` resizable left column (see `builder-form` "EditorLayout — resizable left column") so users can drag the boundary between Metadata and Setup on desktop. The page SHALL own the width in component state and SHALL NOT persist it (no `localStorage`, `sessionStorage` or user preference), so every editor open starts at the 400 px default and one user's, or one app type's, chosen width never carries over to another. The width is a view preference only: it SHALL NOT enter the form values, the create/update payloads or the preview flow, and no additional chat-api request SHALL be made.
+
+The page SHALL pass localized strings through `EntityEditor` labels using new keys under `editor` in `apps/chat/src/i18n/locales/en.json` and `EditorI18nKeys` (`apps/chat/src/constants/translation-keys.ts`): `editor.resizeHandleTooltip` ("Drag to resize") and `editor.resizeHandleAriaLabel`. The setting applies to every definition rendered by `ApplicationFormEditor`; the Prompt, Skill and Toolset editors are unchanged. Direction is inherited from `<html dir>`, so the handle works in Arabic and other RTL locales.
+
+#### Scenario: Width resets on every open
+- **WHEN** a user drags the handle to 520 px and reopens the editor, or opens an editor of another app type
+- **THEN** the Metadata column opens at 400 px
+
+#### Scenario: Width is not stored
+- **WHEN** a user resizes the column
+- **THEN** nothing is written to `localStorage` or `sessionStorage`
+
+#### Scenario: Save behaviour unchanged
+- **WHEN** a user resizes the column and then saves
+- **THEN** the create/update request payload is identical to one made without resizing
+
+### Requirement: Application editors can sign in to one external service through the Chat host
+
+`AppEditorIframe` SHALL add `externalServiceLogin` to the editor iframe URL with the same value it gives
+`applicationCredentials`: `true` only when both credential capability gates are enabled. An editor SHALL treat a
+missing or `false` value as "not supported" and may fall back to `REQUEST_APPLICATION_CREDENTIALS`.
+
+`AppEditorIframe` SHALL handle `{ type: 'REQUEST_EXTERNAL_SERVICE_LOGIN', appId: string, serviceId: string,
+offlineUsageConsent: boolean }` only when both gates are enabled, `event.origin` equals the configured editor URL's
+origin, `event.source` is the current iframe's `contentWindow`, `appId` and `serviceId` are nonempty strings and
+`offlineUsageConsent` is a boolean. Other messages SHALL be ignored.
+
+For a handled request the host SHALL, without opening any host dialog:
+
+1. open the shared OAuth popup before awaiting anything;
+2. read the application's public external-service listing for `normalizeDeploymentId(appId)` and select the entry
+   whose `id` equals `serviceId`;
+3. sign the person in through `useExternalServiceLogin` at `USER` level, passing the opened popup, the entry's OAuth
+   settings and the request's `offlineUsageConsent` unchanged — `OAUTH` and `DIAL_NATIVE` services only;
+4. post `{ type: 'EXTERNAL_SERVICE_LOGIN_RESULT', appId, serviceId, success, reason? }` to the iframe, echoing the
+   `appId` and `serviceId` exactly as received.
+
+`reason` SHALL be one of `popup-blocked`, `not-found`, `unsupported-auth-type`, `cancelled`,
+`admin-consent-required`, `offline-unavailable`, `failure`. The host SHALL close the popup on every failure it
+detects before navigating it. The host SHALL NOT set `offlineUsageConsent` on the person's behalf.
+
+The handler SHALL be memoized and included in `handleMessage`'s dependencies. No new feature flag, translated
+string, cache or visual surface is introduced; RTL and keyboard behavior are unchanged.
+
+#### Scenario: Host advertises the relay only with both gates
+
+- **WHEN** both credential gates are enabled
+- **THEN** the iframe URL carries `externalServiceLogin=true`
+- **AND** with either gate disabled it carries `externalServiceLogin=false` and requests are ignored
+
+#### Scenario: One OAuth service is signed in without the credentials dialog
+
+- **WHEN** the current editor sends a trusted request for service `gitlab-oauth` of `applications/public/runner app`
+  with `offlineUsageConsent: true`
+- **THEN** the host opens only the provider's consent popup, signs the person in at `USER` level with offline-use
+  consent for `applications/public/runner%20app`
+- **AND** posts `EXTERNAL_SERVICE_LOGIN_RESULT` with `success: true`, `appId: 'applications/public/runner app'` and
+  `serviceId: 'gitlab-oauth'`
+- **AND** no `ApplicationCredentials` dialog is mounted
+
+#### Scenario: The popup is reserved before the lookup
+
+- **WHEN** a trusted request arrives
+- **THEN** the OAuth popup is opened before the service listing is requested
+- **AND** a blocked popup answers `success: false, reason: 'popup-blocked'` without requesting the listing
+
+#### Scenario: Unknown or unsupported service
+
+- **WHEN** the listing has no entry with the requested `serviceId`, or the entry's authentication type is `API_KEY`
+  or `NONE`
+- **THEN** the host closes the popup and answers `success: false` with `not-found` or `unsupported-auth-type`
+
+#### Scenario: Consent is forwarded, never defaulted
+
+- **WHEN** a trusted request carries `offlineUsageConsent: false`
+- **THEN** the sign-in is made without offline-use consent
+
+#### Scenario: Other origins, windows or malformed payloads are ignored
+
+- **WHEN** the message origin or source is not the current editor, or `serviceId` is empty, or
+  `offlineUsageConsent` is missing
+- **THEN** no popup opens and no result is posted

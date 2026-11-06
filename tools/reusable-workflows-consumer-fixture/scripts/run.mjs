@@ -51,6 +51,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  execNpmSync,
   bundleFixture,
   cleanupDir,
   createFixtureDependencyResolver,
@@ -61,12 +62,23 @@ import {
   npmInstallFixture,
   typecheckFixture,
 } from '../../../libs/chat-hooks/e2e-fixtures/harness.mjs';
-import { UI_KIT_EDITOR_PEERS } from '../../../libs/chat-hooks/e2e-fixtures/fixtures.mjs';
+import {
+  UI_KIT_EDITOR_PEERS,
+  REUSABLE_CONTROLLER_EXPORTS,
+  ALL_OPTIONAL_PEERS,
+} from '../../../libs/chat-hooks/e2e-fixtures/fixtures.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = path.resolve(here, '..');
 const workspaceRoot = path.resolve(fixtureRoot, '..', '..');
-const ROOT_PACKAGES = ['@epam/ai-dial-skills', '@epam/ai-dial-prompts'];
+const ROOT_PACKAGES = [
+  '@epam/ai-dial-quotations',
+  '@epam/ai-dial-chat-shared',
+  '@epam/ai-dial-skills',
+  '@epam/ai-dial-prompts',
+  '@epam/ai-dial-chat-hooks',
+  '@epam/ai-dial-attachment-canvas',
+];
 /*
  * `@epam/ai-dial-ui-kit`'s published root entry reaches its optional editor
  * stack by name even for a consumer that never touches an editor component —
@@ -75,8 +87,15 @@ const ROOT_PACKAGES = ['@epam/ai-dial-skills', '@epam/ai-dial-prompts'];
  * around by naming these three explicitly; reusing that same constant here
  * keeps the two suites from silently drifting on the workaround.
  */
-const EXTRA_DIRECT_PEERS = [...UI_KIT_EDITOR_PEERS];
-const ROOT_PROJECT_ROOTS = ['libs/skills', 'libs/prompts'];
+const EXTRA_DIRECT_PEERS = [...UI_KIT_EDITOR_PEERS, ...ALL_OPTIONAL_PEERS];
+const ROOT_PROJECT_ROOTS = [
+  'libs/quotations',
+  'libs/chat-shared',
+  'libs/skills',
+  'libs/prompts',
+  'libs/chat-hooks',
+  'libs/attachment-canvas',
+];
 const keepFixtures = process.env.KEEP_FIXTURES === '1';
 
 for (const projectRoot of ROOT_PROJECT_ROOTS) {
@@ -119,6 +138,9 @@ try {
   });
 
   const dependencies = {
+    vitest: lockedVersion('vitest'),
+    jsdom: lockedVersion('jsdom'),
+    '@testing-library/react': lockedVersion('@testing-library/react'),
     react: lockedVersion('react'),
     'react-dom': lockedVersion('react-dom'),
     '@types/react': lockedVersion('@types/react'),
@@ -150,10 +172,41 @@ try {
     'Installing the isolated fixture (no --legacy-peer-deps, no ancestor node_modules)...',
   );
   npmInstallFixture(dir);
+  const smoke = readFileSync(
+    path.join(
+      workspaceRoot,
+      'libs/chat-hooks/src/tests/remaining-reuse-public-api.spec.ts',
+    ),
+    'utf8',
+  ).replaceAll('../entry-points/', '@epam/ai-dial-chat-hooks/');
+  writeFileSync(path.join(dir, 'remaining.spec.ts'), smoke);
+  const titleTests = readFileSync(
+    path.join(
+      workspaceRoot,
+      'libs/chat-hooks/src/conversation/tests/title-enrichment-controller.spec.tsx',
+    ),
+    'utf8',
+  ).replace(
+    "'../useConversationTitleEnrichmentController'",
+    "'@epam/ai-dial-chat-hooks/conversation'",
+  );
+  writeFileSync(path.join(dir, 'titles.spec.tsx'), titleTests);
+  execNpmSync(['exec', '--', 'vitest', 'run', '--environment', 'jsdom'], {
+    cwd: dir,
+    stdio: 'inherit',
+  });
 
   writeFileSync(
     path.join(dir, 'entry.ts'),
     [
+      `export { createGenerationRegistry, useConversationTitleEnrichmentController, useDeploymentChangeTracking, UploadMimeTypePolicy } from '@epam/ai-dial-chat-hooks/conversation';`,
+      `export { resolveActiveScheduledTask, useActiveScheduledTaskDetails } from '@epam/ai-dial-chat-hooks/scheduled-tasks';`,
+      `export { useSkillFilePreviewSyncController } from '@epam/ai-dial-chat-hooks/skill-editor';`,
+      `export { UsageResetOffsetPolicy, formatUsageResetTime } from '@epam/ai-dial-chat-hooks/usage-limits';`,
+      `export { createGenerationRegistry as RootGenerationRegistry, useConversationTitleEnrichmentController as RootTitleController, useDeploymentChangeTracking as RootDeploymentTracking, resolveActiveScheduledTask as RootActiveTaskResolver, useActiveScheduledTaskDetails as RootActiveTaskDetails, useSkillFilePreviewSyncController as RootPreviewController, useExternalServiceLogin as RootExternalServiceLogin, UploadMimeTypePolicy as RootUploadMimeTypePolicy, UsageResetOffsetPolicy as RootUsageResetOffsetPolicy } from '@epam/ai-dial-chat-hooks';`,
+      `export { useExternalServiceLogin } from '@epam/ai-dial-chat-hooks/external-services';`,
+      `export { useHtmlTagAnnotationGroups } from '@epam/ai-dial-quotations';`,
+      `export { toConversationTransferQueueItems } from '@epam/ai-dial-chat-shared';`,
       // Each package's README documents this import as the required setup
       // step — the fixture must do it too, or its CSS never reaches the build.
       `import '@epam/ai-dial-skills/styles.css';`,
@@ -162,6 +215,16 @@ try {
       `export * from '@epam/ai-dial-prompts';`,
       // Explicitly guard the existing root API against accidental removal.
       `export { PromptParametersPopup } from '@epam/ai-dial-prompts';`,
+      `export { useLatestCanvasRequest } from '@epam/ai-dial-attachment-canvas';`,
+      ...Object.entries(REUSABLE_CONTROLLER_EXPORTS).map(
+        ([entry, names]) =>
+          `export { ${names.join(', ')} } from '@epam/ai-dial-chat-hooks/${entry}';`,
+      ),
+      `export { ${[
+        ...new Set(Object.values(REUSABLE_CONTROLLER_EXPORTS).flat()),
+      ]
+        .map((name) => `${name} as Root${name.replace(/^type /, '')}`)
+        .join(', ')} } from '@epam/ai-dial-chat-hooks';`,
       '',
     ].join('\n'),
   );
@@ -208,39 +271,69 @@ try {
     }
 
     // -------------------------------------------------------------------
-    // Feature loading boundary: the main chunk must not eagerly bundle AG
-    // Grid (reachable only through usePromptSelectorOverlay's lazy-loaded
-    // PromptParametersPopup -> @epam/ai-dial-catalog's ListView), while a
-    // separate emitted chunk proves the split genuinely happened rather
-    // than AG Grid being absent for an unrelated reason.
+    // Feature loading boundary: PromptParametersPopup must live in a chunk
+    // the main chunk only reaches through a dynamic import(), and nothing
+    // the main chunk loads eagerly (itself plus its static-import closure,
+    // which includes shared chunks such as the one carrying
+    // @epam/ai-dial-catalog) may bundle AG Grid.
+    //
+    // The check deliberately does not require AG Grid to appear in the lazy
+    // chunk: the popup only uses AppIdentity/ContentTab/DeploymentSize from
+    // @epam/ai-dial-catalog, so a bundler that tree-shakes the unused
+    // ListView correctly (rolldown >= 1.2) emits no AG Grid anywhere.
     // -------------------------------------------------------------------
     const AG_GRID_MARKER = 'ag-grid-community';
-    const mainChunk = readFileSync(bundle.bundlePath, 'utf-8');
-    if (mainChunk.includes(AG_GRID_MARKER)) {
+    const readChunk = (file) => readFileSync(path.join(outDir, file), 'utf-8');
+    const relativeSpecifiers = (source, pattern) =>
+      [...source.matchAll(pattern)]
+        .map((match) => match[1])
+        .filter((specifier) => specifier.startsWith('./'))
+        .map((specifier) => specifier.slice(2));
+    const STATIC_IMPORT =
+      /^(?:import|export)\b[^;]*?["'](\.\/[^"']+\.js)["']/gm;
+    const DYNAMIC_IMPORT = /\bimport\(\s*["'](\.\/[^"']+\.js)["']\s*\)/g;
+
+    const eagerChunks = new Set();
+    const pending = [mainChunkName];
+    while (pending.length > 0) {
+      const file = pending.pop();
+      if (eagerChunks.has(file)) continue;
+      eagerChunks.add(file);
+      pending.push(...relativeSpecifiers(readChunk(file), STATIC_IMPORT));
+    }
+
+    const eagerAgGridChunks = [...eagerChunks].filter((file) =>
+      readChunk(file).includes(AG_GRID_MARKER),
+    );
+    if (eagerAgGridChunks.length > 0) {
       fail(
-        `The main chunk (${mainChunkName}) contains "${AG_GRID_MARKER}" — ` +
-          'usePromptSelectorOverlay is pulling AG Grid into its initial bundle instead of ' +
-          'lazy-loading the component that reaches it (see usePromptSelectorOverlay.tsx).',
+        `Eagerly loaded chunk(s) ${eagerAgGridChunks.join(', ')} contain "${AG_GRID_MARKER}" — ` +
+          'AG Grid is reachable from the initial bundle instead of only behind a lazy boundary ' +
+          '(see usePromptSelectorOverlay.tsx and LazyPromptParametersPopup.tsx).',
       );
     }
-    const otherJsFiles = outputFiles.filter(
-      (file) => file.endsWith('.js') && file !== mainChunkName,
+
+    const lazyPopupChunk = relativeSpecifiers(
+      readChunk(mainChunkName),
+      DYNAMIC_IMPORT,
+    ).find(
+      (file) =>
+        !eagerChunks.has(file) &&
+        /\bas PromptParametersPopup\b/.test(readChunk(file)),
     );
-    const lazyChunkHasMarker = otherJsFiles.some((file) =>
-      readFileSync(path.join(outDir, file), 'utf-8').includes(AG_GRID_MARKER),
-    );
-    if (!lazyChunkHasMarker) {
+    if (!lazyPopupChunk) {
       fail(
-        `No emitted chunk other than ${mainChunkName} contains "${AG_GRID_MARKER}" — ` +
-          'the lazy-loading split could not be verified (expected a separate chunk carrying ' +
-          'PromptParametersPopup/@epam/ai-dial-catalog).',
+        `${mainChunkName} has no dynamic import() of a chunk exporting PromptParametersPopup ` +
+          'outside its static-import closure — the lazy-loading split could not be verified ' +
+          '(see LazyPromptParametersPopup.tsx).',
       );
     }
 
     if (exitCode === 0) {
       console.info(
-        'OK: both packages bundle together, required CSS reaches the build, and AG Grid ' +
-          'stays out of the main chunk while a separate lazy chunk carries it.',
+        'OK: both packages bundle together, required CSS reaches the build, ' +
+          `PromptParametersPopup loads lazily from ${lazyPopupChunk}, and no eagerly ` +
+          'loaded chunk carries AG Grid.',
       );
     }
   }

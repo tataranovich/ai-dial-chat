@@ -9,6 +9,7 @@ import {
   type CommandMenuContext,
 } from '../../../models/Input';
 import { Input } from '../Input';
+import inputStyles from '../Input.module.scss';
 
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@epam/ai-dial-ui-kit')>();
@@ -26,14 +27,31 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => {
       children,
       open,
       renderOverlay,
+      overlayRole = actual.DropdownOverlayRole.Menu,
     }: {
       children: ReactNode;
       open?: boolean;
       renderOverlay?: () => ReactNode;
+      overlayRole?: string;
     }) => (
       <div>
         {children}
-        {open && renderOverlay && createPortal(renderOverlay(), document.body)}
+        {open &&
+          renderOverlay &&
+          createPortal(
+            /* Mirrors the kit: the overlay takes `overlayRole`, and `none`
+               leaves it without one. */
+            <div
+              role={
+                overlayRole === actual.DropdownOverlayRole.None
+                  ? undefined
+                  : overlayRole
+              }
+            >
+              {renderOverlay()}
+            </div>,
+            document.body,
+          )}
       </div>
     ),
   };
@@ -122,6 +140,15 @@ describe('Input — command menu keyboard navigation', () => {
     );
     expect(textarea.getAttribute('aria-activedescendant')).toBeNull();
     expect(screen.getByRole('group', { name: 'Skills' })).toBeTruthy();
+  });
+
+  it('wraps the host listbox in an overlay with no role of its own', () => {
+    const { textarea } = renderWithMenu();
+    openMenu(textarea);
+
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('listbox', { name: 'Skills list' })).toBeTruthy();
   });
 
   it('moves the active option with ArrowDown/ArrowUp, wrapping at both ends', () => {
@@ -256,12 +283,108 @@ describe('Input — selection highlight while a /query is typed', () => {
 
       // eslint-disable-next-line testing-library/no-node-access -- the highlight is a decorative overlay with no role or text
       const highlight = document.querySelector<HTMLElement>(
-        '.bg-control-accent-alpha-active',
+        `.${inputStyles.selectionHighlight}`,
       );
       expect(highlight).toBeTruthy();
       expect(highlight?.style.width).toBe('40px');
     } finally {
       Range.prototype.getClientRects = originalGetClientRects;
     }
+  });
+});
+
+describe('Input — command menu opened by a paste', () => {
+  it('opens filtered by the pasted query when the textarea was empty', async () => {
+    const { textarea } = renderWithMenu();
+    await userEvent.click(textarea);
+
+    await userEvent.paste('/al');
+
+    expect(textarea.value).toBe('/al');
+    expect(
+      screen.getAllByRole('option').map((option) => option.textContent),
+    ).toEqual(['alpha']);
+  });
+
+  it('opens filtered by the pasted query when the textarea already held text', async () => {
+    const { textarea } = renderWithMenu();
+    await userEvent.type(textarea, 'hello ');
+
+    await userEvent.paste('/al');
+
+    expect(textarea.value).toBe('hello /al');
+    expect(
+      screen.getAllByRole('option').map((option) => option.textContent),
+    ).toEqual(['alpha']);
+  });
+
+  it('opens nothing when the paste leaves a non-command word at the caret', async () => {
+    const { textarea } = renderWithMenu();
+    await userEvent.click(textarea);
+
+    await userEvent.paste('/s sdf');
+
+    expect(textarea.value).toBe('/s sdf');
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+});
+
+describe('Input — command menu toggling', () => {
+  it('keeps the same textarea node when the command menu is added and removed', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(<Input onSend={onSend} />);
+    const textarea = screen.getByRole('textbox');
+
+    rerender(<Input onSend={onSend} commandMenu={buildCommandMenu(vi.fn())} />);
+    expect(screen.getByRole('textbox')).toBe(textarea);
+
+    rerender(<Input onSend={onSend} />);
+    expect(screen.getByRole('textbox')).toBe(textarea);
+  });
+});
+
+describe('Input — commandMenu.onTextPaste (issue #9354)', () => {
+  const renderWithPasteHandler = (pasteTextThreshold?: number) => {
+    const calls: string[] = [];
+    const onTextPaste = vi.fn((text: string) => calls.push(`paste:${text}`));
+    const onChange = vi.fn((value: string) => calls.push(`change:${value}`));
+    render(
+      <Input
+        onSend={vi.fn()}
+        onChange={onChange}
+        pasteTextThreshold={pasteTextThreshold}
+        commandMenu={{ ...buildCommandMenu(vi.fn()), onTextPaste }}
+      />,
+    );
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    return { calls, onTextPaste, textarea };
+  };
+
+  it('reports an inline paste before the change that carries it', async () => {
+    const { calls, textarea } = renderWithPasteHandler();
+    await userEvent.click(textarea);
+
+    await userEvent.paste('Run /alpha');
+
+    expect(calls).toEqual(['paste:Run /alpha', 'change:Run /alpha']);
+  });
+
+  it('reports the pasted text with line endings normalized to \n', async () => {
+    const { onTextPaste, textarea } = renderWithPasteHandler();
+    await userEvent.click(textarea);
+
+    await userEvent.paste('one\r\ntwo');
+
+    expect(onTextPaste).toHaveBeenCalledWith('one\ntwo');
+  });
+
+  it('does not report a paste that becomes an attachment', async () => {
+    const { onTextPaste, textarea } = renderWithPasteHandler(5);
+    await userEvent.click(textarea);
+
+    await userEvent.paste('a long pasted text');
+
+    expect(textarea.value).toBe('');
+    expect(onTextPaste).not.toHaveBeenCalled();
   });
 });

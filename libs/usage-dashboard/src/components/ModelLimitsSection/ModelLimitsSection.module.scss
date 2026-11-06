@@ -1,37 +1,9 @@
-.container {
-  background: var(--mls-container-bg, var(--bg-layer-raised, #fcfcfc));
-}
-
 .heading {
   color: var(--mls-heading, var(--text-primary, #161b2d));
 }
 
 .headingCount {
   color: var(--mls-heading-count, var(--text-tertiary, #848e9c));
-}
-
-.columnHeader {
-  color: var(--mls-column-header, var(--text-secondary, #57647a));
-}
-
-.headerRow {
-  /* Dividers inside the table sit on the thin stroke (0.5px), one step below
-     the 1px main stroke controls and standalone dividers use. */
-  border-block-end: 0.5px solid
-    var(--mls-row-divider, var(--stroke-tertiary, #e0e6f0));
-}
-
-.row {
-  border-block-start: 0.5px solid
-    var(--mls-row-divider, var(--stroke-tertiary, #e0e6f0));
-}
-
-.row:first-child {
-  border-block-start: none;
-}
-
-.mobileColumnLabel {
-  color: var(--mls-column-header, var(--text-secondary, #57647a));
 }
 
 .name {
@@ -110,4 +82,15 @@
 
 .neutralStatus {
   color: var(--mls-badge-neutral-text, var(--text-secondary, #57647a));
+}
+
+/*
+ * The kit's auto-height grid sets `min-height: 0` on its body, so with no rows
+ * ag-grid's overlay — the grid below its header — has no height and centres
+ * the empty state over the column titles (Issue #9695). Reserve the empty
+ * state's height (97px illustration + title, with 32px above and below).
+ * The doubled class outranks the kit's three-class rule.
+ */
+.emptyGrid.emptyGrid :global(.ag-layout-auto-height .ag-center-cols-viewport) {
+  min-height: 216px;
 }

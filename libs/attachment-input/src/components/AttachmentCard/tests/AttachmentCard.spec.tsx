@@ -4,8 +4,10 @@ import {
   AttachmentType,
   RequestStatus,
 } from '@epam/ai-dial-chat-shared';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ATTACHMENT_INPUT_CLASS } from '../../../constants/public-class-names';
 import { AttachmentCard } from '../AttachmentCard';
 
 const failedAttachment: DisplayAttachment = {
@@ -30,6 +32,34 @@ describe('AttachmentCard — corner actions in the error state', () => {
     expect(screen.getByLabelText('Retry upload')).toBeTruthy();
     expect(screen.getByLabelText('Remove attachment')).toBeTruthy();
     expect(screen.getAllByLabelText('Retry upload')).toHaveLength(1);
+  });
+
+  it('keeps the error status region mounted and fills it when the upload fails', () => {
+    const { rerender } = render(
+      <AttachmentCard
+        attachment={{ ...failedAttachment, status: RequestStatus.Idle }}
+        onRemove={vi.fn()}
+      />,
+    );
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('');
+    expect(
+      screen
+        .getByLabelText('Remove attachment')
+        .hasAttribute('aria-describedby'),
+    ).toBe(false);
+
+    rerender(
+      <AttachmentCard attachment={failedAttachment} onRemove={vi.fn()} />,
+    );
+
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status.textContent).not.toBe('');
+    expect(
+      screen
+        .getByLabelText('Remove attachment')
+        .getAttribute('aria-describedby'),
+    ).toBe(status.id);
   });
 
   it('hides retry for a file-too-large error, keeping remove', () => {
@@ -132,7 +162,8 @@ describe('AttachmentCard — corner actions in the error state', () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
-  it('still activates the tile itself on Enter', () => {
+  it('still activates the tile itself on Enter', async () => {
+    const user = userEvent.setup();
     const onClick = vi.fn();
     render(
       <AttachmentCard
@@ -143,8 +174,11 @@ describe('AttachmentCard — corner actions in the error state', () => {
       />,
     );
 
-    const tile = screen.getByRole('button', { name: 'Download attachment' });
-    fireEvent.keyDown(tile, { key: 'Enter' });
+    /* The tile button is a tooltip trigger, and the tooltip tracks its focus. */
+    act(() => {
+      screen.getByRole('button', { name: 'Download attachment' }).focus();
+    });
+    await user.keyboard('{Enter}');
     expect(onClick).toHaveBeenCalledWith('a1');
   });
 });
@@ -176,29 +210,33 @@ describe('AttachmentCard — upload in progress', () => {
     expect(screen.getByRole('progressbar', { name: 'Загрузка' })).toBeTruthy();
   });
 
+  /* eslint-disable testing-library/no-node-access -- aria-busy sits on the tile root, which has no role of its own */
+  const getBusyTile = () =>
+    screen
+      .getByLabelText('Remove attachment')
+      .closest(`.${ATTACHMENT_INPUT_CLASS.tile}`);
+  /* eslint-enable testing-library/no-node-access */
+
   it('marks the tile busy while uploading and not busy once settled', () => {
     const { rerender } = render(
-      <AttachmentCard attachment={uploadingAttachment} onClick={vi.fn()} />,
+      <AttachmentCard
+        attachment={uploadingAttachment}
+        onClick={vi.fn()}
+        onRemove={vi.fn()}
+      />,
     );
 
-    expect(
-      screen
-        .getByRole('button', { name: 'Download attachment' })
-        .getAttribute('aria-busy'),
-    ).toBe('true');
+    expect(getBusyTile()?.getAttribute('aria-busy')).toBe('true');
 
     rerender(
       <AttachmentCard
         attachment={{ ...uploadingAttachment, status: RequestStatus.Idle }}
         onClick={vi.fn()}
+        onRemove={vi.fn()}
       />,
     );
 
-    expect(
-      screen
-        .getByRole('button', { name: 'Download attachment' })
-        .getAttribute('aria-busy'),
-    ).toBe('false');
+    expect(getBusyTile()?.getAttribute('aria-busy')).toBe('false');
     expect(screen.queryByRole('progressbar')).toBeNull();
   });
 });
@@ -227,7 +265,202 @@ describe('AttachmentCard — long filename', () => {
     /* jsdom does no layout, so assert the classes that make the clamp work. */
     const name = screen.getByTitle('ARCHITECTUREDECISIONRECORDS');
     expect(name.className).toContain('w-full');
-    expect(name.className).toContain('break-words');
+    expect(name.className).toContain('wrap-break-word');
     expect(name.className).toContain('line-clamp-2');
+  });
+});
+
+/*
+ * A clickable tile is covered by its action button, so the name's own `title`
+ * never sees the pointer; the full name rides on the button in a tooltip
+ * while the clamp cuts it off (#9623).
+ */
+describe('AttachmentCard — clamped name tooltip', () => {
+  const longFile: DisplayAttachment = {
+    id: 'a9',
+    name: 'quarterly-support-tickets-export-final-v2.csv',
+    contentType: 'text/csv',
+    type: AttachmentType.File,
+    status: RequestStatus.Idle,
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const hoverTile = async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(
+      <AttachmentCard
+        attachment={longFile}
+        onClick={vi.fn()}
+        labels={{ clickLabel: 'Preview file' }}
+      />,
+    );
+    await userEvent
+      .setup({ advanceTimers: vi.advanceTimersByTime })
+      .hover(screen.getByRole('button', { name: 'Preview file' }));
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+  };
+
+  it('shows the full file name when the tile is hovered while the name is clamped', async () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(48);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(32);
+
+    await hoverTile();
+
+    expect(screen.getByRole('tooltip').textContent).toBe(longFile.name);
+  });
+
+  it('shows no tooltip while the whole name fits', async () => {
+    await hoverTile();
+
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+});
+
+/* eslint-disable testing-library/no-container, testing-library/no-node-access -- the decorative type glyph is aria-hidden, so it has no role or text to query */
+describe('AttachmentCard — type glyph', () => {
+  const idleFile: DisplayAttachment = {
+    ...failedAttachment,
+    name: 'report.csv',
+    contentType: 'text/csv',
+    status: RequestStatus.Idle,
+    errorReason: undefined,
+  };
+
+  it('renders the kit color file-type icon for a file attachment', () => {
+    const { container } = render(<AttachmentCard attachment={idleFile} />);
+
+    expect(container.querySelector('.dial-kit-file-icon')).toBeTruthy();
+  });
+
+  it('keeps the outline glyph for a prompt attachment', () => {
+    const { container } = render(
+      <AttachmentCard
+        attachment={{ ...idleFile, type: AttachmentType.Prompt }}
+      />,
+    );
+
+    expect(container.querySelector('.dial-kit-file-icon')).toBeNull();
+    expect(screen.getByText('Prompt')).toBeTruthy();
+  });
+});
+
+/* eslint-enable testing-library/no-container, testing-library/no-node-access */
+
+describe('AttachmentCard — remove action visibility', () => {
+  it('keeps the remove button visible below the desktop breakpoint', () => {
+    render(
+      <AttachmentCard
+        attachment={{ ...failedAttachment, status: RequestStatus.Idle }}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Remove attachment').className).toContain(
+      'mobile:opacity-100',
+    );
+  });
+});
+
+describe('AttachmentCard — focus ring', () => {
+  /* CSS-module class marking a tile whose ring stands for its lone action's focus. */
+  const PROXY_RING = /_proxyFocus_/;
+  const idleFile: DisplayAttachment = {
+    ...failedAttachment,
+    status: RequestStatus.Idle,
+    errorReason: undefined,
+  };
+  const image: DisplayAttachment = {
+    id: 'img',
+    name: 'cat.png',
+    contentType: 'image/png',
+    type: AttachmentType.Image,
+    status: RequestStatus.Idle,
+    url: 'https://example.test/cat.png',
+  };
+  /* eslint-disable testing-library/no-node-access -- the tile root carries no role or name of its own when it is not interactive */
+  const getTileOf = (actionLabel: string) =>
+    screen
+      .getByLabelText(actionLabel)
+      .closest(`.${ATTACHMENT_INPUT_CLASS.tile}`);
+  /* eslint-enable testing-library/no-node-access */
+
+  it('rings an interactive tile on its own focus only, 1px clear of the border', () => {
+    render(
+      <AttachmentCard
+        attachment={idleFile}
+        onClick={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    const tileAction = screen.getByRole('button', {
+      name: 'Download attachment',
+    });
+    expect(tileAction.className).toMatch(/tileAction/);
+    const tile = getTileOf('Remove attachment')!;
+    expect(tile.className).toContain('focus-visible:outline-1');
+    expect(tile.className).toContain('outline-offset-1');
+    // Tailwind v4's bare `outline-1` also sets a solid style, ringing every tile.
+    expect(tile.className.split(' ')).not.toContain('outline-1');
+    expect(tile.className).not.toMatch(PROXY_RING);
+  });
+
+  it('rings a non-interactive tile while its only action has focus', () => {
+    render(<AttachmentCard attachment={idleFile} onRemove={vi.fn()} />);
+
+    expect(getTileOf('Remove attachment')?.className).toMatch(PROXY_RING);
+  });
+
+  it('leaves each action its own ring when a non-interactive tile has several', () => {
+    render(
+      <AttachmentCard
+        attachment={failedAttachment}
+        onRetry={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    expect(getTileOf('Remove attachment')?.className).not.toMatch(PROXY_RING);
+  });
+
+  it('applies the same rule to an image tile', () => {
+    render(<AttachmentCard attachment={image} onRemove={vi.fn()} />);
+
+    expect(getTileOf('Remove attachment')?.className).toMatch(PROXY_RING);
+  });
+});
+
+describe('AttachmentCard — image upload in progress', () => {
+  const uploadingImage: DisplayAttachment = {
+    id: 'img',
+    name: 'cat.png',
+    contentType: 'image/png',
+    type: AttachmentType.Image,
+    status: RequestStatus.Loading,
+    previewUrl: 'blob:cat',
+  };
+
+  it('announces the upload and keeps remove visible', () => {
+    render(
+      <AttachmentCard
+        attachment={uploadingImage}
+        onRemove={vi.fn()}
+        onDownload={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('progressbar', { name: 'Uploading' })).toBeTruthy();
+    const removeClasses = screen
+      .getByLabelText('Remove attachment')
+      .className.split(' ');
+    expect(removeClasses).toContain('opacity-100');
+    expect(removeClasses).not.toContain('opacity-0');
+    expect(screen.queryByLabelText('Download attachment')).toBeNull();
   });
 });

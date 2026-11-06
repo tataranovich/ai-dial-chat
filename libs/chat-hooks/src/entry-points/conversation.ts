@@ -1,4 +1,6 @@
 export * from '../conversation/announcement-message';
+export * from '../conversation/conversation-draft/conversation-draft';
+export * from '../conversation/conversation-draft/conversation-draft-store';
 export * from '../conversation/create-chat-stream-api';
 export * from '../conversation/display-name-watch';
 export * from '../conversation/footer-message';
@@ -13,6 +15,7 @@ export * from '../conversation/starter-option';
 export * from '../conversation/deriveConversationRowActionState/deriveConversationRowActionState';
 export * from '../conversation/useActiveConversationSync/useActiveConversationSync';
 export * from '../conversation/useAsyncConfirmDialog/useAsyncConfirmDialog';
+export * from '../conversation/useConversationComposerDraft/useConversationComposerDraft';
 export * from '../conversation/useConversationLookupMaps/useConversationLookupMaps';
 export * from '../conversation/useConversationPanelItems/useConversationPanelItems';
 export * from '../conversation/useImportFilePicker/useImportFilePicker';
@@ -48,3 +51,16 @@ export { isAwaitingGenerationResume } from '../conversation/useConversationStrea
 export * from '../conversation/useConversationStream/useConversationStream';
 export * from '../useChatSettingsFormConfig/useChatSettingsFormConfig';
 export * from '../useToolsMenu/useToolsMenu';
+export * from '../conversation/scheduled-task-grouping';
+export * from '../conversation/useConversationDiscovery/useConversationDiscovery';
+export * from '../conversation/useEntityPreselection/useEntityPreselection';
+
+export * from '../conversation/generation-registry';
+
+export * from '../conversation/useConversationTitleEnrichmentController';
+export * from '../conversation/conversation-title-stream';
+export * from '../conversation/useVisibleConversationIdsReporter/useVisibleConversationIdsReporter';
+export * from '../conversation/conversation-list';
+
+export * from '../conversation/useDeploymentChangeTracking';
+export * from '../conversation/conversation-data-source';

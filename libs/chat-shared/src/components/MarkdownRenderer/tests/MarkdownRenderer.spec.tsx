@@ -11,6 +11,8 @@ vi.mock('react-syntax-highlighter', () => ({
   ),
 }));
 
+const NBSP = String.fromCharCode(0xa0);
+
 const TABLE_MARKDOWN = `| Name | Description |
 | --- | --- |
 | Alpha | A long table value |`;
@@ -92,7 +94,7 @@ describe('MarkdownRenderer', () => {
     expect(table.className).toContain('min-w-full');
     expect(tableWrapper?.className).toContain('max-w-full');
     expect(tableWrapper?.className).toContain('min-w-0');
-    expect(tableWrapper?.className).toContain('[overflow:clip]');
+    expect(tableWrapper?.className).toContain('overflow-clip');
     expect(tableWrapper?.className).toContain('rounded-xl');
     expect(tableWrapper?.className).toContain('border');
     expect(scrollContainer?.className).toContain('overflow-x-auto');
@@ -505,6 +507,26 @@ describe('MarkdownRenderer', () => {
     expect(codeEl.querySelectorAll('br').length).toBe(0);
   });
 
+  it('keeps every space of a run of consecutive spaces in prose visible', () => {
+    render(<MarkdownRenderer content="A        A" />);
+
+    const paragraph = screen.getByRole('paragraph');
+    expect(paragraph.textContent).toBe(`A${NBSP.repeat(7)} A`);
+  });
+
+  it('keeps consecutive spaces in a table cell visible', () => {
+    render(<MarkdownRenderer content={'| Name |\n| --- |\n| a   b |'} />);
+
+    expect(screen.getByRole('cell').textContent).toBe(`a${NBSP}${NBSP} b`);
+  });
+
+  it('leaves consecutive spaces inside an inline code span untouched', () => {
+    render(<MarkdownRenderer content="Use `a   b` here" />);
+
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(document.querySelector('code')?.textContent).toBe('a   b');
+  });
+
   it('renders double-dollar LaTeX as a KaTeX math element once the engine loads', async () => {
     render(<MarkdownRenderer content="Equation: $$x^2 + y^2 = z^2$$" />);
 
@@ -513,12 +535,17 @@ describe('MarkdownRenderer', () => {
      * the <math> element only appears after that async load resolves.
      * MathML's `<math>` element also crashes `getByRole` under jsdom (jsdom
      * cannot compute styles for MathML elements), so a plain selector is
-     * the only reliable way to assert its presence here.
+     * the only reliable way to assert its presence here. This is the first
+     * test to trigger the cold KaTeX import, so it can exceed the default
+     * 1s `waitFor` timeout on a loaded machine.
      */
-    await waitFor(() => {
-      // eslint-disable-next-line testing-library/no-node-access
-      expect(document.querySelector('math')).toBeTruthy();
-    });
+    await waitFor(
+      () => {
+        // eslint-disable-next-line testing-library/no-node-access
+        expect(document.querySelector('math')).toBeTruthy();
+      },
+      { timeout: 5000 },
+    );
   });
 
   it('wraps block LaTeX in a horizontally scrollable container so a wide formula stays reachable', async () => {
@@ -643,9 +670,27 @@ describe('MarkdownRenderer', () => {
     const paragraph = document.querySelector('p');
     const link = screen.getByRole('link');
 
-    expect(paragraph?.className).toContain('break-words');
-    expect(link.className).toContain('break-words');
+    expect(paragraph?.className).toContain('wrap-break-word');
+    expect(link.className).toContain('wrap-break-word');
     expect(link.getAttribute('href')).toBe(longUrl);
+  });
+
+  it('lets long unbreakable text wrap in elements that carry no class of their own', () => {
+    const longToken =
+      'docs.example.com/very/long/path/segment/that/never/breaks/document-name.pdf';
+    const { container } = render(
+      <MarkdownRenderer
+        content={`# ${longToken}\n\n- ${longToken}\n- **${longToken}**`}
+        containerClassName="host-class"
+      />,
+    );
+
+    // The root container has no accessible role of its own.
+    // eslint-disable-next-line testing-library/no-node-access
+    const root = container.firstElementChild;
+
+    expect(root?.className).toContain('wrap-anywhere');
+    expect(root?.className).toContain('host-class');
   });
 
   it('does not treat a currency amount as LaTeX', () => {
@@ -869,6 +914,53 @@ describe('MarkdownRenderer', () => {
       expect(
         screen.getByText('x', { selector: 'a' }).getAttribute('href'),
       ).toBe('');
+    });
+  });
+
+  describe('isRawHtmlEnabled', () => {
+    it('renders a raw HTML tag as literal text when disabled', () => {
+      render(
+        <MarkdownRenderer
+          content="What does <div> do?"
+          isRawHtmlEnabled={false}
+        />,
+      );
+
+      expect(screen.getByText('What does <div> do?')).toBeTruthy();
+    });
+
+    it('creates no element from raw HTML when disabled', () => {
+      render(
+        <MarkdownRenderer
+          content='<img src="x" alt="probe" onerror="alert(1)">'
+          isRawHtmlEnabled={false}
+        />,
+      );
+
+      expect(screen.queryByRole('img')).toBeNull();
+      expect(screen.getByText(/<img src="x"/)).toBeTruthy();
+    });
+
+    it('still parses a raw <br> into a line break by default', () => {
+      const { container } = render(<MarkdownRenderer content="a<br>b" />);
+
+      // <br> has no accessible role, so this needs direct DOM access.
+      // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access -- see comment above
+      expect(container.querySelector('br')).toBeTruthy();
+      expect(screen.queryByText(/<br>/)).toBeNull();
+    });
+
+    it('still strips javascript: links when disabled', () => {
+      render(
+        <MarkdownRenderer
+          content="[x](javascript:alert(1))"
+          isRawHtmlEnabled={false}
+        />,
+      );
+
+      expect(
+        screen.getByText('x', { selector: 'a' }).getAttribute('href') ?? '',
+      ).not.toContain('javascript:');
     });
   });
 });

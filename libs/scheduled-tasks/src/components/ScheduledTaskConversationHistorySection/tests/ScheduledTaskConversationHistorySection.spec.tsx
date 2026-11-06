@@ -1,0 +1,257 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { type ReactNode } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import type { ScheduledTaskRunItem } from '../../../models/scheduled-task-run-item';
+import { ScheduledTaskRunStatus } from '../../../types/scheduled-task-run-status';
+import { ScheduledTaskConversationHistorySection } from '../ScheduledTaskConversationHistorySection';
+
+vi.mock('@epam/ai-dial-ui-kit', async () => ({
+  ...(await vi
+    .importActual<typeof import('@epam/ai-dial-ui-kit')>('@epam/ai-dial-ui-kit')
+    .then(({ LiveRegion, LiveRegionElement }) => ({
+      LiveRegion,
+      LiveRegionElement,
+    }))),
+  DIAL_KIT_ICON_STROKE: 1.5,
+  DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
+  ButtonVariant: { Primary: 'primary' },
+  Accordion: ({
+    title,
+    expanded,
+    onToggle,
+    contentClassName,
+    children,
+  }: {
+    title: ReactNode;
+    expanded?: boolean;
+    onToggle?: (expanded: boolean) => void;
+    contentClassName?: string;
+    children?: ReactNode;
+  }) => (
+    <div>
+      <button aria-expanded={expanded} onClick={() => onToggle?.(!expanded)}>
+        {title}
+      </button>
+      <div className={contentClassName}>{children}</div>
+    </div>
+  ),
+  GhostButton: ({
+    label,
+    variant,
+    onClick,
+    disabled,
+  }: {
+    label: string;
+    variant?: string;
+    onClick?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button data-variant={variant} onClick={onClick} disabled={disabled}>
+      {label}
+    </button>
+  ),
+}));
+
+const { runListProps } = vi.hoisted(() => ({ runListProps: vi.fn() }));
+
+vi.mock(
+  '../../ScheduledTaskRunHistoryList/ScheduledTaskRunHistoryList',
+  () => ({
+    ScheduledTaskRunHistoryList: (props: {
+      items: ScheduledTaskRunItem[];
+      footer?: ReactNode;
+    }) => {
+      runListProps(props);
+      return (
+        <ul>
+          {props.items.map((item) => (
+            <li key={item.id}>{item.timestampLabel}</li>
+          ))}
+          {props.footer}
+        </ul>
+      );
+    },
+  }),
+);
+
+const runs: ScheduledTaskRunItem[] = [
+  {
+    id: 'run_1',
+    status: ScheduledTaskRunStatus.Success,
+    timestampLabel: 'today at 9:01 AM (99s)',
+  },
+];
+
+const labels = {
+  title: 'History',
+  emptyLabel: 'No runs yet',
+  errorLabel: 'Failed to load history',
+  retryLabel: 'Retry',
+  showMoreLabel: 'Show more',
+  runStatusLabels: {
+    [ScheduledTaskRunStatus.Success]: 'Succeeded',
+    [ScheduledTaskRunStatus.Error]: 'Failed',
+    [ScheduledTaskRunStatus.InProgress]: 'Running',
+    [ScheduledTaskRunStatus.Missed]: 'Missed',
+  },
+  currentRunLabel: 'Current run',
+  unreadIndicatorLabel: 'Unread',
+};
+
+describe('ScheduledTaskConversationHistorySection', () => {
+  it('renders the History accordion expanded with its run rows by default', () => {
+    render(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={runs}
+        labels={labels}
+      />,
+    );
+
+    const historyButton = screen.getByRole('button', { name: 'History' });
+    expect(historyButton.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('today at 9:01 AM (99s)')).toBeTruthy();
+  });
+
+  it('forwards the open-conversation label to the run list', () => {
+    render(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={runs}
+        labels={{ ...labels, openConversationLabel: 'Open chat' }}
+      />,
+    );
+
+    expect(runListProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        labels: expect.objectContaining({ openConversationLabel: 'Open chat' }),
+      }),
+    );
+  });
+
+  it('resets to expanded when the schedule changes while collapsed', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={runs}
+        labels={labels}
+      />,
+    );
+
+    const historyButton = screen.getByRole('button', { name: 'History' });
+    await user.click(historyButton);
+    expect(historyButton.getAttribute('aria-expanded')).toBe('false');
+
+    rerender(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-2"
+        items={runs}
+        labels={labels}
+      />,
+    );
+    expect(historyButton.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('renders the Show more footer wired to onLoadMore while another page is available', async () => {
+    const onLoadMore = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={runs}
+        hasMore
+        onLoadMore={onLoadMore}
+        labels={labels}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(onLoadMore).toHaveBeenCalledOnce();
+    expect(
+      screen.getByRole('button', { name: 'Show more' }).dataset.variant,
+    ).toBe('primary');
+
+    rerender(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={runs}
+        hasMore
+        isLoadingMore
+        onLoadMore={onLoadMore}
+        labels={labels}
+      />,
+    );
+    expect(
+      (screen.getByRole('button', { name: 'Show more' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it('hides the Show more footer while the first page is loading', () => {
+    render(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={[]}
+        isLoading
+        hasMore
+        onLoadMore={vi.fn()}
+        labels={labels}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+  });
+
+  it('replaces the runs, error and retry with the unavailable message while isUnavailable is set', () => {
+    render(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={runs}
+        error={new Error('Not found')}
+        onRetry={vi.fn()}
+        hasMore
+        onLoadMore={vi.fn()}
+        isUnavailable
+        labels={{ ...labels, unavailableLabel: 'History is unavailable' }}
+      />,
+    );
+
+    expect(
+      screen.getByText('History is unavailable').getAttribute('role'),
+    ).toBe('status');
+    expect(screen.queryByText('today at 9:01 AM (99s)')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+    expect(
+      screen
+        .getByRole('button', { name: 'History' })
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
+  it('keeps one status region mounted and fills it when history turns unavailable', () => {
+    const { rerender } = render(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={runs}
+        labels={labels}
+      />,
+    );
+    const region = screen.getByRole('status');
+    expect(region.textContent).toBe('');
+
+    rerender(
+      <ScheduledTaskConversationHistorySection
+        scheduleId="schedule-1"
+        items={runs}
+        isUnavailable
+        labels={{ ...labels, unavailableLabel: 'History is unavailable' }}
+      />,
+    );
+
+    expect(screen.getByRole('status')).toBe(region);
+    expect(region.textContent).toBe('History is unavailable');
+  });
+});

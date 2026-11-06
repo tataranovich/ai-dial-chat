@@ -10,6 +10,8 @@ import {
   GhostIconButton,
   Highlight,
   LinkButton,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import { IconCopy } from '@tabler/icons-react';
 import { memo, useMemo, useState, type FC, type ReactNode } from 'react';
@@ -46,6 +48,8 @@ interface SourcesSectionProps {
   typography?: ConversationSourcesPanelTypography;
   /** Color overrides applied as CSS custom properties. */
   colors?: ConversationSourcesPanelColors;
+  /** Extra class name(s) merged onto the section root. */
+  className?: string;
   /** When provided, called on source link click instead of following the href. */
   onSourceClick?: (source: QuotationSource) => void;
 }
@@ -64,6 +68,7 @@ const SourcesSection: FC<SourcesSectionProps> = ({
   searchQuery = '',
   typography,
   colors,
+  className,
   onSourceClick,
 }) => {
   const [copyStatus, setCopyStatus] = useState('');
@@ -92,7 +97,7 @@ const SourcesSection: FC<SourcesSectionProps> = ({
   };
 
   return (
-    <section className="mb-6" style={sectionCssVars}>
+    <section className={mergeClasses('mb-6', className)} style={sectionCssVars}>
       <h2 className={mergeClasses(titleClassName, 'mb-3')}>{title}</h2>
       <ul className="flex flex-col gap-3">
         {sources.map((source) => (
@@ -163,9 +168,9 @@ const SourcesSection: FC<SourcesSectionProps> = ({
           </li>
         ))}
       </ul>
-      <span role="status" aria-live="polite" className="sr-only">
+      <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
         {copyStatus}
-      </span>
+      </LiveRegion>
     </section>
   );
 };

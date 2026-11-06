@@ -47,7 +47,7 @@ The `headerContent?: ReactNode` prop IS REMOVED from `SkillEditorProps`. It is r
 ### Requirement: Form field state ownership
 `SkillEditor` SHALL own the current `name`, `description`, and `instructions` field values as internal state, seeded from an `initialValues` prop and re-seeded whenever `initialValues`'s identity changes, mirroring `libs/prompt-editor`'s `PromptEditorValues` pattern. Field-level validation messages, `invalid` state, and submit-time conflict errors SHALL be supplied by the host via an `errors` prop rather than computed internally, since DIAL-specific normalization and path-safety rules live at the app boundary.
 
-When the host passes `isNameReadOnly`, the Name field SHALL render as non-editable (disabled/read-only, with its value still visible and still included in submitted values unchanged) regardless of any local edit attempt. `SkillEditor` SHALL call an optional `onDirtyChange(isDirty: boolean)` prop whenever any field value or the file-tree state diverges from its most recently seeded `initialValues`/`files`, and again with `false` when it returns to exactly that seeded state (e.g. the user undoes their own edit).
+When the host passes `isNameReadOnly`, the Name field SHALL render disabled (its value still visible and still included in submitted values unchanged) regardless of any local edit attempt, and its tooltip SHALL show `labels.nameReadOnlyTooltip`, defaulting to `"The skill name can't be changed after creation"`. `SkillEditor` SHALL call an optional `onDirtyChange(isDirty: boolean)` prop whenever any field value or the file-tree state diverges from its most recently seeded `initialValues`/`files`, and again with `false` when it returns to exactly that seeded state (e.g. the user undoes their own edit).
 
 #### Scenario: Editing a field updates local state and notifies the host
 - **WHEN** a user types into the Name field
@@ -59,14 +59,18 @@ When the host passes `isNameReadOnly`, the Name field SHALL render as non-editab
 
 #### Scenario: Read-only Name cannot be edited
 - **WHEN** the host passes `isNameReadOnly={true}`
-- **THEN** the Name field's input rejects keystrokes/paste and any submitted value for `name` equals the seeded `initialValues.name` unchanged
+- **THEN** the Name field's input is disabled, carries the read-only tooltip, and any submitted value for `name` equals the seeded `initialValues.name` unchanged
 
 #### Scenario: Dirty state is reported on first edit
 - **WHEN** a user changes any field or adds/removes a file after the form has seeded from `initialValues`
 - **THEN** `onDirtyChange(true)` is called; if the user then reverts to the exact seeded values, `onDirtyChange(false)` is called
 
+#### Scenario: Replacing a file's content makes the form dirty
+- **WHEN** an upload committed with `replacesExisting: true` overwrites an existing file, leaving `files` unchanged
+- **THEN** `onDirtyChange(true)` is called, and the form stays dirty until it is re-seeded from a new `initialValues`
+
 ### Requirement: File-tree selection and protected `SKILL.md` node
-`SkillEditor` SHALL render a file tree seeded from a `files` prop (the in-memory supporting-file/folder structure) plus an always-present, always-first root `SKILL.md` node. The library SHALL own which tree node is currently selected and which folder nodes are expanded as internal state (overridable via optional `selectedPath`/`expandedPaths` + `onSelectedPathChange`/`onExpandedPathsChange` controlled props, mirroring `PublishFoldersTree`'s controlled/uncontrolled pattern). The `SKILL.md` node SHALL NOT expose rename, move, or delete affordances; all other nodes SHALL. When a supporting-file node (not `SKILL.md`, not a folder) is selected, the main pane SHALL render the host-supplied `supportingFileContent` prop when present, falling back to the existing `labels.supportingFileNote` text when it is not. Selecting a folder node SHALL only select or expand/collapse that folder and SHALL NOT render `supportingFileContent` or `supportingFileNote`.
+`SkillEditor` SHALL render a file tree seeded from a `files` prop (the in-memory supporting-file/folder structure) plus an always-present, always-first root `SKILL.md` node. The library SHALL own which tree node is currently selected and which folder nodes are expanded as internal state (overridable via optional `selectedPath`/`expandedPaths` + `onSelectedPathChange`/`onExpandedPathsChange` controlled props, mirroring `PublishFoldersTree`'s controlled/uncontrolled pattern). The `SKILL.md` node SHALL NOT expose rename, move, or delete affordances; all other nodes SHALL. When a supporting-file node (not `SKILL.md`, not a folder) is selected, the main pane SHALL render the host-supplied `supportingFileContent` prop when present, falling back to the existing `labels.supportingFileNote` text when it is not. Selecting a folder node SHALL select it and render the folder preview described under "Folder preview", and SHALL NOT render `supportingFileContent` or `supportingFileNote`.
 
 #### Scenario: SKILL.md is selected by default
 - **WHEN** `SkillEditor` first renders with no `selectedPath` override
@@ -81,12 +85,42 @@ When the host passes `isNameReadOnly`, the Name field SHALL render as non-editab
 - **THEN** the main pane heading updates to that file's name, `onSelectedPathChange` (if provided) is called with the new path, and the main pane body renders the host's `supportingFileContent` node when the host supplied one for this selection
 
 #### Scenario: Selecting a folder does not render supporting-file content
-- **WHEN** a user selects or expands a folder node
-- **THEN** the main pane does not render `supportingFileContent` or `supportingFileNote`, and only the folder's selection/expansion state changes
+- **WHEN** a user selects a folder node
+- **THEN** the main pane does not render `supportingFileContent` or `supportingFileNote`; it renders the folder preview instead
 
 #### Scenario: Falls back to the static note when no content is supplied
 - **WHEN** a host does not pass `supportingFileContent` and selects a supporting file
 - **THEN** the main pane renders `labels.supportingFileNote` exactly as it did before this change
+
+### Requirement: Folder preview
+
+When the selected node is a folder, the main pane SHALL render `SkillFolderPreview` (`libs/skill-editor/src/components/SkillFolderPreview/SkillFolderPreview.tsx`): a ui-kit `Breadcrumbs` trail and a list of the folder's direct children. The trail starts at a root crumb (`labels.folderPreviewRootLabel`, default "Skill") that selects `SKILL.md`, continues with one crumb per ancestor folder, and ends with the current folder as a non-interactive crumb. The list holds the folder's direct children as returned by `listFolderEntries` (`libs/skill-editor/src/utils/file-tree.ts`): folders first, then files, each group sorted by name, including folders that exist only through deeper file paths. A trail long enough to collapse names its ellipsis button with `labels.folderPreviewOverflowAriaLabel`. A folder row shows its direct-child count through `labels.folderItemCountLabel`. A folder with no children SHALL render an empty state (`labels.folderEmptyTitle`, `labels.folderEmptyDescription`) in place of the list. Activating a row or a crumb SHALL select that node and expand every folder on the path to it, plus the target itself when it is a folder, so the Files tree shows the same location as the preview.
+
+All visible text SHALL come from `labels` with English defaults, row border and hover colors from `colors.folderRowBorder` and `colors.folderRowHoverBackground`, and the count typography from `typography.folderItemCountClassName`.
+
+#### Scenario: Selecting a folder lists its direct children
+- **WHEN** a user selects the `agents` folder that holds `reviewers/` and `analyzer.md`
+- **THEN** the main pane shows the trail `Skill › agents` and a list with the `reviewers` folder row (with its item count) before the `analyzer.md` file row, and does not list files nested inside `reviewers`
+
+#### Scenario: Opening a nested folder from the preview reveals it in the tree
+- **WHEN** a user activates the `reviewers` row in the preview while `agents` is collapsed in the Files tree
+- **THEN** `reviewers` becomes the selected node and `agents` and `reviewers` are expanded in the Files tree
+
+#### Scenario: Removing an ancestor of the selection falls back to SKILL.md
+- **WHEN** `agents/planner.md` is selected and the user deletes the `agents` folder
+- **THEN** `SKILL.md` becomes the selected node and no folder preview renders for the removed path
+
+#### Scenario: A crumb navigates up
+- **WHEN** a user activates the `agents` crumb while `agents/reviewers` is selected
+- **THEN** `agents` becomes the selected node and its preview replaces the current one
+
+#### Scenario: The root crumb returns to SKILL.md
+- **WHEN** a user activates the root crumb
+- **THEN** `SKILL.md` becomes the selected node and the manifest form renders
+
+#### Scenario: An empty folder shows an empty state
+- **WHEN** a user selects a folder with no children
+- **THEN** the main pane shows the trail and the empty-state title and description instead of a list
 
 ### Requirement: Host-rendered supporting-file content slot
 
@@ -104,8 +138,28 @@ When the host passes `isNameReadOnly`, the Name field SHALL render as non-editab
 - **WHEN** a host never passes `supportingFileContent`
 - **THEN** `SkillEditor` behaves exactly as it did before this prop existed
 
+### Requirement: Host-rendered aside content
+
+`SkillEditor` SHALL accept an optional `asideData?: ReactNode` prop and forward it to `EntityEditor`, which renders it in an Aside section in a third column at the inline end, below the header row (see the builder-form "EditorLayout — optional host side panel" requirement). The library SHALL have no knowledge of what it contains. The panel SHALL NOT be rendered while the skill is loading (`isLoading`) or when loading failed (`hasLoadError`), because the form itself is not shown in those states. The Aside section SHALL be padded like the Files and selected-file sections on desktop (`desktop:px-8 desktop:py-6`), by passing the same padding to `EntityEditor` as `asideSectionClassName`. Omitting the prop SHALL preserve the existing layout exactly.
+
+#### Scenario: Host panel renders next to the form
+- **WHEN** the host passes `asideData={<QualityCheck />}` and the skill has loaded
+- **THEN** `<QualityCheck />` renders in a column beside the form, under the header
+
+#### Scenario: Aside section is padded like its neighbours
+- **WHEN** the host passes `asideData` and the skill has loaded
+- **THEN** the Aside section carries the same desktop padding classes as the Files section
+
+#### Scenario: Panel is not shown while loading or after a load error
+- **WHEN** `isLoading` or `hasLoadError` is `true`
+- **THEN** the library does not render `asideData`
+
+#### Scenario: Omitting the prop preserves prior behavior
+- **WHEN** a host never passes `asideData`
+- **THEN** `SkillEditor` behaves exactly as it did before this prop existed
+
 ### Requirement: Adding and removing supporting files and folders
-`SkillEditor` SHALL expose an **Add** dropdown in the Files pane header and **Add child** / **Add sibling** submenus in each non-`SKILL.md` node's context menu (specified by the `skill-file-tree-actions` capability). Supporting files SHALL be added only through the upload dialog (specified by the `skill-file-drag-drop` capability) — whether their source is the device, an archive expanded by `fileActions.extractArchive`, or the DIAL file system via `fileActions.pickFromFileSystem` — so a user always stages one or more files, reviews them, and commits the whole valid batch at once, rather than a single file being added directly on selection. Validation SHALL be performed through a host-supplied `fileActions.validateBatch` callback (returning per-candidate and batch-level results) and commit SHALL be performed through a host-supplied `fileActions.commitBatch` callback, so the app boundary's path-safety, size, count, and duplicate-detection rules apply without the library encoding any DIAL-specific policy itself. The library SHALL offer creating an empty folder only when the host supplies `fileActions.onCreateFolder`; it SHALL NOT offer creating an empty file. Removing an already-committed supporting file or folder from the editor's tree (as opposed to removing a not-yet-committed staged candidate inside the upload dialog) SHALL happen immediately on the **Delete** action, with no confirmation step — the entry SHALL be removed from local state and the host-supplied removal callback invoked synchronously when Delete is activated.
+`SkillEditor` SHALL expose an **Add** dropdown in the Files pane header and, in each non-`SKILL.md` node's context menu, the same add entries listed directly for a folder, followed by Delete (specified by the `skill-file-tree-actions` capability). Supporting files SHALL be added only through the upload dialog (specified by the `skill-file-drag-drop` capability) — whether their source is the device, an archive expanded by `fileActions.extractArchive`, or the DIAL file system via `fileActions.pickFromFileSystem` — so a user always stages one or more files, reviews them, and commits the whole valid batch at once, rather than a single file being added directly on selection. Validation SHALL be performed through a host-supplied `fileActions.validateBatch` callback (returning per-candidate and batch-level results) and commit SHALL be performed through a host-supplied `fileActions.commitBatch` callback, so the app boundary's path-safety, size, count, and duplicate-detection rules apply without the library encoding any DIAL-specific policy itself. The library SHALL offer creating an empty folder only when the host supplies `fileActions.onCreateFolder`; it SHALL NOT offer creating an empty file. Removing an already-committed supporting file or folder from the editor's tree (as opposed to removing a not-yet-committed staged candidate inside the upload dialog) SHALL happen immediately on the **Delete** action, with no confirmation step — the entry SHALL be removed from local state and the host-supplied removal callback invoked synchronously when Delete is activated.
 
 #### Scenario: Uploading files from the device adds them as supporting files
 - **WHEN** a user activates Add → Upload files from device, stages one or more local files in the resulting dialog, and confirms
@@ -147,7 +201,7 @@ When the host passes `isNameReadOnly`, the Name field SHALL render as non-editab
 
 #### Scenario: Host-resolved label reflects edit mode
 - **WHEN** the host renders `<SkillEditor isNameReadOnly labels={{ createLabel: 'Save', ... }} .../>` (host-resolved per its own i18n and edit-mode state)
-- **THEN** the submit button shows "Save" and the Name field is read-only, with no `mode` prop involved
+- **THEN** the submit button shows "Save" and the Name field is disabled, with no `mode` prop involved
 
 #### Scenario: Conflict state renders a non-destructive reload action
 - **WHEN** the host passes a `conflict` prop describing a stale-ETag save failure
@@ -157,13 +211,14 @@ When the host passes `isNameReadOnly`, the Name field SHALL render as non-editab
 `SkillEditor` SHALL use `EntityEditor` from `@epam/ai-dial-builder-form` as its outer shell, the same shell every entity editor uses. The skill keeps its Files | selected-file arrangement on that shell. `EntityEditor` SHALL receive the following:
 
 - `onBack`, `labels.backAriaLabel` and `title`, forwarded from `SkillEditorProps`.
-- `metadataTitle={null}` and `metadata`: the Files pane, which carries its own "Files" heading. On mobile it sits inside the collapsible "Editing file" accordion.
-- `setupTitle`: `SKILL.md`, or `labels.selectedFileHeading(name)` for a supporting file.
+- `metadataTitle={null}` and `metadata`: the Files pane, which carries its own "Files" heading. On mobile it sits inside the collapsible "Editing file" card, whose summary row shows the caption and the selected file's or folder's type icon and name next to a down/up caret.
+- `setupTitle`: `SKILL.md`, or `labels.selectedFileHeading(name)` for a supporting file or folder, where `name` is the node's name or, for a folder that exists only through deeper file paths, the last segment of its path.
 - `setup`: for `SKILL.md`, the shared `MetadataForm` followed by the Instructions editor, which fills the height left below the fields. `MetadataForm` gets these settings:
   - `fields={[MetadataField.Name, MetadataField.Description]}`
   - `isDescriptionRequired`
   - `nameCaption` (the existing lowercase-and-hyphens caption)
   - `isNameReadOnly` forwarded from the existing prop
+  - `nameReadOnlyTooltip` from `labels.nameReadOnlyTooltip`, with its English default
   - `renderDescription` wrapping the Description textarea in `TextRefinementField` when `onRefineDescription` is supplied, so the AI refine action keeps working
 
   For another selected file, `setup` is the host-rendered supporting-file content slot. The Name and Description values stay owned by the skill editor's field state (see "Form field state ownership"). `MetadataForm` is controlled.
@@ -179,9 +234,9 @@ When the host passes `isNameReadOnly`, the Name field SHALL render as non-editab
 - **THEN** the left panel shows the Files tree and no "Metadata" heading
 - **AND** the right panel shows a section titled with the selected file path; for `SKILL.md` it holds Name, Description and Instructions
 
-#### Scenario: Mobile accordion comes first
+#### Scenario: Mobile Editing file card comes first
 - **WHEN** `SkillEditor` renders at mobile width
-- **THEN** the collapsible "Editing file" accordion renders first, followed by the selected file's section
+- **THEN** the collapsible "Editing file" card renders first, followed by the selected file's section
 
 #### Scenario: Name and Description belong to SKILL.md
 - **WHEN** a supporting file is selected in the Files tree

@@ -1,6 +1,7 @@
 import {
   BadGatewayException,
   BadRequestException,
+  ForbiddenException,
   HttpStatus,
   NotFoundException,
   ServiceUnavailableException,
@@ -8,11 +9,13 @@ import {
 import type { ConfigService } from '@nestjs/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EnvironmentVariables } from '../../../config/environment.config';
+import { ConversationErrorCode } from '../../../conversations/types/conversation-error-code.enum';
 import type { DeploymentsService } from '../../../deployments/deployments.service';
 import type { DialClientService } from '../../../dial/dial-client.service';
 import type { SkillsLookupService } from '../../../skills/lookup/skills-lookup.service';
 import type { ToolsetsService } from '../../../toolsets/toolsets.service';
 import { ShareAccess } from '../../dto/create-share-link.dto';
+import { ShareInvitationErrorCode } from '../../types/share-invitation-error-code.enum';
 import { ShareInvitationService } from '../share-invitation.service';
 
 const okResponse = (data: unknown) =>
@@ -99,6 +102,7 @@ describe('ShareInvitationService', () => {
       expect(result).toEqual({
         url: 'https://example.com/catalog/shared/abc123',
         expiresInDays: 3,
+        expiresInHours: 72,
         access: [ShareAccess.View],
       });
     });
@@ -198,6 +202,38 @@ describe('ShareInvitationService', () => {
         'bucket',
         'my-chat.json',
         { headers: { Authorization: 'Bearer token-abc' } },
+      );
+    });
+
+    it('shares a conversation whose model id contains a colon with the canonical id unchanged', async () => {
+      const { service, dialClient } = makeService();
+      const shareSpy = vi
+        .spyOn(dialClient.client, 'shareResource')
+        .mockResolvedValue(
+          okResponse({ invitationLink: '/v1/invitations/conv-abc' }),
+        );
+      const itemId =
+        'conversations/owner-bucket/anthropic.claude-haiku-4-5-20251001-v1:0__hi__ace3d220-6bf9-4774-afe7-9d641a3de401';
+
+      const result = await service.createShareLink('token-abc', 'my-bucket', {
+        itemId,
+        access: [ShareAccess.View],
+      });
+
+      expect(dialClient.client.getConversation).toHaveBeenCalledWith(
+        'owner-bucket',
+        'anthropic.claude-haiku-4-5-20251001-v1%3A0__hi__ace3d220-6bf9-4774-afe7-9d641a3de401',
+        { headers: { Authorization: 'Bearer token-abc' } },
+      );
+      expect(shareSpy).toHaveBeenCalledWith({
+        headers: { Authorization: 'Bearer token-abc' },
+        body: {
+          invitationType: 'LINK',
+          resources: [{ url: itemId, permissions: ['READ'] }],
+        },
+      });
+      expect(result.url).toBe(
+        'https://example.com/conversations/shared/conv-abc',
       );
     });
 
@@ -422,6 +458,40 @@ describe('ShareInvitationService', () => {
       expect(shareSpy).not.toHaveBeenCalled();
     });
 
+    it('refuses to share a conversation whose current model is hidden', async () => {
+      const { service, dialClient, deploymentsService } = makeService();
+      vi.spyOn(dialClient.client, 'getConversation').mockResolvedValue(
+        okResponse({
+          model: { id: 'gpt-4o' },
+          assistantModelId: 'nova-lite',
+          messages: [],
+        }),
+      );
+      vi.mocked(deploymentsService.resolveDeploymentItem).mockResolvedValue({
+        id: 'nova-lite',
+        isHidden: true,
+      } as never);
+      const shareSpy = vi.spyOn(dialClient.client, 'shareResource');
+
+      const error = await service
+        .createShareLink('token-abc', 'session-bucket', {
+          itemId: 'conversations/owner-bucket/my-chat.json',
+          access: [ShareAccess.View],
+        })
+        .catch((err: unknown) => err);
+
+      expect(deploymentsService.resolveDeploymentItem).toHaveBeenCalledWith(
+        'nova-lite',
+        'token-abc',
+        'session-bucket',
+      );
+      expect(error).toBeInstanceOf(ForbiddenException);
+      expect((error as ForbiddenException).getResponse()).toMatchObject({
+        code: ConversationErrorCode.ModelHidden,
+      });
+      expect(shareSpy).not.toHaveBeenCalled();
+    });
+
     it('does not load related resources for a non-conversation item', async () => {
       const { service, dialClient } = makeService();
       vi.spyOn(dialClient.client, 'shareResource').mockResolvedValue(
@@ -592,7 +662,7 @@ describe('ShareInvitationService', () => {
       return { ...ctx, warn, share };
     };
 
-    it("derives expiresInDays from the invitation's expireAt", async () => {
+    it("derives expiresInDays and expiresInHours from the invitation's expireAt", async () => {
       const { dialClient, share } = setup();
       vi.mocked(dialClient.client.getInvitation).mockResolvedValue(
         okResponse({ createdAt: NOW, expireAt: NOW + 7 * DAY_MS }),
@@ -601,6 +671,7 @@ describe('ShareInvitationService', () => {
       await expect(share()).resolves.toEqual({
         url: 'https://example.com/catalog/shared/abc123',
         expiresInDays: 7,
+        expiresInHours: 168,
         access: [ShareAccess.View],
       });
     });
@@ -616,7 +687,7 @@ describe('ShareInvitationService', () => {
       });
     });
 
-    it('returns the link without expiresInDays when the peek rejects', async () => {
+    it('returns the link without an expiry when the peek rejects', async () => {
       const { dialClient, share, warn } = setup();
       vi.mocked(dialClient.client.getInvitation).mockRejectedValue(
         new TypeError('fetch failed'),
@@ -629,13 +700,14 @@ describe('ShareInvitationService', () => {
         access: [ShareAccess.View],
       });
       expect(result).not.toHaveProperty('expiresInDays');
+      expect(result).not.toHaveProperty('expiresInHours');
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining('invitationId=abc123'),
         expect.anything(),
       );
     });
 
-    it('returns the link without expiresInDays when the peek returns an upstream error', async () => {
+    it('returns the link without an expiry when the peek returns an upstream error', async () => {
       const { dialClient, share, warn } = setup();
       vi.mocked(dialClient.client.getInvitation).mockResolvedValue(
         errResponse(404),
@@ -644,11 +716,12 @@ describe('ShareInvitationService', () => {
       const result = await share();
 
       expect(result).not.toHaveProperty('expiresInDays');
+      expect(result).not.toHaveProperty('expiresInHours');
       expect(result.url).toBe('https://example.com/catalog/shared/abc123');
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('status 404'));
     });
 
-    it('returns the link without expiresInDays when expireAt is missing', async () => {
+    it('returns the link without an expiry when expireAt is missing', async () => {
       const { dialClient, share, warn } = setup();
       vi.mocked(dialClient.client.getInvitation).mockResolvedValue(
         okResponse({ id: 'abc123', createdAt: NOW }),
@@ -657,10 +730,11 @@ describe('ShareInvitationService', () => {
       const result = await share();
 
       expect(result).not.toHaveProperty('expiresInDays');
+      expect(result).not.toHaveProperty('expiresInHours');
       expect(warn).toHaveBeenCalledOnce();
     });
 
-    it('returns the link without expiresInDays when expireAt is already past', async () => {
+    it('returns the link without an expiry when expireAt is already past', async () => {
       const { dialClient, share } = setup();
       vi.mocked(dialClient.client.getInvitation).mockResolvedValue(
         okResponse({ createdAt: NOW - 4 * DAY_MS, expireAt: NOW - DAY_MS }),
@@ -858,6 +932,82 @@ describe('ShareInvitationService', () => {
           ],
         },
       });
+    });
+
+    it('shares the uploaded icon of a quick app alongside the app and its prompts', async () => {
+      const { service, dialClient } = makeService();
+      vi.spyOn(dialClient.client, 'getCustomApplication').mockResolvedValue(
+        okResponse({
+          iconUrl: 'files/owner-bucket/icons/app%20icon.png',
+          application_properties: {
+            skills: [{ type: 'dial-prompt', url: 'prompts/owner-bucket/mine' }],
+          },
+        }),
+      );
+      const shareSpy = vi
+        .spyOn(dialClient.client, 'shareResource')
+        .mockResolvedValue(okResponse({ invitationLink: '/invite/app' }));
+
+      await service.createShareLink('token-abc', 'session-bucket', {
+        itemId: 'applications/owner-bucket/my-app__1.0',
+        access: [ShareAccess.View],
+      });
+
+      expect(shareSpy).toHaveBeenCalledWith({
+        headers: { Authorization: 'Bearer token-abc' },
+        body: {
+          invitationType: 'LINK',
+          resources: [
+            {
+              url: 'applications/owner-bucket/my-app__1.0',
+              permissions: ['READ'],
+            },
+            {
+              url: 'prompts/owner-bucket/mine',
+              permissions: ['READ'],
+            },
+            {
+              url: 'files/owner-bucket/icons/app%20icon.png',
+              permissions: ['READ'],
+            },
+          ],
+        },
+      });
+    });
+
+    it('excludes an icon that is not in the app bucket or is not a DIAL file', async () => {
+      const { service, dialClient } = makeService();
+      const getApp = vi.spyOn(dialClient.client, 'getCustomApplication');
+      const shareSpy = vi
+        .spyOn(dialClient.client, 'shareResource')
+        .mockResolvedValue(okResponse({ invitationLink: '/invite/app' }));
+
+      for (const iconUrl of [
+        'files/public/icons/app.png',
+        'files/other-bucket/icons/app.png',
+        'https://example.com/app.png',
+        'app-theme-icon.svg',
+      ]) {
+        getApp.mockResolvedValueOnce(okResponse({ iconUrl }));
+
+        await service.createShareLink('token-abc', 'session-bucket', {
+          itemId: 'applications/owner-bucket/my-app__1.0',
+          access: [ShareAccess.View],
+        });
+
+        expect(shareSpy).toHaveBeenLastCalledWith({
+          headers: { Authorization: 'Bearer token-abc' },
+          body: {
+            invitationType: 'LINK',
+            resources: [
+              {
+                url: 'applications/owner-bucket/my-app__1.0',
+                permissions: ['READ'],
+              },
+            ],
+          },
+        });
+      }
     });
 
     it('keeps a referenced prompt whose bucket segment is percent-encoded', async () => {
@@ -1122,6 +1272,104 @@ describe('ShareInvitationService', () => {
       await expect(
         service.acceptInvitation('token', 'missing', 'user-sub-1', 'bucket-1'),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('tags an expired or missing invitation with the shareInvitationNotFound code', async () => {
+      const { service } = makeService();
+      vi.spyOn(
+        (service['dialClient'] as DialClientService).client,
+        'getInvitation',
+      ).mockResolvedValue(errResponse(404));
+
+      const error = await service
+        .acceptInvitation('token', 'expired', 'user-sub-1', 'bucket-1')
+        .catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(NotFoundException);
+      expect((error as NotFoundException).getResponse()).toMatchObject({
+        code: ShareInvitationErrorCode.NotFound,
+      });
+    });
+
+    it('tags an invitation that expires between peek and accept with the shareInvitationNotFound code', async () => {
+      const { service } = makeService();
+      vi.spyOn(
+        (service['dialClient'] as DialClientService).client,
+        'getInvitation',
+      )
+        .mockResolvedValueOnce(
+          okResponse({ id: 'abc123', resources: [{ url: 'gpt-4o' }] }),
+        )
+        .mockResolvedValueOnce({
+          error: 'Invitation abc123 is not found',
+          response: { status: 404 } as Response,
+        } as never);
+
+      const error = await service
+        .acceptInvitation('token', 'abc123', 'user-sub-1', 'bucket-1')
+        .catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(NotFoundException);
+      expect((error as NotFoundException).getResponse()).toMatchObject({
+        code: ShareInvitationErrorCode.NotFound,
+      });
+    });
+
+    it('tags an accept over the accepted-users limit with its code and the shared conversation title', async () => {
+      const { service } = makeService();
+      vi.spyOn(
+        (service['dialClient'] as DialClientService).client,
+        'getInvitation',
+      )
+        .mockResolvedValueOnce(
+          okResponse({
+            id: 'abc123',
+            resources: [
+              { url: 'conversations/owner-bucket/gpt-4o__Quarterly%20plan' },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce({
+          error:
+            'Limit is exceeded on the number of accepted users for the invitation: abc123',
+          response: { status: 400 } as Response,
+        } as never);
+
+      const error = await service
+        .acceptInvitation('token', 'abc123', 'user-sub-1', 'bucket-1')
+        .catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toMatchObject({
+        code: ShareInvitationErrorCode.AcceptedUsersLimitReached,
+        itemName: 'Quarterly plan',
+      });
+    });
+
+    it('omits itemName from the accepted-users limit error when the shared item is not a conversation', async () => {
+      const { service } = makeService();
+      vi.spyOn(
+        (service['dialClient'] as DialClientService).client,
+        'getInvitation',
+      )
+        .mockResolvedValueOnce(
+          okResponse({ id: 'abc123', resources: [{ url: 'gpt-4o' }] }),
+        )
+        .mockResolvedValueOnce({
+          error:
+            'Limit is exceeded on the number of accepted users for the resource: gpt-4o',
+          response: { status: 400 } as Response,
+        } as never);
+
+      const error = await service
+        .acceptInvitation('token', 'abc123', 'user-sub-1', 'bucket-1')
+        .catch((err: unknown) => err);
+
+      const body = (error as BadRequestException).getResponse();
+      expect(body).toMatchObject({
+        code: ShareInvitationErrorCode.AcceptedUsersLimitReached,
+      });
+      expect(body).not.toHaveProperty('itemName');
     });
 
     it('throws ServiceUnavailableException on network error', async () => {

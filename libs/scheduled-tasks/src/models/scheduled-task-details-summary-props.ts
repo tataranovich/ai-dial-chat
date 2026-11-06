@@ -1,3 +1,4 @@
+import type { MarkdownRendererClassNames } from '@epam/ai-dial-chat-shared';
 import type { ReactNode } from 'react';
 import type { ScheduledTaskInstructionsMarkdownLabels } from './scheduled-task-instructions';
 
@@ -5,12 +6,24 @@ import type { ScheduledTaskInstructionsMarkdownLabels } from './scheduled-task-i
 export interface ScheduledTaskDetailsSummaryTypography {
   /** CSS class applied to the "Model"/"Instructions" field labels. Defaults to `'dial-tiny-text'`. */
   fieldLabelClassName?: string;
-  /** CSS class applied to the resolved model value. Defaults to `'dial-body-text'`. */
+  /** CSS class applied to the resolved field values. Defaults to `'dial-small-text'`. */
   fieldValueClassName?: string;
+  /** Typography class of the built-in Instructions viewer's headings (`h1`–`h6`). Defaults to `'dial-small-semi-text'`. */
+  instructionsHeadingClassName?: string;
+  /** Typography class of the built-in Instructions viewer's paragraphs and lists. Defaults to `'dial-small-text'`. */
+  instructionsTextClassName?: string;
+}
+
+/** Color overrides for the {@link ScheduledTaskDetailsSummary} component. */
+export interface ScheduledTaskDetailsSummaryColors {
+  /** Text color of the "Model"/"Skill"/"Instructions" field labels. Defaults to `--text-secondary`. */
+  fieldLabel?: string;
 }
 
 /** Style overrides for the {@link ScheduledTaskDetailsSummary} component. */
 export interface ScheduledTaskDetailsSummaryStyles {
+  /** Color overrides, applied as CSS custom properties. */
+  colors?: ScheduledTaskDetailsSummaryColors;
   /** Typography class overrides. */
   typography?: ScheduledTaskDetailsSummaryTypography;
 }
@@ -21,16 +34,22 @@ export interface ScheduledTaskDetailsSummaryProps {
   skillLabel?: string;
   /** Resolved skill names or full saved references, in selection order; omit or pass [] to hide the field. */
   skillDisplayNames?: string[];
+  /** Optional host renderer for a skill name and its availability, in selection order. */
+  renderSkillName?: (name: string, index: number) => ReactNode;
   /** Label for the model field, e.g. "Model". */
   modelLabel: string;
   /** Label for the instructions field, e.g. "Instructions". */
   instructionsLabel: string;
   /** Resolved "Model" display value (already resolved to a display name, or the raw id as a fallback). Omit to hide the field. */
   modelDisplayName?: string;
+  /** Optional host renderer for model availability and its explanation. */
+  renderModelName?: (name: string) => ReactNode;
   /** Raw instructions markdown, passed to `renderInstructions` when supplied, or rendered via the default `MDMessageViewer` otherwise. Omit to hide the field entirely. */
   instructionsMarkdown?: string;
   /** Renders `instructionsMarkdown` as a ReactNode. When omitted, `instructionsMarkdown` is rendered via `MDMessageViewer` (the same markdown stack chat assistant messages use). */
   renderInstructions?: (markdown: string) => ReactNode;
+  /** Class names merged key by key over the built-in instructions `MDMessageViewer` defaults; a supplied key replaces that element's classes, type step included. Set the type step alone through `styles.typography.instructionsHeadingClassName` / `instructionsTextClassName`. Ignored when `renderInstructions` is supplied. */
+  instructionsClassNames?: MarkdownRendererClassNames;
   /** Code-block, table and formula labels for the built-in `MDMessageViewer`. Ignored when `renderInstructions` is supplied. */
   markdownLabels?: ScheduledTaskInstructionsMarkdownLabels;
   /** Style overrides. */

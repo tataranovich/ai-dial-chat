@@ -61,14 +61,16 @@ All directional layout in the Scheduled Tasks header, toolbar, and empty state M
 
 ### Requirement: ScheduledTasks lib component renders header, toolbar, and data-driven content states
 
-`libs/scheduled-tasks` SHALL export a presentational `ScheduledTasks` root component accepting `labels`, `onCreateClick`, `searchQuery`/`onSearchQueryChange`, `sortKey`/`onSortChange`, `items: ScheduledTaskItem[]`, `isLoading` (default `false`), `hasMore: boolean` (default `false`), `isLoadingMore?: boolean` (default `false`), `skeletonCount?: number` (default `6`), `onLoadMore?: () => void`, optional `error`/`onRetry`, optional `loadMoreError`/`onRetryLoadMore`, `onCardClick`, `banner`, and the styling props `styles`, `sortIcon`, `className`, `gridLayout` and `cardStyles`. It SHALL render, in order: a header (title, subtitle, primary "create" action button), a toolbar (search input, sort control with options), and a content region whose rendering depends on state:
+`libs/scheduled-tasks` SHALL export a presentational `ScheduledTasks` root component accepting `labels`, `onCreateClick`, `searchQuery`/`onSearchQueryChange`, `sortKey`/`onSortChange`, `items: ScheduledTaskItem[]`, `isLoading` (default `false`), `hasMore: boolean` (default `false`), `isLoadingMore?: boolean` (default `false`), `skeletonCount?: number` (default `6`), `onLoadMore?: () => void`, optional `error`/`onRetry`, and an optional `banner?: ReactNode` slot. The header's create button SHALL render only when `onCreateClick` is provided — an omitted callback renders no create button and no header action-group markup, so a host can withdraw the create affordance entirely (the limited-access gating) without the lib knowing why. It SHALL render, in order: a header (title, subtitle, and a right-side action group that renders the primary "create" button as its single header action only while `onCreateClick` is provided), a toolbar (search input, sort control with options), and a content region whose rendering depends on state:
 
 - `isLoading` is `true` (initial load) → the content region renders a `Spinner` and no other content-region markup.
 - `error` is set → the content region renders an error message with a retry action that invokes `onRetry`.
 - `isLoading` is `false`, `error` is unset, and `items` is empty because the source list itself is empty (no `searchQuery` in effect) → the content region renders the shared `PanelEmptyState` component (from `@epam/ai-dial-chat-shared`) with `labels.emptyStateLabel`.
 - `isLoading` is `false`, `error` is unset, `items` is empty, and a non-empty `searchQuery` is in effect → the content region renders a distinct "no results" state (not `PanelEmptyState`, not the card grid) using `labels.noResultsLabel`. Because search is server-driven, this state reflects the server returning zero matches, not a client-side filter reducing a non-empty array to zero.
-- `isLoading` is `false`, `error` is unset, and `items` is non-empty → the content region renders a single flat `ScheduledTaskCardGrid` of `ScheduledTaskCard`s, **in the order they were received** (no client-side reordering by `sortKey` — sort order is now applied server-side, see the "Server-driven search and sort over the full remote dataset" requirement). There is no grouping/sectioning of any kind — no section heading, no count badge — regardless of task ownership. When `isLoadingMore` is `true`, exactly `skeletonCount` `ScheduledTaskCardSkeleton` elements render as **trailing children inside that same `ScheduledTaskCardGrid`** (via its `trailingSkeletonCount` prop) — not in a separate grid container — so they continue filling the current CSS grid row instead of unconditionally starting a new row and leaving a gap in a partially-filled last row. When `loadMoreError` is set, a `role="alert"` row with `labels.loadMoreErrorLabel` (falling back to `labels.errorLabel`) and a retry `GhostButton` calling `onRetryLoadMore` renders below the grid, without removing the loaded cards.
-- A scroll sentinel is rendered at the end of the content region's scrollable area; when it becomes visible and `hasMore && !isLoadingMore && !isLoading && !loadMoreError`, `onLoadMore` is invoked (if provided).
+- `isLoading` is `false`, `error` is unset, and `items` is non-empty → the content region renders a single flat `ScheduledTaskCardGrid` of `ScheduledTaskCard`s, **in the order they were received** (no client-side reordering by `sortKey` — sort order is now applied server-side, see the "Server-driven search and sort over the full remote dataset" requirement). There is no grouping/sectioning of any kind — no section heading, no count badge — regardless of task ownership. When `isLoadingMore` is `true`, exactly `skeletonCount` `ScheduledTaskCardSkeleton` elements render as **trailing children inside that same `ScheduledTaskCardGrid`** (via its `trailingSkeletonCount` prop) — not in a separate grid container — so they continue filling the current CSS grid row (via `grid-auto-flow`) instead of unconditionally starting a new row and leaving a gap in a partially-filled last row.
+- A scroll sentinel is rendered at the end of the content region's scrollable area; when it becomes visible and `hasMore && !isLoadingMore && !isLoading`, `onLoadMore` is invoked (if provided).
+
+The create button SHALL collapse to an icon-only 40px circle below 1280px (the `desktop:` breakpoint mirroring `MOBILE_MAX_WIDTH_PX`), via the module's `.createButton`/`.createButtonLabel` class pair (label-span hide + circle pill).
 
 The component MUST NOT import from `apps/chat`, `server-api`, any generated API client, routing, feature-flag context, auth, env, or analytics — all such knowledge is passed in via props. Fetching, pagination-state management, sort-state management, and DTO mapping happen in the app; the lib performs no sorting of `items` itself — `sortKey`/`onSortChange` are used only to drive the toolbar control's UI state (selected option, `aria-selected`), not to reorder rendered cards.
 
@@ -76,6 +78,11 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 
 - **WHEN** `ScheduledTasks` renders with `labels.title = 'Scheduled tasks'` and `labels.createButtonLabel = 'New task'`
 - **THEN** the page shows a heading with that title and a button with that accessible name
+
+#### Scenario: Omitted create callback renders no create button
+
+- **WHEN** `ScheduledTasks` renders without an `onCreateClick` prop
+- **THEN** no create button renders in the header, and the header's action group renders no create-action markup; with a provided callback the button renders as before
 
 #### Scenario: Loading state shows a spinner
 
@@ -99,7 +106,7 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 
 #### Scenario: Non-empty items render a flat card grid in received order
 
-- **WHEN** `items` contains entries for tasks owned by the current user and entries for tasks created by other users, already ordered by the caller
+- **WHEN** `ScheduledTasks` renders with `items` containing entries for tasks owned by the current user and entries for tasks created by other users, already ordered by the caller
 - **THEN** the content region renders a single `ScheduledTaskCardGrid` with items in the same order they appear in `items` (no reordering by `sortKey` inside the lib), with no section heading or count badge of any kind
 
 #### Scenario: Loading-more state appends trailing skeletons inside the same grid
@@ -122,6 +129,16 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 - **WHEN** the user activates the create button
 - **THEN** `onCreateClick` is called exactly once, with no navigation or network call performed by the lib itself
 
+#### Scenario: The header renders at most one action button
+
+- **WHEN** `ScheduledTasks` renders with an `onCreateClick` prop
+- **THEN** the header's action group contains exactly one action button (the create action); no disconnect/logout action or its markup renders, and no disconnect props exist on the component's public API
+
+#### Scenario: The header button collapses on narrow viewports
+
+- **WHEN** the viewport is narrower than 1280px and the create button renders
+- **THEN** the create button renders as an icon-only 40px circle via the collapse class, and the header row does not overflow
+
 #### Scenario: Lib has no host or integration imports
 
 - **WHEN** the `libs/scheduled-tasks` source is statically analyzed
@@ -129,12 +146,17 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 
 ### Requirement: ScheduledTasks lib component renders an optional banner slot
 
-`libs/scheduled-tasks`'s `ScheduledTasks` component SHALL accept an optional `banner?: ReactNode` prop. When provided, the component SHALL render it between the search/sort toolbar row and the content region (the status message and card grid/spinner/error/empty states) in the resulting layout. When omitted, nothing renders in that position. The component SHALL treat `banner` as opaque content — it MUST NOT interpret, style beyond layout placement, or attach any auth/BFF/routing/feature-flag behavior to it, and MUST NOT import any type describing what the banner represents.
+`libs/scheduled-tasks`'s `ScheduledTasks` component SHALL accept an optional `banner?: ReactNode` prop. When provided, the component SHALL render it between the search/sort toolbar row and the content region (the status message and card grid/spinner/error/empty states) in the resulting layout, inside a wrapper that carries the same width cap and centering as the card grid (`mx-auto w-full min-w-0` with `maxWidth` from `gridLayout?.maxWidth` — default `SCHEDULED_TASKS_GRID_DEFAULT_MAX_WIDTH`, `'1180px'`, exported by the lib so the banner wrapper and the card grid share one fallback), so the banner never renders wider than the cards below it. When omitted, nothing renders in that position — including no empty wrapper (an empty flex child would add a gap row between the toolbar and the content region). The component SHALL treat `banner` as opaque content — it MUST NOT interpret, style beyond layout placement, or attach any auth/BFF/routing/feature-flag behavior to it, and MUST NOT import any type describing what the banner represents.
 
 #### Scenario: Banner renders between toolbar and content
 
 - **WHEN** `ScheduledTasks` renders with `banner={<div>Example</div>}` and a non-empty `items` array
 - **THEN** the rendered "Example" content appears after the search/sort toolbar and before the task card grid in document order
+
+#### Scenario: Banner matches the card grid width
+
+- **WHEN** `ScheduledTasks` renders with a `banner` prop and a populated card grid
+- **THEN** the banner's wrapper and the card grid carry the same `maxWidth` (the `gridLayout?.maxWidth` value, default `1180px`), so the banner never renders wider than the cards below it
 
 #### Scenario: No banner prop renders nothing extra
 
@@ -148,7 +170,7 @@ The component MUST NOT import from `apps/chat`, `server-api`, any generated API 
 
 ### Requirement: ScheduledTaskCard renders a single task with highlighted search matches
 
-`libs/scheduled-tasks` SHALL export a `ScheduledTaskCard` component, rendered on the kit's `CardShell`, showing: a title (highlighting the current search match via the shared `Highlight` component from `@epam/ai-dial-ui-kit`, per `.claude/rules/search-results-highlight.md`), an optional "NEW" badge when `item.isNew` is set, an optional description/prompt-preview line (clamped to four lines), a schedule/status pill, and an optional location breadcrumb built from `locationSegments` through the kit's `FolderPath` (outermost segment first). The card has no overflow menu and no per-task action callbacks: its only callback is `onCardClick`; Edit and Delete are offered only in the detail page header (see `scheduled-task-detail-page`).
+`libs/scheduled-tasks` SHALL export a `ScheduledTaskCard` component, rendered on the kit's `CardShell`, showing: a title (highlighting the current search match via the shared `Highlight` component from `@epam/ai-dial-ui-kit`, per `.claude/rules/search-results-highlight.md`), an optional "NEW" badge when `item.isNew` is set, an optional description/prompt-preview line (clamped to three lines from the desktop breakpoint up and to two lines below it, where the card also drops its fixed height and lets the title wrap to two lines; a preview value too long to break at a space — a long URL and the like — SHALL wrap inside the card via `overflow-wrap: anywhere` instead of stretching the card past its grid track, and ordinary words SHALL wrap whole; whitespace in the preview SHALL collapse — line breaks and blank lines in the raw description value do not consume the clamp budget (unlike the detail page's description, which preserves the author's line breaks — see `scheduled-task-detail-page`)), a schedule/status pill, and an optional location breadcrumb built from `locationSegments` through the kit's `FolderPath` (outermost segment first). The card has no overflow menu and no per-task action callbacks: its only callback is `onCardClick`; Edit and Delete are offered only in the detail page header (see `scheduled-task-detail-page`).
 
 The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` when `item.isActive` is `true` or `undefined`, and a "Paused" badge (with a pause icon) in that same position when `item.isActive` is explicitly `false`. The two are mutually exclusive — the card never renders both at once. This is a display-only distinction; the card issues no pause/resume request and takes no other action based on `isActive` (the mutating pause/resume switch is confined to the detail page — see `scheduled-task-detail-page`).
 
@@ -193,6 +215,16 @@ The schedule/status pill SHALL render the schedule pill showing `scheduleLabel` 
 
 - **WHEN** `ScheduledTaskCard` renders without `onCardClick`
 - **THEN** the card root is `role="group"`, is not focusable, and clicking it invokes no callback
+
+#### Scenario: Unbreakable description token wraps inside the card instead of stretching it
+
+- **WHEN** `ScheduledTaskCard` renders with a `descriptionPreview` containing a single token longer than the card's width (a long URL)
+- **THEN** the token wraps within the card's description area, the card does not stretch past its grid track, and the description still clamps at its line budget with an ellipsis
+
+#### Scenario: Leading blank lines in the description preview do not consume the clamp budget
+
+- **WHEN** `ScheduledTaskCard` renders with a `descriptionPreview` whose value begins with blank lines (the raw textarea description)
+- **THEN** the preview collapses whitespace, so the visible clamp budget is spent on text and the card never renders as an empty description area
 
 ### Requirement: Card click navigates to the task detail route
 
@@ -346,7 +378,7 @@ New user-visible strings introduced for card/grid/loading/error/no-results state
 #### Scenario: New keys are present in en.json
 
 - **WHEN** the change is applied
-- **THEN** `en.json` contains `scheduledTasks.list.noResultsLabel`, `scheduledTasks.list.errorLabel`, `scheduledTasks.list.retryLabel`, `scheduledTasks.list.loadingMoreLabel`, and the card-facing `scheduledTasks.card.newBadgeLabel`, `scheduledTasks.card.completedBadgeLabel` and `scheduledTasks.card.schedule*` label keys
+- **THEN** `en.json` contains `scheduledTasks.list.noResultsLabel`, `scheduledTasks.list.errorLabel`, `scheduledTasks.list.loadingMoreLabel`, and the card-facing `scheduledTasks.card.newBadgeLabel`, `scheduledTasks.card.completedBadgeLabel` and `scheduledTasks.card.schedule*` label keys
 
 #### Scenario: Lib receives strings, not translation keys
 
@@ -571,3 +603,80 @@ Below 768px (a phone-width cutoff inside the `mobile` band — tablets keep both
 
 - **WHEN** the viewport is 768px or wider (tablet band and desktop alike)
 - **THEN** focusing the search input changes nothing — the sort control stays visible beside the field
+
+### Requirement: Limited-access banner and create gating on the list page
+
+When the route-scoped offline-credentials status check reports `schedulerServiceConsent: 'signed_out'`, the Scheduled Tasks list page (`apps/chat/src/pages/ScheduledTasksPage/ScheduledTasksPage.tsx`) SHALL render a non-blocking inline limited-access banner — the kit `Notification` (`@epam/ai-dial-ui-kit`) with `variant={NotificationVariant.Error}` and `type={NotificationType.SectionMessage}`, rendered through a thin `ScheduledTasksLimitedAccessBanner` wrapper (`apps/chat/src/components/ScheduledTasksLimitedAccessBanner/ScheduledTasksLimitedAccessBanner.tsx`) that takes the localized title/body as props and renders `ScheduledTasksLimitedAccessBanner` from `@epam/ai-dial-scheduled-tasks` — in the lib's existing `banner` slot, directly above the task cards, and SHALL NOT pass an `onCreateClick` callback to the `ScheduledTasks` lib component, so no "New task" button renders.
+
+The banner SHALL follow the error-alert Notification design: the error variant's own container styling (radius, border, padding — nothing hand-set), the error variant's built-in assertive `role="alert"` live region, no action control, and no close button. The banner SHALL render on **one line**: a semibold localized "Limited access." title span followed by the localized description "You can't create or edit tasks. Contact your administrator for more details." (the kit stacks its `title` prop above the message, so the single line is composed inside the `message` ReactNode — the same bold-title-plus-supporting-text one-baseline-row composition the login banner uses). Strings resolve from the keys `scheduledTasks.limitedAccessBanner.title` ("Limited access.") and `scheduledTasks.limitedAccessBanner.body` ("You can't create or edit tasks. Contact your administrator for more details.") in `apps/chat/src/i18n/locales/en.json`, declared via `ScheduledTasksI18nKeys` in `apps/chat/src/constants/translation-keys.ts`.
+
+`schedulerServiceConsent` of `signed_in` or `unknown` SHALL change nothing on the page. The list itself (search, sort, card clicks, pagination, and the detail route) SHALL stay fully usable while the limited banner shows — only creation is withdrawn.
+
+Feature gating is unchanged: the page stays behind the existing `scheduledTasksEnabled` feature flag; no new flag or role gating is introduced, and no telemetry is added. RTL impact: none — the banner has no directional icon and uses no directional utilities; it inherits the writing direction.
+
+#### Scenario: Revoked consent shows the limited-access banner and hides New task
+
+- **WHEN** the list page's status check reports `schedulerServiceConsent: 'signed_out'`
+- **THEN** the error-alert `Notification` renders in the banner slot directly above the task cards with the localized "Limited access." title and "You can't create or edit tasks. Contact your administrator for more details." description on one line, no action control, no close button, and no "New task" button renders in the header
+
+#### Scenario: The limited banner shows regardless of the login state
+
+- **WHEN** the status check reports `schedulerServiceConsent: 'signed_out'`
+- **THEN** the limited-access banner renders whether `connected` is `true` or `false`, and the login-required banner never renders alongside or instead of it
+
+#### Scenario: Consent present and connected changes nothing
+
+- **WHEN** the status check reports `schedulerServiceConsent: 'signed_in'` and `connected: true`
+- **THEN** no banner renders and the "New task" button renders as before
+
+#### Scenario: Consent present and not connected keeps the login banner
+
+- **WHEN** the status check reports `schedulerServiceConsent: 'signed_in'` or `unknown` and `connected: false`
+- **THEN** the login-required banner and the "New task" button render exactly as before this change
+
+#### Scenario: The list stays usable under limited access
+
+- **WHEN** the limited-access banner is visible
+- **THEN** search, sort, card clicks, and pagination remain fully usable and a card click navigates to the detail route
+
+#### Scenario: The banner is announced assertively
+
+- **WHEN** the limited-access banner transitions from not-rendered to rendered
+- **THEN** its container is announced via the error variant's built-in `role="alert"` exactly once for that transition
+
+### Requirement: Custom schedule label renders every-N-weeks copy
+
+`describeScheduledTaskTrigger` (`libs/chat-hooks/src/scheduled-task/scheduled-task-description.ts`) SHALL describe a cron whose `day_of_week` is a comma-separated list of two or more plain numeric weekdays, with plain numeric `hour`/`minute` and no `day`/`week`, as the Weekly kind carrying the ordered list of display-timezone weekdays (each UTC weekday shifted by the same calendar-day offset as the time) and the display-timezone `time`. The former every-N-weeks description kind (`EveryNWeeks` with `intervalWeeks`) is removed together with the never-released every-N-weeks Custom option: any shape with a non-null `week` value now falls to the generic `Custom` kind. The generic `Custom` kind (rendered as the `scheduledTasks.card.scheduleRecurringFallback` "Recurring schedule" label) and `Invalid` remain unchanged, so display tolerance stays wider than editability.
+
+`formatScheduledTaskScheduleLabel` (`libs/chat-hooks/src/scheduled-task/scheduled-task-display.ts`) SHALL render a Weekly kind with several days through the existing `weeklyAt(day, time)` callback of `ScheduledTaskScheduleLabels`, passing as `day` the full weekday names joined with `Intl.ListFormat` (type `conjunction`) in the `locale` option, each name formatted through the same `Intl.DateTimeFormat`-on-a-fixed-UTC-date technique the single-day Weekly case uses. The `everyNWeeks` callback is removed from `ScheduledTaskScheduleLabels`; the app (`buildScheduleLabels` in `apps/chat/src/utils/map-scheduled-task-dto.ts`) keeps mapping `weeklyAt` to `scheduledTasks.card.scheduleWeeklyAt` ("Every {{day}} at {{time}}") and drops the former `scheduledTasks.card.scheduleEveryNWeeks` key. When additional locale files exist under `apps/chat/src/i18n/locales/`, they MUST stay in sync.
+
+#### Scenario: Every-2-weeks task shows structured copy on the card
+
+- **WHEN** a task's `trigger.cron.fields` is `{ week: '*/2', day_of_week: '1', hour: '7', minute: '0' }` (written by the former, never released every-N-weeks Custom option)
+- **THEN** the card's schedule pill shows the "Recurring schedule" fallback label (the scenario name is historical: the every-N-weeks label was removed)
+
+#### Scenario: Every-1-week custom task reads as weekly
+
+- **WHEN** a task's `trigger.cron.fields` is `{ week: '*/1', day_of_week: '0', hour: '7', minute: '0' }`
+- **THEN** the schedule pill shows the "Recurring schedule" fallback label (the scenario name is historical: a `week` field is no longer described structurally)
+
+#### Scenario: Several weekdays are listed
+
+- **WHEN** a task's `trigger.cron.fields` is `{ day_of_week: '0,2,4', hour: '7', minute: '0' }` and the browser's timezone is UTC+2
+- **THEN** the schedule pill shows "Every Monday, Wednesday and Friday at 9:00 AM", with the list joined by the active locale's conjunction
+
+#### Scenario: Weekday list shifts with the time across midnight
+
+- **WHEN** a task's `trigger.cron.fields` is `{ day_of_week: '1,6', hour: '22', minute: '30' }` and the browser's timezone is UTC+2
+- **THEN** the schedule pill shows "Every Monday and Wednesday at 12:30 AM", ordered Monday first
+
+#### Scenario: Non-editor week expressions keep the generic fallback
+
+- **WHEN** a task's `trigger.cron.fields` includes `week: '2-40'` or `week: '*/12'`, or a `day_of_week` range such as `'0-4'`
+- **THEN** the schedule pill shows the existing "Recurring schedule" fallback label
+
+#### Scenario: Week constraints are not lost in minute-step descriptions
+
+- **WHEN** a task's `trigger.cron.fields` is `{ week: '*/2', hour: '*', minute: '*/5' }`, or the same shape with `hour` omitted
+- **THEN** the descriptor keeps the full expression as `Custom` and the schedule pill shows "Recurring schedule", not "Every 5 minutes", because the schedule does not run in every week
+

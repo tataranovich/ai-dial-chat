@@ -57,6 +57,31 @@ Rapidly opening several run chats queues their viewed writes within the current
 app instance; older list responses cannot replace a newer successfully loaded
 conversation snapshot. A newer failed request does not discard an older success.
 
+### Unread dot for regular chats
+
+A regular chat shows the unread dot when its answer arrived while the user was
+not looking at it. The backend reports `isUnread: true` for a chat in the user's
+own bucket that was updated after a one-time read-before baseline
+(`.client_data/.conversations-read-baseline.json`, created by the first list
+request) and is not in the viewed ids (`.client_data/.viewed-conversations.json`).
+Older chats are read by condition, nothing is migrated; scheduled runs keep their
+own viewed file.
+
+- Starting a generation (send, regenerate, edit) marks the chat unread in the
+  local list at once, and the server removes it from the viewed ids when the
+  completion starts.
+- The open conversation never shows the dot, so watching a chat generate shows no
+  dot, and leaving it mid-stream shows the dot immediately.
+- The conversation page marks an open unread chat viewed once it has loaded and
+  its stream is not running; returning to a chat that is still generating writes
+  nothing, and the chat is marked when the stream ends while it is open. Leaving
+  mid-stream never marks it. The panel's active-conversation sync only marks
+  scheduled runs.
+  A failed recovery of a generating chat keeps it unread, and a viewed write
+  queued when a generation starts in that chat is dropped.
+- Renaming a read chat keeps it read. A failed viewed write leaves a regular chat
+  read locally; the next list that still reports it unread retries once.
+
 History and Start now pass expected chat ids to
 `ConversationsContext.refreshConversations(expectedIds?)`. Missing chats get up to
 five additional list requests, two seconds apart after each request settles.
@@ -83,7 +108,23 @@ allowing retry when support recovers without requiring the user to reselect
 the model or skill.
 
 Detail and conversation task summaries show a resolved skill name, falling
-back to its full reference while metadata loads or cannot be read. These
+back to its full reference only after a temporary metadata error. Skill names
+remain hidden until all selected references finish resolving, avoiding a flash
+of raw resource paths.
+Metadata responses 400, 403 and 404 mark the reference unavailable: previews
+show the decoded final path segment followed by ` (unavailable)` in the error
+text color, with the tooltip ?The skill has been deleted or access revoked?.
+Unavailable skills use a pointer cursor; the tooltip is also available on keyboard focus.
+HTTP 400 is included because this metadata endpoint returns it for deleted
+skills as well. Availability is not cached for the whole session: changing
+the selection or reopening the editor retries metadata for missing references.
+Removing and re-adding a reference also retries if it is selectable again;
+a deleted skill absent from the catalog cannot be re-added from the dropdown.
+Model/agent previews similarly wait for the deployment catalog, then mark a
+missing deployment with a short name, ` (unavailable)`, error text, a pointer
+cursor, and ?The model or agent has been deleted or access revoked?. Catalog
+failures do not imply deletion. Matching supports IDs, references and encoded
+application names. The conversation panel continues to show the run?s model. These
 lookups belong to app adapters; the libraries receive resolved values and
 callbacks.
 
@@ -122,6 +163,15 @@ setting and `features.halloweenEnabled` flag are removed. Deploy the frontend
 and backend together when migrating that setting. Event selection uses the
 existing client-config refresh lifecycle; it is not a calendar scheduler.
 
+Each user can turn the event off or on with the **Seasonal celebrations**
+switch in Settings → Preferences. A saved choice is stored per browser under
+the `celebrationsEnabled` `localStorage` key (`useCelebrationPreference`).
+Until the user saves one, the switch follows the operator default
+`config.celebrationsEnabledByDefault` (`UI_EVENT_ENABLED_BY_DEFAULT` on
+chat-api, on unless set to `false`, `0` or `no`), which is read live and never
+written to storage. The switch is shown only while
+an event is configured and the host does not hide user settings.
+
 Only `/` renders event decoration and intercepts its optional secret phrase.
 Existing conversations send text normally. The current modules are:
 
@@ -134,7 +184,7 @@ The celebrations themselves live in
 [`@epam/ai-dial-celebrations`](../../libs/celebrations/README.md), which documents
 every scene, decoration behavior and the runtime. The app only adapts itself to
 the library in [`CelebrationHost`](src/context/CelebrationHost.tsx): it passes the
-configured event on `/` once the user config is ready, the navigation key as the
+configured event on `/` once the user config is ready and the celebrations preference is on, the navigation key as the
 reset key, labels translated from the existing `halloween.*` and `newYear.*` keys,
 the success toast as the notification sink, `useIsMobile`, and the composer,
 starter-list and history-panel anchors. The app keeps every scene enabled.
@@ -280,7 +330,7 @@ apps/chat/
 │   ├── components/              # Feature components (see below)
 │   ├── constants/               # Route helpers, translation keys, feature keys
 │   ├── context/                 # React context providers (see below)
-│   ├── hooks/                   # Shared hooks, incl. breakpoint/useBreakpoint
+│   ├── hooks/                   # Shared hooks
 │   ├── i18n/                    # i18n configuration and locale JSON
 │   ├── models/                  # App-level domain models
 │   ├── pages/                   # Route-level pages
@@ -288,6 +338,7 @@ apps/chat/
 │   ├── types/                   # Enums and shared types (incl. ROUTES)
 │   ├── utils/                   # App-level utilities
 │   ├── main.tsx                 # Entry point
+│   ├── tailwind.css             # Tailwind entry
 │   └── styles.scss              # Global styles
 └── README.md                    # This file
 ```
@@ -377,7 +428,11 @@ Values that most visibly change this app:
 1. **Tailwind utilities** for layout and spacing — the default.
 2. **SCSS modules** (`*.module.scss`) when a component needs CSS custom
    properties, pseudo-element styling, or state selectors Tailwind cannot reach.
-3. **Global styles** in `src/styles.scss`, which imports Tailwind's layers.
+3. **Global styles**: `src/tailwind.css` is the Tailwind entry (shared theme,
+   preflight, utilities, all unlayered so they load after and win over the
+   kit's stylesheet on source order). It imports the `html`/`body`/`#root`
+   defaults from `src/styles/base.css`; `src/styles.scss` holds the MCP app CSS
+   variables.
 
 The styling contract shared with `libs/*` — CSS variable naming, what belongs in
 a module versus a utility class, and the `styles={{ colors, typography }}` prop
@@ -386,16 +441,19 @@ shape — is in
 
 ### Breakpoints
 
-`tailwind.config.js` defines exactly two named screens:
+`tools/tailwind/theme.css` defines the default layout variants:
 
-| Screen    | Query               |
+| Variant   | Query               |
 | --------- | ------------------- |
 | `mobile`  | `max-width: 1279px` |
 | `desktop` | `min-width: 1280px` |
 
-Do not introduce `sm:`/`md:`/`lg:`/`xl:` or tablet variants. When a component
-must branch in JavaScript, use `useBreakpoint` / `useIsMobile` from
-`src/hooks/breakpoint/useBreakpoint.ts` instead of reading `window.innerWidth`.
+Menu and right-panel policies additionally use `phone` (<768px), `tablet`
+(768px inclusive to 1280px exclusive) and `tablet-up` (>=768px). Use
+`useIsMobile` for layout, `useIsPhone` for menus and `useIsTablet` for bounded
+right overlays, all from `@epam/ai-dial-chat-shared`. Do not use
+`sm:`/`md:`/`lg:`/`xl:`, deprecated tablet prefixes, or `window.innerWidth`
+to choose presentation.
 
 ### RTL
 
@@ -557,9 +615,26 @@ The Quick Apps iframe receives
 `{ type: 'REQUEST_APPLICATION_CREDENTIALS', appId: 'applications/public/my-agent' }`
 from that iframe opens the same host dialog; no credentials are sent through
 `postMessage`. See [the authentication flow](../../docs/auth/auth-bff-encrypted-cookie.md#proactive-application-credential-forms).
+An editor that already knows the one service to connect checks `externalServiceLogin=true`
+and sends
+`{ type: 'REQUEST_EXTERNAL_SERVICE_LOGIN', appId, serviceId, offlineUsageConsent }` instead:
+the host signs the user in to that service at `USER` level without the dialog, opening only
+the provider's consent popup, and answers with `EXTERNAL_SERVICE_LOGIN_RESULT`.
 
 ## AI text refinement
 
-Skill and scheduled-task forms opt into Description and Instructions refinement only when the backend returns `config.aiTextRefinementAvailable: true`. The host selects one of four purposes and passes a stable callback, cancellation signal, and translated labels to the libraries. Fields remain editable during requests; editing the active field cancels it. Save waits for refinement, and Undo is local to the current draft.
+Skill, scheduled-task, and prompt forms opt into Description and Instructions refinement, and the application and toolset editors into Description refinement, only when the backend returns `config.aiTextRefinementAvailable: true`. The host selects one of eight `TextRefinementPurpose` values and passes a stable callback, cancellation signal, and translated labels to the libraries. Fields remain editable during requests; editing the active field cancels it. Save waits for refinement, and Undo is local to the current draft.
 
 Run `npm exec -- nx run @epam/chat:test-refinement-browser` for Chromium checks of both forms at 360/900/1280/1920px, in LTR and Arabic RTL, using deterministic callbacks without a live model. Geometry evidence is written to `tmp/text-refinement-browser/geometry.json`.
+
+The task editor marks unavailable skills with removable error tags and marks
+an unavailable model/agent field invalid. Unavailable skills also show a field-level
+error caption explaining why Save is blocked. Both use short names, the unavailable
+suffix and explanatory tooltips. Save stays disabled during availability checks
+and while any unavailable selection remains; submission also validates this
+state before calling the API. Removing the skill or replacing the model restores
+saving once the remaining form values are valid.
+
+## Tablet menus and right panels
+
+From 768px menus use anchored dropdown/popover presentation and Catalog uses its normal labeled header Create button; below 768px Create remains a floating icon-only button. At 768-1279px sources, attachment previews, catalog/skill details and publication drawers overlay the page with bounded widths; navigation and conversation-panel layout retain their 1280px boundary. The app owns route-specific canvas defaults and sources-width persistence.

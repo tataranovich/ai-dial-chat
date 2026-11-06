@@ -1,11 +1,14 @@
-import type { RequestSkill } from '@epam/ai-dial-chat-shared';
+import type { RequestSkill, TextSegment } from '@epam/ai-dial-chat-shared';
 import type {
   CommandMenuConfig,
   HighlightedTextRange,
   MenuOverlayConfig,
 } from '@epam/ai-dial-conversation-input';
 import type { ComponentType, ReactNode } from 'react';
-import type { ChatSkillDetailsTrigger } from './chat-skill-props';
+import type {
+  ChatSkillColors,
+  ChatSkillDetailsTrigger,
+} from './chat-skill-props';
 import type { SkillListingEntry } from './favorite-skill-item';
 import type { FavoriteSkillsPanelLabels } from './favorite-skills-panel-props';
 
@@ -100,6 +103,8 @@ export interface UseSkillSelectorOverlayOptions {
    * to that line. Unset falls back to the chip's own default label class.
    */
   historyChipLabelClassName?: string;
+  /** Color overrides forwarded to every `ChatSkill` chip — active mentions and history chips alike. */
+  chipColors?: ChatSkillColors;
   /**
    * Trigger used by mentions rendered in an active composer. Unset retains
    * `ChatSkill`'s hover-and-focus default; history chips are unaffected.
@@ -111,6 +116,8 @@ export interface UseSkillSelectorOverlayOptions {
    * layouts, where hover never fires.
    */
   historyDetailsTrigger?: ChatSkillDetailsTrigger;
+  /** Forwarded to the Add-menu and slash-menu favorites panels' `isRowTooltipHidden`. Defaults to `false`. */
+  isRowTooltipHidden?: boolean;
   /**
    * Renders the browse modal's picker content (e.g. a host catalog view);
    * receives the selection and close callbacks to wire into it, and is
@@ -234,8 +241,24 @@ export interface UseSkillSelectorOverlayResult {
     skills: RequestSkill[] | undefined,
   ) => void;
   /**
+   * Seeds the draft with a single `/{name} ` mention of `url`, naming it from
+   * the listing pools or, when no pool lists it, the url's last non-empty
+   * segment. For a one-shot selection that carries only a url, such as a
+   * catalog "Use in chat" action or a deep link.
+   */
+  selectSkillByUrl: (url: string) => void;
+  /**
+   * Marks `text` as about to be inserted into the composer (e.g. a picked
+   * prompt): once the insertion reaches `onDraftChange`, every `/{name}` run
+   * in it that names a listed skill becomes a tracked mention. Call right
+   * before handing `text` to the composer's insertion channel. A no-op on a
+   * deployment without skills support. A paste into the input goes through
+   * the same recognition via `commandMenu.onTextPaste`.
+   */
+  recognizeMentionsInInsertion: (text: string) => void;
+  /**
    * Renders a user message's `content` and `custom_content.skills` as an
-   * ordered array interleaving plain-text runs and `ChatSkill` elements at
+   * ordered array interleaving markdown string runs and `ChatSkill` segments (each with its matched `/{name}` text) at
    * each mention's actual text position — for `UserMessageBubble`'s
    * `textSegments` prop. Resolves each entry's name from the listing pools
    * matched on its url, falling back to the url's last non-empty segment;
@@ -251,7 +274,7 @@ export interface UseSkillSelectorOverlayResult {
   renderHistorySkillSegments: (
     content: string,
     skills: RequestSkill[] | undefined,
-  ) => ReactNode[] | null;
+  ) => TextSegment[] | null;
   /**
    * Renders every entry of `skills` as a flat list of `ChatSkill` elements,
    * ignoring text position — for `AssistantMessageBubble`'s `beforeContent`

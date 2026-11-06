@@ -29,13 +29,17 @@ const target = (width: number, rtl = false): GiftWrappingTarget => ({
 type NativeLayer = ReturnType<
   typeof buildGiftWrappingComposition
 >['animationData']['layers'][number];
+
 type NativeShape = NativeLayer['shapes'][number];
+
 type NativeTransform = NativeLayer['ks'];
+
 interface NativePath {
   v: number[][];
   i: number[][];
   o: number[][];
 }
+
 interface NumericKeyframe {
   t: number;
   s: number[];
@@ -44,6 +48,7 @@ interface NumericKeyframe {
   o?: { x: number; y: number };
   i?: { x: number; y: number };
 }
+
 interface PathKeyframe extends Omit<NumericKeyframe, 's' | 'e'> {
   s: NativePath[];
   e?: NativePath[];
@@ -164,9 +169,35 @@ const distance = (from: number[], to: number[]) =>
   Math.hypot(to[0] - from[0], to[1] - from[1]);
 
 describe('Gift wrapping composition', () => {
+  it.each([false, true])(
+    'keeps cap movement restrained and carries a hop through its apex, rtl=%s',
+    (rtl) => {
+      const { animationData } = buildGiftWrappingComposition(
+        target(1280, rtl),
+        false,
+      );
+      const master = animationData.layers.find(({ nm }) => nm === 'master')!;
+      const cap = characterTransforms(master, 'cap')[0];
+      for (let t = 0; t <= 16; t += 0.05)
+        expect(Math.abs(numericAt(cap.r, t)[0])).toBeLessThanOrEqual(10);
+      const position = (t: number) => numericAt(master.ks.p, t);
+      const speed = (from: number, to: number, axis: number) =>
+        (position(to)[axis] - position(from)[axis]) / (to - from);
+      expect(Math.abs(speed(10.3, 10.35, 1))).toBeGreaterThan(
+        Math.abs(speed(10.55, 10.6, 1)),
+      );
+      expect(speed(10.9, 10.95, 1)).toBeGreaterThan(speed(10.7, 10.75, 1));
+      expect(Math.abs(speed(10.63, 10.65, 0))).toBeGreaterThan(10);
+      expect(speed(10.63, 10.65, 0)).toBeCloseTo(speed(10.65, 10.67, 0), 4);
+    },
+  );
+
   it.each([360, 900, 1280, 1920])(
     'authors bounded native vectors at %ipx in either direction',
     (width) => {
+      /* Loop-invariant: the elves fixture is stringified once per test, not
+         once per direction. */
+      expect(JSON.stringify(elves).length).toBeLessThan(80000);
       for (const rtl of [false, true]) {
         const { animationData } = buildGiftWrappingComposition(
           target(width, rtl),
@@ -178,12 +209,21 @@ describe('Gift wrapping composition', () => {
         expect(animationData.layers.length).toBeLessThanOrEqual(12);
         expect(animationData.assets).toEqual([]);
         expect(JSON.stringify(animationData).length).toBeLessThan(240000);
-        expect(JSON.stringify(elves).length).toBeLessThan(80000);
+        /* Violations are collected and asserted once per composition: a
+           per-node expect() over every number of a ≤240KB structure is tens
+           of thousands of assertion invocations, which is what timed this
+           test out. */
+        const nonFinite: number[] = [];
+        const unsortedTimes: number[][] = [];
+        const outOfRangeTimes: number[][] = [];
+        const forbiddenKeys: string[] = [];
         let keyframes = 0;
         const visit = (value: unknown) => {
-          if (typeof value === 'number')
-            expect(Number.isFinite(value)).toBe(true);
+          if (typeof value === 'number' && !Number.isFinite(value))
+            nonFinite.push(value);
           if (!value || typeof value !== 'object') return;
+          if ('ef' in value) forbiddenKeys.push('ef');
+          if ('masksProperties' in value) forbiddenKeys.push('masksProperties');
           if (
             'a' in value &&
             value.a === 1 &&
@@ -192,16 +232,19 @@ describe('Gift wrapping composition', () => {
           ) {
             keyframes += value.k.length;
             const times = value.k.map((key) => key.t);
-            expect(times).toEqual([...times].sort((a, b) => a - b));
-            expect(
-              times.every((time) => time >= 0 && time <= animationData.op),
-            ).toBe(true);
+            const sorted = [...times].sort((a, b) => a - b);
+            if (times.some((time, index) => time !== sorted[index]))
+              unsortedTimes.push(times);
+            if (times.some((time) => time < 0 || time > animationData.op))
+              outOfRangeTimes.push(times);
           }
-          expect(value).not.toHaveProperty('ef');
-          expect(value).not.toHaveProperty('masksProperties');
           Object.values(value).forEach(visit);
         };
         visit(animationData);
+        expect(nonFinite).toEqual([]);
+        expect(unsortedTimes).toEqual([]);
+        expect(outOfRangeTimes).toEqual([]);
+        expect(forbiddenKeys).toEqual([]);
         expect(keyframes).toBeLessThanOrEqual(1400);
       }
     },

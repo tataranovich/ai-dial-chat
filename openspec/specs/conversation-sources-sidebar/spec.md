@@ -153,7 +153,7 @@ The container SHALL pass the scheduled-task History and Details accordions as `a
 
 When the panel is globally empty:
 
-- The body SHALL render `NoDataContent` from `@epam/ai-dial-ui-kit`, centred horizontally and vertically, with `title={labels.noDataLabel}` (the container passes `t(BasicI18nKeys.Empty)`, i.e. `basic.noData`). No `icon` prop is supplied.
+- The body SHALL render `NoDataContent` from `@epam/ai-dial-ui-kit`, centred horizontally and vertically, with `title={labels.noDataLabel}` and `description={labels.noDataDescription}`. The container passes the sidebar-specific i18n keys `sidebar.sources.emptyTitle` ("No files or sources yet") and `sidebar.sources.emptyDescription` ("Files and sources from this chat will appear here."), not the shared `basic.noData`. No `icon` prop is supplied.
 - No search input, download-all button, or section headings SHALL be rendered; the header carries only the close button.
 
 When at least one of `uploaded`, `generated`, or `sources` is non-empty:
@@ -164,7 +164,7 @@ When at least one of `uploaded`, `generated`, or `sources` is non-empty:
 
 The body SHALL render, in order: `additionalSections` (History, then Details, when present), then the Uploaded Files `FilesSection`, the Generated Files `FilesSection`, and `SourcesSection`. Each of the three file/source sections renders `null` when its own (filtered) list is empty.
 
-Search SHALL filter `uploaded` and `generated` by attachment `name`, and `sources` by `title`, `url`, or `quote`, all case-insensitively. When the query is non-empty and all three filtered lists are empty, the three sections are replaced by `PanelNoResults` (`labels.noResultsLabel`, `basic.noResults`) and a polite `role="status"` region announces the same label. `additionalSections` still render above it and are never filtered.
+Search SHALL filter `uploaded` and `generated` by attachment `name`, and `sources` by `title`, `url`, or `quote`, all case-insensitively. When the query is non-empty and all three filtered lists are empty, the three sections are replaced by `PanelNoResults` with `labels.noResultsLabel` (i18n key `sidebar.sources.noResultsTitle`, "No files or sources found", not the shared `basic.noResults`) and `labels.noResultsDescription` (i18n key `basic.noResultsDescription`) and a polite `role="status"` region announces the same label. `additionalSections` still render above it and are never filtered.
 
 For both states the container SHALL pass:
 
@@ -176,7 +176,7 @@ For both states the container SHALL pass:
 #### Scenario: Global empty state when no files exist and no scheduled task is active
 
 - **WHEN** `uploaded`, `generated`, and `sources` are empty AND the active conversation is not a scheduled-task conversation
-- **THEN** the body shows centred `NoDataContent` with the `basic.noData` title and default icon
+- **THEN** the body shows centred `NoDataContent` with the `sidebar.sources.emptyTitle` title ("No files or sources yet"), the `sidebar.sources.emptyDescription` description and the default icon
 - **AND** no section heading is rendered
 - **AND** no search or download-all button is rendered
 
@@ -500,7 +500,7 @@ Its shape is unchanged. For PDF sources, `url` MAY carry a `#page=N` fragment id
 
 `libs/source-panel` SHALL render the file and source lists through two internal (not exported) components, `FilesSection` and `SourcesSection`, each rendering a `<section>` with an `<h2>` title (`titleClassName`, default `dial-body-semi-text`, overridable through `styles.typography.sectionTitleClassName`) followed by its content. Each returns `null` when its list is empty, so no title or placeholder line is rendered. Section titles render as plain text; matches are highlighted in item labels.
 
-`FilesSection` (`libs/source-panel/src/components/FilesSection/FilesSection.tsx`) is used for both Uploaded Files and Generated Files and accepts `{ attachments: DisplayAttachment[]; title: string; searchQuery?: string; titleClassName?: string; onAttachmentClick?: (attachment: DisplayAttachment) => void; attachmentClickLabel?: string }`. There is no `emptyMessage` prop. When `attachments.length > 0` it SHALL render an auto-fill grid (`role="list"`, `grid-cols-[repeat(auto-fill,minmax(84px,1fr))]`) where each cell (`role="listitem"`) wraps an `AttachmentCard` from `@epam/ai-dial-attachment-input` (no `onRemove`, no `onRetry`) that receives `searchQuery`, `labels={{ clickLabel: attachmentClickLabel }}`, and, only when `onAttachmentClick` is provided, `onClick={() => onAttachmentClick(att)}`. The container passes `attachmentClickLabel = t(AttachmentsI18nKeys.Download)` (`attachments.downloadFile`).
+`FilesSection` (`libs/source-panel/src/components/FilesSection/FilesSection.tsx`) is used for both Uploaded Files and Generated Files and accepts `{ attachments: DisplayAttachment[]; title: string; searchQuery?: string; titleClassName?: string; onAttachmentClick?: (attachment: DisplayAttachment) => void; attachmentClickLabel?: string }`. There is no `emptyMessage` prop. When `attachments.length > 0` it SHALL render an auto-fill grid (`role="list"`, `grid-cols-[repeat(auto-fill,minmax(100px,1fr))]`) where each cell (`role="listitem"`) wraps an `AttachmentCard` from `@epam/ai-dial-attachment-input` (no `onRemove`, no `onRetry`) that receives `searchQuery`, `labels={{ clickLabel: attachmentClickLabel }}`, and, only when `onAttachmentClick` is provided, `onClick={() => onAttachmentClick(att)}`. The container passes `attachmentClickLabel = t(AttachmentsI18nKeys.Download)` (`attachments.downloadFile`).
 
 `SourcesSection` (`libs/source-panel/src/components/SourcesSection/SourcesSection.tsx`) accepts `{ title: ReactNode; sources: QuotationSource[]; copyLabel: string; copiedLabel?: string; searchQuery?: string; typography?; colors?; onSourceClick?: (source: QuotationSource) => void }` (`copiedLabel` defaults to `'Link copied to clipboard'`). When `sources.length > 0` it SHALL render a `<ul>` where each `<li>` contains:
 
@@ -666,12 +666,12 @@ The close SHALL NOT be implemented as an effect keyed on `conversationId` in `Co
 
 All user-visible strings in the right sidebar (toggle aria-label, panel aria-label, close label, section titles, search and download-all aria-labels, attachment click label, and the new History/Details section strings) SHALL be sourced from i18n keys. Sidebar-specific strings live under `sidebar.base.*` and `sidebar.sources.*` in `apps/chat/src/i18n/locales/en.json`; the all-empty "No data" string reuses `basic.noData`. A typed `SidebarI18nKeys` enum/object SHALL be exposed from `apps/chat/src/constants/translation-keys.ts` for consumers.
 
-New History/Details/task-summary strings introduced for scheduled-task conversations SHALL reuse existing `scheduledTasks.detail.*` keys, shared button keys, and run-status keys wherever their meaning matches (e.g. status labels, the "no runs" empty state, retry button text) instead of duplicating equivalent English strings under `sidebar.*`. The History/Details section titles reuse `scheduledTasks.detail.historyTitle` and `scheduledTasks.create.detailsSectionTitle`. Only strings with no existing equivalent live under `scheduledTasks.conversationPanel.*`, which today holds `modelLabel` and `currentRunLabel`; there is no load-more status string.
+New History/Details/task-summary strings introduced for scheduled-task conversations SHALL reuse existing `scheduledTasks.detail.*` keys, shared button keys, and run-status keys wherever their meaning matches (e.g. status labels, the "no runs" empty state, retry button text) instead of duplicating equivalent English strings under `sidebar.*`. The History/Details section titles reuse `scheduledTasks.detail.historyTitle` and `scheduledTasks.create.detailsSectionTitle`. Only strings with no existing equivalent live under `scheduledTasks.conversationPanel.*`, which today holds `modelLabel`, `currentRunLabel` and `historyUnavailableLabel`; there is no load-more status string.
 
 #### Scenario: New keys added to en.json
 
 - **WHEN** `apps/chat/src/i18n/locales/en.json` is inspected
-- **THEN** it contains keys `sidebar.base.toggleOpen`, `sidebar.sources.ariaLabel`, `sidebar.sources.downloadAll`, `sidebar.sources.sections.uploadedFiles`, `sidebar.sources.sections.generatedFiles`, `sidebar.sources.sections.sources`, `scheduledTasks.conversationPanel.modelLabel`, `scheduledTasks.conversationPanel.currentRunLabel` — History/Details section titles and the "Show more" button reuse existing keys (`scheduledTasks.detail.historyTitle`, `scheduledTasks.create.detailsSectionTitle`, `buttons.showMore`) rather than duplicating them under `conversationPanel.*`
+- **THEN** it contains keys `sidebar.base.toggleOpen`, `sidebar.sources.ariaLabel`, `sidebar.sources.downloadAll`, `sidebar.sources.sections.uploadedFiles`, `sidebar.sources.sections.generatedFiles`, `sidebar.sources.sections.sources`, `scheduledTasks.conversationPanel.modelLabel`, `scheduledTasks.conversationPanel.currentRunLabel`, `scheduledTasks.conversationPanel.historyUnavailableLabel` — History/Details section titles and the "Show more" button reuse existing keys (`scheduledTasks.detail.historyTitle`, `scheduledTasks.create.detailsSectionTitle`, `buttons.showMore`) rather than duplicating them under `conversationPanel.*`
 
 #### Scenario: Components consume the typed key map
 
@@ -917,7 +917,7 @@ Task-detail failure, run-history failure, and attachment/source-derivation issue
 - A `getScheduledTask` failure SHALL NOT hide the History section, the existing file/source sections, or the conversation.
 - A run-history failure SHALL NOT hide the Details section.
 - An attachment/source rendering issue SHALL NOT hide the History or Details sections.
-- A `404` from `getScheduledTask` (task deleted) SHALL be treated as "task unavailable" (`ActiveScheduledTaskDetailState.Unavailable`): the conversation and existing sections remain visible, the Details section shows the localized `scheduledTasks.conversationBanner.unavailableLabel` text (in a `role="alert"` paragraph, with no retry button) rather than an app-level error, the History section keeps rendering its own run list, and the panel title falls back to the conversation title. A non-404 task failure (`Error`) shows the same text plus a retry button.
+- A `404` from `getScheduledTask` (the task was deleted, or the viewer does not own it — e.g. a task conversation shared with them by its owner) SHALL be treated as "task unavailable" (`ActiveScheduledTaskDetailState.Unavailable`): the conversation and existing sections remain visible, the Details section shows the localized `scheduledTasks.conversationBanner.unavailableLabel` text (in a `role="alert"` paragraph, with no retry button) rather than an app-level error, and the panel title falls back to the conversation title. The History section SHALL likewise show the localized `scheduledTasks.conversationPanel.historyUnavailableLabel` text ("History is unavailable", in a `role="alert"` paragraph) in place of its run list, its "Failed to load history" error, its retry button, and its "Show more" footer — `ConversationSourcesPanel` passes `isUnavailable` to `TaskHistorySection`, which forwards it to the lib's `ScheduledTaskConversationHistorySection`. A retry there could never succeed, because the viewer cannot read the owner's run history either. A non-404 task failure (`Error`) shows the Details text plus a retry button and leaves History on its own run-history state.
 - `401`/`403`/`429`/`502`/`503` responses SHALL follow the existing API error/notification conventions without redirecting away from the conversation.
 - Each section's retry action SHALL retry only its own failed request (task detail vs. run history), not the other.
 
@@ -925,7 +925,14 @@ Task-detail failure, run-history failure, and attachment/source-derivation issue
 
 - **WHEN** `getScheduledTask` responds with `404`
 - **THEN** the conversation and existing Uploaded/Generated/Sources sections remain visible
-- **AND** the Details section shows the localized "unavailable" text instead of the task content, the History section still renders its run list, and the panel title shows the conversation title (per the header-fallback requirement)
+- **AND** the Details section shows the localized "unavailable" text instead of the task content, and the panel title shows the conversation title (per the header-fallback requirement)
+- **AND** the History section shows the localized "History is unavailable" text instead of its run list
+
+#### Scenario: Shared task conversation shows History as unavailable without a retry action
+
+- **WHEN** a user opens a scheduled-task conversation shared with them by the task's owner, so `getScheduledTask` responds with `404` and the run-history request fails as well
+- **THEN** the History section shows "History is unavailable", consistent with "Task details are unavailable" in Details
+- **AND** neither section shows "Failed to load history" or a retry button
 
 #### Scenario: Run-history failure does not hide Details
 
@@ -952,7 +959,7 @@ Task-detail failure, run-history failure, and attachment/source-derivation issue
 
 Each context value SHALL be memoized with `useMemo` over its own fields only. Each hook SHALL throw a clear error when used outside `SourcesSidebarProvider`. A `setMessages` or `setConversationModelId` call SHALL NOT change the controls context value. `useSourcesSidebar()` no longer returns `messages` or `conversationModelId`. `ConversationSourcesPanel` is their only reader.
 
-The provider's name, props and mount point in `apps/chat/src/main.tsx` do not change. There is no user-visible string, RTL or a11y change, feature flag, cache or telemetry.
+The provider's name, props and mount point in `apps/chat/src/AppRoot.tsx` do not change. There is no user-visible string, RTL or a11y change, feature flag, cache or telemetry.
 
 #### Scenario: A controls-only consumer does not re-render on a messages update
 

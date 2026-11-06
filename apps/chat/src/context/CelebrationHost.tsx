@@ -4,6 +4,7 @@ import {
   type CelebrationEventLoader,
   type CelebrationNotification,
 } from '@epam/ai-dial-celebrations';
+import { useIsMobile } from '@epam/ai-dial-chat-shared';
 import { CONVERSATION_INPUT_CLASS } from '@epam/ai-dial-conversation-input';
 import { STARTER_BUTTONS_CLASS } from '@epam/ai-dial-starter-buttons';
 import { useCallback, useMemo, type FC, type ReactNode } from 'react';
@@ -14,7 +15,7 @@ import {
   HalloweenI18nKeys,
   NewYearI18nKeys,
 } from '../constants/translation-keys';
-import { useIsMobile } from '../hooks/breakpoint/useBreakpoint';
+import { useCelebrationPreference } from '../hooks/celebration/useCelebrationPreference';
 import { ROUTES } from '../types/routes';
 import { UserConfigStatus } from '../types/user-config-status';
 import { useAppConfig } from './AppConfigContext';
@@ -55,15 +56,19 @@ interface Props {
   children: ReactNode;
 }
 
-/** Adapts app config, routing, i18n and notifications to the celebrations library. */
+/** Adapts app config, the user's opt-in, routing, i18n and notifications to the celebrations library. */
 export const CelebrationHost: FC<Props> = ({ children }) => {
   const { t } = useTranslation();
   const { status, config } = useAppConfig();
   const location = useLocation();
   const { showSuccessNotification } = useNotification();
   const isMobile = useIsMobile();
+  const { isEnabled } = useCelebrationPreference();
+  /* The operator picks the event; the user still has to opt in to see it. */
   const activeEventId =
-    status === UserConfigStatus.Ready && location.pathname === ROUTES.Root
+    isEnabled &&
+    status === UserConfigStatus.Ready &&
+    location.pathname === ROUTES.Root
       ? config.activeEventId
       : null;
   const labels = useMemo(

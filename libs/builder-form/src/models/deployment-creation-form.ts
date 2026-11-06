@@ -105,12 +105,22 @@ export interface DeploymentCreationFormLabels {
   ariaLabel?: string;
 }
 
+/** CSS custom property overrides for `DeploymentLocalesField`. */
+export interface DeploymentLocalesFieldColors {
+  /** Text color of the "Locales: [DE]" summary. Defaults to `--text-secondary`. */
+  summaryText?: string;
+  /** Text color of each popup row's "Locale N" heading. Defaults to `--text-secondary`. */
+  rowLabelText?: string;
+}
+
 /** Optional per-slot class name overrides for visual composition by the host app. */
 export interface DeploymentCreationFormStyles {
   /** Class applied to the root container. Defaults to a vertical flex stack. */
   root?: string;
   /** Class applied to each individual field wrapper. */
   field?: string;
+  /** Color overrides forwarded to the additional-locales `DeploymentLocalesField`. */
+  localesColors?: DeploymentLocalesFieldColors;
 }
 
 /** Props accepted by the `DeploymentCreationForm` component. */
@@ -139,18 +149,32 @@ export interface DeploymentCreationFormProps {
   styles?: DeploymentCreationFormStyles;
   /** Selectable language options for additional-locale rows. Defaults to an empty list (no locales addable). */
   availableLocaleOptions?: DeploymentCreationFormLocaleOption[];
+  /** Labels a stored locale code that is not in `availableLocaleOptions`. Defaults to `code.toUpperCase()`. */
+  formatLocaleLabel?: (code: string) => string;
   /**
    * Fields to render, always in the fixed order Avatar, Name + Version,
    * Description, Locales, Tags. Defaults to every field. When `Version` is
    * absent, Name takes the full row.
    */
   fields?: readonly MetadataField[];
-  /** Renders the name field read-only, e.g. when the entity cannot be renamed after creation. */
+  /** Renders the name field disabled, e.g. when the entity cannot be renamed after creation. */
   isNameReadOnly?: boolean;
+  /** Tooltip shown over the name field while `isNameReadOnly` is set. Defaults to the field value. */
+  nameReadOnlyTooltip?: string;
+  /**
+   * Renders the version field read-only (still focusable), e.g. in edit mode
+   * where a version changes only by saving a new one. Typing and
+   * `onVersionBlur` are ignored while set. Defaults to `false`.
+   */
+  isVersionReadOnly?: boolean;
+  /** Tooltip shown over the version field while `isVersionReadOnly` is set. Defaults to `'The version is changed with "Save as new version"'`. */
+  versionReadOnlyTooltip?: string;
   /** Helper text rendered under the name field. */
   nameCaption?: string;
   /** Marks the description field as required. The host still owns the validation. */
   isDescriptionRequired?: boolean;
+  /** Helper text rendered under the description field, e.g. a `120/2000` counter. */
+  descriptionCaption?: string;
   /**
    * Wraps the Description textarea, e.g. in a label row with extra actions.
    * When set, the textarea renders without its own label, so the returned node

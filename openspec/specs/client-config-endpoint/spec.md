@@ -665,3 +665,103 @@ metrics, or exceptions.
 
 - **WHEN** the mapping lookup receives a key that has no entry, including inherited property names such as `constructor` or `__proto__`
 - **THEN** the accumulator is left unchanged and no exception or log is produced
+
+### Requirement: client-config exposes resolved catalog creation permissions
+
+`GET /api/v1/client-config?appId=chat-ui` SHALL include required `config.catalogCreationPermissions` with required `allowedTypes` (an array of the five creation-type enum values) and `restrictedSchemaIds` (a string array). Evaluation follows `catalog-creation-role-restrictions`. Both arrays SHALL always be present, including when empty. The role maps and user roles SHALL never be serialized.
+
+Request: existing required `GetClientConfigDto.appId`, allowlisted to `chat-ui`, no body or new headers. Authorization SHALL stay `@Public()` plus `OptionalSessionGuard`; no role is required to read config, and anonymous callers receive evaluation with no roles. Response SHALL remain 200 for a valid request, 400 for missing/invalid appId. This change adds no auth, schema-lookup, upstream dependency, or new 401/403/404/502/503 outcome; existing unexpected failures retain the sanitized framework 500 response. A policy is validated at boot, not silently discarded during a request.
+
+Example policy: `{"types":{"custom-app":["developers"]},"schemas":{"schema-A":["team-A"]}}`. Response to a user holding neither role (unrelated fields abbreviated):
+
+```http
+GET /api/v1/client-config?appId=chat-ui
+```
+
+```json
+{
+  "appId": "chat-ui",
+  "features": { "asrEnabled": false },
+  "config": {
+    "enabledUiFeatures": null,
+    "catalogCreationPermissions": {
+      "allowedTypes": ["schema-app", "toolset", "prompt", "skill"],
+      "restrictedSchemaIds": ["schema-A"]
+    }
+  },
+  "metadata": { "resolvedAt": "2026-10-27T10:00:00.000Z", "cacheTtlSeconds": 60 }
+}
+```
+
+`ClientConfigDto` in `apps/chat-api/src/app-config/dto/client-config-response.dto.ts` SHALL document the object through concrete Swagger types and a string enum for creation categories. Append the service-assembled field after the mapped config fields. Update the response key-order and mapper coverage tests.
+
+**Generated client:** retain operationId/SDK method `getClientConfig`, existing request DTO `GetClientConfigDto` and `ClientConfigResponseDto`. Add a non-optional typed permission DTO field to `ClientConfigDto`; enum arrays MUST NOT degrade to `any` or untyped objects. Regenerate `libs/chat-api-client`; retain the normal, non-Raw method through `apps/chat/src/server-api/app-config.api.ts` and its existing singleton.
+
+**Cache:** unchanged `app-config:client:<encodedAppId>:user:<encodedUserId>:roles:<sortedEncodedRoles>`, existing anonymous/no-role sentinels, TTL 60 seconds, expiry/restart invalidation, `Cache-Control: private, no-store`. **Observability:** existing endpoint metrics only, no raw rules/roles in logs. **RTL / i18n:** none at the endpoint.
+
+#### Scenario: No rules returns all creation types
+- **WHEN** the policy is absent
+- **THEN** the object contains all five type values and `restrictedSchemaIds: []`
+
+#### Scenario: Roles affect only the new permission field
+- **WHEN** users with and without a required role request the same configured UI-feature baseline
+- **THEN** their permission objects differ but `config.enabledUiFeatures` does not
+
+#### Scenario: An explicit baseline is not filtered
+- **WHEN** `ENABLED_UI_FEATURES=header,custom-apps` and custom-app creation is denied
+- **THEN** `config.enabledUiFeatures` remains `["header", "custom-apps"]`
+
+#### Scenario: The default baseline stays null
+- **WHEN** `ENABLED_UI_FEATURES` is unset and creation is restricted
+- **THEN** `config.enabledUiFeatures` remains null and only the new permission object carries creation restrictions
+
+#### Scenario: No role map is disclosed
+- **WHEN** any client-config response is serialized
+- **THEN** it contains no policy role names or raw policy maps
+
+#### Scenario: Generated client preserves the strong contract
+- **WHEN** OpenAPI and the client are regenerated
+- **THEN** the permission object and arrays are non-optional and typed, and `npm run openapi:check` passes
+
+### Requirement: client-config exposes additionalContentLocales
+
+`GET /api/v1/client-config` SHALL include one more `visibility='client'` field under `config`: `additionalContentLocales: string[]`. It is sourced from the `content.additionalLocales` registry entry (`ADDITIONAL_CONTENT_LOCALES`, falling back to the deprecated `AVAILABLE_LOCALES`), with default `[]`. The field is added to the response `client-config-endpoint` already returns. The endpoint's path, query parameters, authorization (none required) and cache key/TTL are unchanged, so the field is cached and invalidated together with the rest of the response.
+
+`CLIENT_CONFIG_MAPPINGS` (`apps/chat-api/src/app-config/client-config.mapper.ts`) SHALL map `content.additionalLocales` to `additionalContentLocales`. An array value passes through, and anything else becomes `[]`. The empty default SHALL be added to the mapper's default config object. `ClientConfigResponseDto` (`apps/chat-api/src/app-config/dto/client-config-response.dto.ts`) SHALL add an `@ApiProperty({ type: [String] })` field `additionalContentLocales!: string[]`, so the generated `@epam/ai-dial-chat-api-client` types it concretely.
+
+**Generated client impact:** `operationId` `getClientConfig` is unchanged, and its response type's `config` property gains `additionalContentLocales: string[]`. The request DTO is unchanged. Frontend callers keep using the normal (non-`Raw`) generated method.
+
+**RTL impact:** none. **i18n impact:** none; values are locale codes.
+
+Example response (abridged):
+
+```json
+GET /api/v1/client-config?appId=chat-ui
+200 OK
+{
+  "config": {
+    "publicationFilterSources": ["title", "role", "dial_roles"],
+    "additionalContentLocales": ["de", "fr-FR"]
+  }
+}
+```
+
+#### Scenario: Empty list returned when unconfigured
+
+- **WHEN** `GET /api/v1/client-config?appId=chat-ui` is called and neither `ADDITIONAL_CONTENT_LOCALES` nor `AVAILABLE_LOCALES` is set
+- **THEN** the response includes `config.additionalContentLocales: []`
+
+#### Scenario: Operator-configured locales are returned canonicalised
+
+- **WHEN** `ADDITIONAL_CONTENT_LOCALES=de,fr-fr` is set
+- **THEN** the response includes `config.additionalContentLocales: ["de", "fr-FR"]`
+
+#### Scenario: Registry-coverage test accepts the new key
+
+- **WHEN** the client-config mapper coverage test (`apps/chat-api/src/app-config/tests/client-config.mapper.spec.ts`) runs
+- **THEN** `content.additionalLocales` has exactly one mapping entry, and `additionalContentLocales` is written by no other entry
+
+#### Scenario: Generated client type includes the new field
+
+- **WHEN** `npm run openapi` is run
+- **THEN** the generated `ClientConfigDto` type includes `additionalContentLocales: string[]`, and `npm run openapi:check` passes

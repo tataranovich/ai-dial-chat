@@ -44,11 +44,18 @@ describe('LazyContentBoundary', () => {
     expect(screen.getAllByRole('status').length).toBeGreaterThan(0);
   });
 
-  it('renders a role="alert" with a retry control when the import rejects', async () => {
+  it('announces the failure through the status region mounted while pending, with a retry control', async () => {
     const factory = vi.fn(() => Promise.reject(new Error('boom')));
     render(<TestHarness factory={factory} />);
+    const region = screen
+      .getAllByRole('status')
+      .find((node) => node.textContent === '');
+    expect(region).toBeTruthy();
 
-    expect(await screen.findByRole('alert')).toBeTruthy();
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(region?.isConnected).toBe(true);
+    expect(region?.textContent).toBe('Failed to load content');
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
   });
 
@@ -61,7 +68,7 @@ describe('LazyContentBoundary', () => {
       );
     render(<TestHarness factory={factory} />);
 
-    await screen.findByRole('alert');
+    await screen.findByRole('button', { name: 'Retry' });
     expect(factory).toHaveBeenCalledOnce();
 
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));

@@ -2,7 +2,9 @@ import {
   DeploymentCreationFieldErrorCode,
   EntityEditor,
   MetadataField,
+  MetadataForm,
   useMetadataForm,
+  type DeploymentCreationFormValidationOptions,
 } from '@epam/ai-dial-builder-form';
 import {
   getApiErrorDetails,
@@ -18,7 +20,7 @@ import {
 import type { FC, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TOOLSET_EDITOR_CLASS } from '../../constants/public-class-names';
-import { TOOLSET_METADATA_VALIDATION_OPTIONS } from '../../constants/toolsets';
+import { DEFAULT_TOOLSET_METADATA_LABELS } from '../../constants/toolsets';
 import type { ToolsetEditorProps } from '../../models/toolset-editor-props';
 import type {
   ToolsetAuthFormData,
@@ -28,10 +30,10 @@ import type {
 import {
   isToolsetFormValid,
   isValidEndpointUrl,
+  isValidOAuthResource,
   pickToolsetMetadata,
   splitToolsetFormPatch,
 } from '../../utils/toolsets';
-import { GeneralForm } from '../GeneralForm/GeneralForm';
 import { SettingsForm } from '../SettingsForm/SettingsForm';
 
 const AUTH_ERROR_FIELDS: (keyof ToolsetFormErrors)[] = [
@@ -41,6 +43,7 @@ const AUTH_ERROR_FIELDS: (keyof ToolsetFormErrors)[] = [
   'clientSecret',
   'authorizationEndpoint',
   'tokenEndpoint',
+  'resource',
 ];
 
 /* Setup-section fields; Metadata errors are owned by `useMetadataForm`. */
@@ -50,6 +53,10 @@ const SETUP_ERROR_FIELDS: (keyof ToolsetFormErrors)[] = [
 ];
 
 const SETUP_ERROR_FIELD_SET = new Set<string>(SETUP_ERROR_FIELDS);
+
+const METADATA_VALIDATION_OPTIONS: DeploymentCreationFormValidationOptions = {
+  validateVersionPattern: true,
+};
 
 type ToolsetDirtyFields = Partial<Record<keyof ToolsetFormErrors, true>>;
 
@@ -73,20 +80,21 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
   onSaveSuccess,
   onSaveComplete,
   onBack,
+  onDirtyChange,
   buildMcpUrl,
   listToolNames,
   authActions,
   onOAuthLogin,
   onNotifySuccess,
   onNotifyError,
-  bucket,
-  FileManagerModal,
-  resolveIconUrl,
-  allowedMimeTypes,
-  maxFileSizeBytes,
+  avatarPicker,
   availableLocaleOptions,
+  formatLocaleLabel,
   onRefineDescription,
   labels,
+  colors,
+  typography,
+  isVersionReadOnly = false,
 }) => {
   const isEditMode = Boolean(toolsetId);
   const [draftToolsetId, setDraftToolsetId] = useState('');
@@ -98,8 +106,15 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
    * the Setup state below resets.
    */
   const [seed, setSeed] = useState({ initialForm, key: 0 });
+  /*
+   * The values unsaved changes are measured against: the seeded form, then
+   * whatever was last persisted. Reset in the same render as the re-seed so a
+   * new load never reads as an edit.
+   */
+  const [baselineForm, setBaselineForm] = useState(initialForm);
   if (seed.initialForm !== initialForm) {
     setSeed({ initialForm, key: seed.key + 1 });
+    setBaselineForm(initialForm);
   }
 
   const metadataInitialValues = useMemo(
@@ -108,7 +123,7 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
   );
   const metadata = useMetadataForm({
     initialValues: metadataInitialValues,
-    validationOptions: TOOLSET_METADATA_VALIDATION_OPTIONS,
+    validationOptions: METADATA_VALIDATION_OPTIONS,
     reseedKey: seed.key,
   });
   const {
@@ -125,6 +140,15 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
     () => ({ ...setupForm, ...metadataValues }),
     [setupForm, metadataValues],
   );
+
+  /* Covers Metadata and Setup alike: `form` carries both, seeded from the same object. */
+  const isDirty = useMemo(
+    () => JSON.stringify(form) !== JSON.stringify(baselineForm),
+    [form, baselineForm],
+  );
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   const [isSaving, setIsSaving] = useState(false);
   const [errors, setErrors] = useState<ToolsetFormErrors>({});
@@ -238,6 +262,9 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
         setDraftToolsetId(id);
       }
       lastPersistedFormRef.current = form;
+      /* The draft now holds every edit; reported at once, ahead of the login it precedes. */
+      setBaselineForm(form);
+      onDirtyChange?.(false);
       await onToolsetsChanged();
       return id;
     } catch {
@@ -246,7 +273,7 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
     } finally {
       setIsSaving(false);
     }
-  }, [form, persistedToolsetId, onPersist, onToolsetsChanged]);
+  }, [form, persistedToolsetId, onPersist, onToolsetsChanged, onDirtyChange]);
 
   const handleEnsureSaved = useCallback(
     async () => (await persistFormIfChanged()) ?? false,
@@ -292,19 +319,26 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
               validationLabels?.clientSecretRequired ??
               'Client secret is required';
           }
-          if (
-            data.auth.authorizationEndpoint?.trim() &&
-            !isValidEndpointUrl(data.auth.authorizationEndpoint)
-          ) {
+          if (!data.auth.authorizationEndpoint?.trim()) {
+            nextErrors.authorizationEndpoint =
+              validationLabels?.authorizationEndpointRequired ??
+              'Authorization endpoint is required';
+          } else if (!isValidEndpointUrl(data.auth.authorizationEndpoint)) {
             nextErrors.authorizationEndpoint =
               validationLabels?.endpointInvalid ?? 'Enter a valid http(s) URL';
           }
-          if (
-            data.auth.tokenEndpoint?.trim() &&
-            !isValidEndpointUrl(data.auth.tokenEndpoint)
-          ) {
+          if (!data.auth.tokenEndpoint?.trim()) {
+            nextErrors.tokenEndpoint =
+              validationLabels?.tokenEndpointRequired ??
+              'Token endpoint is required';
+          } else if (!isValidEndpointUrl(data.auth.tokenEndpoint)) {
             nextErrors.tokenEndpoint =
               validationLabels?.endpointInvalid ?? 'Enter a valid http(s) URL';
+          }
+          if (!isValidOAuthResource(data.auth.resource)) {
+            nextErrors.resource =
+              validationLabels?.resourceInvalid ??
+              'Enter an absolute URI without a fragment';
           }
         }
       }
@@ -326,6 +360,7 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
     try {
       const id = await onPersist(form, persistedToolsetId);
       if (!id) return;
+      setBaselineForm(form);
       await onToolsetsChanged();
       /*
        * Reported before the post-save auth attempt: the toolset is persisted at this
@@ -387,6 +422,14 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
       )
     : undefined;
 
+  const metadataLabels = useMemo(
+    () => ({
+      form: labels?.general?.form ?? DEFAULT_TOOLSET_METADATA_LABELS,
+      avatarPicker: labels?.general?.avatarPicker,
+    }),
+    [labels?.general?.form, labels?.general?.avatarPicker],
+  );
+
   const isSaveDisabled = useMemo(
     () => !isToolsetFormValid(form, isEditMode),
     [form, isEditMode],
@@ -437,7 +480,7 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
     ) {
       nextErrors.version =
         validationLabels?.versionInvalid ??
-        'Version must follow semantic versioning (e.g., 1.0.0)';
+        'Version may only contain letters, digits, dots, underscores, and dashes';
     }
     return nextErrors;
   }, [dirtyFields, errors, form, labels, metadataErrorCodes, validateSetup]);
@@ -474,18 +517,17 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
         cancelLabel: labels?.layout?.cancelLabel ?? 'Cancel',
       }}
       metadata={
-        <GeneralForm
-          form={form}
+        <MetadataForm
+          values={form}
           errors={visibleErrors}
-          bucket={bucket}
-          FileManagerModal={FileManagerModal}
-          resolveIconUrl={resolveIconUrl}
-          allowedMimeTypes={allowedMimeTypes}
-          maxFileSizeBytes={maxFileSizeBytes}
-          availableLocaleOptions={availableLocaleOptions}
           onChange={handleChange}
+          avatarPicker={avatarPicker}
+          availableLocaleOptions={availableLocaleOptions}
+          formatLocaleLabel={formatLocaleLabel}
           renderDescription={renderRefinableDescription}
-          labels={labels?.general}
+          labels={metadataLabels}
+          isVersionReadOnly={isVersionReadOnly}
+          versionReadOnlyTooltip={labels?.versionReadOnlyTooltip}
         />
       }
       setup={
@@ -505,6 +547,8 @@ export const ToolsetEditor: FC<ToolsetEditorProps> = ({
           onAuthChange={handleAuthChange}
           onEnsureSaved={handleEnsureSaved}
           labels={labels?.settings}
+          colors={colors?.settings}
+          typography={typography?.settings}
         />
       }
     />

@@ -3,6 +3,8 @@ import {
   DIAL_KIT_ICON_STROKE,
   ElementSize,
   GhostIconButton,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck, IconCopy, IconDownload } from '@tabler/icons-react';
 import { lazy, type FC, memo, type ReactNode, Suspense, useMemo } from 'react';
@@ -47,18 +49,22 @@ export interface MarkdownCodeBlockProps {
   theme?: CodeBlockTheme;
   /** Accessible label for the copy button. Defaults to `'Copy code'`. */
   copyLabel?: string;
-  /** Message announced through the block's `aria-live="polite"` region after a copy completes. The copy button's own accessible name stays `copyLabel`. Defaults to `'Copied!'`. */
+  /** Message announced through the block's polite kit `LiveRegion` after a copy completes. The copy button's own accessible name stays `copyLabel`. Defaults to `'Copied!'`. */
   copiedLabel?: string;
   /** Accessible label for the download button. Defaults to `'Download code'`. */
   downloadLabel?: string;
+  /** Accessible label for the scrollable code region. Defaults to `'Scrollable code'`. */
+  scrollRegionAriaLabel?: string;
   /** When true, hides the download button while still showing copy. Defaults to `false`. */
   hideDownload?: boolean;
   /** Extra classes applied to the outer container element. */
   containerClassName?: string;
   /** Extra classes applied to the sticky header bar. */
   headerClassName?: string;
-  /** Typography class for the `<code>` element (used when no language is detected). Defaults to `'dial-code-text'`. */
+  /** Typography class for the code text — the `<code>` element, plus the highlighted `<pre>` when a language is detected. Defaults to `'dial-code-text'`. */
   codeClassName?: string;
+  /** Whether the code keeps its own top padding below the header; `false` starts it right under the header. Defaults to `true`. */
+  hasContentTopPadding?: boolean;
   /** CSS class applied to the language label in the header. Defaults to `'dial-tiny-lead-semi-text'` plus the module's `.languageLabel` class (`--text-secondary`). */
   languageLabelClassName?: string;
   /** Header text shown in place of `language`, for blocks whose highlighting id is not the name to display (e.g. `bash` highlighted, `cURL` shown). Defaults to the `language` value. */
@@ -94,7 +100,9 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
     copyLabel = 'Copy code',
     copiedLabel = 'Copied!',
     downloadLabel = 'Download code',
+    scrollRegionAriaLabel = 'Scrollable code',
     hideDownload = false,
+    hasContentTopPadding = true,
     containerClassName,
     headerClassName,
     codeClassName = 'dial-code-text',
@@ -115,7 +123,7 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
     /* Rendered for language-less or oversized blocks, and as the Suspense
      * fallback while the syntax-highlighting engine loads. */
     const plainCode = (
-      <pre className="p-4">
+      <pre className={hasContentTopPadding ? 'p-4' : 'px-4 pt-0 pb-4'}>
         <code className={mergeClasses('whitespace-pre', codeClassName)}>
           {value}
         </code>
@@ -134,7 +142,7 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
       <div
         style={cssVars}
         className={mergeClasses(
-          'my-4 max-w-full rounded-xl border [overflow:clip]',
+          'my-4 max-w-full overflow-clip rounded-xl border',
           styles.container,
           isLightTheme && styles.containerLight,
           containerClassName,
@@ -205,6 +213,11 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
             'max-h-[60vh] overflow-auto',
           )}
           dir="ltr"
+          /* Code scrolls on both axes, so the region is always a named tab
+             stop: a keyboard user can scroll it with the arrow keys. */
+          role="region"
+          aria-label={scrollRegionAriaLabel}
+          tabIndex={0}
         >
           {language && canHighlight ? (
             <Suspense fallback={plainCode}>
@@ -215,11 +228,9 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
                   margin: 0,
                   borderRadius: 0,
                   background: 'transparent',
-                  fontSize: 14,
-                  lineHeight: 1.5,
-                  padding: '14px 16px',
-                  letterSpacing: 0,
+                  padding: hasContentTopPadding ? '14px 16px' : '0 16px 14px',
                 }}
+                className={codeClassName}
                 codeTagProps={{ className: codeClassName }}
               >
                 {value}
@@ -233,9 +244,9 @@ export const MarkdownCodeBlock: FC<MarkdownCodeBlockProps> = memo(
          * Copy success leaves no persistent visible text, so it is announced
          * here; the button keeps its stable `copyLabel` accessible name.
          */}
-        <span role="status" aria-live="polite" className="sr-only">
+        <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
           {isCopied ? copiedLabel : ''}
-        </span>
+        </LiveRegion>
       </div>
     );
   },

@@ -2,6 +2,7 @@ import {
   SEMVER_VERSION_PATTERN,
   type DeploymentCreationFormValues,
 } from '@epam/ai-dial-builder-form';
+import { CatalogCreationType } from '@epam/ai-dial-chat-api-client';
 import type {
   CreateApplicationBodyDto,
   DeploymentItemDto,
@@ -20,10 +21,16 @@ import {
 } from '../../../constants/custom-apps';
 import { ToolsetEditorQuery } from '../../../constants/toolsets';
 import {
+  ButtonsI18nKeys,
+  CatalogI18nKeys,
   CustomAppI18nKeys,
   EditorI18nKeys,
 } from '../../../constants/translation-keys';
-import type { ApplicationSetupErrors } from '../../../models/application-editor';
+import type {
+  ApplicationCreateOptions,
+  ApplicationEditorContext,
+  ApplicationSetupErrors,
+} from '../../../models/application-editor';
 import type { CustomAppFormData } from '../../../models/custom-apps';
 import {
   createApplication,
@@ -35,9 +42,13 @@ import {
   ApplicationEditorKind,
 } from '../../../types/application-editor';
 import { NotifiableEntity } from '../../../types/entity-notification';
-import { defineApplicationEditor } from '../../../utils/application-editor';
+import {
+  defineApplicationEditor,
+  toFolderPathField,
+} from '../../../utils/application-editor';
 import { PRIMARY_LOCALE } from '../../../utils/locale';
 import CustomAppSetup from '../setup/CustomAppSetup';
+import { getVersionLockedInEditMode } from './schemaDefinitionHelpers';
 
 const getMetadataLabelOverrides = (t: TFunction) => ({
   name: {
@@ -97,6 +108,8 @@ const toLocaleFields = (metadata: DeploymentCreationFormValues) => {
 const create = async (
   metadata: DeploymentCreationFormValues,
   setup: CustomAppFormData,
+  _ctx: ApplicationEditorContext,
+  options?: ApplicationCreateOptions,
 ) => {
   const appProperties: Record<string, unknown> = {
     endpoint: setup.completionUrl,
@@ -119,6 +132,7 @@ const create = async (
     topics: metadata.topics,
     applicationProperties: appProperties,
     ...toLocaleFields(metadata),
+    ...toFolderPathField(options),
   };
   return createApplication(body);
 };
@@ -150,6 +164,7 @@ const update = (
 /** Schema-less custom application: Metadata plus completion URL, features, and attachment limits. */
 export const customAppDefinition = defineApplicationEditor<CustomAppFormData>({
   kind: ApplicationEditorKind.CustomApp,
+  creationType: CatalogCreationType.CustomApp,
   notifiableEntity: NotifiableEntity.CustomApp,
   createStrategy: ApplicationCreateStrategy.AllAtOnce,
   idQueryParam: ToolsetEditorQuery.Id,
@@ -172,9 +187,11 @@ export const customAppDefinition = defineApplicationEditor<CustomAppFormData>({
   confirmation: {
     titleKey: CustomAppI18nKeys.SaveConfirmTitle,
     descriptionKey: CustomAppI18nKeys.SaveConfirmDescription,
-    confirmKey: CustomAppI18nKeys.SaveConfirmLabel,
+    confirmKey: ButtonsI18nKeys.Save,
   },
   Setup: CustomAppSetup,
   create,
   update,
+  savePanel: { getTypeLabel: (ctx) => ctx.t(CatalogI18nKeys.CreateCustomApp) },
+  getMetadataFieldState: getVersionLockedInEditMode,
 });

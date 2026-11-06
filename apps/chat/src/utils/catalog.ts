@@ -12,6 +12,67 @@ const SEARCH_ENTITY_KEYS: Record<CatalogEntityType, CatalogI18nKeys> = {
   [CatalogEntityType.Skill]: CatalogI18nKeys.SearchEntitySkills,
 };
 
+/** Capitalised plural noun naming each entity type at the start of a sentence. */
+const TAB_ENTITY_KEYS: Record<CatalogEntityType, CatalogI18nKeys> = {
+  [CatalogEntityType.Model]: CatalogI18nKeys.TabModels,
+  [CatalogEntityType.Agent]: CatalogI18nKeys.TabApplications,
+  [CatalogEntityType.Toolset]: CatalogI18nKeys.TabToolsets,
+  [CatalogEntityType.Prompt]: CatalogI18nKeys.TabPrompts,
+  [CatalogEntityType.Skill]: CatalogI18nKeys.TabSkills,
+};
+
+/**
+ * Returns `entityTextKey` interpolated with the active tab's entity noun from
+ * `nounKeys`, or `genericKey` for an unknown tab.
+ */
+const getCatalogEntityText = (
+  activeTab: string,
+  t: TFunction,
+  nounKeys: Record<CatalogEntityType, CatalogI18nKeys>,
+  entityTextKey: CatalogI18nKeys,
+  genericKey: CatalogI18nKeys,
+): string => {
+  const nounKey = nounKeys[activeTab as CatalogEntityType];
+  if (nounKey == null) return t(genericKey);
+  return t(entityTextKey, { entities: t(nounKey) });
+};
+
+/** Returns the Catalog's "no results" heading naming the active tab's entity ("No models found"). */
+export const getCatalogNoResultsTitle = (
+  activeTab: string,
+  t: TFunction,
+): string =>
+  getCatalogEntityText(
+    activeTab,
+    t,
+    SEARCH_ENTITY_KEYS,
+    CatalogI18nKeys.NoResultsEntityTitle,
+    CatalogI18nKeys.NoResultsTitle,
+  );
+
+/** Returns the Catalog's empty-tab heading naming the active tab's entity ("No models yet"). */
+export const getCatalogEmptyTitle = (activeTab: string, t: TFunction): string =>
+  getCatalogEntityText(
+    activeTab,
+    t,
+    SEARCH_ENTITY_KEYS,
+    CatalogI18nKeys.EmptyEntityTitle,
+    CatalogI18nKeys.EmptyTitle,
+  );
+
+/** Returns the Catalog's empty-tab description naming the active tab's entity ("Models will appear here…"). */
+export const getCatalogEmptyDescription = (
+  activeTab: string,
+  t: TFunction,
+): string =>
+  getCatalogEntityText(
+    activeTab,
+    t,
+    TAB_ENTITY_KEYS,
+    CatalogI18nKeys.EmptyEntityDescription,
+    CatalogI18nKeys.EmptyDescription,
+  );
+
 /**
  * Returns the Catalog toolbar's search placeholder naming only `entityTypes`,
  * or `basic.searchPlaceholder` ("Search...") when the list is empty.
@@ -35,6 +96,19 @@ export const getCatalogSearchPlaceholder = (
 };
 
 /**
+ * Returns the Catalog's "My" empty-state heading naming the active tab's
+ * entity ("No personal agents yet"), or a generic one for an unknown tab.
+ */
+export const getCatalogMyAppsEmptyTitle = (
+  activeTab: string,
+  t: TFunction,
+): string => {
+  const entityKey = SEARCH_ENTITY_KEYS[activeTab as CatalogEntityType];
+  if (entityKey == null) return t(CatalogI18nKeys.MyAppsEmptyTitleGeneric);
+  return t(CatalogI18nKeys.MyAppsEmptyTitle, { entities: t(entityKey) });
+};
+
+/**
  * Returns the skill Overview tab's translated section labels, shared by the
  * Catalog page's details pipeline and the chat route's skill details side panel.
  */
@@ -44,11 +118,8 @@ export const buildSkillOverviewLabels = (
   whenToUseLabel: t(CatalogI18nKeys.DetailsSkillWhenToUse),
   allowedToolsLabel: t(CatalogI18nKeys.DetailsSkillAllowedTools),
   bundledResourcesLabel: t(CatalogI18nKeys.DetailsSkillBundledResources),
-  specificationSectionTitle: t(
-    CatalogI18nKeys.DetailsSkillSpecificationSection,
-  ),
+  specificationSectionTitle: t(CatalogI18nKeys.DetailsSpecificationSection),
   authorLabel: t(CatalogI18nKeys.DetailsSkillAuthor),
   updatedLabel: t(CatalogI18nKeys.DetailsSkillUpdated),
   fileCountLabel: t(CatalogI18nKeys.DetailsSkillFileCount),
-  detailsSectionTitle: t(CatalogI18nKeys.DetailsSkillSection),
 });

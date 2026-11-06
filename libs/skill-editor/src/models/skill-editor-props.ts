@@ -64,6 +64,8 @@ export interface SkillFileUploadCandidate {
   file: File;
   /** Resolved relative path (`webkitRelativePath` falling back to `File.name`, `/`-normalized). */
   path: string;
+  /** Set when the user chose to replace the file already at `path`; the commit then overwrites it instead of adding a node. */
+  replacesExisting?: boolean;
 }
 
 /** Host validation outcome for one staged candidate. */
@@ -161,18 +163,22 @@ export interface SkillEditorLabels extends TextRefinementLabels {
   filesTreeAriaLabel?: string;
   /** Label of the Files pane's Add dropdown trigger. Defaults to `'Add'`. */
   addLabel?: string;
-  /** Add-menu entry that creates a folder inline. Defaults to `'Create folder'`. */
+  /** Add-menu entry that creates a folder — inline on desktop, in a dialog of the same title below the `desktop` breakpoint. Defaults to `'Create folder'`. */
   createFolderLabel?: string;
+  /** Name field label of the mobile Create folder dialog. Defaults to `'Name'`. */
+  createFolderNameLabel?: string;
+  /** Name field placeholder of the mobile Create folder dialog. Defaults to `'Enter folder name'`. */
+  createFolderNamePlaceholder?: string;
+  /** Accessible label of the mobile Create folder dialog's close control. Defaults to `'Close'`. */
+  createFolderCloseAriaLabel?: string;
+  /** Confirm button label of the mobile Create folder dialog. Defaults to `'Create'`. */
+  createFolderConfirmLabel?: string;
   /** Add-menu entry that opens the upload dialog for device files. Defaults to `'Upload files from device'`. */
   uploadFilesLabel?: string;
   /** Add-menu entry that opens the upload dialog for a `.zip` archive. Defaults to `'Upload archive from device'`. */
   uploadArchiveLabel?: string;
   /** Add-menu entry that opens the host's file-system picker. Defaults to `'Open DIAL file system'`. */
   openFileSystemLabel?: string;
-  /** Folder context-menu submenu that adds inside the folder. Defaults to `'Add child'`. */
-  addChildLabel?: string;
-  /** Node context-menu submenu that adds next to the node. Defaults to `'Add sibling'`. */
-  addSiblingLabel?: string;
   /** Node context-menu action that removes the node. Defaults to `'Delete'`. */
   deleteLabel?: string;
   /** Name prefilled in a folder being created inline. Defaults to `'New folder'`. */
@@ -203,6 +209,8 @@ export interface SkillEditorLabels extends TextRefinementLabels {
   nameLabel?: string;
   /** Name field placeholder. Defaults to `'good-morning-breakfast'`. */
   namePlaceholder?: string;
+  /** Tooltip over the Name field while it is read-only. Defaults to `"The skill name can't be changed after creation"`. */
+  nameReadOnlyTooltip?: string;
   /** Name field helper text. Defaults to `"Lowercase letters and hyphens only, no spaces. We'll reformat automatically if needed."`. */
   nameCaption?: string;
   /** Description field label. Defaults to `'Description'`. */
@@ -227,6 +235,20 @@ export interface SkillEditorLabels extends TextRefinementLabels {
   loadingAriaLabel?: string;
   /** Accessible label of the spinner shown while the Instructions Markdown editor's chunk is loading. Defaults to `'Loading'`. */
   instructionsLoadingAriaLabel?: string;
+  /** Label of the folder preview's root breadcrumb, which returns to `SKILL.md`. Defaults to `'Skill'`. */
+  folderPreviewRootLabel?: string;
+  /** Accessible name of the folder preview's breadcrumb trail. Defaults to `'Folder path'`. */
+  folderPreviewBreadcrumbAriaLabel?: string;
+  /** Accessible name of the folder preview's "show hidden path segments" button, which appears once the trail is long. Defaults to `'Show hidden path segments'`. */
+  folderPreviewOverflowAriaLabel?: string;
+  /** Accessible name of the folder preview's list of entries. Defaults to `'Folder content'`. */
+  folderPreviewListAriaLabel?: string;
+  /** Headline of the empty-folder state. Defaults to `'This folder is empty'`. */
+  folderEmptyTitle?: string;
+  /** Secondary line of the empty-folder state. Defaults to `'Use Add to upload files or create a subfolder.'`. */
+  folderEmptyDescription?: string;
+  /** Item count shown on a folder row in the preview, given the count. Defaults to `'1 item'` or `'n items'`. */
+  folderItemCountLabel?: (count: number) => string;
   /** Note shown in the main pane when a supporting file (not `SKILL.md` or a folder) is selected. Defaults to a sentence explaining content isn't editable here. */
   supportingFileNote?: string;
   /** Label of the "Reload latest" button rendered next to the host-supplied `conflict.message` in the conflict state. Defaults to `'Reload latest'`. */
@@ -241,6 +263,22 @@ export interface SkillEditorLabels extends TextRefinementLabels {
   uploadDropZoneMobileLabel?: string;
   /** Accessible label of the drop zone / native-picker trigger. Defaults to `'Upload files'`. */
   uploadDropZoneAriaLabel?: string;
+  /** Secondary drop-zone line, e.g. the accepted formats. Hidden by default. */
+  uploadDropZoneDescription?: string;
+  /** Secondary archive-mode drop-zone line, e.g. the accepted formats. Hidden by default. */
+  uploadArchiveDropZoneDescription?: string;
+  /** Title of the step that asks how to resolve an upload whose path already holds a file. Defaults to `'Replace or duplicate it?'`. */
+  uploadConflictTitle?: string;
+  /** Builds that step's message, given the conflicting path. Defaults to a sentence naming the path. */
+  uploadConflictMessage?: (path: string) => string;
+  /** Option that overwrites the existing file. Defaults to `'Replace'`. */
+  uploadConflictReplaceLabel?: string;
+  /** Option that keeps both files, staging the upload as `name (n).ext`. Defaults to `'Duplicate'`. */
+  uploadConflictDuplicateLabel?: string;
+  /** Confirm button label of that step. Defaults to `'Confirm'`. */
+  uploadConflictConfirmLabel?: string;
+  /** Note on a staged row that will overwrite an existing file. Defaults to `'Will replace the existing file'`. */
+  uploadReplaceRowNote?: string;
   /** Builds the accessible label of a staged row's remove control, given its path. Defaults to a sentence naming the path. */
   uploadRemoveCandidateLabel?: (path: string) => string;
   /** Explanatory copy on a manifest-kind staged row. Defaults to a sentence explaining it will populate/replace the Skill's metadata. */
@@ -249,7 +287,7 @@ export interface SkillEditorLabels extends TextRefinementLabels {
   uploadConfirmLabel?: string;
   /** Cancel button label in the upload dialog. Defaults to `'Cancel'`. */
   uploadCancelLabel?: string;
-  /** Prefix announced in the `aria-live` region when a batch-level error appears. Defaults to `'Upload error: '`. */
+  /** Prefix announced in the `aria-live` region before each batch-level or staged-row error. Defaults to `'Upload error: '`. */
   uploadBatchErrorAriaPrefix?: string;
   /** Title shown in the full-surface overlay while a file-bearing drag is over the editor and the upload dialog isn't open yet. Defaults to `'Upload files'`. */
   dropOverlayTitle?: string;
@@ -274,12 +312,32 @@ export interface SkillEditorColors {
   refineActionText?: string;
   /** Refinement error color. Defaults to --text-error. */
   refineErrorText?: string;
-  /** Color of the "Files" heading and of the Metadata and Setup section headings. Defaults to `--text-primary`. */
+  /** Color of the "Files" heading, the Metadata and Setup section headings, and the mobile "Editing file" file name. Defaults to `--text-primary`. */
   title?: string;
-  /** Color of the hand-rendered Instructions field label. Defaults to `--text-secondary`. */
+  /** Color of the hand-rendered Instructions field label and of the mobile "Editing file" caption and caret. Defaults to `--text-secondary`. */
   helperText?: string;
+  /** Background of the mobile "Editing file" card. Defaults to `--bg-layer-sunken`. */
+  filesCardBackground?: string;
+  /** Border color of the mobile "Editing file" card. Defaults to `--stroke-tertiary`. */
+  filesCardBorder?: string;
+  /** Background of the mobile upload and create-folder sheet footer. Defaults to `--bg-layer-raised`. */
+  dialogFooterBackground?: string;
+  /** Top border color of the mobile upload and create-folder sheet footer. Defaults to `--stroke-tertiary`. */
+  dialogFooterBorder?: string;
   /** Border color of the layout header row and Files sidebar divider. Defaults to `--stroke-tertiary`. */
   border?: string;
+  /** Color of the upload icon on the file-drop overlay. Defaults to `--text-accent-primary`. */
+  dropOverlayIcon?: string;
+  /** Color of the file tree Add-menu entry icons. Defaults to `--text-secondary`. */
+  menuIcon?: string;
+  /** Border color of the upload dialog's drop zone while every staged file is invalid. Defaults to `--stroke-error`. */
+  uploadInvalidDropZoneBorder?: string;
+  /** Border color of each staged row in the upload dialog. Defaults to `--stroke-tertiary`. */
+  uploadRowBorder?: string;
+  /** Border color of the folder preview's list and rows. Defaults to `--stroke-tertiary`. */
+  folderRowBorder?: string;
+  /** Background of a folder preview row on hover and keyboard focus. Defaults to `--bg-layer-sunken`. */
+  folderRowHoverBackground?: string;
 }
 
 /** Typography class overrides for `SkillEditor`. */
@@ -292,8 +350,20 @@ export interface SkillEditorTypography {
   helperTextClassName?: string;
   /** Color class applied to the file tree "Delete" context-menu icon. Unset by default, so the icon takes the item's danger color. */
   removeIconClassName?: string;
-  /** Color class applied to the file tree Add-menu entry icons. Defaults to `'text-secondary'`. */
-  menuIconClassName?: string;
+  /** Typography class applied to the mobile "Editing file" caption. Defaults to `'dial-tiny-lead-text'`. */
+  editingFileLabelClassName?: string;
+  /** Typography class applied to the mobile "Editing file" file name. Defaults to `'dial-small-text'`. */
+  editingFileNameClassName?: string;
+  /** Typography class applied to the upload dialog's Replace-or-duplicate message. Defaults to `'dial-small-text'`. */
+  uploadMessageClassName?: string;
+  /** Typography and color classes merged over a staged upload row's size and notes, which render `'dial-tiny-text text-secondary'` when unset. */
+  uploadRowCaptionClassName?: string;
+  /** Typography class applied to the file-drop overlay title. Defaults to `'dial-h3-text'`. */
+  dropOverlayTitleClassName?: string;
+  /** Typography class applied to the file-drop overlay subtitle. Defaults to `'dial-small-text'`. */
+  dropOverlaySubtitleClassName?: string;
+  /** Typography class applied to the item count on a folder preview row. Defaults to `'dial-tiny-text'`. */
+  folderItemCountClassName?: string;
 }
 
 /** Grouped style overrides for `SkillEditor`. */
@@ -348,11 +418,11 @@ export interface SkillEditorProps {
   /** Called when the conflict state's "Reload latest" control is activated. Required when `conflict` can be set. */
   onReloadLatest?: () => void;
   /**
-   * When `true`, the Name field renders read-only — its value is still
+   * When `true`, the Name field renders disabled — its value is still
    * included in submitted values unchanged. The host sets this in edit mode,
    * since DIAL Core has no rename/move operation for a skill; the library
    * itself has no notion of "edit mode" and infers no policy from this flag
-   * beyond rendering the field read-only.
+   * beyond rendering the field disabled.
    */
   isNameReadOnly?: boolean;
   /**
@@ -387,6 +457,14 @@ export interface SkillEditorProps {
    * `labels.supportingFileNote` when omitted.
    */
   supportingFileContent?: ReactNode;
+  /**
+   * Host-rendered content of an Aside section in an extra column at the
+   * inline end, below the header, on desktop; stacked after the form on
+   * mobile/tablet. The library renders it verbatim with no knowledge of what
+   * it contains. Not rendered while the skill is loading or failed to load.
+   * Omit for the default layout.
+   */
+  asideData?: ReactNode;
   /** Called with the current values when the form is submitted. */
   onSubmit: (values: SkillEditorValues) => void;
   /** Called when the form is dismissed without saving. */

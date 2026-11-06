@@ -5,7 +5,7 @@ import {
   sanitizeAnnouncementMessageHtml,
   type AnnouncementContent,
 } from '@epam/ai-dial-chat-hooks';
-import { mergeClasses } from '@epam/ai-dial-chat-shared';
+import { mergeClasses, useIsTextClipped } from '@epam/ai-dial-chat-shared';
 import {
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
@@ -18,7 +18,6 @@ import { useTranslation } from 'react-i18next';
 import { AnnouncementBannerI18nKeys } from '../../constants/translation-keys';
 import { useAppConfig } from '../../context/AppConfigContext';
 import { useAnnouncementDismissal } from '../../hooks/useAnnouncementDismissal/useAnnouncementDismissal';
-import { useIsTextClipped } from '../../hooks/useIsTextClipped/useIsTextClipped';
 import { UserConfigStatus } from '../../types/user-config-status';
 import AnnouncementsPopover from '../AnnouncementsPopover/AnnouncementsPopover';
 
@@ -162,7 +161,7 @@ const AnnouncementBanner: FC<Props> = ({ className }) => {
             <span
               ref={descriptionRef}
               className={mergeClasses(
-                'min-w-0 [&_a:hover]:opacity-75 [&_a]:text-accent [&_a]:underline',
+                'min-w-0 [&_a]:text-accent [&_a]:underline [&_a:hover]:opacity-75',
                 !isExpanded && 'flex-1 truncate',
               )}
               // eslint-disable-next-line react/no-danger
@@ -222,7 +221,7 @@ const AnnouncementBanner: FC<Props> = ({ className }) => {
             are coloured and underlined here rather than via operator-authored
             style attributes, which the sanitizer strips. */}
         <div
-          className="dial-small-paragraph-semi-text text-center [&>p+p]:mt-1 [&_a:hover]:opacity-75 [&_a]:text-accent [&_a]:underline"
+          className="dial-small-paragraph-semi-text text-center [&_a]:text-accent [&_a]:underline [&_a:hover]:opacity-75 [&>p+p]:mt-1"
           // eslint-disable-next-line react/no-danger -- HTML is sanitized by DOMPurify before use
           dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
         />

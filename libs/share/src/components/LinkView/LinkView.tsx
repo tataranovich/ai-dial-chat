@@ -4,6 +4,8 @@ import {
   DIAL_KIT_ICON_STROKE,
   GhostIconButton,
   Input,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck, IconCopy } from '@tabler/icons-react';
 import { FC } from 'react';
@@ -46,7 +48,7 @@ export const LinkView: FC<LinkViewProps> = ({
         value={url}
         aria-label={linkAriaLabel}
         containerClassName="min-w-0 flex-1"
-        wrapperClassName="border-0 bg-transparent px-0 outline-none"
+        wrapperClassName="border-0 bg-transparent px-0 outline-hidden"
       />
       <GhostIconButton
         icon={
@@ -72,8 +74,8 @@ export const LinkView: FC<LinkViewProps> = ({
       />
     </div>
     {/* Screen-reader-only announcement: button label change is visual-only. */}
-    <span role="status" aria-live="polite" className="sr-only">
+    <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
       {isCopied ? copiedButtonLabel : ''}
-    </span>
+    </LiveRegion>
   </>
 );

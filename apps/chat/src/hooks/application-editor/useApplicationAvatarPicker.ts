@@ -1,16 +1,14 @@
-import type {
-  AvatarPickerModalLabels,
-  MetadataFormAvatarPicker,
+import {
+  AVATAR_ALLOWED_MIME_TYPES,
+  AVATAR_MAX_FILE_SIZE_BYTES,
+  type AvatarPickerModalLabels,
+  type MetadataFormAvatarPicker,
 } from '@epam/ai-dial-builder-form';
 import { dialFileToAttachment } from '@epam/ai-dial-chat-hooks';
 import type { AttachResult } from '@epam/ai-dial-chat-shared';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import DialFileManagerModal from '../../components/DialFileManagerModal/DialFileManagerModal';
-import {
-  AVATAR_ALLOWED_MIME_TYPES,
-  AVATAR_MAX_FILE_SIZE_BYTES,
-} from '../../constants/files';
+import AvatarFileManagerModal from '../../components/AvatarFileManagerModal/AvatarFileManagerModal';
 import {
   BasicI18nKeys,
   ButtonsI18nKeys,
@@ -60,7 +58,7 @@ export const useApplicationAvatarPicker = (): ApplicationAvatarPicker => {
   const avatarPicker = useMemo<MetadataFormAvatarPicker>(
     () => ({
       bucket,
-      FileManagerModal: DialFileManagerModal,
+      FileManagerModal: AvatarFileManagerModal,
       resolveIconUrl,
       resolveAttachedIconUrl,
       allowedMimeTypes: AVATAR_ALLOWED_MIME_TYPES,
@@ -76,7 +74,7 @@ export const useApplicationAvatarPicker = (): ApplicationAvatarPicker => {
       emptyTitle: t(DialFileManagerI18nKeys.Empty),
       emptyDescription: '',
       errorMessage: t(DialFileManagerI18nKeys.Error),
-      retryLabel: t(DialFileManagerI18nKeys.Retry),
+      retryLabel: t(ButtonsI18nKeys.Retry),
       hiddenFilesLabel: t(DialFileManagerI18nKeys.HiddenFiles),
       showHiddenFilesLabel: t(DialFileManagerI18nKeys.ShowHiddenFiles),
       hideHiddenFilesLabel: t(DialFileManagerI18nKeys.HideHiddenFiles),

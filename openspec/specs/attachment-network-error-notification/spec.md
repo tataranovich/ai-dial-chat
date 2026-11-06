@@ -8,7 +8,7 @@ Specifies the "Network unavailable" notification shown when attachment uploads f
 
 ### Requirement: Show "Network unavailable" notification when uploads fail offline
 
-When one or more attachment uploads fail and `navigator.onLine` is `false` at the time of failure, the app SHALL show a single top-center error notification listing every filename that failed in the same burst. The burst is coalesced by a debounce owned by the upload hook, defaulting to 700 ms and overridable per host through its `debounceMs` option.
+When one or more attachment uploads fail and `navigator.onLine` is `false` at the time of failure, the app SHALL show a single error notification listing every filename that failed in the same burst. The burst is coalesced by a debounce owned by the upload hook, defaulting to 700 ms and overridable per host through its `debounceMs` option.
 
 The notification SHALL have:
 - **title**: i18n key `attachments.networkError.title` → "Network unavailable"
@@ -22,7 +22,7 @@ The host turns the callback into UI: `buildNetworkUploadErrorNotification(filena
 
 Failed cards SHALL retain their retry and remove buttons so the user can reattempt once the connection is restored.
 
-Every surface that uploads attachments SHALL wire the callback: the existing-conversation page (`Conversation.tsx`), the new-conversation composer (`NewConversationComposer.tsx`), and the Apps-editor preview chat (`AppPreviewChat.tsx`). Each supplies its own `handleNetworkUploadError`, so a surface that mounts its own composer cannot silently drop the notification. `NewConversationComposer.tsx` passes it straight to `useAttachmentUpload` as `onNetworkError` (with `debounceMs: NETWORK_ERROR_DEBOUNCE_MS` from `apps/chat/src/constants/upload.ts`, also 700 ms); `Conversation.tsx` and `AppPreviewChat.tsx` pass it to `useConversationHandlers` as `showNetworkError`, which forwards it to its internal `useAttachmentUpload` as `onNetworkError`.
+Every surface that uploads attachments SHALL wire the callback: the existing-conversation page (`Conversation.tsx`), the new-conversation composer (`NewConversationComposer.tsx`), and the Apps-editor preview chat (`AppPreviewChat.tsx`). Each supplies its own `handleNetworkUploadError`, so a surface that mounts its own composer cannot silently drop the notification. `NewConversationComposer.tsx` passes it straight to `useAttachmentUpload` as `onNetworkError` and relies on the hook's default 700 ms `debounceMs`; `Conversation.tsx` and `AppPreviewChat.tsx` pass it to `useConversationHandlers` as `showNetworkError`, which forwards it to its internal `useAttachmentUpload` as `onNetworkError`.
 
 **i18n keys added:**
 - `attachments.networkError.title`
@@ -30,7 +30,7 @@ Every surface that uploads attachments SHALL wire the callback: the existing-con
 
 **Feature flag**: none — always active.
 
-**RTL**: the notification renders inside the existing `NotificationContainer` (top-center portal with `left-1/2 -translate-x-1/2`, a direction-agnostic centering pair); no directional changes needed.
+**Placement / RTL**: the notification renders inside the shared `NotificationContainer`, whose bottom-end logical anchor is owned by the `notification-placement` capability; this surface adds no placement or directional classes of its own.
 
 **Accessibility**: `Notification` already carries `role="alert"` / `aria-live`; no additional ARIA required.
 

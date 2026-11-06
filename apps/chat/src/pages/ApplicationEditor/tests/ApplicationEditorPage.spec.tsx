@@ -1,15 +1,22 @@
+import { CatalogCreationType } from '@epam/ai-dial-chat-api-client';
 import { NotificationVariant } from '@epam/ai-dial-ui-kit';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Route, Routes } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ButtonsI18nKeys,
+  CatalogI18nKeys,
   CustomAppI18nKeys,
   EditorI18nKeys,
 } from '../../../constants/translation-keys';
 import { useNotification } from '../../../context/NotificationContext';
+import {
+  resetCatalogCreationState,
+  setCatalogCreationState,
+} from '../../../context/tests/catalog-creation-state';
 import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
+import { renderWithLeaveGuard } from '../../../hooks/unsaved-changes/tests/render-with-leave-guard';
 import type {
   ApplicationEditorDefinition,
   ApplicationSetupProps,
@@ -61,6 +68,7 @@ const FakeSetupForm = ({
 
 const fakeDefinition = defineApplicationEditor<FakeSetup>({
   kind: FAKE_KIND,
+  creationType: CatalogCreationType.CustomApp,
   notifiableEntity: NotifiableEntity.CustomApp,
   createStrategy: ApplicationCreateStrategy.AllAtOnce,
   idQueryParam: 'id',
@@ -90,9 +98,17 @@ const fakeDefinition = defineApplicationEditor<FakeSetup>({
   update: mockUpdate,
 });
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({ status: 'ready', config: {} }),
-}));
+vi.mock('../../../context/AppConfigContext', async () => {
+  const { useCatalogCreationState } =
+    await import('../../../context/tests/catalog-creation-state');
+  return {
+    useAppConfig: () => ({
+      status: 'ready',
+      config: { additionalContentLocales: [] },
+      ...useCatalogCreationState(),
+    }),
+  };
+});
 vi.mock('../definitions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../definitions')>();
   return {
@@ -127,16 +143,15 @@ vi.mock(
 );
 
 const renderFakeKind = () =>
-  render(
-    <MemoryRouter initialEntries={['/fake-editor']}>
-      <Routes>
-        <Route
-          path="/fake-editor"
-          element={<ApplicationEditorPage kind={FAKE_KIND} />}
-        />
-        <Route path={ROUTES.Catalog} element={<div>Catalog</div>} />
-      </Routes>
-    </MemoryRouter>,
+  renderWithLeaveGuard(
+    <Routes>
+      <Route
+        path="/fake-editor"
+        element={<ApplicationEditorPage kind={FAKE_KIND} />}
+      />
+      <Route path={ROUTES.Catalog} element={<div>Catalog</div>} />
+    </Routes>,
+    ['/fake-editor'],
   );
 
 /* The layout renders its actions in the header and again in the mobile bar; take the header copy. */
@@ -147,6 +162,7 @@ describe('ApplicationEditorPage', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCatalogCreationState();
     vi.mocked(useNotification).mockReturnValue(
       createNotificationContextValue(mockShowNotification),
     );
@@ -167,6 +183,25 @@ describe('ApplicationEditorPage', () => {
       screen.getByLabelText(EditorI18nKeys.NameLabel, { exact: false }),
     ).toBeTruthy();
     expect(screen.getByLabelText('fake-endpoint')).toBeTruthy();
+  });
+
+  it("checks a new application against its kind's creation type", () => {
+    setCatalogCreationState({
+      allowedTypes: Object.values(CatalogCreationType).filter(
+        (type) => type !== CatalogCreationType.CustomApp,
+      ),
+      restrictedSchemaIds: [],
+    });
+    renderFakeKind();
+
+    expect(
+      screen.getByRole('heading', {
+        level: 1,
+        name: CatalogI18nKeys.CreationDenied,
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('fake-endpoint')).toBeNull();
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it('creates the fake kind with its metadata and setup, confirms it and returns', async () => {
@@ -245,6 +280,81 @@ describe('ApplicationEditorPage', () => {
   });
 });
 
+describe('ApplicationEditorPage Metadata column resizing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    vi.mocked(useNotification).mockReturnValue(
+      createNotificationContextValue(mockShowNotification),
+    );
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  const getHandle = () =>
+    screen.getByRole('separator', {
+      name: EditorI18nKeys.ResizeHandleAriaLabel,
+    });
+
+  it('opens at the default width', () => {
+    renderFakeKind();
+
+    expect(getHandle().getAttribute('aria-valuenow')).toBe('400');
+  });
+
+  it('does not restore a width stored by an earlier visit', () => {
+    localStorage.setItem('applicationEditorMetadataWidth', JSON.stringify(520));
+
+    renderFakeKind();
+
+    expect(getHandle().getAttribute('aria-valuenow')).toBe('400');
+  });
+
+  it('sends the same create payload after the column was resized', async () => {
+    mockCreate.mockResolvedValue({ id: 'new-id' });
+    renderFakeKind();
+
+    fireEvent.keyDown(getHandle(), { key: 'End' });
+    await userEvent.type(
+      screen.getByLabelText(EditorI18nKeys.NameLabel, { exact: false }),
+      'Fake app',
+    );
+    await userEvent.type(
+      screen.getByLabelText('fake-endpoint'),
+      'https://x.test',
+    );
+    await userEvent.click(getAction(ButtonsI18nKeys.Create));
+
+    await screen.findByText('Catalog');
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Fake app' }),
+      { endpoint: 'https://x.test' },
+      expect.objectContaining({ searchParams: expect.any(URLSearchParams) }),
+    );
+  });
+
+  it('applies the width chosen with the keyboard without persisting it', () => {
+    renderFakeKind();
+
+    fireEvent.keyDown(getHandle(), { key: 'ArrowRight' });
+
+    expect(getHandle().getAttribute('aria-valuenow')).toBe('416');
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('opens at the default width again after remounting the editor', () => {
+    const { unmount } = renderFakeKind();
+    fireEvent.keyDown(getHandle(), { key: 'End' });
+    unmount();
+
+    renderFakeKind();
+
+    expect(getHandle().getAttribute('aria-valuenow')).toBe('400');
+  });
+});
+
 describe('APPLICATION_EDITOR_DEFINITIONS', () => {
   it('registers every kind, with only the toolset rendering its own page', async () => {
     const { APPLICATION_EDITOR_DEFINITIONS } =
@@ -262,5 +372,46 @@ describe('APPLICATION_EDITOR_DEFINITIONS', () => {
       false,
     );
     expect(quickApp && isApplicationEditorPageDefinition(quickApp)).toBe(false);
+  });
+
+  it('checks each kind against its own creation type', async () => {
+    const { APPLICATION_EDITOR_DEFINITIONS } =
+      await vi.importActual<typeof import('../definitions')>('../definitions');
+
+    expect(
+      Object.fromEntries(
+        Object.entries(APPLICATION_EDITOR_DEFINITIONS).map(
+          ([kind, definition]) => [kind, definition.creationType],
+        ),
+      ),
+    ).toEqual({
+      [ApplicationEditorKind.Toolset]: CatalogCreationType.Toolset,
+      [ApplicationEditorKind.CustomApp]: CatalogCreationType.CustomApp,
+      [ApplicationEditorKind.QuickApp]: CatalogCreationType.SchemaApp,
+      [ApplicationEditorKind.SchemaApp]: CatalogCreationType.SchemaApp,
+    });
+  });
+
+  it('opens every form-based kind with an empty name and version 1.0.0', async () => {
+    const { APPLICATION_EDITOR_DEFINITIONS } =
+      await vi.importActual<typeof import('../definitions')>('../definitions');
+    const definitions = APPLICATION_EDITOR_DEFINITIONS as Partial<
+      Record<ApplicationEditorKind, ApplicationEditorDefinition>
+    >;
+
+    for (const kind of [
+      ApplicationEditorKind.CustomApp,
+      ApplicationEditorKind.QuickApp,
+      ApplicationEditorKind.SchemaApp,
+    ]) {
+      const definition = definitions[kind];
+      if (!definition || isApplicationEditorPageDefinition(definition)) {
+        throw new Error(`${kind} is not a form-based definition`);
+      }
+      expect(definition.defaultMetadata).toMatchObject({
+        name: '',
+        version: '1.0.0',
+      });
+    }
   });
 });

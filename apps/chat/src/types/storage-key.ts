@@ -3,6 +3,7 @@ export enum StorageKey {
   ConversationSourcesWidth = 'conversationSourcesWidth',
   Theme = 'theme',
   KeyboardShortcut = 'keyboardShortcut',
+  CelebrationsEnabled = 'celebrationsEnabled',
   DefaultAgent = 'defaultAgent',
   CatalogSortKey = 'catalogSortKey',
   CatalogFilterTopics = 'catalogFilterTopics',
@@ -10,4 +11,6 @@ export enum StorageKey {
   CatalogActiveTab = 'catalogActiveTab',
   TextOfClosedAnnouncement = 'textOfClosedAnnouncement',
   PublishDestinationFolders = 'publishDestinationFolders',
+  ConversationDrafts = 'conversationDrafts',
+  NavigationSidebarExpanded = 'navigationSidebarExpanded',
 }

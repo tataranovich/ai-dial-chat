@@ -28,20 +28,20 @@ const apiError = (body: unknown, status = 500) => ({
   },
 });
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  setOnLine(true);
-  vi.mocked(useNotification).mockReturnValue(
-    createNotificationContextValue(mockShowNotification),
-  );
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
 describe('usePublishErrorNotification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    setOnLine(true);
+    vi.mocked(useNotification).mockReturnValue(
+      createNotificationContextValue(mockShowNotification),
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('shows a connection-specific error notification without a request ID while offline', async () => {
     setOnLine(false);
     const { result } = renderHook(() => usePublishErrorNotification());
@@ -74,6 +74,33 @@ describe('usePublishErrorNotification', () => {
         message: 'Upstream rejected the request',
         requestId: '4bf92f3577b34da6a3ce929d0e0e4736',
       }),
+    );
+  });
+
+  it('names the missing attachment files when publish is refused with conversationAttachmentMissing', async () => {
+    const { result } = renderHook(() => usePublishErrorNotification());
+
+    result.current(
+      apiError(
+        {
+          statusCode: 422,
+          code: 'conversationAttachmentMissing',
+          message:
+            'The conversation references attachment files that no longer exist: files/bucket-123/old.pdf',
+          missingFiles: ['files/bucket-123/old.pdf'],
+        },
+        422,
+      ),
+    );
+
+    await waitFor(() =>
+      expect(mockShowNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: NotificationVariant.Error,
+          title: 'publish.failedTitle',
+          message: expect.stringContaining('files/bucket-123/old.pdf'),
+        }),
+      ),
     );
   });
 

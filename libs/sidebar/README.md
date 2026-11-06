@@ -94,7 +94,10 @@ Empty-state block shown when a panel has no items at all.
 ```tsx
 import { PanelEmpty } from '@epam/ai-dial-sidebar';
 
-<PanelEmpty label="No conversations" />;
+<PanelEmpty
+  label="No chats yet"
+  description="Chats will appear here once you start one."
+/>;
 ```
 
 ### PanelNoResults
@@ -104,7 +107,10 @@ No-results state shown when a search or filter produces no matches.
 ```tsx
 import { PanelNoResults } from '@epam/ai-dial-sidebar';
 
-<PanelNoResults label="No results" />;
+<PanelNoResults
+  label="No chats found"
+  description="Try a different search term or check your filters."
+/>;
 ```
 
 ## Public class names
@@ -195,3 +201,7 @@ import type {
   PanelNoResultsProps,
 } from '@epam/ai-dial-sidebar';
 ```
+
+## Bounded overlays
+
+`SidebarPanel.isBoundedOverlay` defaults to false. Opt in on a right panel to position it at the logical inline end of its positioned containing block without reserving layout space. The shell observes the containing width and caps its own and the resize container's sizes to that width minus 32px, also bounded by the viewport. Configured minima cannot exceed that cap. Temporary viewport clamping does not call `onResizeStop` or replace the user's preferred size. Existing close/reset semantics remain. The non-modal complementary region supports Escape and focus return; closed overlays are inert. Other consumers, including left panels and the legacy `isOverlay` contract, remain unchanged.

@@ -1,3 +1,4 @@
+import { LiveRegion } from '@epam/ai-dial-ui-kit';
 import { useEffect, useMemo, useState, type FC, type ReactNode } from 'react';
 import { CelebrationDecor } from '../components/CelebrationDecor/CelebrationDecor';
 import {
@@ -50,6 +51,12 @@ export interface ScenePlayerProps {
   startersBelowComposer?: boolean;
   /** Hide starters to exercise a composer-only host. */
   showStarters?: boolean;
+  /** Pin the composer to the viewport bottom to exercise cramped geometry. */
+  /** Optional editor text for scene contact fixtures. */
+  composerValue?: string;
+  /** Empty-editor hint for scene contact fixtures. */
+  composerPlaceholder?: string;
+  composerAlign?: 'center' | 'bottom';
   /** Host scene and decoration selection for the event. */
   selection?: CelebrationEventSelection;
   /** Extra content inside the provider, such as playground controls. */
@@ -65,7 +72,7 @@ const Autoplay: FC<{ sceneId?: string }> = ({ sceneId }) => {
   return (
     <button
       type="button"
-      className="bg-layer-2 fixed bottom-3 start-3 z-[80] rounded border px-3 py-1.5"
+      className="bg-layer-2 fixed inset-s-3 bottom-3 z-80 rounded border px-3 py-1.5"
       onClick={() => celebrate(sceneId)}
     >
       Replay
@@ -82,6 +89,9 @@ export const ScenePlayer: FC<ScenePlayerProps> = ({
   isReducedMotion = false,
   startersBelowComposer = false,
   showStarters = true,
+  composerValue,
+  composerPlaceholder,
+  composerAlign = 'center',
   selection,
   children,
 }) => {
@@ -107,6 +117,9 @@ export const ScenePlayer: FC<ScenePlayerProps> = ({
         <StoryHostPage
           startersBelowComposer={startersBelowComposer}
           showStarters={showStarters}
+          composerAlign={composerAlign}
+          composerDefaultValue={composerValue}
+          composerPlaceholder={composerPlaceholder}
         >
           <CelebrationDecor />
         </StoryHostPage>
@@ -114,12 +127,10 @@ export const ScenePlayer: FC<ScenePlayerProps> = ({
         {children}
       </CelebrationProvider>
       {/* The live region stays mounted; only a filled toast draws a frame. */}
-      <div
-        role="status"
-        aria-live="polite"
+      <LiveRegion
         className={
           notification
-            ? 'bg-layer-2 fixed end-3 top-3 z-[80] max-w-xs rounded border p-3'
+            ? 'bg-layer-2 fixed inset-e-3 top-3 z-80 max-w-xs rounded border p-3'
             : 'sr-only'
         }
       >
@@ -129,7 +140,7 @@ export const ScenePlayer: FC<ScenePlayerProps> = ({
             <p>{notification.message}</p>
           </>
         )}
-      </div>
+      </LiveRegion>
     </div>
   );
 };

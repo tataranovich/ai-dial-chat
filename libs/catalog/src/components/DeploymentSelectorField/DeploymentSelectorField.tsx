@@ -1,11 +1,15 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
   Dropdown,
+  DropdownOverlayRole,
   GhostButton,
   Highlight,
   Input,
   MenuItem,
   Search,
+  LiveRegion,
+  LiveRegionElement,
+  LiveRegionPoliteness,
 } from '@epam/ai-dial-ui-kit';
 import {
   type AriaAttributes,
@@ -36,6 +40,8 @@ export interface DeploymentSelectorFieldLabels {
   emptyLabel: string;
   errorLabel: string;
   browseLabel?: string;
+  /** Accessible name of the default dropdown panel. Defaults to `'Select model'`. */
+  panelAriaLabel?: string;
 }
 
 export interface DeploymentSelectorFieldProps {
@@ -52,7 +58,7 @@ export interface DeploymentSelectorFieldProps {
   isDisabled?: boolean;
   isInvalid?: boolean;
   labelledById?: string;
-  /** Accessible popup role. Use `dialog` for a host-rendered sheet. Defaults to `listbox`. */
+  /** Trigger `aria-haspopup` for a `renderOverlay` sheet; the default dropdown derives `dialog` from its overlay role. Defaults to `listbox`. */
   ariaHasPopup?: AriaAttributes['aria-haspopup'];
   className?: string;
   panelClassName?: string;
@@ -119,11 +125,20 @@ export const DeploymentSelectorField: FC<DeploymentSelectorFieldProps> = ({
     onSelect(id);
     close();
   };
+  /* Loading and no-results text share one always-mounted status region, kept outside the listbox. */
+  let statusText = '';
+  if (isLoading) {
+    statusText = labels.searchPlaceholder;
+  } else if (!error && options.length === 0) {
+    statusText = labels.emptyLabel;
+  }
+  const hasError = !isLoading && Boolean(error);
+  const hasOptions = !isLoading && !error && options.length > 0;
   const panel = renderPanel ? (
     renderPanel(close)
   ) : (
     <div
-      className={mergeClasses('w-full min-w-0 max-w-full p-3', panelClassName)}
+      className={mergeClasses('w-full max-w-full min-w-0 p-3', panelClassName)}
     >
       <Search
         value={query}
@@ -131,18 +146,23 @@ export const DeploymentSelectorField: FC<DeploymentSelectorFieldProps> = ({
         placeholder={labels.searchPlaceholder}
         aria-label={labels.searchAriaLabel}
       />
-      <div
-        role="listbox"
-        className="mt-2 max-h-[min(50dvh,320px)] min-w-0 overflow-y-auto"
+      <LiveRegion as={LiveRegionElement.Span} className="mt-2 block">
+        {statusText === '' ? null : statusText}
+      </LiveRegion>
+      <LiveRegion
+        politeness={LiveRegionPoliteness.Assertive}
+        as={LiveRegionElement.Span}
+        className="mt-2 block"
       >
-        {isLoading ? (
-          <span role="status">{labels.searchPlaceholder}</span>
-        ) : error ? (
-          <span role="alert">{labels.errorLabel}</span>
-        ) : options.length === 0 ? (
-          <span role="status">{labels.emptyLabel}</span>
-        ) : (
-          options.map((option) => (
+        {hasError ? labels.errorLabel : null}
+      </LiveRegion>
+      {/* Rendered only with options, so an empty list leaves no blank listbox or margin. */}
+      {hasOptions && (
+        <div
+          role="listbox"
+          className="mt-2 max-h-[min(50dvh,320px)] min-w-0 overflow-y-auto"
+        >
+          {options.map((option) => (
             <MenuItem
               key={option.id}
               role="option"
@@ -160,9 +180,9 @@ export const DeploymentSelectorField: FC<DeploymentSelectorFieldProps> = ({
               onClick={() => select(option.id)}
               className="h-auto max-w-full py-2"
             />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
       {onBrowse && (
         <GhostButton
           className="mt-2 min-h-11 max-w-full"
@@ -182,7 +202,7 @@ export const DeploymentSelectorField: FC<DeploymentSelectorFieldProps> = ({
       }}
       readOnly
       role="combobox"
-      aria-haspopup={ariaHasPopup}
+      aria-haspopup={renderOverlay ? ariaHasPopup : undefined}
       aria-expanded={isOpen}
       aria-labelledby={labelledById}
       disabled={isDisabled}
@@ -229,6 +249,11 @@ export const DeploymentSelectorField: FC<DeploymentSelectorFieldProps> = ({
       disabled={isDisabled}
       className="w-full"
       listClassName="w-[min(var(--reference-width),calc(100vw-2rem))] max-w-full"
+      /* Search, status regions, listbox and footer: a dialog, not a menu.
+       * Arrow keys still move between the listbox options. */
+      overlayRole={DropdownOverlayRole.Dialog}
+      overlayAriaLabel={labels.panelAriaLabel ?? 'Select model'}
+      optionArrowNavigation
       renderOverlay={() => panel}
     >
       {trigger}

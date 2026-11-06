@@ -64,12 +64,18 @@ export interface InputColors {
   mentionHighlightUnsupportedBg?: string;
   /** Text color of a tracked skill mention's highlighted run while unsupported. Defaults to `--text-error`. */
   mentionHighlightUnsupportedText?: string;
+  /** Background of the text-selection rectangles drawn over the highlight mirror while mentions are tracked. Defaults to `--bg-control-accent-alpha-active`. */
+  selectionHighlightBg?: string;
 }
 
 /** Typography overrides for the `Input` component. */
 export interface InputTypography {
   /** Typography utility class applied to the textarea (e.g. `'dial-body-paragraph-text'`). */
   fontClassName?: string;
+  /** Typography class of the selected model name on the model selector trigger. Defaults to `'dial-small-text'`. */
+  modelSelectorNameClassName?: string;
+  /** Typography class of the selected model version on the model selector trigger. Defaults to `'dial-tiny-text'`. */
+  modelSelectorVersionClassName?: string;
 }
 
 /** Status labels displayed inside the model selector dropdown and mobile bottom-sheet. */
@@ -108,6 +114,8 @@ export interface ModelMenuColors {
   selectedItemText?: string;
   /** Color of the check mark on the selected row. Defaults to the row's text color on desktop and `--text-accent` in the sheet. */
   checkIcon?: string;
+  /** Background of the desktop dropdown panel when `modelPickerOverlay` supplies the content. Defaults to `--bg-layer-raised`. */
+  overlayBackground?: string;
 }
 
 /**
@@ -214,6 +222,13 @@ export interface CommandMenuConfig {
   emptyQueryHint?: string;
   /** Accessible name for the menu region. When absent, the content is rendered without a labeled wrapper. */
   menuLabel?: string;
+  /**
+   * Called with the plain text of a paste that lands inline in the textarea
+   * (not converted into an attachment), line endings normalized to `\n`, just
+   * before the `onChange` that carries it — e.g. to recognize trigger-prefixed
+   * words in the pasted text.
+   */
+  onTextPaste?: (text: string) => void;
 }
 
 /**
@@ -559,22 +574,22 @@ export interface InputProps {
    */
   caretPositionOverride?: number;
   /**
-   * Host-injected slash-command menu. When provided, typing `triggerPrefix`
-   * as the first character of an empty textarea — or pasting into an empty
-   * textarea a value that is exactly the prefix, or the prefix plus a
-   * whitespace-free, prefix-free query — opens an overlay above the input;
-   * it stays open while the value keeps matching the prefix followed by a
-   * query with no whitespace or second prefix character, and closes on
-   * unmatch, Escape, or an outside click. Escape is the one dismissal that
-   * latches: the menu stays closed over that same word until the value stops
-   * matching and the trigger is typed or pasted again. An outside click only
+   * Host-injected slash-command menu. When provided, an overlay opens above
+   * the input whenever the whitespace-delimited word at the caret becomes
+   * `triggerPrefix` alone or followed by a whitespace-free, prefix-free
+   * query — anywhere in the textarea, whether it was empty or already held
+   * text, and whether the word was typed or pasted. It stays open while that
+   * word keeps matching, and closes on unmatch, Escape, or an outside click.
+   * Escape is the one dismissal that latches: the menu stays closed over that
+   * same word until it stops matching and the trigger is typed or pasted
+   * again. An outside click only
    * closes it for the moment — typing/deleting within the same still-matching
    * word, or moving the caret back into it (a click, or refocusing the
    * textarea), reopens it with no need to retype the trigger. A message can
    * hold more than one command-shaped word at once; the menu always tracks
    * whichever one the caret is actually in, re-evaluated on every such caret
-   * move rather than assumed from whichever word was active before. Any other
-   * pasted value, and any paste into a non-empty textarea, inserts as a
+   * move rather than assumed from whichever word was active before. A paste
+   * that leaves any other word at the caret (e.g. `/s sdf`) inserts as a
    * regular paste and opens nothing. Selection typically goes through
    * `ctx.close({ consumeQuery: true })`, which removes the `/query` text from
    * the textarea. Absent disables the mechanism.
@@ -623,6 +638,8 @@ export interface InputProps {
    * popover after a selection or an explicit dismiss.
    */
   modelPickerOverlay?: (onClose: () => void) => ReactNode;
+  /** Reports open/dismiss events so host-owned picker search can reset on dismissal. Breakpoint changes keep it open. */
+  onModelPickerOpenChange?: (open: boolean) => void;
   /** Arbitrary slot rendered in the action row before the model selector. Use to inject app-level controls (e.g. a token-usage indicator). */
   usageLimitsSlot?: ReactNode;
   /**
@@ -643,6 +660,12 @@ export interface ChatSettingsValues {
   systemPrompt?: string;
   /** Updated temperature, present when the temperature field was shown. */
   temperature?: number;
+}
+
+/** Color overrides for `ChatSettingsModal`, applied as CSS custom properties. */
+export interface ChatSettingsModalColors {
+  /** Background of the modal surface. Defaults to `--bg-layer-raised`. */
+  background?: string;
 }
 
 /** Configuration for the built-in chat-settings menu entry and modal. */
@@ -685,4 +708,6 @@ export interface ChatSettingsConfig {
   saveDisabledTooltip?: string;
   /** Accessible label for the back arrow in the mobile bottom-sheet stack. Defaults to `'Back'`. */
   backLabel?: string;
+  /** Color overrides for the desktop modal. */
+  modalColors?: ChatSettingsModalColors;
 }

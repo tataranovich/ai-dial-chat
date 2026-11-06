@@ -1,4 +1,8 @@
-import { ItemHeader, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  ItemHeader,
+  mergeClasses,
+  useIsPhone,
+} from '@epam/ai-dial-chat-shared';
 import {
   ButtonAppearance,
   ButtonDropdown,
@@ -7,17 +11,35 @@ import {
   DIAL_KIT_ICON_STROKE,
   DropdownItem,
   ElementSize,
+  GhostIconButton,
   MenuItemMark,
   Search,
   SegmentedControl,
   SegmentedControlItem,
   SelectOption,
 } from '@epam/ai-dial-ui-kit';
-import { IconLayoutGrid, IconLayoutList } from '@tabler/icons-react';
-import { FC, ReactNode, useMemo } from 'react';
-import { ToolbarStyles } from '../../../models/toolbar-props';
+import {
+  IconAdjustmentsHorizontal,
+  IconLayoutGrid,
+  IconLayoutList,
+} from '@tabler/icons-react';
+import {
+  FC,
+  ReactNode,
+  Ref,
+  useMemo,
+  useState,
+  useLayoutEffect,
+  useRef,
+} from 'react';
+import { DEFAULT_BROWSE_SETTINGS_LABELS } from '../../../constants/browse-settings';
+import {
+  BrowseSettingsSheetLabels,
+  ToolbarStyles,
+} from '../../../models/toolbar-props';
 import { CatalogViewMode } from '../../../types/view-mode';
 import { Filter } from '../../Filter/Filter';
+import { BrowseSettingsSheet } from '../BrowseSettingsSheet';
 import styles from '../Toolbar.module.scss';
 
 interface TitleRowProps {
@@ -30,6 +52,7 @@ interface TitleRowProps {
   query: string;
   onQueryChange: (q: string) => void;
   searchPlaceholder?: string;
+  searchInputRef?: Ref<HTMLInputElement>;
   gridViewLabel?: string;
   listViewLabel?: string;
   viewToggleLabel?: string;
@@ -45,7 +68,11 @@ interface TitleRowProps {
   filterFromLabel?: string;
   filterMyAppsLabel?: string;
   filterTopicsLabel?: string;
+  browseSettingsLabels?: Partial<BrowseSettingsSheetLabels>;
 }
+
+/* Shared, never mutated: the filter components copy before editing. */
+const EMPTY_FILTERS = new Set<string>();
 
 /** Browse section header: title + view toggle + sort, then search + filter row below. */
 export const TitleRow: FC<TitleRowProps> = ({
@@ -58,6 +85,7 @@ export const TitleRow: FC<TitleRowProps> = ({
   query,
   onQueryChange,
   searchPlaceholder,
+  searchInputRef,
   gridViewLabel = 'Grid view',
   listViewLabel = 'List view',
   viewToggleLabel = 'View mode',
@@ -73,7 +101,38 @@ export const TitleRow: FC<TitleRowProps> = ({
   filterFromLabel,
   filterMyAppsLabel,
   filterTopicsLabel,
+  browseSettingsLabels,
 }) => {
+  const isPhone = useIsPhone();
+  const rowRef = useRef<HTMLDivElement>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const desktopControlsRef = useRef<HTMLDivElement>(null);
+  const hadFocusRef = useRef(false);
+  const previousPhoneRef = useRef(isPhone);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  useLayoutEffect(() => {
+    if (previousPhoneRef.current === isPhone) return;
+    previousPhoneRef.current = isPhone;
+    if (
+      isSettingsOpen ||
+      (hadFocusRef.current && document.activeElement === document.body)
+    ) {
+      setIsSettingsOpen(false);
+      if (isPhone) settingsTriggerRef.current?.focus();
+      else
+        desktopControlsRef.current
+          ?.querySelector<HTMLElement>('[role="radio"]')
+          ?.focus();
+    }
+  }, [isPhone, isSettingsOpen]);
+  const isFilterActive = (isMyAppsActive ?? false) || (filters?.size ?? 0) > 0;
+  const sheetLabels: BrowseSettingsSheetLabels = {
+    ...DEFAULT_BROWSE_SETTINGS_LABELS,
+    myApps: filterMyAppsLabel ?? DEFAULT_BROWSE_SETTINGS_LABELS.myApps,
+    topics: filterTopicsLabel ?? DEFAULT_BROWSE_SETTINGS_LABELS.topics,
+    ...browseSettingsLabels,
+  };
+
   const titleClassName =
     browseStyles?.typography?.titleClassName ?? 'dial-body-semi-text';
   const countClassName =
@@ -135,9 +194,25 @@ export const TitleRow: FC<TitleRowProps> = ({
   );
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* Row 1: title | view toggle | divider | sort */}
-      <div className="flex items-center gap-2">
+    <div
+      ref={rowRef}
+      onFocusCapture={() => {
+        hadFocusRef.current = true;
+      }}
+      onBlurCapture={(event) => {
+        if (
+          event.relatedTarget &&
+          !event.currentTarget.contains(event.relatedTarget)
+        ) {
+          hadFocusRef.current = false;
+        }
+      }}
+      className="flex flex-col gap-3"
+    >
+      {/* Row 1: title | view toggle | divider | sort. Below the phone-menu
+          breakpoint the controls move into the browse-settings sheet, so the
+          row holds the title alone. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-3">
         {browseHeaderRenderer ?? (
           <ItemHeader
             title={title}
@@ -153,55 +228,110 @@ export const TitleRow: FC<TitleRowProps> = ({
           />
         )}
 
-        <div className="ms-auto flex shrink-0 items-center gap-2">
-          <SegmentedControl
-            aria-label={viewToggleLabel}
-            value={viewMode}
-            onChange={onViewModeChange}
-            items={viewModeItems}
-          />
+        {!isPhone && (
+          <div
+            ref={desktopControlsRef}
+            className="ms-auto flex shrink-0 items-center gap-2"
+          >
+            <SegmentedControl
+              aria-label={viewToggleLabel}
+              value={viewMode}
+              onChange={onViewModeChange}
+              items={viewModeItems}
+            />
 
-          {sortOptions != null && sortOptions.length > 0 && (
-            <>
-              <div
-                className={mergeClasses('h-4 w-px shrink-0', styles.divider)}
-              />
+            {sortOptions != null && sortOptions.length > 0 && (
+              <>
+                <div
+                  className={mergeClasses('h-4 w-px shrink-0', styles.divider)}
+                />
 
-              {/* The trigger shows the applied order and the menu marks it
+                {/* The trigger shows the applied order and the menu marks it
                   with the design's trailing check. */}
-              <ButtonDropdown
-                items={sortItems}
-                label={activeSortLabel}
-                variant={ButtonVariant.Primary}
-                appearance={ButtonAppearance.Ghost}
-              />
-            </>
-          )}
-        </div>
+                <ButtonDropdown
+                  items={sortItems}
+                  label={activeSortLabel}
+                  variant={ButtonVariant.Primary}
+                  appearance={ButtonAppearance.Ghost}
+                />
+              </>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="mb-5 flex items-center gap-3">
+      <div className="mb-5 flex items-center gap-3 mobile:mb-3 mobile:gap-2">
         <div role="search" className="flex-1">
           <Search
             value={query}
             onChange={handleChange}
             size={ElementSize.Large}
-            wrapperClassName="dial-kit-input-large"
+            wrapperClassName={styles.searchField}
             placeholder={searchPlaceholder}
             aria-label={searchPlaceholder}
+            inputRef={searchInputRef}
           />
         </div>
-        <Filter
-          checked={filters ?? new Set()}
-          onChange={onFiltersChange ?? (() => undefined)}
-          values={filterValues}
-          isMyAppsActive={isMyAppsActive}
-          onMyAppsChange={onMyAppsChange}
-          defaultLabel={filterFromLabel}
-          myAppsLabel={filterMyAppsLabel}
-          topicsLabel={filterTopicsLabel}
-          typography={browseStyles?.typography}
-        />
+        {isPhone ? (
+          <>
+            <span className="relative shrink-0">
+              <GhostIconButton
+                ref={settingsTriggerRef}
+                size={ElementSize.Large}
+                aria-label={sheetLabels.title}
+                aria-haspopup="dialog"
+                aria-expanded={isSettingsOpen}
+                onClick={() => setIsSettingsOpen(true)}
+                icon={
+                  <IconAdjustmentsHorizontal
+                    size={DIAL_ICON_SIZE.LG}
+                    stroke={DIAL_KIT_ICON_STROKE}
+                    aria-hidden
+                  />
+                }
+              />
+              {isFilterActive && (
+                <span
+                  className={mergeClasses(
+                    'pointer-events-none absolute inset-e-2.5 top-2.5 size-2 rounded-full',
+                    styles.settingsDot,
+                  )}
+                  aria-hidden
+                />
+              )}
+            </span>
+            <BrowseSettingsSheet
+              open={isSettingsOpen}
+              onClose={() => setIsSettingsOpen(false)}
+              viewMode={viewMode}
+              onViewModeChange={onViewModeChange}
+              sortOptions={sortOptions}
+              sortKey={sortKey}
+              onSortChange={onSortChange}
+              filters={filters ?? EMPTY_FILTERS}
+              onFiltersChange={onFiltersChange ?? (() => undefined)}
+              filterValues={filterValues}
+              isMyAppsActive={isMyAppsActive}
+              onMyAppsChange={onMyAppsChange}
+              labels={sheetLabels}
+              typography={browseStyles?.typography}
+            />
+          </>
+        ) : (
+          <Filter
+            checked={filters ?? EMPTY_FILTERS}
+            onChange={onFiltersChange ?? (() => undefined)}
+            values={filterValues}
+            isMyAppsActive={isMyAppsActive}
+            onMyAppsChange={onMyAppsChange}
+            defaultLabel={filterFromLabel}
+            myAppsLabel={filterMyAppsLabel}
+            topicsLabel={filterTopicsLabel}
+            clearLabel={browseSettingsLabels?.clear}
+            applyLabel={browseSettingsLabels?.apply}
+            typography={browseStyles?.typography}
+          />
+        )}
       </div>
     </div>
   );

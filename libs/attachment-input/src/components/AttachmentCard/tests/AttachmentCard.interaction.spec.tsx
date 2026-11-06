@@ -84,7 +84,7 @@ describe('AttachmentCard — tiles with onClick', () => {
       render(<AttachmentCard attachment={attachment} onClick={vi.fn()} />);
 
       const tile = screen.getByRole('button', { name });
-      expect(tile.getAttribute('tabindex')).toBe('0');
+      expect(tile.tagName).toBe('BUTTON');
       expect(tile.className).toContain('cursor-pointer');
     },
   );
@@ -94,7 +94,8 @@ describe('AttachmentCard — tiles with onClick', () => {
     ['image', imageAttachment],
   ])(
     'calls onClick from mouse, Enter and Space on a %s tile',
-    (_, attachment) => {
+    async (_, attachment) => {
+      const user = userEvent.setup();
       const onClick = vi.fn();
       render(
         <AttachmentCard
@@ -105,16 +106,100 @@ describe('AttachmentCard — tiles with onClick', () => {
       );
 
       const tile = screen.getByRole('button', { name: 'Open it' });
-      fireEvent.click(tile);
-      fireEvent.keyDown(tile, { key: 'Enter' });
-      fireEvent.keyDown(tile, { key: ' ' });
+      await user.click(tile);
+      await user.keyboard('{Enter}');
+      await user.keyboard(' ');
       expect(onClick).toHaveBeenCalledTimes(3);
       expect(onClick).toHaveBeenCalledWith(attachment.id);
     },
   );
 });
 
+describe('AttachmentCard — selected state is exposed as aria-pressed', () => {
+  it.each([
+    ['file', fileAttachment, 'Download attachment'],
+    ['image', imageAttachment, 'Open attachment'],
+  ])('marks a selected clickable %s tile as pressed', (_, attachment, name) => {
+    render(
+      <AttachmentCard
+        attachment={attachment}
+        onClick={vi.fn()}
+        isSelected={true}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name }).getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
+  it.each([
+    ['file', fileAttachment, 'Download attachment'],
+    ['image', imageAttachment, 'Open attachment'],
+  ])(
+    'marks an unselected clickable %s tile as not pressed',
+    (_, attachment, name) => {
+      render(
+        <AttachmentCard
+          attachment={attachment}
+          onClick={vi.fn()}
+          isSelected={false}
+        />,
+      );
+
+      expect(
+        screen.getByRole('button', { name }).getAttribute('aria-pressed'),
+      ).toBe('false');
+    },
+  );
+
+  it.each([
+    ['file', fileAttachment, 'Download attachment'],
+    ['image', imageAttachment, 'Open attachment'],
+  ])(
+    'renders no aria-pressed on a clickable %s tile without isSelected',
+    (_, attachment, name) => {
+      render(<AttachmentCard attachment={attachment} onClick={vi.fn()} />);
+
+      expect(
+        screen.getByRole('button', { name }).hasAttribute('aria-pressed'),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ['file', fileAttachment],
+    ['image', imageAttachment],
+  ])(
+    'renders no aria-pressed on a selected %s tile without onClick',
+    (_, attachment) => {
+      render(<AttachmentCard attachment={attachment} isSelected={true} />);
+
+      /* No button at all, so no pressed button of either state can exist. */
+      expect(screen.queryByRole('button', { pressed: true })).toBeNull();
+      expect(screen.queryByRole('button', { pressed: false })).toBeNull();
+    },
+  );
+});
+
 describe('AttachmentCard — expandable pasted tiles', () => {
+  it('is not a toggle, so it exposes no pressed state even when selected', () => {
+    render(
+      <AttachmentCard
+        attachment={pastedAttachment}
+        onExpand={vi.fn()}
+        onClick={vi.fn()}
+        isSelected={true}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole('button', { name: 'Expand pasted text' })
+        .hasAttribute('aria-pressed'),
+    ).toBe(false);
+  });
+
   it('is named by the expand label, not the click label', () => {
     render(
       <AttachmentCard
@@ -146,7 +231,8 @@ describe('AttachmentCard — expandable pasted tiles', () => {
     ).toBeTruthy();
   });
 
-  it('expands on mouse, Enter and Space instead of calling onClick', () => {
+  it('expands on mouse, Enter and Space instead of calling onClick', async () => {
+    const user = userEvent.setup();
     const onExpand = vi.fn();
     const onClick = vi.fn();
     render(
@@ -158,9 +244,9 @@ describe('AttachmentCard — expandable pasted tiles', () => {
     );
 
     const tile = screen.getByRole('button', { name: 'Expand pasted text' });
-    fireEvent.click(tile);
-    fireEvent.keyDown(tile, { key: 'Enter' });
-    fireEvent.keyDown(tile, { key: ' ' });
+    await user.click(tile);
+    await user.keyboard('{Enter}');
+    await user.keyboard(' ');
 
     expect(onExpand).toHaveBeenCalledTimes(3);
     expect(onExpand).toHaveBeenCalledWith('p1');

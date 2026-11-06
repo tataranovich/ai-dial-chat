@@ -26,6 +26,15 @@ vi.mock('@epam/ai-dial-chat-hooks', async (importOriginal) => {
   };
 });
 
+const { mockUseDialFilePreview, mockOnFileClick } = vi.hoisted(() => ({
+  mockUseDialFilePreview: vi.fn(),
+  mockOnFileClick: vi.fn(),
+}));
+
+vi.mock('../../../hooks/files/useDialFilePreview', () => ({
+  useDialFilePreview: mockUseDialFilePreview,
+}));
+
 vi.mock('../../../context/NotificationContext', () => ({
   useNotification: () => createNotificationContextValue(vi.fn()),
 }));
@@ -92,11 +101,15 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
       uploadValidationMessages,
       selectedPaths,
       onSelectedPathsChange,
+      onTableFileClick,
       className,
     }: {
       items?: { path: string }[];
       gridOptions?: {
         actionLabels?: Partial<Record<DialFileManagerActions, string>>;
+        containerClassName?: string;
+        filterable?: boolean;
+        withoutHeaderBorders?: boolean;
       };
       bulkActionsToolbarOptions?: {
         actionLabels?: Partial<Record<DialFileManagerActions, string>>;
@@ -107,9 +120,16 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
       treeOptions?: {
         tabs?: Array<{ value: string; label: string }>;
         activeTab?: string;
+        containerClassName?: string;
       };
       selectedPaths?: Set<string>;
       onSelectedPathsChange?: (paths: Set<string>) => void;
+      onTableFileClick?: (row: {
+        id: string;
+        name: string;
+        path: string;
+        nodeType: DialFileNodeType;
+      }) => void;
       autoSelectUploadedItems?: boolean;
       maxSelectableFileSize?: number;
       maxFileSize?: number;
@@ -121,6 +141,10 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
         aria-label="file manager"
         className={className}
         data-tab-count={treeOptions?.tabs?.length}
+        data-grid-container-class={gridOptions?.containerClassName}
+        data-grid-filterable={String(gridOptions?.filterable)}
+        data-grid-no-header-borders={String(gridOptions?.withoutHeaderBorders)}
+        data-tree-container-class={treeOptions?.containerClassName}
         data-max-selectable-file-size={maxSelectableFileSize}
         data-max-file-size={maxFileSize}
         data-oversized-files-message={uploadValidationMessages?.oversizedFiles}
@@ -187,6 +211,19 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
         >
           Select report
         </button>
+        <button
+          type="button"
+          onClick={() =>
+            onTableFileClick?.({
+              id: 'report.pdf',
+              name: 'report.pdf',
+              path: '/My files/report.pdf',
+              nodeType: DialFileNodeType.ITEM,
+            })
+          }
+        >
+          Click report
+        </button>
         <span>{selectedPaths?.size ?? 0} selected</span>
       </div>
     ),
@@ -234,6 +271,10 @@ const defaultHookResult: UseDialFileManagerSectionsResult = {
   isCreatingFolder: false,
   onDownloadFiles: vi.fn(),
   isDownloading: false,
+  downloadBatchState: null,
+  cancelDownloadFile: vi.fn(),
+  cancelAllDownloads: vi.fn(),
+  clearDownloadBatch: vi.fn(),
   onDeleteFiles: vi.fn(),
   isDeleting: false,
   onRenameValidate: vi.fn(),
@@ -264,14 +305,39 @@ const defaultHookResult: UseDialFileManagerSectionsResult = {
   sectionTab: DialFileManagerTabs.MyFiles,
 };
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  mockActiveTab.value = undefined;
-  mockFileManagerTabs.value = ['my_files', 'shared', 'organization'];
-  mockUseDialFileManager.mockReturnValue(defaultHookResult);
-});
-
 describe('DialFileManagerPage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockActiveTab.value = undefined;
+    mockFileManagerTabs.value = ['my_files', 'shared', 'organization'];
+    mockUseDialFileManager.mockReturnValue(defaultHookResult);
+    mockUseDialFilePreview.mockReturnValue({
+      onPreview: vi.fn(),
+      onFileClick: mockOnFileClick,
+      previewExtensions: [],
+    });
+  });
+
+  it('gives the preview hook the listing, the bucket and the search results', () => {
+    render(<DialFileManagerPage />);
+
+    expect(mockUseDialFilePreview).toHaveBeenCalledWith(
+      defaultHookResult.items,
+      'test-bucket',
+      defaultHookResult.searchResults,
+    );
+  });
+
+  it('opens a clicked file through the preview hook', async () => {
+    render(<DialFileManagerPage />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Click report' }));
+
+    expect(mockOnFileClick).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/My files/report.pdf' }),
+    );
+  });
+
   it('renders the shell with items from the hook result', () => {
     render(<DialFileManagerPage />);
     expect(screen.getByRole('region', { name: 'file manager' })).toBeTruthy();
@@ -287,13 +353,6 @@ describe('DialFileManagerPage', () => {
         actionProfile: DialFileManagerActionProfile.Full,
       }),
     );
-  });
-
-  it('renders the file manager on the base layer background', () => {
-    render(<DialFileManagerPage />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-    expect(manager.classList.contains('bg-layer-base')).toBe(true);
-    expect(manager.classList.contains('bg-layer-sunken')).toBe(false);
   });
 
   it('does not render an Attach button or attach footer', () => {
@@ -339,164 +398,238 @@ describe('DialFileManagerPage', () => {
       'dialFileManager.uploadFileTooLarge',
     );
   });
-});
 
-describe('DialFileManagerPage — full action matrix on my_files', () => {
-  it('surfaces the complete my_files matrix: Copy/Move/Duplicate/Rename/Delete, Share/Remove access, Info, and upload-archive', () => {
-    mockActiveTab.value = DialFileManagerTabs.MyFiles;
-    mockUseDialFileManager.mockReturnValue({
-      ...defaultHookResult,
-      actionLabels: {
-        [DialFileManagerActions.Download]: 'Download',
-        [DialFileManagerActions.Delete]: 'Delete',
-        [DialFileManagerActions.Rename]: 'Rename',
-        [DialFileManagerActions.Copy]: 'Copy',
-        [DialFileManagerActions.Move]: 'Move',
-        [DialFileManagerActions.Duplicate]: 'Duplicate',
-        [DialFileManagerActions.RemoveAccess]: 'Remove access',
-        [DialFileManagerActions.Info]: 'Info',
-      },
-    });
-    render(<DialFileManagerPage />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-
-    expect(manager.getAttribute('data-has-download')).toBe('true');
-    expect(manager.getAttribute('data-has-delete')).toBe('true');
-    expect(manager.getAttribute('data-has-rename')).toBe('true');
-    expect(manager.getAttribute('data-has-copy')).toBe('true');
-    expect(manager.getAttribute('data-has-move')).toBe('true');
-    expect(manager.getAttribute('data-has-duplicate')).toBe('true');
-    expect(manager.getAttribute('data-has-bulk-copy')).toBe('true');
-    expect(manager.getAttribute('data-has-bulk-move')).toBe('true');
-    expect(manager.getAttribute('data-has-bulk-duplicate')).toBe('true');
-    expect(manager.getAttribute('data-has-remove-access')).toBe('true');
-    expect(manager.getAttribute('data-has-info')).toBe('true');
-    expect(manager.getAttribute('data-has-upload-archive')).toBe('true');
-  });
-
-  it('surfaces Download only on the Shared tab', () => {
-    mockActiveTab.value = DialFileManagerTabs.Shared;
-    mockUseDialFileManager.mockReturnValue({
-      ...defaultHookResult,
-      actionLabels: {
-        [DialFileManagerActions.Download]: 'Download',
-      },
-    });
-    render(<DialFileManagerPage />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-
-    expect(manager.getAttribute('data-has-download')).toBe('true');
-    expect(manager.getAttribute('data-has-delete')).toBe('false');
-    expect(manager.getAttribute('data-has-rename')).toBe('false');
-    expect(manager.getAttribute('data-has-copy')).toBe('false');
-    expect(manager.getAttribute('data-has-move')).toBe('false');
-    expect(manager.getAttribute('data-has-duplicate')).toBe('false');
-  });
-
-  it('surfaces Download only on the Organization tab', () => {
-    mockActiveTab.value = DialFileManagerTabs.Organization;
-    mockUseDialFileManager.mockReturnValue({
-      ...defaultHookResult,
-      actionLabels: {
-        [DialFileManagerActions.Download]: 'Download',
-      },
-    });
-    render(<DialFileManagerPage />);
-    const manager = screen.getByRole('region', { name: 'file manager' });
-
-    expect(manager.getAttribute('data-has-download')).toBe('true');
-    expect(manager.getAttribute('data-has-delete')).toBe('false');
-    expect(manager.getAttribute('data-has-copy')).toBe('false');
-    expect(manager.getAttribute('data-has-move')).toBe('false');
-    expect(manager.getAttribute('data-has-duplicate')).toBe('false');
-  });
-});
-
-describe('DialFileManagerPage — All tab', () => {
-  beforeEach(() => {
-    mockFileManagerTabs.value = ['all', 'my_files', 'shared', 'organization'];
-  });
-
-  it('opens on the All tab with every source tab as a section', () => {
-    render(<DialFileManagerPage />);
-
-    expect(
-      screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed'),
-    ).toBe('true');
-    expect(mockUseDialFileManager).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activeTab: DialFileManagerTabs.All,
-        sections: [
-          {
-            tab: DialFileManagerTabs.MyFiles,
-            rootLabel: 'dialFileManager.tab.myFiles',
-          },
-          {
-            tab: DialFileManagerTabs.Shared,
-            rootLabel: 'dialFileManager.shared.rootFolder',
-          },
-          {
-            tab: DialFileManagerTabs.Organization,
-            rootLabel: 'basic.organization',
-          },
-        ],
-      }),
-    );
-  });
-
-  it('only turns configured source tabs into sections', () => {
-    mockFileManagerTabs.value = ['all', 'my_files', 'organization'];
-    render(<DialFileManagerPage />);
-
-    const [options] = mockUseDialFileManager.mock.calls[0];
-    expect(options.sections.map((section) => section.tab)).toEqual([
-      DialFileManagerTabs.MyFiles,
-      DialFileManagerTabs.Organization,
-    ]);
-  });
-
-  it('switches to My files when the deployment does not list all', () => {
-    mockFileManagerTabs.value = ['my_files', 'shared', 'organization'];
-    render(<DialFileManagerPage />);
-
-    expect(screen.queryByRole('button', { name: 'All' })).toBeNull();
-    expect(mockHandleTabChange).toHaveBeenCalledWith(
-      DialFileManagerTabs.MyFiles,
-    );
-  });
-
-  it('keeps All as the first tab under a right-to-left document', () => {
-    document.documentElement.dir = 'rtl';
-    try {
+  describe('DialFileManagerPage — full action matrix on my_files', () => {
+    it('surfaces the complete my_files matrix: Copy/Move/Duplicate/Rename/Delete, Share/Remove access, Info, and upload-archive', () => {
+      mockActiveTab.value = DialFileManagerTabs.MyFiles;
+      mockUseDialFileManager.mockReturnValue({
+        ...defaultHookResult,
+        actionLabels: {
+          [DialFileManagerActions.Download]: 'Download',
+          [DialFileManagerActions.Delete]: 'Delete',
+          [DialFileManagerActions.Rename]: 'Rename',
+          [DialFileManagerActions.Copy]: 'Copy',
+          [DialFileManagerActions.Move]: 'Move',
+          [DialFileManagerActions.Duplicate]: 'Duplicate',
+          [DialFileManagerActions.RemoveAccess]: 'Remove access',
+          [DialFileManagerActions.Info]: 'Info',
+        },
+      });
       render(<DialFileManagerPage />);
-      const tabs = within(
-        screen.getByRole('group', { name: 'tabs' }),
-      ).getAllByRole('button');
-      expect(tabs.map((tab) => tab.textContent)).toEqual([
-        'All',
-        'My Files',
-        'Shared',
-        'Organization',
-      ]);
-    } finally {
-      document.documentElement.dir = '';
-    }
+      const manager = screen.getByRole('region', { name: 'file manager' });
+
+      expect(manager.getAttribute('data-has-download')).toBe('true');
+      expect(manager.getAttribute('data-has-delete')).toBe('true');
+      expect(manager.getAttribute('data-has-rename')).toBe('true');
+      expect(manager.getAttribute('data-has-copy')).toBe('true');
+      expect(manager.getAttribute('data-has-move')).toBe('true');
+      expect(manager.getAttribute('data-has-duplicate')).toBe('true');
+      expect(manager.getAttribute('data-has-bulk-copy')).toBe('true');
+      expect(manager.getAttribute('data-has-bulk-move')).toBe('true');
+      expect(manager.getAttribute('data-has-bulk-duplicate')).toBe('true');
+      expect(manager.getAttribute('data-has-remove-access')).toBe('true');
+      expect(manager.getAttribute('data-has-info')).toBe('true');
+      expect(manager.getAttribute('data-has-upload-archive')).toBe('true');
+    });
+
+    it('surfaces Download only on the Shared tab', () => {
+      mockActiveTab.value = DialFileManagerTabs.Shared;
+      mockUseDialFileManager.mockReturnValue({
+        ...defaultHookResult,
+        actionLabels: {
+          [DialFileManagerActions.Download]: 'Download',
+        },
+      });
+      render(<DialFileManagerPage />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+
+      expect(manager.getAttribute('data-has-download')).toBe('true');
+      expect(manager.getAttribute('data-has-delete')).toBe('false');
+      expect(manager.getAttribute('data-has-rename')).toBe('false');
+      expect(manager.getAttribute('data-has-copy')).toBe('false');
+      expect(manager.getAttribute('data-has-move')).toBe('false');
+      expect(manager.getAttribute('data-has-duplicate')).toBe('false');
+    });
+
+    it('surfaces Download only on the Organization tab', () => {
+      mockActiveTab.value = DialFileManagerTabs.Organization;
+      mockUseDialFileManager.mockReturnValue({
+        ...defaultHookResult,
+        actionLabels: {
+          [DialFileManagerActions.Download]: 'Download',
+        },
+      });
+      render(<DialFileManagerPage />);
+      const manager = screen.getByRole('region', { name: 'file manager' });
+
+      expect(manager.getAttribute('data-has-download')).toBe('true');
+      expect(manager.getAttribute('data-has-delete')).toBe('false');
+      expect(manager.getAttribute('data-has-copy')).toBe('false');
+      expect(manager.getAttribute('data-has-move')).toBe('false');
+      expect(manager.getAttribute('data-has-duplicate')).toBe('false');
+    });
   });
 
-  it('clears the selection when the browsed section changes', async () => {
-    let setSectionTab: (tab: DialFileManagerTabs) => void = () => undefined;
-    mockUseDialFileManager.mockImplementation(() => {
-      const [sectionTab, setTab] = useState(DialFileManagerTabs.MyFiles);
-      setSectionTab = setTab;
-      return { ...defaultHookResult, sectionTab };
+  describe('DialFileManagerPage — All tab', () => {
+    beforeEach(() => {
+      mockFileManagerTabs.value = ['all', 'my_files', 'shared', 'organization'];
     });
-    const user = userEvent.setup();
-    render(<DialFileManagerPage />);
-    await user.click(screen.getByRole('button', { name: 'Select report' }));
-    expect(screen.getByText('1 selected')).toBeTruthy();
 
-    act(() => setSectionTab(DialFileManagerTabs.Shared));
+    it('opens on the All tab with every source tab as a section', () => {
+      render(<DialFileManagerPage />);
 
-    expect(screen.getByText('0 selected')).toBeTruthy();
+      expect(
+        screen
+          .getByRole('button', { name: 'All' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+      expect(mockUseDialFileManager).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activeTab: DialFileManagerTabs.All,
+          sections: [
+            {
+              tab: DialFileManagerTabs.MyFiles,
+              rootLabel: 'dialFileManager.tab.myFiles',
+            },
+            {
+              tab: DialFileManagerTabs.Shared,
+              rootLabel: 'dialFileManager.shared.rootFolder',
+            },
+            {
+              tab: DialFileManagerTabs.Organization,
+              rootLabel: 'basic.organization',
+            },
+          ],
+        }),
+      );
+    });
+
+    it('only turns configured source tabs into sections', () => {
+      mockFileManagerTabs.value = ['all', 'my_files', 'organization'];
+      render(<DialFileManagerPage />);
+
+      const [options] = mockUseDialFileManager.mock.calls[0];
+      expect(options.sections.map((section) => section.tab)).toEqual([
+        DialFileManagerTabs.MyFiles,
+        DialFileManagerTabs.Organization,
+      ]);
+    });
+
+    it('switches to My files when the deployment does not list all', () => {
+      mockFileManagerTabs.value = ['my_files', 'shared', 'organization'];
+      render(<DialFileManagerPage />);
+
+      expect(screen.queryByRole('button', { name: 'All' })).toBeNull();
+      expect(mockHandleTabChange).toHaveBeenCalledWith(
+        DialFileManagerTabs.MyFiles,
+      );
+    });
+
+    it('keeps All as the first tab under a right-to-left document', () => {
+      document.documentElement.dir = 'rtl';
+      try {
+        render(<DialFileManagerPage />);
+        const tabs = within(
+          screen.getByRole('group', { name: 'tabs' }),
+        ).getAllByRole('button');
+        expect(tabs.map((tab) => tab.textContent)).toEqual([
+          'All',
+          'My Files',
+          'Shared',
+          'Organization',
+        ]);
+      } finally {
+        document.documentElement.dir = '';
+      }
+    });
+
+    it('clears the selection when the browsed section changes', async () => {
+      let setSectionTab: (tab: DialFileManagerTabs) => void = () => undefined;
+      mockUseDialFileManager.mockImplementation(() => {
+        const [sectionTab, setTab] = useState(DialFileManagerTabs.MyFiles);
+        setSectionTab = setTab;
+        return { ...defaultHookResult, sectionTab };
+      });
+      const user = userEvent.setup();
+      render(<DialFileManagerPage />);
+      await user.click(screen.getByRole('button', { name: 'Select report' }));
+      expect(screen.getByText('1 selected')).toBeTruthy();
+
+      act(() => setSectionTab(DialFileManagerTabs.Shared));
+
+      expect(screen.getByText('0 selected')).toBeTruthy();
+    });
+  });
+
+  describe('DialFileManagerPage — page frame', () => {
+    it('renders the page title as the top-level heading', () => {
+      render(<DialFileManagerPage />);
+
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: 'dialFileManager.page.title',
+        }),
+      ).toBeTruthy();
+    });
+
+    it('shows the page title on a phone too, with the design 12px/4px padding', () => {
+      render(<DialFileManagerPage />);
+
+      const classes = screen.getByRole('banner').className.split(' ');
+      expect(classes).toContain('flex');
+      expect(classes).not.toContain('hidden');
+      expect(classes).toContain('px-3');
+      expect(classes).toContain('py-1');
+    });
+
+    it('frames the manager in a raised card on a phone too, with tighter spacing than desktop', () => {
+      render(<DialFileManagerPage />);
+
+      /* eslint-disable testing-library/no-node-access */
+      const card = screen.getByRole('region', { name: 'file manager' })
+        .parentElement?.parentElement?.parentElement;
+      /* eslint-enable testing-library/no-node-access */
+      const classes = card?.className.split(' ') ?? [];
+      expect(classes).toEqual(
+        expect.arrayContaining([
+          'rounded-xl',
+          'bg-layer-raised',
+          'py-2',
+          'desktop:p-5',
+        ]),
+      );
+    });
+
+    it('makes the shell surface transparent at every width so the card is the surface', () => {
+      render(<DialFileManagerPage />);
+
+      /* The surface is a CSS variable set on the wrapper around the shell; neither
+       has a role, so it is found two levels above the manager region. */
+      /* eslint-disable testing-library/no-node-access */
+      const wrapper = screen.getByRole('region', { name: 'file manager' })
+        .parentElement?.parentElement;
+      /* eslint-enable testing-library/no-node-access */
+      expect(wrapper?.classList.contains('[--dfms-surface:transparent]')).toBe(
+        true,
+      );
+    });
+
+    it('divides the folders panel from the grid with a line on its end edge and makes the grid a flat table without shadow, filters or header borders', () => {
+      render(<DialFileManagerPage />);
+
+      const manager = screen.getByRole('region', { name: 'file manager' });
+      const treeClasses = (
+        manager.getAttribute('data-tree-container-class') ?? ''
+      ).split(' ');
+      expect(treeClasses).toContain('border-e');
+      expect(treeClasses).not.toContain('border-s');
+      expect(treeClasses).not.toContain('shadow-sm');
+      expect(
+        (manager.getAttribute('data-grid-container-class') ?? '').split(' '),
+      ).toEqual(expect.arrayContaining(['shadow-none', 'rounded-none']));
+      expect(manager.getAttribute('data-grid-filterable')).toBe('false');
+      expect(manager.getAttribute('data-grid-no-header-borders')).toBe('true');
+    });
   });
 });

@@ -4,7 +4,9 @@ import { SkillFileNodeKind } from '../../types/skill-file-node-kind';
 import {
   buildDialFileTree,
   joinSkillPath,
+  listAncestorPaths,
   listChildNames,
+  listFolderEntries,
   resolveAddTarget,
   validateFolderName,
 } from '../file-tree';
@@ -66,7 +68,6 @@ describe('resolveAddTarget', () => {
     name: 'a.md',
     kind: SkillFileNodeKind.File,
   };
-  const rootFile = { path: 'b.md', name: 'b.md', kind: SkillFileNodeKind.File };
 
   it('targets the root from the header when nothing is selected', () => {
     expect(resolveAddTarget(SkillAddSource.Header, undefined)).toBe('');
@@ -82,14 +83,6 @@ describe('resolveAddTarget', () => {
 
   it('adds a child inside the folder', () => {
     expect(resolveAddTarget(SkillAddSource.Child, folder)).toBe('docs');
-  });
-
-  it('adds a sibling next to a nested node', () => {
-    expect(resolveAddTarget(SkillAddSource.Sibling, nestedFile)).toBe('docs');
-  });
-
-  it('adds a sibling of a top-level node at the root', () => {
-    expect(resolveAddTarget(SkillAddSource.Sibling, rootFile)).toBe('');
   });
 });
 
@@ -141,5 +134,85 @@ describe('validateFolderName', () => {
 
   it('accepts a new unique name', () => {
     expect(validateFolderName('scripts', siblings, messages)).toBeUndefined();
+  });
+});
+
+describe('listFolderEntries', () => {
+  const nodes = [
+    { path: 'agents', name: 'agents', kind: SkillFileNodeKind.Folder },
+    {
+      path: 'agents/planner.md',
+      name: 'planner.md',
+      kind: SkillFileNodeKind.File,
+    },
+    {
+      path: 'agents/reviewers/lint.md',
+      name: 'lint.md',
+      kind: SkillFileNodeKind.File,
+    },
+    {
+      path: 'agents/reviewers/deep/a.md',
+      name: 'a.md',
+      kind: SkillFileNodeKind.File,
+    },
+    { path: 'agents/archive', name: 'archive', kind: SkillFileNodeKind.Folder },
+    { path: 'notes.md', name: 'notes.md', kind: SkillFileNodeKind.File },
+  ];
+
+  it('lists direct children with folders first and each group sorted by name', () => {
+    expect(
+      listFolderEntries(nodes, 'agents').map((entry) => [
+        entry.name,
+        entry.kind,
+      ]),
+    ).toEqual([
+      ['archive', SkillFileNodeKind.Folder],
+      ['reviewers', SkillFileNodeKind.Folder],
+      ['planner.md', SkillFileNodeKind.File],
+    ]);
+  });
+
+  it('includes a folder that exists only through deeper paths and counts its direct children', () => {
+    const reviewers = listFolderEntries(nodes, 'agents').find(
+      (entry) => entry.name === 'reviewers',
+    );
+
+    expect(reviewers).toMatchObject({
+      path: 'agents/reviewers',
+      childCount: 2,
+    });
+  });
+
+  it('counts zero children for an empty folder and for a file', () => {
+    const entries = listFolderEntries(nodes, 'agents');
+
+    expect(entries.find((e) => e.name === 'archive')?.childCount).toBe(0);
+    expect(entries.find((e) => e.name === 'planner.md')?.childCount).toBe(0);
+  });
+
+  it('returns nothing for an empty folder', () => {
+    expect(listFolderEntries(nodes, 'agents/archive')).toEqual([]);
+  });
+
+  it('does not treat a sibling sharing a name prefix as a child', () => {
+    const entries = listFolderEntries(
+      [
+        { path: 'a', name: 'a', kind: SkillFileNodeKind.Folder },
+        { path: 'ab/x.md', name: 'x.md', kind: SkillFileNodeKind.File },
+      ],
+      'a',
+    );
+
+    expect(entries).toEqual([]);
+  });
+});
+
+describe('listAncestorPaths', () => {
+  it('returns every ancestor folder, outermost first', () => {
+    expect(listAncestorPaths('a/b/c.md')).toEqual(['a', 'a/b']);
+  });
+
+  it('returns nothing for a root-level path', () => {
+    expect(listAncestorPaths('notes.md')).toEqual([]);
   });
 });

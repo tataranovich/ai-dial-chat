@@ -21,6 +21,8 @@ export interface ScheduledTaskDetailViewLabels extends ScheduledTaskInstructions
   deletedStateLabel: string;
   /** Message shown alongside the page-level retry action when `error` is set. */
   errorLabel: string;
+  /** Accessible label of the loading spinner shown while `isLoading` is `true`. Defaults to `'Loading scheduled task'`. */
+  loadingAriaLabel?: string;
   /** Title of the Details section. */
   detailsTitle: string;
   /** Label for the description field. */
@@ -51,6 +53,8 @@ export interface ScheduledTaskDetailViewLabels extends ScheduledTaskInstructions
   historyTitle: string;
   /** Message shown when the task has no runs yet. */
   historyEmptyLabel: string;
+  /** Secondary line under `historyEmptyLabel`. Omitted when not set. */
+  historyEmptyDescription?: string;
   /** Message shown alongside the retry action when `runsError` is set. */
   historyErrorLabel: string;
   /** Next-page failure message; falls back to historyErrorLabel. */
@@ -65,6 +69,8 @@ export interface ScheduledTaskDetailViewLabels extends ScheduledTaskInstructions
   runStatusLabels: Record<ScheduledTaskRunStatus, string>;
   /** `sr-only` label announced alongside the unread-dot indicator on a run row whose `isUnread` is `true`. Defaults to `'Unread'`. */
   unreadIndicatorLabel?: string;
+  /** Label of the link inside an expanded failed run's details that opens its conversation. Defaults to `'Open conversation'`. */
+  openConversationLabel?: string;
   /** Accessible name for the mobile/tablet body's tab row. Defaults to `'Scheduled task sections'`. */
   tabsAriaLabel?: string;
 }
@@ -82,6 +88,8 @@ export interface ScheduledTaskDetailViewColors {
   detailsColumnBorder?: string;
   /** Section subtitle and status-message text color. Fallback: `--text-secondary`. */
   subtitleText?: string;
+  /** Description text color in the Details section. Fallback: `--text-primary` (`#161b2d` when no theme token is defined). */
+  descriptionText?: string;
   /** Success status icon color. Fallback: `--text-success`. */
   successIconColor?: string;
   /** Error status icon color. Fallback: `--text-error`. */
@@ -169,6 +177,8 @@ export interface ScheduledTaskDetailViewProps {
   description?: string;
   /** Resolved "Model or Agent" display value (already resolved to a display name, or the raw id as a fallback). */
   modelLabel?: string;
+  /** Optional host renderer for model availability and its explanation. */
+  renderModelName?: (name: string) => ReactNode;
   /** Pre-formatted recurrence label, e.g. "Every Monday 12:00". */
   repeatsLabel?: string;
   /** Pre-formatted activity-window label, e.g. "Aug 1, 2026 – Dec 31, 2026". Omit to hide (unbounded or one-shot schedule). */
@@ -179,6 +189,8 @@ export interface ScheduledTaskDetailViewProps {
   instructionsMarkdown?: string;
   /** Resolved skill names or full saved references, in selection order; omit or pass [] to hide the field. */
   skillDisplayNames?: string[];
+  /** Optional host renderer for a skill name and its availability, in selection order. */
+  renderSkillName?: (name: string, index: number) => ReactNode;
   /** Renders `instructionsMarkdown` as a ReactNode. When omitted, `instructionsMarkdown` is rendered via `MDMessageViewer` (the same markdown stack chat assistant messages use). */
   renderInstructions?: (markdown: string) => ReactNode;
   /** Pre-formatted "Next run" label shown under the History title, e.g. "Next run: Jul 31 at 9:00 AM". Omit to hide (e.g. when the schedule is paused or inactive). */

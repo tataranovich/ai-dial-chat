@@ -1,4 +1,8 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  ConflictException,
+  INestApplication,
+  ValidationPipe,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import type {
@@ -10,13 +14,14 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthSource } from '../../auth/auth-source.enum';
 import type { SessionUser } from '../../auth/session/session.types';
-import { ConversationGenerationService } from '../conversation-generation.service';
-import { ConversationController } from '../conversation.controller';
+import { ConversationGenerationController } from '../conversation-generation.controller';
 import { ConversationService } from '../conversation.service';
 import {
   ConversationMessageDto,
   ConversationMessageRole,
 } from '../dto/conversation-message.dto';
+import { ConversationGenerationService } from '../generation/conversation-generation.service';
+import { ConversationCompletionsResponder } from '../streaming/conversation-completions.responder';
 
 const TEST_USER = {
   sid: 'test-sid',
@@ -55,6 +60,13 @@ const startAttachRequest = async (app: INestApplication) =>
     .send({ path: PATH })
     .expect(200);
 
+/* Decodes the `data:` lines of an SSE body, skipping keepalive comments. */
+const parseSseEvents = (body: string): Record<string, unknown>[] =>
+  body
+    .split('\n')
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice('data: '.length)));
+
 const waitForSubscribers = async (
   service: ConversationGenerationService,
   ownerKey: string,
@@ -79,8 +91,9 @@ describe('POST /conversations/completions/attach (integration)', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ConversationController],
+      controllers: [ConversationGenerationController],
       providers: [
+        ConversationCompletionsResponder,
         { provide: ConversationService, useValue: mockService },
         { provide: ConfigService, useValue: { get: vi.fn() } },
         ConversationGenerationService,
@@ -137,6 +150,20 @@ describe('POST /conversations/completions/attach (integration)', () => {
       .expect(400);
   });
 
+  it('returns 400 when path contains a backslash', async () => {
+    await request(app.getHttpServer())
+      .post('/conversations/completions/attach')
+      .send({ path: String.raw`bucket\secret` })
+      .expect(400);
+  });
+
+  it('accepts a path whose title contains an ellipsis (#9600)', async () => {
+    await request(app.getHttpServer())
+      .post('/conversations/completions/attach')
+      .send({ path: 'test-bucket/gpt-4o__Hi... there__uuid' })
+      .expect(404);
+  });
+
   it('delivers a snapshot, then live chunks, then a terminal event, in order', async () => {
     const lease = generationService.register(COOKIE_OWNER_KEY, PATH, GEN_ID);
     generationService.seedAssembledMessage(lease, makeMessage(''));
@@ -173,6 +200,69 @@ describe('POST /conversations/completions/attach (integration)', () => {
 
     const res = await reqPromise;
     expect(res.text).toContain('"type":"stopped"');
+  });
+
+  it('announces the generation id on the snapshot event', async () => {
+    const lease = generationService.register(COOKIE_OWNER_KEY, PATH, GEN_ID);
+    generationService.seedAssembledMessage(lease, makeMessage(''));
+
+    const reqPromise = startAttachRequest(app);
+    await waitForSubscribers(generationService, COOKIE_OWNER_KEY);
+    generationService.complete(lease);
+
+    const res = await reqPromise;
+
+    const snapshot = parseSseEvents(res.text).find(
+      (event) => event.type === 'snapshot',
+    );
+    expect(snapshot?.generationId).toBe(GEN_ID);
+    expect(snapshot?.message).toMatchObject({ role: 'assistant', content: '' });
+  });
+
+  it('lets the announced id stop the generation it was attached to', async () => {
+    const lease = generationService.register(COOKIE_OWNER_KEY, PATH, GEN_ID);
+    generationService.seedAssembledMessage(lease, makeMessage(''));
+
+    const reqPromise = startAttachRequest(app);
+    await waitForSubscribers(generationService, COOKIE_OWNER_KEY);
+    await request(app.getHttpServer())
+      .post('/conversations/completions/stop')
+      .send({ generationId: GEN_ID, path: PATH })
+      .expect(204);
+    generationService.error(lease);
+
+    const res = await reqPromise;
+    const events = parseSseEvents(res.text);
+    expect(
+      events.find((event) => event.type === 'snapshot')?.generationId,
+    ).toBe(GEN_ID);
+    expect(events.at(-1)?.type).toBe('stopped');
+  });
+
+  it('keeps the message and the chunk events unchanged by the announced id', async () => {
+    const lease = generationService.register(COOKIE_OWNER_KEY, PATH, GEN_ID);
+    generationService.seedAssembledMessage(lease, makeMessage(''));
+
+    const reqPromise = startAttachRequest(app);
+    await waitForSubscribers(generationService, COOKIE_OWNER_KEY);
+    generationService.applyChunk(
+      lease,
+      { choices: [{ delta: { content: 'Hi' } }] },
+      makeMessage('Hi'),
+    );
+    generationService.complete(lease);
+
+    const events = parseSseEvents((await reqPromise).text);
+
+    expect(events.map((event) => event.type)).toEqual([
+      'snapshot',
+      'chunk',
+      'done',
+    ]);
+    expect(events[1]).toEqual({
+      type: 'chunk',
+      chunk: { choices: [{ delta: { content: 'Hi' } }] },
+    });
   });
 
   it('supports two concurrent subscribers on the same generation, each with their own snapshot', async () => {
@@ -235,8 +325,9 @@ describe('POST /conversations/completions/attach — header-authenticated caller
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ConversationController],
+      controllers: [ConversationGenerationController],
       providers: [
+        ConversationCompletionsResponder,
         { provide: ConversationService, useValue: mockService },
         { provide: ConfigService, useValue: { get: vi.fn() } },
         ConversationGenerationService,
@@ -315,5 +406,140 @@ describe('POST /conversations/completions/attach — header-authenticated caller
     expect(snapshotIdx).toBeGreaterThanOrEqual(0);
     expect(chunkIdx).toBeGreaterThan(snapshotIdx);
     expect(doneIdx).toBeGreaterThan(chunkIdx);
+  });
+});
+
+describe('POST /conversations/completions/attach — retained entry after the finalization bound', () => {
+  const FINALIZE_TIMEOUT_MS = 1000;
+  const HEADER_OWNER_KEY = `h:${HEADER_USER.providerId}:${HEADER_USER.sub}`;
+  let app: INestApplication;
+  let generationService: ConversationGenerationService;
+  let resolveBackgroundAttach: ReturnType<typeof vi.fn>;
+  let principal: SessionUser;
+  let authSource: AuthSource;
+
+  beforeEach(async () => {
+    principal = TEST_USER;
+    authSource = AuthSource.Cookie;
+    resolveBackgroundAttach = vi.fn().mockResolvedValue(null);
+    const mockService = {
+      streamCompletion: vi.fn(),
+      resolveBackgroundAttach,
+      stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [ConversationGenerationController],
+      providers: [
+        ConversationCompletionsResponder,
+        { provide: ConversationService, useValue: mockService },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: vi.fn((key: string) =>
+              key === 'GENERATION_FINALIZE_TIMEOUT_MS'
+                ? FINALIZE_TIMEOUT_MS
+                : undefined,
+            ),
+          },
+        },
+        ConversationGenerationService,
+      ],
+    }).compile();
+
+    app = module.createNestApplication();
+    app.use(
+      (req: ExpressRequest, _res: ExpressResponse, next: NextFunction) => {
+        req.user = principal;
+        req.authSource = authSource;
+        next();
+      },
+    );
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
+    await app.init();
+    await app.listen(0, '127.0.0.1');
+
+    generationService = app.get(ConversationGenerationService);
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    await app.close();
+  });
+
+  /*
+   * Dispatches the terminal write and lets the finalization bound elapse
+   * while that write stays pending, leaving the entry retained with its
+   * subscribers released. Only `setTimeout` is faked, and only here, so the
+   * HTTP requests that follow run on real timers.
+   */
+  const retainAfterBound = (ownerKey: string) => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const lease = generationService.register(ownerKey, PATH, GEN_ID);
+      generationService.seedAssembledMessage(
+        lease,
+        makeMessage('partial so far'),
+      );
+      generationService.beginFinalizing(lease);
+      vi.advanceTimersByTime(FINALIZE_TIMEOUT_MS);
+      return lease;
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  const expectNotFound = async () => {
+    const res = await request(app.getHttpServer())
+      .post('/conversations/completions/attach')
+      .send({ path: PATH })
+      .expect(404);
+    expect(res.headers['content-type']).not.toContain('text/event-stream');
+    expect(res.body.message).toBe(
+      'No active generation found for the given path',
+    );
+    expect(res.text).not.toContain('snapshot');
+    expect(res.text).not.toContain('partial so far');
+  };
+
+  it('returns 404 with no stream for every attach while the save is pending, without reading the conversation', async () => {
+    retainAfterBound(COOKIE_OWNER_KEY);
+
+    await expectNotFound();
+    await expectNotFound();
+
+    expect(resolveBackgroundAttach).not.toHaveBeenCalled();
+  });
+
+  it('keeps rejecting a new generation until the pending save settles, then admits it', async () => {
+    const lease = retainAfterBound(COOKIE_OWNER_KEY);
+    await expectNotFound();
+    expect(() =>
+      generationService.register(COOKIE_OWNER_KEY, PATH, 'gen-2'),
+    ).toThrow(ConflictException);
+
+    generationService.complete(lease);
+
+    await expectNotFound();
+    expect(() =>
+      generationService.register(COOKIE_OWNER_KEY, PATH, 'gen-2'),
+    ).not.toThrow();
+  });
+
+  it('returns the same 404 to a header-authenticated owner', async () => {
+    principal = HEADER_USER;
+    authSource = AuthSource.Header;
+    retainAfterBound(HEADER_OWNER_KEY);
+
+    await expectNotFound();
+
+    expect(resolveBackgroundAttach).not.toHaveBeenCalled();
   });
 });

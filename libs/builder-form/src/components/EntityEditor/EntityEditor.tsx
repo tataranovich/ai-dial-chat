@@ -1,5 +1,10 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { NeutralButton, PrimaryButton } from '@epam/ai-dial-ui-kit';
+import {
+  NeutralButton,
+  PrimaryButton,
+  LiveRegion,
+  LiveRegionPoliteness,
+} from '@epam/ai-dial-ui-kit';
 import { memo, type FC } from 'react';
 import { BUILDER_FORM_CLASS } from '../../constants/public-class-names';
 import type { EntityEditorProps } from '../../models/entity-editor-props';
@@ -7,6 +12,7 @@ import { EditorLayout } from '../EditorLayout/EditorLayout';
 import { EditorSection } from '../EditorSection/EditorSection';
 
 const SECTION_CLASS_NAME = 'border-0 p-4 desktop:p-8';
+const UNPADDED_SECTION_CLASS_NAME = 'border-0';
 /* On desktop the Setup section fills the column, so full-height content (an embedded editor) can stretch. */
 const SETUP_SECTION_CLASS_NAME = 'desktop:flex-1';
 const ALERT_CLASS_NAME = 'px-4 pt-4 desktop:px-6 desktop:pt-6';
@@ -27,19 +33,28 @@ const EntityEditorComponent: FC<EntityEditorProps> = ({
   metadataFooter,
   setup,
   setupTitle,
+  asideData,
+  asideTitle,
+  asideSectionClassName,
   alert,
+  resizableLeftColumn,
   metadataSectionClassName,
   setupSectionClassName,
+  hasSetupSectionPadding = true,
   labels,
   styles,
   dir,
 }) => {
-  const alertRegion =
-    alert != null ? (
-      <div role="alert" className={ALERT_CLASS_NAME}>
-        {alert}
-      </div>
-    ) : null;
+  /* Always mounted so a message arriving later is announced: a live region
+     rendered together with its text is not read reliably. Empty, it takes no space. */
+  const alertRegion = (
+    <LiveRegion
+      politeness={LiveRegionPoliteness.Assertive}
+      className={alert != null ? ALERT_CLASS_NAME : undefined}
+    >
+      {alert}
+    </LiveRegion>
+  );
   const hasSetup = setup != null;
 
   return (
@@ -48,7 +63,27 @@ const EntityEditorComponent: FC<EntityEditorProps> = ({
       onBack={onBack}
       backAriaLabel={labels?.backAriaLabel ?? 'Back'}
       isSaving={isSubmitting}
-      labels={{ savingStatusLabel: labels?.savingStatusLabel ?? 'Saving' }}
+      resizableLeftColumn={resizableLeftColumn}
+      labels={{
+        savingStatusLabel: labels?.savingStatusLabel ?? 'Saving',
+        resizeHandleLabel: labels?.resizeHandleLabel,
+        resizeHandleTooltip: labels?.resizeHandleTooltip,
+      }}
+      rightContent={
+        asideData != null ? (
+          <EditorSection
+            title={asideTitle}
+            styles={styles?.section}
+            className={mergeClasses(
+              SECTION_CLASS_NAME,
+              asideSectionClassName,
+              BUILDER_FORM_CLASS.asideSection,
+            )}
+          >
+            {asideData}
+          </EditorSection>
+        ) : undefined
+      }
       styles={styles?.layout}
       dir={dir}
       actions={
@@ -91,7 +126,7 @@ const EntityEditorComponent: FC<EntityEditorProps> = ({
           {metadataFooter}
         </>
       }
-      rightContent={
+      centerContent={
         hasSetup ? (
           <>
             {alertRegion}
@@ -103,7 +138,9 @@ const EntityEditorComponent: FC<EntityEditorProps> = ({
               }
               styles={styles?.section}
               className={mergeClasses(
-                SECTION_CLASS_NAME,
+                hasSetupSectionPadding
+                  ? SECTION_CLASS_NAME
+                  : UNPADDED_SECTION_CLASS_NAME,
                 SETUP_SECTION_CLASS_NAME,
                 setupSectionClassName,
                 BUILDER_FORM_CLASS.setupSection,

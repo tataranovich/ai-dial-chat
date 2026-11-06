@@ -43,6 +43,25 @@ describe('DeploymentSelectorField', () => {
     await waitFor(() => expect(trigger.matches(':focus')).toBe(true));
   });
 
+  it('opens the default panel as a named dialog announced by the trigger', async () => {
+    const user = userEvent.setup();
+    renderField({
+      labels: {
+        searchPlaceholder: 'Search',
+        searchAriaLabel: 'Search models',
+        emptyLabel: 'Nothing here',
+        errorLabel: 'Error',
+        panelAriaLabel: 'Pick a model',
+      },
+    });
+    const trigger = screen.getByRole('combobox');
+    expect(trigger.getAttribute('aria-haspopup')).toBe('dialog');
+    await user.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: 'Pick a model' });
+    expect(within(dialog).getByRole('listbox')).toBeTruthy();
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
   it('keeps Browse available when records are empty', async () => {
     const onBrowse = vi.fn();
     const user = userEvent.setup();
@@ -129,5 +148,39 @@ describe('DeploymentSelectorField', () => {
     });
     await user.click(screen.getByText('Open picker'));
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('DeploymentSelectorField — search status', () => {
+  it('keeps the status region outside the listbox and fills it when the search matches nothing', async () => {
+    const user = userEvent.setup();
+    renderField();
+    await user.click(screen.getByRole('combobox'));
+    await screen.findByRole('option', { name: 'Model A' });
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('');
+    expect(
+      within(screen.getByRole('listbox')).queryByRole('status'),
+    ).toBeNull();
+
+    await user.type(
+      screen.getByRole('textbox', { name: 'Search models' }),
+      'zzz',
+    );
+
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status.textContent).toBe('Nothing here');
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('renders no listbox when there are no records, keeping the status and alert regions mounted', async () => {
+    const user = userEvent.setup();
+    renderField({ records: [] });
+    await user.click(screen.getByRole('combobox'));
+    expect((await screen.findByRole('status')).textContent).toBe(
+      'Nothing here',
+    );
+    expect(screen.getByRole('alert').textContent).toBe('');
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 });

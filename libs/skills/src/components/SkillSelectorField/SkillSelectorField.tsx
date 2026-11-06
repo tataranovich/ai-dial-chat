@@ -8,9 +8,11 @@ import {
   DIAL_ICON_SIZE,
   Highlight,
   Select,
+  Tag,
+  TagAppearance,
   Tooltip,
 } from '@epam/ai-dial-ui-kit';
-import { useId, useLayoutEffect, useRef, useState, type FC } from 'react';
+import { useId, useState, type FC } from 'react';
 import { SKILLS_CLASS } from '../../constants/public-class-names';
 import type {
   SkillSelectorFieldProps,
@@ -19,7 +21,8 @@ import type {
 import styles from './SkillSelectorField.module.scss';
 
 const EMPTY_SKILLS: SkillSelectorOption[] = [];
-const DEFAULT_UNAVAILABLE_TOOLTIP_LABEL =
+
+const DEFAULT_UNAVAILABLE_HINT_LABEL =
   'Selected model does not support skills. Select a different model to use a skill.';
 
 /** Controlled multi-skill Select listing the given skills as checkbox options. */
@@ -27,6 +30,7 @@ export const SkillSelectorField: FC<SkillSelectorFieldProps> = ({
   value,
   onChange,
   displayNames,
+  unavailableValues = [],
   skills = EMPTY_SKILLS,
   isSkillsSupported,
   isDisabled = false,
@@ -37,20 +41,25 @@ export const SkillSelectorField: FC<SkillSelectorFieldProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const rootRef = useRef<HTMLDivElement>(null);
   const descriptionId = useId();
   const unsupported = value.some((url) =>
     isSkillSelectionUnsupported(url, isSkillsSupported),
   );
   const canAdd = isSkillsSupported && !isDisabled;
   const open = isOpen && canAdd;
+  /* The unsupported reason exists only while a selection is present; with no
+   * selection and no support the field is simply disabled, without a
+   * tooltip or caption. */
   const unsupportedReason =
-    value.length > 0
-      ? labels.unsupportedTooltipLabel
-      : (labels.unavailableTooltipLabel ?? DEFAULT_UNAVAILABLE_TOOLTIP_LABEL);
+    value.length > 0 ? labels.unsupportedTooltipLabel : undefined;
   const isUnavailableHintShown = !isSkillsSupported && value.length === 0;
-  const description =
-    error ?? (isUnavailableHintShown ? unsupportedReason : undefined);
+  /* The design shows no visible tooltip or caption for the disabled empty
+   * field, so the reason reaches assistive tech through the screen-reader-only
+   * description alone. A host validation error is passed to Select as the
+   * error, never aliased into this description. */
+  const description = isUnavailableHintShown
+    ? (labels.unavailableHintLabel ?? DEFAULT_UNAVAILABLE_HINT_LABEL)
+    : undefined;
   const optionItems = new Map(
     value.map((url) => [url, { id: url, name: displayNames?.[url] || url }]),
   );
@@ -62,7 +71,7 @@ export const SkillSelectorField: FC<SkillSelectorFieldProps> = ({
       <Highlight text={item.name} query={query} maxLines={1} />
     ) : undefined,
     icon: <DeploymentIcon size={DIAL_ICON_SIZE.SM} initialsName={item.name} />,
-    disabled: !isSkillsSupported,
+    disabled: !isSkillsSupported || unavailableValues.includes(item.id),
   }));
   const cssVars = {
     ...buildCssVars({
@@ -70,6 +79,8 @@ export const SkillSelectorField: FC<SkillSelectorFieldProps> = ({
       '--ssf-bg': fieldStyles?.colors?.background,
       '--ssf-border': fieldStyles?.colors?.border,
       '--ssf-error': fieldStyles?.colors?.error,
+      '--ssf-unavailable-tag-bg': fieldStyles?.colors?.unavailableTagBackground,
+      '--ssf-unavailable-tag-border': fieldStyles?.colors?.unavailableTagBorder,
     }),
     ...fieldStyles?.cssVars,
   };
@@ -79,23 +90,8 @@ export const SkillSelectorField: FC<SkillSelectorFieldProps> = ({
     setIsOpen(nextOpen);
   };
 
-  /* Select does not expose the combobox ARIA state directly, so bridge the
-   * host validation description onto its focus target until the kit does. */
-  useLayoutEffect(() => {
-    const combobox =
-      rootRef.current?.querySelector<HTMLInputElement>('[role="combobox"]');
-    if (!combobox) return;
-
-    if (description) combobox.setAttribute('aria-describedby', descriptionId);
-    else combobox.removeAttribute('aria-describedby');
-
-    if (error || unsupported) combobox.setAttribute('aria-invalid', 'true');
-    else combobox.removeAttribute('aria-invalid');
-  }, [description, descriptionId, error, isDisabled, unsupported]);
-
   return (
     <div
-      ref={rootRef}
       className={mergeClasses('min-w-0', className, SKILLS_CLASS.selectorField)}
       style={cssVars}
     >
@@ -107,6 +103,47 @@ export const SkillSelectorField: FC<SkillSelectorFieldProps> = ({
         <div inert={isDisabled ? true : undefined}>
           <Select
             multiple
+            customMultiSelectTagsRenderer={
+              unavailableValues.length
+                ? (options, selectedValues, removeTag) =>
+                    selectedValues.map((url) => {
+                      const label =
+                        options.find((option) => option.value === url)?.label ??
+                        url;
+                      const unavailable = unavailableValues.includes(url);
+                      const tag = (
+                        <Tag
+                          label={label}
+                          title={unavailable ? '' : undefined}
+                          appearance={TagAppearance.Bordered}
+                          closable
+                          disabled={isDisabled}
+                          removeLabel={labels.removeLabel}
+                          onRemove={(event) => removeTag(event, url)}
+                          className={
+                            unavailable ? styles.unavailableTag : undefined
+                          }
+                        />
+                      );
+                      return unavailable ? (
+                        <Tooltip
+                          key={url}
+                          tooltip={
+                            labels.unavailableTooltipLabel ??
+                            'The skill has been deleted or access revoked'
+                          }
+                          triggerClassName="min-w-0 cursor-pointer"
+                        >
+                          {tag}
+                        </Tooltip>
+                      ) : (
+                        <span key={url} className="min-w-0">
+                          {tag}
+                        </span>
+                      );
+                    })
+                : undefined
+            }
             searchable
             open={open}
             onOpenChange={handleOpenChange}
@@ -120,7 +157,7 @@ export const SkillSelectorField: FC<SkillSelectorFieldProps> = ({
             placeholder={labels.placeholder}
             labelProps={{ label: labels.fieldLabel }}
             error={error}
-            caption={isUnavailableHintShown ? unsupportedReason : undefined}
+            ariaDescribedBy={description ? descriptionId : undefined}
             searchPlaceholder={labels.searchPlaceholder ?? 'Search skills'}
             emptyStateTitle={
               query.trim()

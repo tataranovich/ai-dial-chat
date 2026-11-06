@@ -1,4 +1,8 @@
-import { CatalogEntityType, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  CatalogEntityType,
+  mergeClasses,
+  useIsPhone,
+} from '@epam/ai-dial-chat-shared';
 import { SelectOption, Spinner, Tabs } from '@epam/ai-dial-ui-kit';
 import {
   FC,
@@ -10,9 +14,11 @@ import {
   useState,
 } from 'react';
 import { CATALOG_CLASS } from '../../constants/public-class-names';
+import { useCatalogScrollToTop } from '../../hooks/useCatalogScrollToTop/useCatalogScrollToTop';
 import { CatalogItem } from '../../models/catalog-item';
 import type { CatalogProps } from '../../models/catalog-props';
 import type { CatalogItemDetailsFetchResult } from '../../models/item-details-data';
+import type { ListViewHandle } from '../../models/list-props';
 import { CatalogSortKey } from '../../types/sort';
 import type { CredentialsLevel } from '../../types/toolset-auth';
 import { CatalogViewMode } from '../../types/view-mode';
@@ -23,7 +29,13 @@ import {
   getTopicOptions,
 } from '../../utils/catalog-filter';
 import { sortCatalogItems } from '../../utils/catalog-sort';
-import { buildCatalogTabs } from '../../utils/catalog-tabs';
+import {
+  buildCatalogTabs,
+  getCatalogItemTabs,
+  resolveTabText,
+  scrollSelectedTabIntoView,
+} from '../../utils/catalog-tabs';
+import { getTabCreateButtonConfig } from '../../utils/create-menu';
 import { getCatalogMarkdownLabels } from '../../utils/item-details-texts';
 import { getStyles } from '../../utils/styles';
 import { isLevelSignedIn, sleep } from '../../utils/toolset-credentials';
@@ -31,9 +43,11 @@ import { CardGrid } from '../CardGrid/CardGrid';
 import { DetailsPanel } from '../Details/DetailsPanel';
 import { Favorites } from '../Favorites/Favorites';
 import { ListView } from '../ListView/ListView';
+import { PersonalEmptyState } from '../PersonalEmptyState/PersonalEmptyState';
+import { ScrollToTopButton } from '../ScrollToTopButton/ScrollToTopButton';
 import { Toolbar } from '../Toolbar/Toolbar';
 import styles from './Catalog.module.scss';
-import { CreateButton } from './CreateButton';
+import { CreateButton, type CreateButtonProps } from './CreateButton';
 
 /**
  * How many times the post-login/post-logout details refetch retries before
@@ -110,11 +124,13 @@ export const Catalog: FC<CatalogProps> = ({
   onCreateClick,
   createOptions,
   createSearch,
+  createMenuByTab,
   hideCreateButton = false,
   hidePageTitle = false,
   isReadonly = false,
   initialViewMode = CatalogViewMode.Grid,
   isFullWidth = false,
+  isFavoritesPaginationHidden = false,
   selectedItemId,
   onCardClick,
   isLoading,
@@ -132,8 +148,10 @@ export const Catalog: FC<CatalogProps> = ({
   onActiveTabChange,
   renderEmptyState,
 }) => {
-  const { typography } = catalogStyles ?? {};
+  const { typography, headingRowClassName = 'h-[64px]' } = catalogStyles ?? {};
   const cssVars = getStyles(catalogStyles);
+
+  const isPhone = useIsPhone();
 
   const pageTitle = titles?.pageTitle ?? 'Catalog';
   const createLabel = titles?.createLabel ?? 'Create';
@@ -141,13 +159,18 @@ export const Catalog: FC<CatalogProps> = ({
   const browseTitle = titles?.browseTitle ?? 'Browse';
   const searchPlaceholder =
     titles?.searchPlaceholder ?? 'Search models, tools, agents…';
-  const noResultsTitle =
-    titles?.noResultsTitle ?? ((q: string) => `No results for "${q}"`);
+  const noResultsTitle = titles?.noResultsTitle ?? (() => 'No items found');
+  const myAppsEmptyTitle =
+    titles?.myAppsEmptyTitle ?? (() => 'No personal items yet');
+  const myAppsEmptyDescription =
+    titles?.myAppsEmptyDescription ??
+    "Create your first one, it'll show up right here.";
   const featuredLabel = titles?.featuredLabel ?? 'Featured';
   const gridViewLabel = titles?.gridViewLabel ?? 'Grid view';
   const listViewLabel = titles?.listViewLabel ?? 'List view';
   const viewToggleLabel = titles?.viewToggleLabel ?? 'View mode';
   const resolvedAriaLabel = titles?.ariaLabel ?? 'Catalog';
+  const scrollToTopLabel = titles?.scrollToTopLabel ?? 'Scroll to top';
 
   const sortLabel = titles?.sortLabel ?? 'Sort';
 
@@ -239,6 +262,15 @@ export const Catalog: FC<CatalogProps> = ({
 
   const activeTab = controlledActiveTab ?? internalActiveTab;
 
+  /* The tab row scrolls sideways on narrow screens, so a selected tab past
+     its end (restored on load, or picked from the host) is brought into view. */
+  const tabsRowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (tabsRowRef.current != null) {
+      scrollSelectedTabIntoView(tabsRowRef.current);
+    }
+  }, [activeTab, tabs.length]);
+
   const handleActiveTabChange = useCallback(
     (tabId: string) => {
       setInternalActiveTab(tabId);
@@ -269,6 +301,19 @@ export const Catalog: FC<CatalogProps> = ({
     CatalogItemDetailsFetchResult | undefined
   >(undefined);
   const [isDetailsLoading, setIsDetailsLoading] = useState(false);
+  const detailsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  useEffect(
+    () => () => {
+      if (detailsCloseTimeoutRef.current !== null) {
+        clearTimeout(detailsCloseTimeoutRef.current);
+      }
+    },
+    [],
+  );
+
   const pendingItemIdRef = useRef<string | null>(null);
   /*
    * Identifies each in-flight `onFetchDetails` call by a monotonically
@@ -309,6 +354,12 @@ export const Catalog: FC<CatalogProps> = ({
     async (
       item: CatalogItem,
     ): Promise<CatalogItemDetailsFetchResult | undefined> => {
+      if (detailsCloseTimeoutRef.current !== null) {
+        clearTimeout(detailsCloseTimeoutRef.current);
+        detailsCloseTimeoutRef.current = null;
+        /* The panel is still mounted, including when reopening the same item. */
+        setIsDetailsOpen(true);
+      }
       setSelectedItem(item);
       setFetchedDetails(undefined);
       return fetchDetails(item);
@@ -413,7 +464,11 @@ export const Catalog: FC<CatalogProps> = ({
     pendingItemIdRef.current = null;
     /* Invalidates the in-flight request's token, so a response arriving after close cannot resurrect the closed panel. */
     pendingRequestIdRef.current += 1;
-    setTimeout(() => {
+    if (detailsCloseTimeoutRef.current !== null) {
+      clearTimeout(detailsCloseTimeoutRef.current);
+    }
+    detailsCloseTimeoutRef.current = setTimeout(() => {
+      detailsCloseTimeoutRef.current = null;
       setSelectedItem(null);
       setFetchedDetails(undefined);
       setIsDetailsLoading(false);
@@ -454,7 +509,9 @@ export const Catalog: FC<CatalogProps> = ({
   const tabFiltered = useMemo(
     () =>
       activeTab
-        ? myAppsFiltered.filter((item) => item.type === activeTab)
+        ? myAppsFiltered.filter((item) =>
+            getCatalogItemTabs(item).includes(activeTab as CatalogEntityType),
+          )
         : myAppsFiltered,
     [myAppsFiltered, activeTab],
   );
@@ -506,11 +563,39 @@ export const Catalog: FC<CatalogProps> = ({
   }, []);
 
   const isCreateButtonVisible = !hideCreateButton && !isReadonly;
+  /* On phones the header's Create button becomes a round
+   * "+" pinned to the bottom of the catalog, as on other mobile screens. */
+  const isFloatingCreateVisible = isCreateButtonVisible && isPhone;
+
+  /* State, not a ref: the scroll body mounts only after loading, and the
+     scroll-to-top hook must subscribe to it once it exists. */
+  const [scrollBody, setScrollBody] = useState<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const listViewRef = useRef<ListViewHandle>(null);
+  const {
+    isVisible: isScrollToTopVisible,
+    handleRowsScroll,
+    scrollToTop,
+  } = useCatalogScrollToTop({
+    scrollBody,
+    searchInputRef,
+    listViewRef,
+    isListView: viewMode === CatalogViewMode.Cards,
+  });
   /* A read-only catalog cannot favorite anything, so the strip has no way to
    * gain or lose entries and is dropped rather than shown frozen. */
   const isFavoritesVisible = isFavoritesRendered && !isReadonly;
 
-  const emptyTitle = query ? noResultsTitle(query) : 'No items';
+  /* A search or a topic filter narrowed the tab to nothing, so the empty
+   * state explains how to widen it; otherwise the tab itself is empty. */
+  const isNarrowed = query !== '' || filters.size > 0;
+  const emptyTitle = isNarrowed
+    ? noResultsTitle(query, activeTab)
+    : (resolveTabText(titles?.emptyTitle, activeTab) ?? 'No items yet');
+  const emptyDescription = isNarrowed
+    ? (titles?.noResultsDescription ??
+      'Try a different search term or check your filters.')
+    : resolveTabText(titles?.emptyDescription, activeTab);
   /* Keyed on the strings, not `detailsTexts`, which hosts often pass inline;
    * a fresh object here would invalidate every virtual grid row. */
   const {
@@ -540,11 +625,19 @@ export const Catalog: FC<CatalogProps> = ({
   const cardGridTitles = useMemo(
     () => ({
       noResultsTitle: emptyTitle,
+      noResultsDescription: emptyDescription,
       featuredLabel,
+      noFolderLabel: titles?.noFolderLabel,
       credentialsBadgeLoggedOutLabel:
         detailsTexts?.credentialsBadgeLoggedOutLabel,
     }),
-    [emptyTitle, featuredLabel, detailsTexts?.credentialsBadgeLoggedOutLabel],
+    [
+      emptyTitle,
+      emptyDescription,
+      featuredLabel,
+      titles?.noFolderLabel,
+      detailsTexts?.credentialsBadgeLoggedOutLabel,
+    ],
   );
 
   /*
@@ -561,11 +654,43 @@ export const Catalog: FC<CatalogProps> = ({
         isMyAppsActive,
       })
     : undefined;
+  /* A tab missing from `createMenuByTab` has no personal entities at all
+     (models), so it keeps the default empty state. */
+  const isPersonalEmptyStateVisible =
+    isResultSetEmpty &&
+    isMyAppsActive &&
+    !query &&
+    filters.size === 0 &&
+    (createMenuByTab == null ||
+      createMenuByTab[activeTab as CatalogEntityType] != null);
+
+  const createButtonProps: CreateButtonProps = {
+    label: createLabel,
+    options: createOptions,
+    onClick: onCreateClick,
+    search: createSearch,
+    searchPlaceholder: titles?.createSearchPlaceholder,
+    searchClearLabel: titles?.createSearchClearLabel,
+    noResultsLabel: titles?.createNoResultsLabel,
+    backLabel: titles?.createMenuBackLabel,
+    closeLabel: titles?.createMenuCloseLabel,
+    colors: catalogStyles?.colors?.createMenu,
+    sectionHeaderClassName: typography?.createMenuSectionHeaderClassName,
+  };
+  /* The empty state creates only the active tab's type; without a per-tab
+     menu it falls back to the header's full menu. */
+  const tabCreateButton = createMenuByTab
+    ? getTabCreateButtonConfig(createMenuByTab[activeTab as CatalogEntityType])
+    : createButtonProps;
+  const emptyStateCreateButton: CreateButtonProps | undefined =
+    isCreateButtonVisible && tabCreateButton != null
+      ? { ...createButtonProps, ...tabCreateButton }
+      : undefined;
 
   if (isLoading) {
     return (
       <div className="flex size-full min-h-0 flex-1 items-center justify-center">
-        <Spinner />
+        <Spinner ariaLabel={titles?.loadingLabel ?? 'Loading…'} />
       </div>
     );
   }
@@ -574,7 +699,7 @@ export const Catalog: FC<CatalogProps> = ({
     <section
       aria-label={resolvedAriaLabel}
       className={mergeClasses(
-        'flex size-full min-h-0 flex-1 flex-col',
+        'relative flex size-full min-h-0 flex-1 flex-col',
         styles.root,
         CATALOG_CLASS.root,
       )}
@@ -582,7 +707,13 @@ export const Catalog: FC<CatalogProps> = ({
     >
       {(!hidePageTitle || isCreateButtonVisible) && (
         <div className={mergeClasses('shrink-0', styles.heading)}>
-          <div className="flex h-[64px] w-full items-center justify-between px-8">
+          <div
+            className={mergeClasses(
+              'flex w-full items-center justify-between px-4 desktop:px-8',
+              !(hidePageTitle && isFloatingCreateVisible) &&
+                headingRowClassName,
+            )}
+          >
             {!hidePageTitle && (
               <h1
                 className={mergeClasses(
@@ -594,23 +725,47 @@ export const Catalog: FC<CatalogProps> = ({
               </h1>
             )}
             {isCreateButtonVisible && (
-              <CreateButton
-                label={createLabel}
-                options={createOptions}
-                onClick={onCreateClick}
-                search={createSearch}
-                searchPlaceholder={titles?.createSearchPlaceholder}
-                searchClearLabel={titles?.createSearchClearLabel}
-                noResultsLabel={titles?.createNoResultsLabel}
-              />
+              <div
+                className={
+                  isFloatingCreateVisible
+                    ? 'absolute inset-e-4 bottom-4 z-10'
+                    : undefined
+                }
+              >
+                <CreateButton
+                  {...createButtonProps}
+                  isFloating={isFloatingCreateVisible}
+                />
+              </div>
             )}
           </div>
         </div>
       )}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
+      {isScrollToTopVisible && (
+        /* Stacked above the floating Create button (16px inset + 48px FAB +
+           16px gap) so neither covers the other. */
+        <div
+          className={mergeClasses(
+            'absolute inset-e-4 z-10',
+            isFloatingCreateVisible ? 'bottom-20' : 'bottom-4',
+          )}
+        >
+          <ScrollToTopButton label={scrollToTopLabel} onClick={scrollToTop} />
+        </div>
+      )}
+
+      {/* With the floating Create button, extra bottom space keeps it from
+          covering the last row of cards once scrolled to the end. */}
+      <div
+        ref={setScrollBody}
+        className={mergeClasses(
+          'flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto',
+          isFloatingCreateVisible && 'pb-16',
+        )}
+      >
         {isFavoritesVisible && (
-          <div className="w-full px-8">
+          <div className="w-full px-4 desktop:px-8">
             <Favorites
               items={favorites}
               totalCount={favorites.length}
@@ -624,11 +779,12 @@ export const Catalog: FC<CatalogProps> = ({
               credentialsBadgeLoggedOutLabel={
                 detailsTexts?.credentialsBadgeLoggedOutLabel
               }
+              isPaginationHidden={isFavoritesPaginationHidden}
             />
           </div>
         )}
 
-        <div className="w-full px-4 pt-6">
+        <div className="w-full pt-6 desktop:px-4">
           <Toolbar
             totalCount={myAppsFiltered.length}
             viewMode={viewMode}
@@ -636,6 +792,7 @@ export const Catalog: FC<CatalogProps> = ({
             sortKey={sortKey}
             query={query}
             onQueryChange={setQuery}
+            searchInputRef={searchInputRef}
             title={browseTitle}
             browseHeaderRenderer={browseHeaderRenderer}
             searchPlaceholder={searchPlaceholder}
@@ -653,6 +810,7 @@ export const Catalog: FC<CatalogProps> = ({
             filterFromLabel={titles?.filterFromLabel}
             filterMyAppsLabel={titles?.filterMyAppsLabel}
             filterTopicsLabel={titles?.filterTopicsLabel}
+            browseSettingsLabels={titles?.browseSettings}
           />
         </div>
 
@@ -660,14 +818,29 @@ export const Catalog: FC<CatalogProps> = ({
             dropped rather than rendered as a single inert tab. `activeTab`
             still resolves to that one type, so the grid is unaffected. */}
         {tabs.length > 1 && (
-          <div className="min-w-0 shrink-0 overflow-x-auto px-8">
+          /* The tabs keep their natural width and the row scrolls sideways
+             when they outgrow a narrow screen, rather than each tab shrinking
+             until its label and count clip. The scrollbar is hidden, as in
+             the design; touch and trackpad swipes still scroll the row. The
+             gutter is a margin on the scroll box rather than padding, so the
+             row clips 16px in from the edge, in line with the search field,
+             whether or not it is scrolled. */
+          <div
+            ref={tabsRowRef}
+            className="mx-4 min-w-0 shrink-0 scrollbar-none overflow-x-auto desktop:mx-8"
+          >
             <Tabs
+              tabListClassName="w-max min-w-full"
+              tabClassName="shrink-0 whitespace-nowrap"
               tabs={tabs.map((tab) => ({
                 id: tab.id,
                 label:
                   typeof tab.label === 'string' ? tab.label : String(tab.label),
-                count: myAppsFiltered.filter((item) => item.type === tab.id)
-                  .length,
+                count: myAppsFiltered.filter((item) =>
+                  getCatalogItemTabs(item).includes(
+                    tab.id as CatalogEntityType,
+                  ),
+                ).length,
               }))}
               activeTabId={activeTab}
               onTabChange={handleActiveTabChange}
@@ -678,7 +851,10 @@ export const Catalog: FC<CatalogProps> = ({
           className={mergeClasses(
             tabFiltered.length > 0
               ? [
-                  'min-h-full w-full px-8 py-6',
+                  /* `flex-1`, not `min-h-full`: 100% of the scroll body plus
+                     the Favorites/Toolbar/Tabs above it always overflowed, so
+                     a lone result still showed a scrollbar (#9325). */
+                  'w-full flex-1 px-4 py-6 desktop:px-8',
                   /* Tailwind's JIT cannot scan a variable, so the cap is a
                      literal here and `CONTENT_MAX_WIDTH` in
                      `constants/virtual-grid.ts` — which the virtualizer reads
@@ -686,12 +862,18 @@ export const Catalog: FC<CatalogProps> = ({
                   !isFullWidth && 'mx-auto max-w-[1180px]',
                 ]
               : 'min-h-[180px] flex-1',
-            tabFiltered.length === 0 && 'px-8 py-6',
+            tabFiltered.length === 0 && 'px-4 py-6 desktop:px-8',
           )}
         >
-          {customEmptyState != null ? (
-            customEmptyState
-          ) : (
+          {customEmptyState != null && customEmptyState}
+          {customEmptyState == null && isPersonalEmptyStateVisible && (
+            <PersonalEmptyState
+              title={myAppsEmptyTitle(activeTab)}
+              description={myAppsEmptyDescription}
+              createButton={emptyStateCreateButton}
+            />
+          )}
+          {customEmptyState == null && !isPersonalEmptyStateVisible && (
             <>
               <div
                 inert={viewMode !== CatalogViewMode.Grid}
@@ -712,36 +894,41 @@ export const Catalog: FC<CatalogProps> = ({
                   isFullWidth={isFullWidth}
                   featuredChipStyle={catalogStyles?.colors?.featuredChipStyle}
                   markdownLabels={cardMarkdownLabels}
+                  activeTab={activeTab as CatalogEntityType}
                 />
               </div>
 
               {listMountState !== ListMountState.Unmounted && (
                 /* The first preparation needs real width for ag-grid's
-                   layout, but must not add height to the card view. */
+                   layout, but must not add height to the card view. Shown,
+                   the box takes the height left in the scroll body, since the
+                   grid scrolls its own rows; the floor keeps a short viewport
+                   usable, the scroll body scrolling first. */
                 <div
                   inert={viewMode !== CatalogViewMode.Cards}
                   className={mergeClasses(
-                    'pb-8',
+                    viewMode === CatalogViewMode.Cards &&
+                      'h-full min-h-[360px] pb-8',
                     viewMode !== CatalogViewMode.Cards &&
                       (listMountState === ListMountState.Prepared
-                        ? 'invisible h-0 overflow-hidden p-0'
+                        ? 'invisible h-0 overflow-hidden'
                         : 'hidden'),
-                    tabFiltered.length === 0 &&
-                      viewMode === CatalogViewMode.Cards &&
-                      'h-full',
                   )}
                 >
                   <ListView
+                    ref={listViewRef}
+                    onRowsScroll={handleRowsScroll}
                     type={activeTab as CatalogEntityType}
                     items={tabFiltered}
                     query={query}
                     ariaLabel={resolvedAriaLabel}
                     emptyStateTitle={emptyTitle}
+                    emptyStateDescription={emptyDescription}
+                    isEmptyStateLive={isNarrowed}
                     onToggleFavorite={onToggleFavorite}
                     isFavoriteVisible={isFavoriteVisible}
                     columnVisibility={columnVisibility}
                     onItemClick={onCardClick ?? handleOpenDetails}
-                    stickyHeaderTop={0}
                     selectedItemId={selectedItemId}
                     credentialsBadgeLoggedOutLabel={
                       detailsTexts?.credentialsBadgeLoggedOutLabel

@@ -12,6 +12,32 @@ import { ScheduledTaskRunStatus } from '../../../types/scheduled-task-run-status
 import { ScheduledTaskHistorySection } from '../ScheduledTaskHistorySection';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  LiveRegionPoliteness: { Polite: 'polite', Assertive: 'assertive' },
+  LiveRegionElement: { Div: 'div', Span: 'span', P: 'p' },
+  LiveRegion: ({
+    politeness = 'polite',
+    visuallyHidden,
+    as: Tag = 'div',
+    atomic,
+    className,
+    children,
+    ...rest
+  }: {
+    politeness?: string;
+    visuallyHidden?: boolean;
+    as?: 'div' | 'span' | 'p';
+    atomic?: boolean;
+  } & React.HTMLAttributes<HTMLElement>) => (
+    <Tag
+      {...rest}
+      role={politeness === 'assertive' ? 'alert' : 'status'}
+      aria-live={politeness as 'polite' | 'assertive'}
+      aria-atomic={atomic}
+      className={visuallyHidden ? 'sr-only' : className}
+    >
+      {children}
+    </Tag>
+  ),
   DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   GhostButton: ({
@@ -29,23 +55,25 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   ),
 }));
 
+const { runListProps } = vi.hoisted(() => ({ runListProps: vi.fn() }));
+
 vi.mock(
   '../../ScheduledTaskRunHistoryList/ScheduledTaskRunHistoryList',
   () => ({
-    ScheduledTaskRunHistoryList: ({
-      items,
-      footer,
-    }: {
+    ScheduledTaskRunHistoryList: (props: {
       items: ScheduledTaskRunItem[];
       footer?: ReactNode;
-    }) => (
-      <ul>
-        {items.map((item) => (
-          <li key={item.id}>{item.timestampLabel}</li>
-        ))}
-        {footer}
-      </ul>
-    ),
+    }) => {
+      runListProps(props);
+      return (
+        <ul>
+          {props.items.map((item) => (
+            <li key={item.id}>{item.timestampLabel}</li>
+          ))}
+          {props.footer}
+        </ul>
+      );
+    },
   }),
 );
 
@@ -97,6 +125,64 @@ describe('ScheduledTaskHistorySection', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it('mounts the load-more alert region before the failed page, then fills it', () => {
+    const { rerender } = renderSection();
+    const region = screen.getByRole('alert');
+    expect(region.textContent).toBe('');
+
+    rerender(
+      <ScheduledTaskHistorySection
+        variant={ScheduledTaskHistorySectionVariant.Card}
+        labels={labels}
+        items={runs}
+        hasMore
+        onLoadMore={vi.fn()}
+        loadMoreError={new Error('failed')}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toBe(region);
+    expect(region.textContent).toBe(labels.historyErrorLabel);
+  });
+
+  it('forwards the open-conversation label and the failed-run styles to the run list', () => {
+    renderSection({
+      labels: { ...labels, openConversationLabel: 'Open chat' },
+      errorDetailsClassName: 'custom-details',
+      styles: {
+        rowExpandedBackground: '#222222',
+        colors: { errorDetailsTextColor: '#111111' },
+      },
+    });
+
+    expect(runListProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        labels: expect.objectContaining({ openConversationLabel: 'Open chat' }),
+        styles: expect.objectContaining({
+          rowExpandedBackground: '#222222',
+          colors: { errorDetailsTextColor: '#111111' },
+          typography: expect.objectContaining({
+            errorDetailsClassName: 'custom-details',
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('defaults the error details to the tiny text step', () => {
+    renderSection();
+
+    expect(runListProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        styles: expect.objectContaining({
+          typography: expect.objectContaining({
+            errorDetailsClassName: 'dial-tiny-text',
+          }),
+        }),
+      }),
+    );
   });
 
   describe('ScheduledTaskHistorySection — card variant', () => {

@@ -171,7 +171,6 @@ const Fixture = () => {
             detailsSectionTitle: 'Details',
             detailsSectionSubtitle: 'Configure a packed task',
             configurationSectionTitle: 'Configuration',
-            configurationSectionSubtitle: 'Packed public editor',
             displayNameLabel: 'Name',
             displayNameRequired: 'Name is required',
             timeInvalidLabel: 'Invalid time',
@@ -184,9 +183,15 @@ const Fixture = () => {
             skillLabel: 'Skill',
             instructionsPlaceholder: 'Write instructions',
             runAtLabel: 'Run at',
+            runAtPlaceholder: 'Pick date and time',
             dayOfWeekLabel: 'Day of week',
             dayOfMonthLabel: 'Day of month',
             minuteLabel: 'Minute',
+            daysOfWeekLabel: 'Days',
+            customDayOptions: [
+              { value: '0', shortLabel: 'M', fullName: 'Monday' },
+              { value: '1', shortLabel: 'T', fullName: 'Tuesday' },
+            ],
             startDateLabel: 'Start date',
             startDatePlaceholder: 'Choose a start date',
             endDateLabel: 'End date',
@@ -293,10 +298,9 @@ const Fixture = () => {
           description="A packed detail surface"
           modelLabel="Model A"
           repeatsLabel="Daily"
-          instructionsMarkdown="Packed instructions"
+          instructionsMarkdown="Summarize the weekly report and cross-check the totals against the ledger."
           skillDisplayNames={skillUrls}
           runs={[]}
-          renderInstructions={(text) => <p>{text}</p>}
         />
       </section>
       <section aria-label="Host picker composition">

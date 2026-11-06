@@ -105,3 +105,139 @@ export const getPublishedTargetUrl = (
   resourceName: string,
 ): string =>
   `${resourceTypePrefix}/${getPublicTargetFolder(folderPath)}${resourceName}`;
+
+const FILE_RESOURCE_PREFIX = 'files/';
+
+/*
+ * An application's icon is a top-level `iconUrl` (or `icon_url`) field, not a
+ * schema-declared file inside `application_properties`, so DIAL Core does not
+ * relocate it on publish the way it relocates knowledge files — the published
+ * copy kept pointing at the author's private bucket, where nobody else can
+ * download it (#9446). Returns the icon as a DIAL file resource url when it
+ * is an uploaded file in `appBucket`, or `undefined` for a theme icon name, an
+ * absolute URL, a file already outside the author's bucket (e.g. `public`),
+ * or a url carrying a `..` traversal segment. Query strings and `#`-fragments
+ * are stripped.
+ */
+export const getPublishableIconUrl = (
+  application: unknown,
+  appBucket: string,
+): string | undefined => {
+  if (typeof application !== 'object' || application == null) return undefined;
+  const { iconUrl, icon_url } = application as Record<string, unknown>;
+  const rawIconUrl = iconUrl ?? icon_url;
+  if (typeof rawIconUrl !== 'string') return undefined;
+
+  const resourceUrl = rawIconUrl.split(/[?#]/, 1)[0];
+  if (!resourceUrl.startsWith(FILE_RESOURCE_PREFIX)) return undefined;
+  if (safeDecodeURIComponent(resourceUrl).split('/').includes('..'))
+    return undefined;
+  if (
+    safeDecodeURIComponent(getResourceBucket(resourceUrl)) !==
+    safeDecodeURIComponent(appBucket)
+  )
+    return undefined;
+
+  return resourceUrl;
+};
+
+/**
+ * The published icon's path: `files/public/{folderPath}/{targetResourceName}/{iconName}`.
+ * Nesting it under the app's own versioned target name keeps two apps (or two
+ * versions of one app) whose icons share a file name, e.g. `icon.png`, from
+ * colliding in the same Organization folder.
+ */
+export const getPublishedIconTargetUrl = (
+  folderPath: string,
+  targetResourceName: string,
+  iconUrl: string,
+): string =>
+  getPublishedTargetUrl(
+    'files',
+    folderPath,
+    `${targetResourceName}/${getResourceName(iconUrl)}`,
+  );
+
+const CONVERSATION_RESOURCE_PREFIX = 'conversations/';
+
+/**
+ * The folder holding the attachment files of a published conversation:
+ * `files/` plus the published conversation's own path, trailing-slashed, e.g.
+ * `conversations/public/Org/my-chat` -> `files/public/Org/my-chat/`.
+ *
+ * The one derivation shared by publish (where the files are written), unpublish
+ * (which lists the folder to delete its files) and the read-time resolution of
+ * folder attachments, so the three can never disagree on where the files are.
+ * @param publishedConversationUrl - `conversations/public/{folder}/{name}`, encoded
+ */
+export const getPublishedAttachmentsFolderUrl = (
+  publishedConversationUrl: string,
+): string =>
+  `files/${publishedConversationUrl.slice(
+    publishedConversationUrl.startsWith(CONVERSATION_RESOURCE_PREFIX)
+      ? CONVERSATION_RESOURCE_PREFIX.length
+      : 0,
+  )}/`;
+
+/**
+ * The published path of one attachment file:
+ * `files/public/{folderPath}/{conversationResourceName}/{source bucket}/{path in that bucket}`.
+ * Nesting under the conversation's own target name keeps same-named files of
+ * different conversations from colliding in one Organization folder, the same
+ * way {@link getPublishedIconTargetUrl} does for an app icon; keeping the
+ * source bucket as a segment ties every published file to the bucket it came
+ * from, and keeping the bucket-relative path preserves folder structure.
+ * @param folderPath - plain publish target folder
+ * @param conversationResourceName - the conversation's resource name (last segment of its path)
+ * @param sourceBucket - the bucket the file is published from
+ * @param bucketRelativePath - the file's path inside `sourceBucket`, already percent-encoded
+ */
+export const getPublishedAttachmentTargetUrl = (
+  folderPath: string,
+  conversationResourceName: string,
+  sourceBucket: string,
+  bucketRelativePath: string,
+): string =>
+  `${getPublishedAttachmentsFolderUrl(
+    getPublishedTargetUrl(
+      'conversations',
+      folderPath,
+      conversationResourceName,
+    ),
+  )}${sourceBucket}/${bucketRelativePath}`;
+
+/*
+ * DIAL Core stores applications and toolsets as `{name}__{version}`, but
+ * editing an existing one's version only rewrites the version field inside the
+ * resource — its path keeps the version it was created with. Publishing a new
+ * version must still land on a new `{name}__{version}` target, or Core rejects
+ * it because the earlier version's copy already exists there (#9428).
+ */
+const VERSIONED_RESOURCE_PREFIXES = new Set(['applications', 'toolsets']);
+const RESOURCE_VERSION_SEPARATOR = '__';
+// The charset the application and toolset DTOs accept, never only dots.
+const TARGET_VERSION_PATTERN = /^(?!\.+$)[\w.+-]{1,64}$/;
+
+/**
+ * The published copy's resource name for `version`: `resourceName`'s own
+ * `{name}__{version}` suffix replaced by `version`. Returns `resourceName`
+ * unchanged for an unversioned resource type, a name with no suffix, or a
+ * `version` outside the DTO version charset (so free text never reaches the
+ * path).
+ */
+export const getVersionedTargetResourceName = (
+  resourceTypePrefix: string,
+  resourceName: string,
+  version: string | undefined,
+): string => {
+  const separatorIndex = resourceName.lastIndexOf(RESOURCE_VERSION_SEPARATOR);
+  if (
+    !VERSIONED_RESOURCE_PREFIXES.has(resourceTypePrefix) ||
+    separatorIndex === -1 ||
+    !version ||
+    !TARGET_VERSION_PATTERN.test(version)
+  ) {
+    return resourceName;
+  }
+  return `${resourceName.slice(0, separatorIndex)}${RESOURCE_VERSION_SEPARATOR}${encodeURIComponent(version)}`;
+};

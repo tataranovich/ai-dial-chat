@@ -1,5 +1,9 @@
-import type { ConversationResponseDto } from '@epam/ai-dial-chat-api-client';
 import {
+  ConversationErrorCode,
+  type ConversationResponseDto,
+} from '@epam/ai-dial-chat-api-client';
+import {
+  findDeploymentByIdOrReference,
   getApiErrorDetails,
   getConversationPath,
   getFormSchemaToolSyncKey,
@@ -12,6 +16,8 @@ import {
   useConversationStream,
   useToolsMenu,
 } from '@epam/ai-dial-chat-hooks';
+import { ClientGenerationStatus } from '@epam/ai-dial-chat-hooks/conversation';
+import { ActiveScheduledTaskStatus } from '@epam/ai-dial-chat-hooks/scheduled-tasks';
 import {
   generateUUID,
   MessageRating,
@@ -19,6 +25,7 @@ import {
   type Conversation,
   type Message,
 } from '@epam/ai-dial-chat-shared';
+import { ConversationStartTimestamp } from '@epam/ai-dial-conversation-messages';
 import {
   ConfirmationPopup,
   ConfirmationPopupVariant,
@@ -32,11 +39,14 @@ import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import ConversationView from '../../components/ConversationView/ConversationView';
 import NegativeFeedbackModal from '../../components/ConversationView/Rate/NegativeFeedbackModal';
+import CustomViewerFrame from '../../components/CustomViewer/CustomViewerFrame';
 import ScheduledTaskConversationBanner from '../../components/ScheduledTaskConversationBanner/ScheduledTaskConversationBanner';
-import { getConversationRoute } from '../../constants/routes';
+import { normalizeConversationId } from '../../constants/routes';
 import {
+  BasicI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
+  ConversationI18nKeys,
   ConversationPanelI18nKeys,
   RateI18nKeys,
   ToolsI18nKeys,
@@ -44,43 +54,42 @@ import {
 import { useActiveScheduledTask } from '../../context/ActiveScheduledTaskContext';
 import { useUser } from '../../context/auth/UserContext';
 import { useClientChannel } from '../../context/ClientChannelContext';
+import { useConversationDataSource } from '../../context/ConversationDataSourceContext';
 import { useConversations } from '../../context/ConversationsContext';
 import { useDeployments } from '../../context/DeploymentsContext';
-import {
-  ClientGenerationStatus,
-  useGeneration,
-} from '../../context/GenerationContext';
+import { useGeneration } from '../../context/GenerationContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useOptionalOverlay } from '../../context/overlay/OverlayContext';
 import { useSourcesSidebar } from '../../context/SourcesSidebarContext';
 import { useActiveConversationBridge } from '../../hooks/conversation/useActiveConversationBridge';
 import { useAudioTranscription } from '../../hooks/conversation/useAudioTranscription';
 import { useVisualizerMessageSendHandler } from '../../hooks/conversation/useVisualizerMessageSendHandler';
+import { useCustomViewer } from '../../hooks/custom-viewer/useCustomViewer';
+import { useLanguage } from '../../hooks/language/useLanguage';
 import { useDeploymentChangeEffect } from '../../hooks/useDeploymentChangeEffect';
 import {
-  conversationsApi as configuredConversationsApi,
   filesApi as configuredFilesApi,
   rateApi as configuredRateApi,
 } from '../../server-api/api-client';
 import { CompletionMode } from '../../server-api/chat-stream.api';
-import {
-  getConversation as apiGetConversation,
-  saveConversation,
-} from '../../server-api/conversations.api';
-import { ActiveScheduledTaskStatus } from '../../types/active-scheduled-task';
 import { ROUTES } from '../../types/routes';
 import { buildNetworkUploadErrorNotification } from '../../utils/attachment-network-error-notification';
-import {
-  conversationStreamTransport,
-  logConversationStreamError,
-} from '../../utils/conversation-stream-transport';
+import { conversationIdsMatch } from '../../utils/conversation-id-match';
+import { logConversationStreamError } from '../../utils/conversation-stream-transport';
+import { resolveCustomViewer } from '../../utils/custom-viewer';
 
 interface Props {
   onDuplicateReadonly?: () => void;
+  /** The conversation to show; defaults to the `/conversations/*` route splat. */
+  conversationId?: string;
 }
 
-export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
-  const { '*': conversationId } = useParams<{ '*': string }>();
+export const ConversationPage: FC<Props> = ({
+  onDuplicateReadonly,
+  conversationId: conversationIdProp,
+}) => {
+  const { '*': routeConversationId } = useParams<{ '*': string }>();
+  const conversationId = conversationIdProp ?? routeConversationId;
   const { state, pathname, search } = useLocation();
   const prefetchedConversation =
     (state as { conversation?: Conversation } | null)?.conversation ?? null;
@@ -90,6 +99,31 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   const [isFetching, setIsFetching] = useState(
     !prefetchedConversation && !!conversationId,
   );
+  /*
+   * The route id the shown conversation was applied for. `isFetching` only turns
+   * true inside the load effect, so in the first commit after the route changes
+   * the previous conversation is still shown with `isFetching` false: this id
+   * tells that commit apart from a conversation that belongs to the route.
+   */
+  const [loadedConversationId, setLoadedConversationId] = useState(
+    prefetchedConversation ? conversationId : undefined,
+  );
+  /*
+   * Id of the conversation this page instance just created (it arrived with
+   * router `state.conversation` from the first send). Captured here rather
+   * than read from `useLocation().state` because the page clears that state
+   * right after mount; re-derived whenever `conversationId` changes, so leaving
+   * and returning to the conversation shows its start label again.
+   */
+  const [createdHereId, setCreatedHereId] = useState<string | null>(
+    prefetchedConversation ? (conversationId ?? null) : null,
+  );
+  const [trackedConversationId, setTrackedConversationId] =
+    useState(conversationId);
+  if (trackedConversationId !== conversationId) {
+    setTrackedConversationId(conversationId);
+    setCreatedHereId(prefetchedConversation ? (conversationId ?? null) : null);
+  }
   const conversationRef = useRef<Conversation | null>(null);
   const displayNameWatchCleanupRef = useRef<(() => void) | null>(null);
   const displayNameWatchKeyRef = useRef<string | null>(null);
@@ -99,12 +133,20 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   const appliedFormSchemaKeyRef = useRef<string | null>(null);
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const { language } = useLanguage();
   const {
+    items: deployments,
     restoreSelectedItemId,
     selectedItemId: currentSelectedItemId,
     selectedDeploymentConfiguration,
     isLoading: isDeploymentsLoading,
+    schemas,
   } = useDeployments();
+  /* Read by `loadConversation` without making it depend on the catalog. */
+  const viewerLookupRef = useRef({ deployments, schemas });
+  useEffect(() => {
+    viewerLookupRef.current = { deployments, schemas };
+  }, [deployments, schemas]);
   const {
     toolsMenuItems,
     onToolToggle,
@@ -143,14 +185,29 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   const { user } = useUser();
   const bucket = user?.bucket ?? '';
   const { status: activeScheduledTaskStatus } = useActiveScheduledTask();
+  const { conversations, duplicateConversation } = useConversations();
+  /* Loads, saves, routing, read-only and list side effects; a project chat provides its own. */
   const {
-    conversations,
-    duplicateConversation,
-    updateConversationTitle,
-    bumpConversationActivity,
-    watchForDisplayNameUpdate,
-    removeConversationFromList,
-  } = useConversations();
+    transport,
+    getConversation: apiGetConversation,
+    saveConversation,
+    handlersApi,
+    watchTitle: watchForDisplayNameUpdate,
+    getConversationRoute,
+    getExitRoute,
+    isReadOnly: isConversationReadOnly,
+    listSync,
+    canDuplicate,
+    notFoundMessageKey,
+  } = useConversationDataSource();
+  const {
+    updateTitle: updateConversationTitle,
+    bumpActivity: bumpConversationActivity,
+    markUnread: markConversationUnread,
+    markViewed: markConversationViewed,
+    remove: removeConversationFromList,
+    refresh: refreshConversations,
+  } = listSync;
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const overlay = useOptionalOverlay();
   /*
@@ -162,6 +219,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   const [pendingInputContent, setPendingInputContent] = useState({
     revision: 0,
     value: '',
+    isPending: false,
   });
   const [pendingInputInsertion, setPendingInputInsertion] = useState({
     revision: 0,
@@ -192,19 +250,10 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     number | null
   >(null);
 
-  const isReadOnly = useMemo(() => {
-    if (!conversationId) return false;
-    const listItem = conversations.find((c) => c.id.includes(conversationId));
-    if (listItem) {
-      return (
-        listItem.isReadonly || listItem.sharedWithMe || listItem.publishedWithMe
-      );
-    }
-    // Fallback: bucket-prefix check when the conversation isn't in the list yet.
-    if (!bucket) return false;
-    const slashIndex = conversationId.indexOf('/');
-    return slashIndex !== -1 && conversationId.slice(0, slashIndex) !== bucket;
-  }, [conversationId, bucket, conversations]);
+  const isReadOnly = useMemo(
+    () => !!conversationId && isConversationReadOnly(conversationId),
+    [conversationId, isConversationReadOnly],
+  );
 
   const handleConversationChange = useCallback(
     (updated: Conversation) => {
@@ -219,24 +268,48 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     },
     // conversationRef is a stable ref — intentionally omitted from deps
 
-    [conversationId],
+    [conversationId, saveConversation],
+  );
+
+  /* A copy would hand the operator-hidden model a fresh conversation, so a chat
+     whose model was hidden via HIDDEN_ENTITY_TAGS can't be duplicated
+     ([#9183](https://github.com/epam/ai-dial-chat/issues/9183)). */
+  const conversationModelId =
+    conversation?.assistantModelId || conversation?.model.id;
+  const { viewer: customViewer, isResolving: isCustomViewerResolving } =
+    useCustomViewer(conversationModelId);
+  const isConversationModelHidden = useMemo(
+    () =>
+      !!conversationModelId &&
+      !!findDeploymentByIdOrReference(deployments, conversationModelId)
+        ?.isHidden,
+    [deployments, conversationModelId],
   );
 
   const handleDuplicateConversation = useCallback(async () => {
-    if (!conversationId) return;
+    if (!conversationId || isConversationModelHidden) return;
     setDuplicateError(null);
     try {
       const newPath = await duplicateConversation(conversationId);
       if (isReadOnly) onDuplicateReadonly?.();
       navigate(getConversationRoute(newPath));
-    } catch {
-      setDuplicateError(t(ConversationPanelI18nKeys.DuplicateError));
+    } catch (error) {
+      const { code } = await getApiErrorDetails(error);
+      setDuplicateError(
+        t(
+          code === ConversationErrorCode.ConversationDuplicateModelHidden
+            ? ConversationPanelI18nKeys.DuplicateUnavailableModel
+            : ConversationPanelI18nKeys.DuplicateError,
+        ),
+      );
     }
   }, [
     conversationId,
+    isConversationModelHidden,
     isReadOnly,
     onDuplicateReadonly,
     duplicateConversation,
+    getConversationRoute,
     navigate,
     t,
   ]);
@@ -312,7 +385,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         return next;
       });
     },
-    [conversationId],
+    [conversationId, saveConversation],
   );
 
   const isConversationLoaded =
@@ -366,7 +439,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   } = useConversationStream({
     conversationId,
     state: { setConversation, conversationRef },
-    transport: conversationStreamTransport,
+    transport,
     generation: { startGeneration, completeGeneration },
     channel,
     overlay,
@@ -384,15 +457,67 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
    * Every generation this page can launch — send, regenerate, edit and the
    * auto-continue on load — funnels through startStream, so bumping the
    * sidebar entry here reorders the list by latest activity right away
-   * instead of leaving it stale until the next full re-fetch.
+   * instead of leaving it stale until the next full re-fetch. The chat is also
+   * unseen from here on: the answer is still to come, so leaving mid-stream
+   * must show the unread dot without waiting for a list refresh.
    */
   const startStream = useCallback<typeof startConversationStream>(
     (streamedConversationId, ...rest) => {
       bumpConversationActivity(streamedConversationId);
+      markConversationUnread(streamedConversationId);
       startConversationStream(streamedConversationId, ...rest);
     },
-    [bumpConversationActivity, startConversationStream],
+    [bumpConversationActivity, markConversationUnread, startConversationStream],
   );
+
+  /*
+   * An open regular chat is read once nothing is generating for it. The panel's
+   * active-conversation sync cannot own this: it fires on every re-entry into a
+   * chat and cannot tell that the answer is still being produced, so a mark
+   * written then would hide the dot for good. `isStreaming` is the right
+   * signal once the conversation has loaded: coming back to a generating chat
+   * resumes it in the same batch that applies the loaded conversation, so
+   * there is no loaded render with the stream still unflagged. The effect
+   * re-runs when the stream ends, so watching it to the end marks the chat
+   * read; leaving first never marks it, and the chat stays unread.
+   */
+  const isOpenChatUnread = useMemo(() => {
+    if (listSync.shouldMarkOpenChatViewed) return true;
+    const openRow = conversationId
+      ? conversations.find((c) => conversationIdsMatch(c.id, conversationId))
+      : undefined;
+    return !!openRow && !openRow.isScheduledTask && !!openRow.isUnread;
+  }, [conversations, conversationId, listSync.shouldMarkOpenChatViewed]);
+  const isOpenChatLoaded =
+    !isFetching && !!conversation && loadedConversationId === conversationId;
+  /*
+   * A recovery that failed (attach, watch and the final reload) also ends with
+   * `isStreaming` false, but only the placeholder is shown: the answer was not
+   * seen, so the chat stays unread until a retry succeeds and clears the error.
+   *
+   * A failed viewed write is not retried by this effect on its own: the context
+   * keeps the chat read locally, so the effect runs again only when a later list
+   * reports it unread. That is at most one request per list refresh, and a
+   * backend that keeps failing this write fails the list itself as well.
+   */
+  const isRecoveryFailed = hasConversationReloadError;
+  useEffect(() => {
+    if (
+      conversationId &&
+      isOpenChatLoaded &&
+      isOpenChatUnread &&
+      !isStreaming &&
+      !isRecoveryFailed
+    )
+      void markConversationViewed(conversationId);
+  }, [
+    conversationId,
+    isOpenChatLoaded,
+    isOpenChatUnread,
+    isStreaming,
+    isRecoveryFailed,
+    markConversationViewed,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -448,13 +573,24 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
   ]);
 
   const loadConversation = useCallback(
-    async (id: string, initialData?: Conversation | null) => {
+    async (
+      id: string,
+      initialData: Conversation | null | undefined,
+      signal: AbortSignal,
+    ) => {
       if (!initialData) {
         setIsFetching(true);
       }
       try {
         const loadedConversation: Conversation =
-          initialData ?? ((await apiGetConversation(id)) as Conversation);
+          initialData ??
+          ((await apiGetConversation(id, signal)) as Conversation);
+        /*
+         * The user opened another conversation while this one was loading.
+         * Applying it now would show it under the other conversation's route,
+         * and the follow-up model/status writes would save it over that one.
+         */
+        if (signal.aborted) return;
         const result = restoreBufferedGeneration(id, loadedConversation);
         if (result.name) {
           updateConversationTitle(id, result.name);
@@ -470,6 +606,28 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         if (modelToSelect) {
           restoreSelectedItemId(modelToSelect);
         }
+        /*
+         * A Custom Viewer drives its own conversation, so the chat must never
+         * auto-start or resume a generation for it — the viewer app may not
+         * even expose a completion endpoint.
+         */
+        const { deployments: knownDeployments, schemas: knownSchemas } =
+          viewerLookupRef.current;
+        const isViewerConversation = !!resolveCustomViewer(
+          findDeploymentByIdOrReference(
+            knownDeployments,
+            result.assistantModelId || result.model.id,
+          ),
+          knownSchemas,
+        );
+        if (isViewerConversation) {
+          setConversation(result);
+          conversationRef.current = result;
+          /* This branch returns before the end of the load, so it must count the chat as loaded too. */
+          setLoadedConversationId(id);
+          return;
+        }
+
         if (restoredToolConfigIdRef.current !== id) {
           restoredToolConfigIdRef.current = id;
           restoreToolConfiguration(getLatestToolConfiguration(result.messages));
@@ -539,12 +697,16 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
             resumeIfAwaitingGeneration(id, result);
           }
         }
+        /* After any resume above, so a generating chat is already streaming when it counts as loaded. */
+        setLoadedConversationId(id);
       } catch (error) {
+        if (signal.aborted) return;
         if (notificationShownForRef.current !== id) {
           notificationShownForRef.current = id;
           const { traceId } = await getApiErrorDetails(error);
+          if (signal.aborted) return;
           showErrorNotification({
-            message: t(ChatI18nKeys.ConversationNotFound),
+            message: t(notFoundMessageKey ?? ChatI18nKeys.ConversationNotFound),
             requestId: traceId,
           });
         }
@@ -554,12 +716,17 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
         if (isConversationNotFoundError(error)) {
           removeConversationFromList(id);
         }
-        navigate(ROUTES.Root);
+        navigate(getExitRoute());
       } finally {
-        setIsFetching(false);
+        // A superseded load must not clear the loading state of its successor.
+        if (!signal.aborted) {
+          setIsFetching(false);
+        }
       }
     },
     [
+      apiGetConversation,
+      getExitRoute,
       navigate,
       restoreSelectedItemId,
       restoreToolConfiguration,
@@ -569,6 +736,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
       updateConversationTitle,
       getGeneration,
       removeConversationFromList,
+      notFoundMessageKey,
       showErrorNotification,
       t,
     ],
@@ -591,7 +759,13 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
       setIsFetching(false);
       return;
     }
-    void loadConversationRef.current(conversationId, prefetchedConversation);
+    const controller = new AbortController();
+    void loadConversationRef.current(
+      conversationId,
+      prefetchedConversation,
+      controller.signal,
+    );
+    return () => controller.abort();
     /*
      * prefetchedConversation intentionally omitted: it is router state captured at mount,
      * re-running when it changes would re-initialize an already-loaded conversation.
@@ -619,8 +793,8 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
 
   const handleConversationDeleted = useCallback(() => {
     if (conversationId) removeConversationFromList(conversationId);
-    navigate(ROUTES.Root);
-  }, [conversationId, navigate, removeConversationFromList]);
+    navigate(getExitRoute());
+  }, [conversationId, getExitRoute, navigate, removeConversationFromList]);
 
   const {
     handleSend,
@@ -647,7 +821,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     startStream,
     state: { setConversation, conversationRef },
     filesApi: configuredFilesApi,
-    conversationsApi: configuredConversationsApi,
+    conversationsApi: handlersApi,
     rateApi: configuredRateApi,
     resolveModelId,
     onConversationDeleted: handleConversationDeleted,
@@ -666,8 +840,23 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     setPendingInputContent((prev) => ({
       revision: prev.revision + 1,
       value: content,
+      isPending: true,
     }));
   }, []);
+
+  /*
+   * The overlay content is a one-shot hand-off, spent once ConversationView has
+   * rendered with it. This page is not remounted between conversations, so
+   * without this a later view remount (opening an uncached conversation shows
+   * the spinner) would seed the stale text again and save it as that
+   * conversation's draft.
+   */
+  const isConversationViewShown =
+    !isFetching && !!conversation && !isCustomViewerResolving && !customViewer;
+  useEffect(() => {
+    if (!isConversationViewShown || !pendingInputContent.isPending) return;
+    setPendingInputContent((prev) => ({ ...prev, isPending: false }));
+  }, [isConversationViewShown, pendingInputContent.isPending]);
 
   const handleInsertText = useCallback((text: string) => {
     setPendingInputInsertion((prev) => ({
@@ -743,24 +932,99 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
     [t],
   );
 
-  const topContent = useMemo(
-    () =>
-      activeScheduledTaskStatus ===
-      ActiveScheduledTaskStatus.TaskConversation ? (
-        <ScheduledTaskConversationBanner />
-      ) : undefined,
-    [activeScheduledTaskStatus],
+  const conversationStartLabels = useMemo(
+    () => ({
+      today: (time: string) => t(ConversationI18nKeys.StartedToday, { time }),
+      yesterday: (time: string) =>
+        t(ConversationI18nKeys.StartedYesterday, { time }),
+    }),
+    [t],
   );
 
-  if (isFetching)
+  const startTimestamp =
+    createdHereId != null && createdHereId === conversationId
+      ? undefined
+      : conversation?.messages[0]?.timestamp;
+
+  const topContent = useMemo(() => {
+    const isTaskConversation =
+      activeScheduledTaskStatus === ActiveScheduledTaskStatus.TaskConversation;
+    if (!isTaskConversation && !startTimestamp) return undefined;
+    return (
+      <>
+        {isTaskConversation && <ScheduledTaskConversationBanner />}
+        {startTimestamp && (
+          <ConversationStartTimestamp
+            timestamp={startTimestamp}
+            locale={language}
+            labels={conversationStartLabels}
+          />
+        )}
+      </>
+    );
+  }, [
+    activeScheduledTaskStatus,
+    startTimestamp,
+    language,
+    conversationStartLabels,
+  ]);
+
+  const handleCustomViewerConversationCreated = useCallback(
+    (createdId: string) => {
+      void refreshConversations([createdId]);
+      const route = getConversationRoute(createdId);
+      if (route !== ROUTES.Root) navigate(route);
+    },
+    [getConversationRoute, refreshConversations, navigate],
+  );
+
+  const handleCustomViewerConversationUpdated = useCallback(
+    async (updatedId: string) => {
+      void refreshConversations();
+      const isOpenConversation =
+        !!conversationId &&
+        (updatedId === conversationRef.current?.id ||
+          normalizeConversationId(updatedId) === conversationId);
+      if (!isOpenConversation) return;
+      try {
+        /* Reloaded in place: going through loadConversation would show the
+         * page spinner and remount the viewer iframe. */
+        const reloaded = (await apiGetConversation(
+          conversationId,
+        )) as Conversation;
+        setConversation(reloaded);
+        conversationRef.current = reloaded;
+      } catch {
+        console.warn(
+          'Custom viewer: failed to reload the updated conversation',
+        );
+      }
+    },
+    [apiGetConversation, conversationId, refreshConversations],
+  );
+
+  if (isFetching || (conversation && isCustomViewerResolving))
     return (
       <div className="flex size-full items-center justify-center">
-        <Spinner />
+        <Spinner ariaLabel={t(BasicI18nKeys.Loading)} />
       </div>
     );
 
   if (!conversation) {
     return null;
+  }
+
+  if (customViewer) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden">
+        <CustomViewerFrame
+          viewer={customViewer}
+          conversationId={conversation.id}
+          onConversationCreated={handleCustomViewerConversationCreated}
+          onConversationUpdated={handleCustomViewerConversationUpdated}
+        />
+      </div>
+    );
   }
 
   return (
@@ -792,15 +1056,22 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
           onVisualizerSendMessage={handleVisualizerSendMessage}
           stoppedGeneratingText={t(ChatI18nKeys.StoppedGenerating)}
           isReadOnly={isReadOnly}
-          onDuplicateConversation={handleDuplicateConversation}
+          onDuplicateConversation={
+            canDuplicate ? handleDuplicateConversation : undefined
+          }
+          isDuplicateUnavailable={isConversationModelHidden}
           duplicateError={duplicateError ?? undefined}
           isAudioMessageSupported={isAudioMessageSupported}
           isVoiceRecordingSupported={isVoiceRecordingSupported}
           onTranscribeAudio={handleTranscribeAudio}
           conversation={conversation}
           onConversationChange={handleConversationChange}
-          inputContent={pendingInputContent.value}
-          inputContentRevision={pendingInputContent.revision}
+          inputContent={
+            pendingInputContent.isPending ? pendingInputContent.value : ''
+          }
+          inputContentRevision={
+            pendingInputContent.isPending ? pendingInputContent.revision : 0
+          }
           inputInsertion={pendingInputInsertion}
           onInsertText={handleInsertText}
           toolsMenuItems={toolsMenuItems}
@@ -808,6 +1079,7 @@ export const ConversationPage: FC<Props> = ({ onDuplicateReadonly }) => {
           toolsMenuTitle={t(ToolsI18nKeys.MenuTitle)}
           toolsChipLabels={toolsChipLabels}
           topContent={topContent}
+          hasMessageTimestamps
         />
       </div>
 

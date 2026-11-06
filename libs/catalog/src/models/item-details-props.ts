@@ -1,3 +1,4 @@
+import type { CatalogEntityType } from '@epam/ai-dial-chat-shared';
 import type {
   PublicationRule,
   PublishFolderNode,
@@ -48,6 +49,8 @@ export interface ItemDetailsTexts {
   tabPricingLabel?: string;
   /** "Limits" tab label. Default: `'Limits'`. */
   tabLimitsLabel?: string;
+  /** Empty-state text for an About tab with no description or topics, and an Overview tab with no sections. Default: `'No data'`. */
+  emptyTabLabel?: string;
   /** Accessible label for the details panel `role="dialog"`. Default: `'Item details'`. */
   ariaLabel?: string;
   /** Accessible label for the close button. Default: `'Close'`. */
@@ -72,8 +75,21 @@ export interface ItemDetailsTexts {
   contentFileErrorLabel?: string;
   /** Body text shown when a picked file's preview type is `unsupported`. Default: `'Preview is not supported for this file'`. */
   contentFileUnsupportedLabel?: string;
+  /** Placeholder and accessible name of the Tools tab's search field. Default: `'Search...'`. */
+  toolsSearchPlaceholder?: string;
+  /** Accessible name of the Tools search field's clear button. Default: `'Clear search'`. */
+  toolsSearchClearLabel?: string;
+  /** Returns the tool-count text above the Tools list. Default: ``(count) => `${count} tools` ``. */
+  toolsCountLabel?: (count: number) => string;
+  /** Text shown when the Tools search matches no tool. Default: `'No results found'`. */
+  toolsNoResultsLabel?: string;
   /** Label on the "Featured" tag chip shown when the entity is featured. Default: `'Featured'`. */
   featuredLabel?: string;
+  /**
+   * Visible entity type in the header, per type (e.g. translated names). A
+   * type that is absent keeps the raw `item.type` value (`'TOOLSET'`, …).
+   */
+  entityTypeLabels?: Partial<Record<CatalogEntityType, string>>;
   /** Label on the header badge shown when `item.details?.limits?.status` is `CatalogLimitStatus.RunningLow`. Default: `'Running low'`. */
   limitRunningLowLabel?: string;
   /** Label on the header badge shown when `item.details?.limits?.status` is `CatalogLimitStatus.LimitReached`. Default: `'Limit reached'`. */
@@ -84,6 +100,8 @@ export interface ItemDetailsTexts {
   publishLabel?: string;
   /** Title shown in the panel header while the Publish view is open. Default: `'Publish'`. */
   publishTitle?: string;
+  /** Title shown in the panel header while the Publish folder view is open. Default: `'Change folder'`. */
+  publishChangeFolderTitle?: string;
   /** Accessible label for the back button that returns from the Publish view to details. Default: `'Back'`. */
   backToDetailsAriaLabel?: string;
   /** When `false`, the primary action button is hidden. Default: `true`. */
@@ -118,6 +136,8 @@ export interface ItemDetailsTexts {
   mathScrollRegionAriaLabel?: string;
   /** "Token pricing" section heading in the Pricing tab. Default: `'Token pricing'`. */
   pricingPricesSectionLabel?: string;
+  /** Price section heading in the Pricing tab when prices are quoted per character. Default: `'Character pricing'`. */
+  pricingCharacterPricesSectionLabel?: string;
   /** "Usage limits" section heading in the Pricing tab. Default: `'Usage limits'`. */
   pricingLimitsSectionLabel?: string;
   /** Accessible label for the loading placeholder shown next to the tab row while structured details are being fetched. Default: `'Loading details'`. */
@@ -380,6 +400,12 @@ export interface ItemDetailsTypography {
   credentialsKeyCardTitleClassName?: string;
   /** Typography class for the configured-API-key card's description. Default: `'dial-tiny-text'`. */
   credentialsKeyCardDescriptionClassName?: string;
+  /** Typography class for the API-key popover's title. Default: `'dial-small-semi-text'`. */
+  credentialsOverlayTitleClassName?: string;
+  /** Typography class for the API-key popover's header-name hint under the input. Default: `'dial-caption-text'`. */
+  credentialsHintClassName?: string;
+  /** Typography class for the header's "Limit reached"/"Running low" badge. Default: `'dial-caption-lead-semi-text'`. */
+  limitStatusBadgeClassName?: string;
 }
 
 /**
@@ -422,6 +448,8 @@ export interface ItemDetailsColors {
   toolsDivider?: string;
   /** Tool description text color. Fallback: `--text-secondary`. */
   toolsDescriptionText?: string;
+  /** Tool count text color above the Tools list. Fallback: `--text-secondary`. */
+  toolsCountText?: string;
   /** Spec-grid outer border color. Fallback: `--stroke-secondary`. */
   gridBorder?: string;
   /** Spec-grid header text color. Fallback: `--text-secondary`. */
@@ -456,6 +484,22 @@ export interface ItemDetailsColors {
   credentialsRowDescriptionText?: string;
   /** Text color of the empty-API-key validation message. Fallback: `--text-error`. */
   credentialsErrorText?: string;
+  /** Text color of the "Delete" action on a configured API key. Fallback: `--text-error`. */
+  credentialsDeleteActionText?: string;
+  /** Background of the header's "Limit reached" badge. Fallback: `--bg-error`. */
+  limitReachedBackground?: string;
+  /** Text color of the header's "Limit reached" badge. Fallback: `--text-error`. */
+  limitReachedText?: string;
+  /** Background of the header's "Running low" badge. Fallback: `--bg-warning`. */
+  limitRunningLowBackground?: string;
+  /** Text color of the header's "Running low" badge. Fallback: `--text-warning`. */
+  limitRunningLowText?: string;
+  /** Icon color of the non-destructive entries in the header's manage menu. Fallback: `--text-secondary`. */
+  manageMenuIcon?: string;
+  /** Background of a hovered or focused row in the Content tab's file tree. Fallback: `--bg-control-accent-alpha-hover`. */
+  contentFileTreeRowHoverBackground?: string;
+  /** Background of the displayed file's row in the Content tab's file tree. Fallback: `--bg-control-accent-alpha-active`. */
+  contentFileTreeRowSelectedBackground?: string;
   /** Text color of the header-name hint under the personal API-key popover's input. Fallback: `--text-secondary`. */
   credentialsHintText?: string;
   /** Surface color of the credentials status card used by the banner, the configured-key card, and the personal API-key popover. Fallback: `--bg-layer-base`. */

@@ -78,21 +78,43 @@ describe('CreateApplicationBodyDto — locales', () => {
     expect(errors.some((e) => e.property === 'locales')).toBe(true);
   });
 });
+describe('CreateApplicationBodyDto — features', () => {
+  it('passes with a top-level features object', async () => {
+    const errors = await validateDto({
+      ...BASE_BODY,
+      features: { tools_supported: true },
+    });
+    expect(errors).toHaveLength(0);
+  });
 
-describe('CreateApplicationBodyDto — version', () => {
-  it.each(['1.0.0', '1.0.0-beta', '1.0.0+build', '1.0.0-rc.1+build.5'])(
-    'accepts the SemVer 2.0.0 version %s',
-    async (version) => {
-      const errors = await validateDto({ ...BASE_BODY, version });
+  it.each([[['tools_supported']], ['tools_supported'], [true]])(
+    'rejects non-object features (%j)',
+    async (features) => {
+      const errors = await validateDto({ ...BASE_BODY, features });
+      expect(errors.some((e) => e.property === 'features')).toBe(true);
+    },
+  );
+});
+
+describe('CreateApplicationBodyDto — folderPath', () => {
+  it.each(['', 'Design', 'Design/Audit Agents'])(
+    'accepts the folder path %j',
+    async (folderPath) => {
+      const errors = await validateDto({ ...BASE_BODY, folderPath });
       expect(errors).toHaveLength(0);
     },
   );
 
-  it.each(['1', '1.2', '1.0.0.0', '01.0.0', 'abc', '1.0.0_beta'])(
-    'rejects the non-SemVer version %s',
-    async (version) => {
-      const errors = await validateDto({ ...BASE_BODY, version });
-      expect(errors.some((e) => e.property === 'version')).toBe(true);
-    },
-  );
+  it.each([
+    '../escape',
+    'a/../b',
+    '/root',
+    'trailing/',
+    'a//b',
+    'a%2Fb',
+    'a:b',
+  ])('rejects the folder path %j', async (folderPath) => {
+    const errors = await validateDto({ ...BASE_BODY, folderPath });
+    expect(errors.some((e) => e.property === 'folderPath')).toBe(true);
+  });
 });

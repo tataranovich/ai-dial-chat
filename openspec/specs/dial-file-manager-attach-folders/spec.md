@@ -35,7 +35,7 @@ Memoisation: `isRowSelectable` is a `useCallback` in `useFileAttachmentPicker`; 
 
 ### Requirement: onAttach returns both files and folder paths
 
-`DialFileManagerModal` SHALL expose an `onAttach` callback of signature `(result: AttachResult) => void`, where `AttachResult` is exported from `@epam/ai-dial-chat-shared` (`libs/chat-shared/src/file-manager/attach-result.ts`; an identical app-local copy also exists at `apps/chat/src/components/DialFileManagerModal/types/attach-result.ts`):
+`DialFileManagerModal` SHALL expose an `onAttach` callback of signature `(result: AttachResult) => void`, where `AttachResult` is exported from `@epam/ai-dial-chat-shared` (`libs/chat-shared/src/file-manager/attach-result.ts`; the app imports it from there and keeps no local copy):
 
 ```ts
 interface AttachResult {
@@ -46,7 +46,7 @@ interface AttachResult {
 
 When `canAttachFolders` is `false`, `folderPaths` SHALL always be an empty array (`[]`).
 
-`useDialFileManagerState.handleAttach` (`apps/chat/src/hooks/files/useDialFileManagerState.ts`, used by `NewConversationComposer` as `handleAttachDialFiles`) and `ConversationView.handleAttachDialFiles` SHALL both accept `AttachResult` and pass `result.files` to `dialFilesToAttachments`.
+`useDialFileManagerState.handleAttach` (`apps/chat/src/hooks/files/useDialFileManagerState.ts`) SHALL accept `AttachResult` and pass `result.files` to `dialFilesToAttachments`. It is the single attach handler: `NewConversationComposer` and `ConversationView` both destructure it as `handleAttachDialFiles`, and neither defines its own.
 
 RTL: none
 Feature flag: none
@@ -70,7 +70,7 @@ When `canAttachFolders` is `true` and the user selects both a folder and a file 
 
 Dedup logic: a selected item (file or folder) is excluded from the result if any other selected folder path is a proper prefix of its path. A "proper prefix" check uses a trailing `/` separator to avoid false matches (e.g., `files/bucket/foo/` must not match `files/bucket/foobar/file.txt`).
 
-This dedup runs on the virtual grid paths inside `handleAttach` in `FileManagerAttachModal` before calling `onAttach`; each surviving folder is then converted by the host-supplied `resolveFolderPath` (in `DialFileManagerModal`: a `files/<bucket>/<path>/` DIAL path with `.`/`..` segments stripped and a trailing `/`) to produce `folderPaths`. Hidden-path items are skipped, files rejected by `isFileTypeAllowed` are dropped (triggering `onSkippedUnsupportedFiles`), and when `existingAttachmentsAmount` + files + folders exceeds `maximumAttachmentsAmount`, `onCountLimitExceeded` is called instead of `onAttach`.
+This dedup runs on the virtual grid paths inside `handleAttach` in `FileManagerAttachModal` before calling `onAttach`; each surviving folder is then converted by the host-supplied `resolveFolderPath` (in `DialFileManagerModal`: `resolveDialFolderPath` from `@epam/ai-dial-chat-hooks`, a `files/<bucket>/<path>/` DIAL path with `.`/`..` segments stripped and a trailing `/`) to produce `folderPaths`. Hidden-path items are skipped, files rejected by `isFileTypeAllowed` are dropped (triggering `onSkippedUnsupportedFiles`), and when `existingAttachmentsAmount` + files + folders exceeds `maximumAttachmentsAmount`, `onCountLimitExceeded` is called instead of `onAttach`.
 
 RTL: none
 Feature flag: none
@@ -121,11 +121,11 @@ Memoisation: none required — value is read from the selected deployment object
 
 ### Requirement: handleAttachDialFiles forwards folderPaths as folder Attachments
 
-Both `useDialFileManagerState.handleAttach` (the `NewConversationComposer` handler) and `ConversationView.handleAttachDialFiles` SHALL accept `AttachResult` and map `result.folderPaths` through `dialFolderPathToAttachment` (`@epam/ai-dial-chat-hooks`) to `Attachment` objects with `type: AttachmentType.File`, `id`/`url` set to the folder path, and `name` set to its decoded last segment. DIAL Core resolves folder contents server-side regardless of client-side attachment type value. The resulting folder attachments SHALL be merged with file attachments before being added to the conversation.
+`useDialFileManagerState.handleAttach` — the `handleAttachDialFiles` used by both `NewConversationComposer` and `ConversationView` — SHALL accept `AttachResult` and map `result.folderPaths` through `dialFolderPathToAttachment` (`@epam/ai-dial-chat-hooks`) to `Attachment` objects with `type: AttachmentType.File`, `id`/`url` set to the folder path, and `name` set to its decoded last segment. DIAL Core resolves folder contents server-side regardless of client-side attachment type value. The resulting folder attachments SHALL be merged with file attachments before being added to the conversation.
 
 RTL: none.
 Feature flag: none — behavior is conditional on `folderPaths.length > 0`.
-Memoisation: both handlers are `useCallback`; the `folderPaths` mapping lives inside the existing callback.
+Memoisation: the handler is a `useCallback` inside the hook; the `folderPaths` mapping lives inside it.
 
 #### Scenario: File-only attach result — folderPaths empty
 
@@ -141,6 +141,11 @@ Memoisation: both handlers are `useCallback`; the `folderPaths` mapping lives in
 
 - **WHEN** `handleAttachDialFiles` receives `{ files: [], folderPaths: ['bucket/images/'] }`
 - **THEN** a folder attachment for `'bucket/images/'` is added and no file attachments are created
+
+#### Scenario: Same handler in an existing conversation
+
+- **WHEN** `ConversationView` receives `{ files: [file1], folderPaths: ['bucket/docs/'] }` from `DialFileManagerModal`
+- **THEN** the result is handled by `useDialFileManagerState.handleAttach`, producing the same pending attachments a new chat would
 
 ---
 

@@ -33,7 +33,7 @@ the themes host takes up to 5 minutes (plus that host's own cache) to appear.
 
 When `THEMES_CONFIG_URL` is unset, the configuration request fails, the
 application logs the failure and continues with its built-in palette: the
-light-theme hex fallbacks compiled into `tailwind.config.js`. The Preferences
+light-theme hex fallbacks in `tools/tailwind/theme.css`. The Preferences
 tab then shows no theme row at all.
 
 ### Configuration file format
@@ -81,7 +81,9 @@ value. This is the single most common way a theme "half applies".
 
 `UI_EVENT=halloween` or `UI_EVENT=new-year` selects a bundled celebration on the
 start page. `UI_EVENT=none` or an omitted value disables it. Unknown event IDs
-leave the normal interface intact. The former `HALLOWEEN_ENABLED` setting has
+leave the normal interface intact. Each user can turn the event off or on with
+**Seasonal celebrations** in Settings → Preferences. Until they do, the switch
+follows `UI_EVENT_ENABLED_BY_DEFAULT` (on unless set to `false`, `0` or `no`). The former `HALLOWEEN_ENABLED` setting has
 been removed; use `UI_EVENT=halloween` instead.
 
 The selected event replaces the existing favicon slot in desktop navigation
@@ -174,7 +176,7 @@ The id must exist in the deployment's configuration file. See the
 
 ### Fonts are not themeable
 
-`--theme-font` exists, but `apps/chat/src/styles.scss` declares it on `html`,
+`--theme-font` exists, but `apps/chat/src/styles/base.css` declares it on `html`,
 `body`, and `#root`. A value supplied through a theme's `colors` map lands on
 `<html>` only and is shadowed for everything inside `#root`, so it has no
 practical effect. Changing the application font currently requires editing that
@@ -190,8 +192,13 @@ These are the CSS custom properties the application reads. Anything else in
 ```text
 bg-layer-sunken   bg-layer-base     bg-layer-raised
 bg-backdrop       bg-error          bg-warning
-bg-info           bg-success
+bg-info           bg-success        bg-entity-icon
 ```
+
+`bg-entity-icon` is the plate behind a model's, agent's or other entity's icon
+image. Many vendor logos are a monochrome dark glyph on a transparent
+background, so a dark theme should set it to a light value — otherwise such a
+logo disappears into the dark plate. Unset, it follows `bg-layer-sunken`.
 
 **Controls**
 
@@ -269,21 +276,25 @@ fence at 48px, and filled glyphs carry no icon stroke at all.
 **Shadows**
 
 ```text
-shadow-xs-1  shadow-xs-2  shadow-sm  shadow-md  shadow-lg
+shadow-xs-1  shadow-xs-2  shadow-sm-1  shadow-sm-2  shadow-md-1  shadow-md-2  shadow-lg
 ```
 
 The variables are named after the elevation that consumes them, not after their
-hue. `shadow-xs` paints two layers — a wide blue one from `shadow-xs-1` and a
-tight grey one from `shadow-xs-2`. `shadow-sm`, `shadow-md`, and `shadow-lg`
-are a single blue layer each, so they take one variable apiece. Themes that set
+hue. `shadow-xs` paints a single blue halo from `shadow-xs-1`; `shadow-xs-2`
+(a tight grey) is only read by `shadow-chat-button`. `shadow-sm` and
+`shadow-md` paint two blue layers, as the design's Shadow SM and Shadow MD: a
+drop from `shadow-sm-2` /
+`shadow-md-2` and a tight halo from `shadow-sm-1` / `shadow-md-1`. A theme that
+still sets the old single `shadow-sm` / `shadow-md` colour keeps it on the drop
+layer. `shadow-lg` is a single blue layer with one variable. Themes that set
 the pre-spec `shadow-xs-sm-1` / `shadow-xs-sm-2` need to move to the
 `shadow-xs-*` names; `shadow-sm` was retuned for the side panels and now has
 its own variable.
 
 Besides the four scale steps there is `shadow-chat-button`, the resting shadow
 the chat button kept when `shadow-sm` was retuned. It is not a foundations
-elevation and has no variable of its own — it paints the same two variables as
-`shadow-xs` at a wider offset and blur.
+elevation and has no variable of its own — it paints `shadow-xs-1` and
+`shadow-xs-2` as two offset layers.
 
 There is no inset variant: a recessed seam between a panel and the content
 beside it is painted by the panel's own `shadow-sm`, not by an inset shadow on
@@ -293,7 +304,7 @@ the content.
 
 The control tokens were renamed for the role they fill instead of their opacity
 or their literal hue. **The old variable names are not honored anywhere** —
-neither `tailwind.config.js` nor the chains in `libs/*` (see
+neither `tools/tailwind/theme.css` nor the chains in `libs/*` (see
 [Styling libraries](#styling-libraries)) carry them as a fallback, so a theme
 still on the old names renders the built-in light hex for every renamed token.
 Rename them.
@@ -316,7 +327,7 @@ as `stroke-accent-alpha`. Move the value there.
 
 The focus ring variable is `stroke-focus` again. ui-kit 0.13 renamed it to
 `stroke-focus-black`; the kit now reads `--stroke-focus` first and keeps
-`--stroke-focus-black` only as its own fallback. `tailwind.config.js` and the
+`--stroke-focus-black` only as its own fallback. `tools/tailwind/theme.css` and the
 `libs/*` chains read `--stroke-focus` alone, so a theme still setting
 `stroke-focus-black` recolors only the kit's focus rings. Rename it. The
 Tailwind class moved back with it (`outline-focus-black` → `outline-focus`).
@@ -325,7 +336,7 @@ Tailwind class moved back with it (`outline-focus-black` → `outline-focus`).
 
 The accent focus ring variable is named for the role it fills instead of its
 literal hue, matching the `border-accent-focus` / `outline-accent-focus`
-classes that consume it. `tailwind.config.js`, the `libs/*` chains, and
+classes that consume it. `tools/tailwind/theme.css`, the `libs/*` chains, and
 `@epam/ai-dial-ui-kit`'s own stylesheet all read `--stroke-accent-focus` with
 no fallback to the old name, so a theme setting only `stroke-focus-blue` gets
 the built-in `#6785FB`. Rename it.
@@ -374,7 +385,7 @@ same role) are omitted: `bg-error`, `bg-warning`, `bg-info`, `bg-success`,
 | `stroke-accent-primary`                                                                                                                           | `stroke-accent`, plus `stroke-accent-focus` for accent focus rings                                 |
 | `bg-accent-secondary`, `bg-accent-tertiary`, `stroke-accent-secondary`, `stroke-accent-tertiary`, `text-accent-secondary`, `text-accent-tertiary` | No equivalent — the three-accent scheme became a single accent                                     |
 | `bg-auth-layer-0`, `bg-auth-layer-1`                                                                                                              | No equivalent — the login page uses the shared surface tokens                                      |
-| `bg-model-icon`                                                                                                                                   | No equivalent                                                                                      |
+| `bg-model-icon`                                                                                                                                   | `bg-entity-icon` — the plate behind entity icons                                                   |
 | `border-radius`                                                                                                                                   | No equivalent — radii are Tailwind classes, not a themeable variable                               |
 | `codeblock-font`, `theme-font`                                                                                                                    | No equivalent in practice — see [Fonts are not themeable](#fonts-are-not-themeable)                |
 
@@ -427,9 +438,8 @@ singleton host import. This preserves the same token cascade without coupling
 an embedding app to the scheduler's private composition.
 
 The chain is exactly three tiers. The middle tier names the current token only —
-it does not carry the pre-0.14 aliases that `tailwind.config.js` keeps for its
-utilities, because a lib is not supposed to know this application's rename
-history.
+it carries no pre-0.14 alias (neither does `tools/tailwind/theme.css`),
+because a lib is not supposed to know this application's rename history.
 
 The full convention — variable naming, what belongs in `.module.scss` versus
 Tailwind, the `buildCssVars` helper, and the checks that catch styles which

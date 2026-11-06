@@ -1,12 +1,15 @@
 import {
-  DialSchemaRenderer,
   ErrorMessageNotification,
+  ErrorText,
   type JsonSchema,
+  NoDataContent,
+  SchemaRenderer,
   SchemaRendererVariant,
   Spinner,
+  LiveRegionPoliteness,
 } from '@epam/ai-dial-ui-kit';
 import type { FC } from 'react';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router';
 import { AppsEditorI18nKeys } from '../../../constants/translation-keys';
@@ -16,7 +19,10 @@ import type {
 } from '../../../models/application-editor';
 import { getApplicationSchema } from '../../../server-api/application-schemas';
 import { AppsEditorQuery } from '../../../types/apps-editor';
-import { getSchemaTopLevelDefaults } from '../../../utils/application-editor';
+import {
+  getSchemaTopLevelDefaults,
+  hasVisibleSchemaProperties,
+} from '../../../utils/application-editor';
 
 type Props = ApplicationSetupProps<SchemaApplicationSetup>;
 
@@ -25,11 +31,13 @@ const SchemaAppSetup: FC<Props> = ({
   value,
   errors,
   onChange,
+  onInitialize,
   isEditMode,
   onReadyChange,
 }) => {
   const { t } = useTranslation();
   const [searchParams] = useSearchParams();
+  const propertiesErrorId = useId();
   const schemaId = searchParams.get(AppsEditorQuery.Schema) ?? '';
   const [schema, setSchema] = useState<JsonSchema>();
   const [hasLoadError, setHasLoadError] = useState(false);
@@ -66,11 +74,12 @@ const SchemaAppSetup: FC<Props> = ({
     schemaRequired !== undefined &&
     schemaRequired.length === value.requiredProperties.length &&
     schemaRequired.every((name) => value.requiredProperties.includes(name));
+  const handleInitialize = onInitialize ?? onChange;
   useEffect(() => {
     if (schemaRequired && !isRequiredSynced) {
-      onChange({ requiredProperties: schemaRequired });
+      handleInitialize({ requiredProperties: schemaRequired });
     }
-  }, [schemaRequired, isRequiredSynced, onChange]);
+  }, [schemaRequired, isRequiredSynced, handleInitialize]);
 
   /* The renderer reads `defaultValue` once on mount, so an edited app waits
      for its loaded properties before the form appears. */
@@ -101,6 +110,13 @@ const SchemaAppSetup: FC<Props> = ({
     [onChange],
   );
 
+  /* The renderer reports the defaults it filled in once on mount; that is
+     initialisation, not an edit. */
+  const handleDefaultValues = useCallback(
+    (properties: Record<string, unknown>) => handleInitialize({ properties }),
+    [handleInitialize],
+  );
+
   if (hasLoadError) {
     return (
       <ErrorMessageNotification
@@ -117,21 +133,26 @@ const SchemaAppSetup: FC<Props> = ({
     );
   }
 
+  if (!hasVisibleSchemaProperties(schema)) {
+    return <NoDataContent title={t(AppsEditorI18nKeys.SchemaFormEmpty)} />;
+  }
+
   return (
-    <div className="flex flex-col gap-2">
-      {errors.properties && (
-        <p role="alert" className="dial-small-text text-error">
-          {errors.properties}
-        </p>
-      )}
-      <DialSchemaRenderer
+    <div className="flex flex-col">
+      <ErrorText
+        announce={LiveRegionPoliteness.Assertive}
+        id={propertiesErrorId}
+        text={errors.properties}
+        className="mb-2 block"
+      />
+      <SchemaRenderer
         schema={schema}
         variant={SchemaRendererVariant.Flat}
         defaultValue={defaultValue}
         // After a blocked save every missing required field is marked, not only the touched ones.
         skipUntouched={!errors.properties}
         onChange={handlePropertiesChange}
-        onDefaultValues={handlePropertiesChange}
+        onDefaultValues={handleDefaultValues}
       />
     </div>
   );

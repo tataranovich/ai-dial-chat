@@ -13,23 +13,33 @@ import { DeploymentCreationForm } from '../DeploymentCreationForm';
 
 vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@epam/ai-dial-ui-kit')>()),
+  /* Mirrors the kit: the error renders with no role, is linked to the
+   * field through `aria-describedby`, and marks the field `aria-invalid`. */
   Input: ({
+    id,
     value,
     onChange,
     labelProps,
     error,
     placeholder,
     inputRef,
+    disabled,
     readOnly,
+    onBlur,
+    tooltipText,
     caption,
   }: {
+    id?: string;
     value?: string;
     onChange?: (v?: string) => void;
     labelProps?: { label?: string };
     error?: string;
     placeholder?: string;
     inputRef?: Ref<HTMLInputElement>;
+    disabled?: boolean;
     readOnly?: boolean;
+    onBlur?: () => void;
+    tooltipText?: string;
     caption?: string;
   }) => (
     <>
@@ -37,17 +47,24 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
         {labelProps?.label}
         <input
           ref={inputRef}
+          id={id}
           value={value ?? ''}
           placeholder={placeholder}
+          disabled={disabled}
           readOnly={readOnly}
+          onBlur={onBlur}
+          title={tooltipText}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
           onChange={(e) => onChange?.(e.target.value)}
         />
       </label>
       {caption && <p>{caption}</p>}
-      {error && <p role="alert">{error}</p>}
+      {error && <span id={`${id}-error`}>{error}</span>}
     </>
   ),
   Textarea: ({
+    id,
     value,
     onChange,
     labelProps,
@@ -55,6 +72,7 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
     error,
     ref,
   }: {
+    id?: string;
     value?: string;
     onChange?: (v: string) => void;
     labelProps?: { label?: string; required?: boolean };
@@ -68,12 +86,15 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
         {labelProps?.required && ' *'}
         <textarea
           ref={ref}
+          id={id}
           value={value ?? ''}
           placeholder={placeholder}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
           onChange={(e) => onChange?.(e.target.value)}
         />
       </label>
-      {error && <p role="alert">{error}</p>}
+      {error && <span id={`${id}-error`}>{error}</span>}
     </>
   ),
   TagInput: ({
@@ -195,13 +216,18 @@ describe('DeploymentCreationForm', () => {
 
   it('surfaces a passed-in name error without validating itself', () => {
     renderComponent(undefined, { name: 'Name is required' });
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toBe('Name is required');
+    const field = screen.getByRole('textbox', {
+      name: 'Name',
+      description: 'Name is required',
+    });
+    expect(field.getAttribute('aria-invalid')).toBe('true');
   });
 
   it('renders no error when none is passed', () => {
     renderComponent();
-    expect(screen.queryByRole('alert')).toBeNull();
+    const field = screen.getByLabelText('Name');
+    expect(field.getAttribute('aria-invalid')).toBeNull();
+    expect(field.getAttribute('aria-describedby')).toBeNull();
   });
 
   it('renders only the requested fields, with Name alone on its row', () => {
@@ -217,24 +243,67 @@ describe('DeploymentCreationForm', () => {
     expect(screen.queryByText('Add locales')).toBeNull();
   });
 
-  it('marks Description required, renders a name caption and a read-only Name', () => {
+  it('marks Description required, renders a name caption and a disabled Name', () => {
     renderComponent(undefined, {}, vi.fn(), vi.fn(), {
       isDescriptionRequired: true,
       isNameReadOnly: true,
+      nameReadOnlyTooltip: 'Name cannot be changed',
       nameCaption: 'Lowercase letters and hyphens',
     });
     expect(screen.getByText('Lowercase letters and hyphens')).toBeTruthy();
-    expect((screen.getByLabelText('Name') as HTMLInputElement).readOnly).toBe(
+    expect((screen.getByLabelText('Name') as HTMLInputElement).disabled).toBe(
       true,
     );
+    expect(screen.getByLabelText('Name').title).toBe('Name cannot be changed');
     expect(screen.getByLabelText('Description *')).toBeTruthy();
+  });
+
+  it('renders a focusable read-only Version that ignores typing and blur', async () => {
+    const onChange = vi.fn();
+    const onVersionBlur = vi.fn();
+    renderComponent(undefined, {}, onChange, vi.fn(), {
+      isVersionReadOnly: true,
+      versionReadOnlyTooltip: 'Use Save as new version',
+      onVersionBlur,
+    });
+    const version = screen.getByLabelText('Version') as HTMLInputElement;
+    expect(version.readOnly).toBe(true);
+    expect(version.disabled).toBe(false);
+    expect(version.title).toBe('Use Save as new version');
+
+    await user.click(version);
+    await user.keyboard('9');
+    await user.tab();
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onVersionBlur).not.toHaveBeenCalled();
+  });
+
+  it('uses the default tooltip for a read-only Version', () => {
+    renderComponent(undefined, {}, vi.fn(), vi.fn(), {
+      isVersionReadOnly: true,
+    });
+    expect(screen.getByLabelText('Version').title).toBe(
+      'The version is changed with "Save as new version"',
+    );
+  });
+
+  it('keeps Version editable by default', () => {
+    const onChange = vi.fn();
+    renderComponent(undefined, {}, onChange);
+    const version = screen.getByLabelText('Version') as HTMLInputElement;
+    expect(version.readOnly).toBe(false);
+    fireEvent.change(version, { target: { value: '2.0.0' } });
+    expect(onChange).toHaveBeenCalledWith({ version: '2.0.0' });
   });
 
   it('surfaces a description error', () => {
     renderComponent(undefined, { description: 'Description is required' });
-    expect(screen.getByRole('alert').textContent).toBe(
-      'Description is required',
-    );
+    const field = screen.getByRole('textbox', {
+      name: 'Description',
+      description: 'Description is required',
+    });
+    expect(field.getAttribute('aria-invalid')).toBe('true');
   });
 
   it('moves focus to Description when it is the only field that becomes invalid', () => {

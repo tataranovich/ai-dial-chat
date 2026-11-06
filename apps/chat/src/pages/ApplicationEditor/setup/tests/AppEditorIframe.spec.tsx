@@ -1,11 +1,21 @@
-import type { DialToolsetDto } from '@epam/ai-dial-chat-api-client';
+import type {
+  DialToolsetDto,
+  ApplicationExternalServiceDto,
+} from '@epam/ai-dial-chat-api-client';
 import {
   emitToolsetLoginSuccess,
   getToolsetOAuthChannelName,
   TOOLSET_REDIRECT_STATE_KEY,
   ToolsetCredentialsLevel,
+  type ToolsetRedirectState,
 } from '@epam/ai-dial-chat-hooks';
+import { ExternalServiceLoginOutcomeType } from '@epam/ai-dial-chat-hooks';
 import {
+  decodeJsonFromBase64,
+  encodeJsonToBase64,
+} from '@epam/ai-dial-chat-shared';
+import {
+  act,
   fireEvent,
   render,
   screen,
@@ -14,17 +24,23 @@ import {
 } from '@testing-library/react';
 import type { ComponentProps, Ref } from 'react';
 import { createRef } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AppsEditorI18nKeys } from '../../../../constants/translation-keys';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  AppsEditorI18nKeys,
+  ButtonsI18nKeys,
+} from '../../../../constants/translation-keys';
 import * as AppConfigContextModule from '../../../../context/AppConfigContext';
 import * as UserContextModule from '../../../../context/auth/UserContext';
 import * as ThemeContextModule from '../../../../context/ThemeContext';
 import * as deploymentsApi from '../../../../server-api/deployments';
+import * as externalServicesApi from '../../../../server-api/external-services';
 import * as toolsetsApi from '../../../../server-api/toolsets';
 import { AppsEditorEvent } from '../../../../types/apps-editor';
 import { AuthStatus } from '../../../../types/auth-status';
 import type { AppEditorIframeHandle } from '../AppEditorIframe';
-import AppEditorIframe from '../AppEditorIframe';
+import AppEditorIframe, {
+  EDITOR_RESPONSE_TIMEOUT_MS,
+} from '../AppEditorIframe';
 
 vi.mock('../../../../context/AppConfigContext', () => ({
   useFeatureFlag: vi.fn(() => true),
@@ -49,6 +65,24 @@ vi.mock('../../../../server-api/toolsets', () => ({
 vi.mock('../../../../server-api/deployments', () => ({
   getDeploymentDetails: vi.fn(),
 }));
+vi.mock('../../../../server-api/external-services', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../../../../server-api/external-services')
+  >()),
+  listExternalServices: vi.fn(),
+}));
+const { mockLoginExternalService } = vi.hoisted(() => ({
+  mockLoginExternalService: vi.fn(),
+}));
+vi.mock(
+  '../../../../hooks/externalServices/useExternalServiceLogin',
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import('../../../../hooks/externalServices/useExternalServiceLogin')
+    >()),
+    useExternalServiceLogin: () => ({ login: mockLoginExternalService }),
+  }),
+);
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
   Popup: ({
@@ -61,6 +95,31 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     <div role="dialog">
       {children}
       <button onClick={onClose}>Close credentials</button>
+    </div>
+  ),
+  NeutralButton: ({
+    label,
+    onClick,
+  }: {
+    label: string;
+    onClick: () => void;
+  }) => <button onClick={onClick}>{label}</button>,
+  ElementSize: { Small: 'small' },
+  /* Read at import time by conversation-input's UsageLimitBannerView. */
+  NotificationVariant: { Warning: 'warning', Error: 'error' },
+  WarningMessageNotification: ({
+    title,
+    message,
+    action,
+  }: {
+    title: React.ReactNode;
+    message: React.ReactNode;
+    action: React.ReactNode;
+  }) => (
+    <div role="alert">
+      <p>{title}</p>
+      <p>{message}</p>
+      {action}
     </div>
   ),
   DIAL_KIT_ICON_STROKE: 1.5,
@@ -98,6 +157,19 @@ const getEditorWindow = () =>
   (screen.queryByTitle('QuickApp') as HTMLIFrameElement | null)
     ?.contentWindow ?? null;
 
+const postEditorMessage = (
+  data: Record<string, unknown>,
+  source: MessageEventSource | null = getEditorWindow(),
+) =>
+  fireEvent(
+    window,
+    new MessageEvent('message', {
+      data,
+      origin: 'https://editor.example.com',
+      source,
+    }),
+  );
+
 describe('AppEditorIframe', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -122,6 +194,93 @@ describe('AppEditorIframe', () => {
     expect(url.searchParams.get('authProvider')).toBe('local');
     expect(url.searchParams.get('id')).toBe('abc');
     expect(url.searchParams.get('theme')).toBe('dark');
+  });
+
+  it('includes applicationName in the iframe src', () => {
+    renderIframe();
+    const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
+    expect(new URL(iframe.src).searchParams.get('applicationName')).toBe(
+      'QuickApp',
+    );
+  });
+
+  it.each(['invalid URL', 'data:text/html,editor'])(
+    'does not create a message transport for an invalid editor origin: %s',
+    (editorUrl) => {
+      const ref = createRef<AppEditorIframeHandle>();
+      const onReadyChange = vi.fn();
+      renderIframe({ schema: { ...SCHEMA, editorUrl }, onReadyChange }, ref);
+      const postMessageSpy = vi.spyOn(
+        getEditorWindow() as Window,
+        'postMessage',
+      );
+
+      ref.current?.triggerSave({ name: 'My App' });
+      postEditorMessage({
+        type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
+      });
+
+      expect(postMessageSpy).not.toHaveBeenCalled();
+      expect(onReadyChange).not.toHaveBeenCalledWith(true);
+    },
+  );
+
+  it('encodes applicationName with spaces and dots and round-trips it', () => {
+    renderIframe({ schema: { ...SCHEMA, displayName: 'Quick app 2.0' } });
+    const iframe = screen.getByTitle('Quick app 2.0') as HTMLIFrameElement;
+    expect(iframe.src).toContain('applicationName=Quick+app+2.0');
+    expect(new URL(iframe.src).searchParams.get('applicationName')).toBe(
+      'Quick app 2.0',
+    );
+  });
+
+  it.each([
+    ['empty', ''],
+    ['undefined', undefined],
+  ])('omits applicationName when displayName is %s', (_label, displayName) => {
+    const { container } = renderIframe({
+      schema: {
+        ...SCHEMA,
+        displayName,
+      } as unknown as ComponentProps<typeof AppEditorIframe>['schema'],
+    });
+    // An empty or missing displayName leaves the iframe without a title to query it by.
+    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    expect(new URL(iframe.src).searchParams.has('applicationName')).toBe(false);
+  });
+
+  it('changes the iframe src and re-gates readiness when displayName changes', () => {
+    const onReadyChange = vi.fn();
+    const { rerender } = render(
+      <AppEditorIframe {...DEFAULT_PROPS} onReadyChange={onReadyChange} />,
+    );
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data: {
+          type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
+        },
+        origin: 'https://editor.example.com',
+        source: getEditorWindow(),
+      }),
+    );
+    expect(onReadyChange).toHaveBeenCalledWith(true);
+    onReadyChange.mockClear();
+
+    rerender(
+      <AppEditorIframe
+        {...DEFAULT_PROPS}
+        schema={{ ...SCHEMA, displayName: 'Other App' }}
+        onReadyChange={onReadyChange}
+      />,
+    );
+
+    const iframe = screen.getByTitle('Other App') as HTMLIFrameElement;
+    expect(new URL(iframe.src).searchParams.get('applicationName')).toBe(
+      'Other App',
+    );
+    expect(onReadyChange).toHaveBeenCalledWith(false);
   });
 
   it('delegates local-network-access to the embedded iframe', () => {
@@ -162,6 +321,7 @@ describe('AppEditorIframe', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToInteract}`,
         },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(screen.queryByRole('status')).toBeNull();
@@ -177,6 +337,7 @@ describe('AppEditorIframe', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.UpdatedSuccess}`,
         },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(onUpdated).toHaveBeenCalledOnce();
@@ -190,6 +351,7 @@ describe('AppEditorIframe', () => {
       new MessageEvent('message', {
         data: { type: AppsEditorEvent.SaveSuccess, hasChanges: true },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(onSaveSuccess).toHaveBeenCalledWith(true);
@@ -203,6 +365,7 @@ describe('AppEditorIframe', () => {
       new MessageEvent('message', {
         data: { type: AppsEditorEvent.SaveSuccess, hasChanges: false },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(onSaveSuccess).toHaveBeenCalledWith(false);
@@ -216,9 +379,87 @@ describe('AppEditorIframe', () => {
       new MessageEvent('message', {
         data: { type: AppsEditorEvent.SaveSuccess },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(onSaveSuccess).toHaveBeenCalledWith(false);
+  });
+
+  it.each([
+    [{ error: 'Save was refused' }, 'Save was refused'],
+    [{ payload: { error: 'Storage unavailable' } }, 'Storage unavailable'],
+    [{}, ''],
+  ])('forwards the normalized save error: %j', (fields, error) => {
+    const onSaveError = vi.fn();
+    renderIframe({ onSaveError });
+
+    postEditorMessage({ type: AppsEditorEvent.SaveError, ...fields });
+
+    expect(onSaveError).toHaveBeenCalledWith(error);
+  });
+
+  it.each(['missing', 'foreign'])(
+    'ignores lifecycle and save messages with a %s source',
+    (sourceKind) => {
+      const source = sourceKind === 'missing' ? null : window;
+      const onReadyChange = vi.fn();
+      const onLoggedOutChange = vi.fn();
+      const onUpdated = vi.fn();
+      const onSaveSuccess = vi.fn();
+      const onSaveError = vi.fn();
+      renderIframe({
+        onReadyChange,
+        onLoggedOutChange,
+        onUpdated,
+        onSaveSuccess,
+        onSaveError,
+      });
+      onReadyChange.mockClear();
+      onLoggedOutChange.mockClear();
+
+      for (const type of [
+        `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToInteract}`,
+        `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
+        `${SCHEMA.displayName}/${AppsEditorEvent.LoggedOut}`,
+        `${SCHEMA.displayName}/${AppsEditorEvent.UpdatedSuccess}`,
+        AppsEditorEvent.SaveSuccess,
+        AppsEditorEvent.SaveError,
+      ]) {
+        postEditorMessage(
+          { type, hasChanges: true, error: 'Foreign error' },
+          source,
+        );
+      }
+
+      expect(screen.getByRole('status')).toBeTruthy();
+      expect(onReadyChange).not.toHaveBeenCalled();
+      expect(onLoggedOutChange).not.toHaveBeenCalled();
+      expect(onUpdated).not.toHaveBeenCalled();
+      expect(onSaveSuccess).not.toHaveBeenCalled();
+      expect(onSaveError).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses the latest callbacks without starting another iframe load', () => {
+    const onLoadStart = vi.fn();
+    const onSaveSuccess = vi.fn();
+    const nextOnSaveSuccess = vi.fn();
+    const { rerender } = renderIframe({ onLoadStart, onSaveSuccess });
+    const iframe = screen.getByTitle('QuickApp');
+
+    rerender(
+      <AppEditorIframe
+        {...DEFAULT_PROPS}
+        onLoadStart={onLoadStart}
+        onSaveSuccess={nextOnSaveSuccess}
+      />,
+    );
+    postEditorMessage({ type: AppsEditorEvent.SaveSuccess, hasChanges: true });
+
+    expect(screen.getByTitle('QuickApp')).toBe(iframe);
+    expect(onLoadStart).toHaveBeenCalledOnce();
+    expect(onSaveSuccess).not.toHaveBeenCalled();
+    expect(nextOnSaveSuccess).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it('ignores messages from a different origin', () => {
@@ -231,6 +472,7 @@ describe('AppEditorIframe', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToInteract}`,
         },
         origin: 'https://evil.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(screen.getByRole('status')).toBeTruthy();
@@ -245,6 +487,185 @@ describe('AppEditorIframe', () => {
       'message',
       expect.any(Function),
     );
+  });
+
+  it('stops delivering editor callbacks after unmount', () => {
+    const onSaveSuccess = vi.fn();
+    const { unmount } = renderIframe({ onSaveSuccess });
+    const source = getEditorWindow();
+
+    unmount();
+    postEditorMessage(
+      { type: AppsEditorEvent.SaveSuccess, hasChanges: true },
+      source,
+    );
+
+    expect(onSaveSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppEditorIframe — unresponsive editor', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    mockUseUser.mockReturnValue({
+      status: AuthStatus.Authenticated,
+      user: { sub: 'u1', providerId: 'local', claims: {}, isAdmin: false },
+      refresh: vi.fn(),
+      reset: vi.fn(),
+    });
+    mockUseTheme.mockReturnValue({
+      currentTheme: 'dark',
+      selectedTheme: 'dark',
+      setTheme: vi.fn(),
+      isLoading: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const postFromEditor = (type: string) =>
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data: { type },
+        origin: 'https://editor.example.com',
+        source: getEditorWindow(),
+      }),
+    );
+
+  const expireResponseTimeout = () =>
+    act(() => {
+      vi.advanceTimersByTime(EDITOR_RESPONSE_TIMEOUT_MS);
+    });
+
+  it('warns instead of spinning when the editor sends no message in time, even after a load event', () => {
+    const onUnresponsiveChange = vi.fn();
+    renderIframe({ onUnresponsiveChange });
+    // An unreachable host still fires load for the browser's own error page.
+    fireEvent.load(screen.getByTitle('QuickApp'));
+
+    expireResponseTimeout();
+
+    const alert = screen.getByRole('alert');
+    expect(
+      within(alert).getByText(AppsEditorI18nKeys.SettingsStepUnresponsiveTitle),
+    ).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(onUnresponsiveChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('keeps the spinner and no warning before the timeout', () => {
+    renderIframe();
+    act(() => {
+      vi.advanceTimersByTime(EDITOR_RESPONSE_TIMEOUT_MS - 1);
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status')).toBeTruthy();
+  });
+
+  it('never warns once the editor has sent a message', () => {
+    renderIframe();
+    postFromEditor(`${SCHEMA.displayName}/${AppsEditorEvent.LoggedOut}`);
+    expireResponseTimeout();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('treats visualizer READY as activity without making the editor safe to save', () => {
+    const onReadyChange = vi.fn();
+    renderIframe({ onReadyChange });
+
+    postEditorMessage({ type: `${SCHEMA.displayName}/READY` });
+    expireResponseTimeout();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(onReadyChange).toHaveBeenLastCalledWith(false);
+    expect(onReadyChange).not.toHaveBeenCalledWith(true);
+  });
+
+  it('does not count same-origin messages from another window as editor activity', () => {
+    renderIframe();
+
+    postEditorMessage({ type: `${SCHEMA.displayName}/READY` }, window);
+    expireResponseTimeout();
+
+    expect(screen.getByRole('alert')).toBeTruthy();
+  });
+
+  it('ignores messages from other origins when deciding the editor responded', () => {
+    renderIframe();
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data: {
+          type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToInteract}`,
+        },
+        origin: 'https://evil.example.com',
+        source: getEditorWindow(),
+      }),
+    );
+    expireResponseTimeout();
+    expect(screen.getByRole('alert')).toBeTruthy();
+  });
+
+  it('clears the warning when a late message arrives', () => {
+    const onUnresponsiveChange = vi.fn();
+    renderIframe({ onUnresponsiveChange });
+    expireResponseTimeout();
+
+    postFromEditor(`${SCHEMA.displayName}/${AppsEditorEvent.ReadyToInteract}`);
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(onUnresponsiveChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('remounts the iframe and restarts the wait on Reload', () => {
+    const onLoadStart = vi.fn();
+    const onReadyChange = vi.fn();
+    renderIframe({ onLoadStart, onReadyChange });
+    const firstIframe = screen.getByTitle('QuickApp');
+    expect(onLoadStart).toHaveBeenCalledTimes(1);
+    expect(onReadyChange).toHaveBeenLastCalledWith(false);
+    expireResponseTimeout();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: ButtonsI18nKeys.Reload }),
+    );
+
+    expect(screen.getByTitle('QuickApp')).not.toBe(firstIframe);
+    expect(screen.getByTitle('QuickApp').getAttribute('src')).toBe(
+      firstIframe.getAttribute('src'),
+    );
+    expect(onLoadStart).toHaveBeenCalledTimes(2);
+    expect(onReadyChange).not.toHaveBeenCalledWith(true);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status')).toBeTruthy();
+
+    expireResponseTimeout();
+    expect(screen.getByRole('alert')).toBeTruthy();
+  });
+
+  it('ignores the old iframe window after Reload and accepts the new one', () => {
+    const onReadyChange = vi.fn();
+    renderIframe({ onReadyChange });
+    const previousWindow = getEditorWindow();
+    expireResponseTimeout();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: ButtonsI18nKeys.Reload }),
+    );
+    const message = {
+      type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
+    };
+    postEditorMessage(message, previousWindow);
+
+    expect(onReadyChange).not.toHaveBeenCalledWith(true);
+
+    postEditorMessage(message);
+
+    expect(onReadyChange).toHaveBeenLastCalledWith(true);
   });
 });
 
@@ -277,6 +698,7 @@ describe('AppEditorIframe — ready-to-save readiness', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToInteract}`,
         },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
 
@@ -294,17 +716,47 @@ describe('AppEditorIframe — ready-to-save readiness', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
         },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
 
     expect(onReadyChange).toHaveBeenCalledWith(true);
   });
 
+  it('gates saving after logout and clears logout after the editor becomes ready again', () => {
+    const onReadyChange = vi.fn();
+    const onLoggedOutChange = vi.fn();
+    renderIframe({ onReadyChange, onLoggedOutChange });
+
+    postEditorMessage({
+      type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
+    });
+    expect(onReadyChange).toHaveBeenLastCalledWith(true);
+
+    postEditorMessage({
+      type: `${SCHEMA.displayName}/${AppsEditorEvent.LoggedOut}`,
+    });
+    expect(onReadyChange).toHaveBeenLastCalledWith(false);
+    expect(onLoggedOutChange).toHaveBeenLastCalledWith(true);
+
+    postEditorMessage({
+      type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
+    });
+    expect(onReadyChange).toHaveBeenLastCalledWith(true);
+    expect(onLoggedOutChange).toHaveBeenLastCalledWith(false);
+  });
+
   it('re-gates readiness to false when the iframe reloads for a different app', () => {
+    const onLoadStart = vi.fn();
     const onReadyChange = vi.fn();
     const { rerender } = render(
-      <AppEditorIframe {...DEFAULT_PROPS} onReadyChange={onReadyChange} />,
+      <AppEditorIframe
+        {...DEFAULT_PROPS}
+        onLoadStart={onLoadStart}
+        onReadyChange={onReadyChange}
+      />,
     );
+    expect(onLoadStart).toHaveBeenCalledTimes(1);
 
     fireEvent(
       window,
@@ -313,6 +765,7 @@ describe('AppEditorIframe — ready-to-save readiness', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
         },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(onReadyChange).toHaveBeenCalledWith(true);
@@ -322,11 +775,61 @@ describe('AppEditorIframe — ready-to-save readiness', () => {
       <AppEditorIframe
         {...DEFAULT_PROPS}
         appId="different-app"
+        onLoadStart={onLoadStart}
         onReadyChange={onReadyChange}
       />,
     );
 
+    expect(onLoadStart).toHaveBeenCalledTimes(2);
     expect(onReadyChange).toHaveBeenCalledWith(false);
+  });
+
+  it('keeps readiness and the current load when callback and schema references change', () => {
+    const onLoadStart = vi.fn();
+    const nextOnLoadStart = vi.fn();
+    const onReadyChange = vi.fn();
+    const { rerender } = renderIframe({ onLoadStart, onReadyChange });
+    const firstIframe = screen.getByTitle('QuickApp');
+
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data: {
+          type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
+        },
+        origin: 'https://editor.example.com',
+        source: getEditorWindow(),
+      }),
+    );
+    expect(onReadyChange).toHaveBeenLastCalledWith(true);
+    onReadyChange.mockClear();
+
+    rerender(
+      <AppEditorIframe
+        {...DEFAULT_PROPS}
+        schema={{ ...SCHEMA }}
+        onLoadStart={nextOnLoadStart}
+        onReadyChange={onReadyChange}
+      />,
+    );
+
+    expect(screen.getByTitle('QuickApp')).toBe(firstIframe);
+    expect(onLoadStart).toHaveBeenCalledTimes(1);
+    expect(nextOnLoadStart).not.toHaveBeenCalled();
+    expect(onReadyChange).not.toHaveBeenCalled();
+
+    rerender(
+      <AppEditorIframe
+        {...DEFAULT_PROPS}
+        appId="different-app"
+        onLoadStart={nextOnLoadStart}
+        onReadyChange={onReadyChange}
+      />,
+    );
+
+    expect(onLoadStart).toHaveBeenCalledTimes(1);
+    expect(nextOnLoadStart).toHaveBeenCalledTimes(1);
+    expect(onReadyChange).toHaveBeenLastCalledWith(false);
   });
 
   it('ignores a readyToSave message from a different origin', () => {
@@ -340,10 +843,36 @@ describe('AppEditorIframe — ready-to-save readiness', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.ReadyToSave}`,
         },
         origin: 'https://evil.example.com',
+        source: getEditorWindow(),
       }),
     );
 
     expect(onReadyChange).not.toHaveBeenCalledWith(true);
+  });
+
+  it('reports form validity from the editor window and ignores other sources', () => {
+    const onValidityChange = vi.fn();
+    renderIframe({ onValidityChange });
+    expect(onValidityChange).toHaveBeenLastCalledWith(true);
+
+    const post = (isValid: boolean, source: MessageEventSource | null) =>
+      fireEvent(
+        window,
+        new MessageEvent('message', {
+          data: { type: AppsEditorEvent.ValidityState, payload: { isValid } },
+          origin: 'https://editor.example.com',
+          source,
+        }),
+      );
+
+    post(false, null);
+    expect(onValidityChange).toHaveBeenLastCalledWith(true);
+
+    post(false, getEditorWindow());
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+
+    post(true, getEditorWindow());
+    expect(onValidityChange).toHaveBeenLastCalledWith(true);
   });
 
   it('reports logged out once a loggedOut message arrives', () => {
@@ -357,6 +886,7 @@ describe('AppEditorIframe — ready-to-save readiness', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.LoggedOut}`,
         },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
 
@@ -374,6 +904,7 @@ describe('AppEditorIframe — ready-to-save readiness', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.LoggedOut}`,
         },
         origin: 'https://evil.example.com',
+        source: getEditorWindow(),
       }),
     );
 
@@ -396,6 +927,7 @@ describe('AppEditorIframe — ready-to-save readiness', () => {
           type: `${SCHEMA.displayName}/${AppsEditorEvent.LoggedOut}`,
         },
         origin: 'https://editor.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(onLoggedOutChange).toHaveBeenCalledWith(true);
@@ -657,9 +1189,13 @@ describe('AppEditorIframe — toolset login request', () => {
     sendLoginRequest('toolsets/b/my__1.0.0');
 
     await waitFor(() => expect(capturedPopup).toBeDefined());
-    const flowId = JSON.parse(
-      capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ?? '{}',
-    ).state;
+    const { state: flowId } = decodeJsonFromBase64<ToolsetRedirectState>(
+      capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ??
+        encodeJsonToBase64({}),
+    );
+    if (flowId == null) {
+      throw new Error('expected a stored flow id');
+    }
 
     postOAuthResult(flowId, {
       type: 'success',
@@ -702,9 +1238,13 @@ describe('AppEditorIframe — toolset login request', () => {
     sendLoginRequest('toolsets/b/my__1.0.0');
 
     await waitFor(() => expect(capturedPopup).toBeDefined());
-    const flowId = JSON.parse(
-      capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ?? '{}',
-    ).state;
+    const { state: flowId } = decodeJsonFromBase64<ToolsetRedirectState>(
+      capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ??
+        encodeJsonToBase64({}),
+    );
+    if (flowId == null) {
+      throw new Error('expected a stored flow id');
+    }
 
     postOAuthResult(flowId, {
       type: 'success',
@@ -745,9 +1285,13 @@ describe('AppEditorIframe — toolset login request', () => {
     sendLoginRequest('toolsets/b/my__1.0.0');
 
     await waitFor(() => expect(capturedPopup).toBeDefined());
-    const flowId = JSON.parse(
-      capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ?? '{}',
-    ).state;
+    const { state: flowId } = decodeJsonFromBase64<ToolsetRedirectState>(
+      capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ??
+        encodeJsonToBase64({}),
+    );
+    if (flowId == null) {
+      throw new Error('expected a stored flow id');
+    }
 
     postOAuthResult(flowId, {
       type: 'failure',
@@ -955,6 +1499,43 @@ describe('AppEditorIframe — toolset logout request', () => {
     );
   });
 
+  it('does not deliver an old logout result after loading another app at the same origin', async () => {
+    let finishLogout: () => void = () => undefined;
+    vi.mocked(toolsetsApi.logoutToolset)
+      .mockResolvedValue({ success: true })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishLogout = () => resolve({ success: true });
+          }),
+      );
+    const { rerender } = renderIframe();
+    const previousPost = vi.spyOn(getEditorWindow() as Window, 'postMessage');
+
+    sendLogoutRequest('toolsets/b/my__1.0.0');
+    expect(toolsetsApi.logoutToolset).toHaveBeenCalledOnce();
+    rerender(<AppEditorIframe {...DEFAULT_PROPS} appId="another-app" />);
+    const currentPost = vi.spyOn(getEditorWindow() as Window, 'postMessage');
+
+    await act(async () => {
+      finishLogout();
+    });
+
+    expect(previousPost).not.toHaveBeenCalled();
+    expect(currentPost).not.toHaveBeenCalled();
+
+    sendLogoutRequest('toolsets/b/my__1.0.0');
+    await waitFor(() =>
+      expect(currentPost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: AppsEditorEvent.ToolsetLogoutResult,
+          success: true,
+        }),
+        'https://editor.example.com',
+      ),
+    );
+  });
+
   it('ignores a logout request from a different origin', async () => {
     renderIframe();
     fireEvent(
@@ -965,6 +1546,7 @@ describe('AppEditorIframe — toolset logout request', () => {
           toolsetId: 'toolsets/b/my__1.0.0',
         },
         origin: 'https://evil.example.com',
+        source: getEditorWindow(),
       }),
     );
     expect(toolsetsApi.logoutToolset).not.toHaveBeenCalled();
@@ -1059,6 +1641,39 @@ describe('AppEditorIframe — toolset login broadcast', () => {
         'https://editor.example.com',
       ),
     );
+  });
+
+  it('does not deliver an old broadcast result after loading another app at the same origin', async () => {
+    let finishRefresh: () => void = () => undefined;
+    vi.mocked(deploymentsApi.getDeploymentDetails).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRefresh = () =>
+            resolve({
+              id: 'toolsets/b/my__1.0.0',
+              type: 'toolset',
+              toolsetDetails: {
+                authSettings: { userLevelAuthStatus: 'SIGNED_IN' },
+              },
+            } as never);
+        }),
+    );
+    const { rerender } = renderIframe();
+    const previousPost = vi.spyOn(getEditorWindow() as Window, 'postMessage');
+
+    emitToolsetLoginSuccess({
+      toolsetId: 'toolsets/b/my__1.0.0',
+      credentialsLevel: ToolsetCredentialsLevel.User,
+    });
+    rerender(<AppEditorIframe {...DEFAULT_PROPS} appId="another-app" />);
+    const currentPost = vi.spyOn(getEditorWindow() as Window, 'postMessage');
+
+    await act(async () => {
+      finishRefresh();
+    });
+
+    expect(previousPost).not.toHaveBeenCalled();
+    expect(currentPost).not.toHaveBeenCalled();
   });
 
   it('unsubscribes on unmount and does not post after the iframe is gone', async () => {
@@ -1162,5 +1777,360 @@ describe('application credential requests from Quick apps', () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByText('Close credentials'));
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('AppEditorIframe — external-service login request', () => {
+  const RAW_APP_ID = 'applications/public/runner app';
+  const ENCODED_APP_ID = 'applications/public/runner%20app';
+  const OAUTH_SERVICE: ApplicationExternalServiceDto = {
+    id: 'gitlab-oauth',
+    displayName: 'GitLab',
+    authenticationType: 'OAUTH',
+    userLevelAuthStatus: 'SIGNED_OUT',
+    clientId: 'client',
+    authorizationEndpoint: 'https://gitlab.example.com/oauth/authorize',
+    scopesSupported: ['read_repository'],
+    codeChallenge: 'challenge',
+    codeChallengeMethod: 'S256',
+    resource: 'https://gitlab.example.com/api/mcp',
+  };
+
+  let popup: { close: ReturnType<typeof vi.fn> } | undefined;
+
+  const sendRequest = (
+    fields: Record<string, unknown> = {},
+    source: MessageEventSource | null = getEditorWindow(),
+  ) =>
+    postEditorMessage(
+      {
+        type: AppsEditorEvent.RequestExternalServiceLogin,
+        appId: RAW_APP_ID,
+        serviceId: 'gitlab-oauth',
+        offlineUsageConsent: true,
+        ...fields,
+      },
+      source,
+    );
+
+  const mountAndSpy = () => {
+    renderIframe();
+    const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
+    return vi.spyOn(iframe.contentWindow as Window, 'postMessage');
+  };
+
+  const expectResult = async (
+    postMessageSpy: ReturnType<typeof mountAndSpy>,
+    fields: Record<string, unknown>,
+  ) =>
+    waitFor(() =>
+      expect(postMessageSpy).toHaveBeenCalledWith(
+        {
+          type: AppsEditorEvent.ExternalServiceLoginResult,
+          appId: RAW_APP_ID,
+          serviceId: 'gitlab-oauth',
+          reason: undefined,
+          ...fields,
+        },
+        'https://editor.example.com',
+      ),
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(AppConfigContextModule.useFeatureFlag).mockReturnValue(true);
+    mockUseUser.mockReturnValue({
+      status: AuthStatus.Authenticated,
+      user: { sub: 'u1', providerId: 'local', claims: {}, isAdmin: false },
+      refresh: vi.fn(),
+      reset: vi.fn(),
+    });
+    mockUseTheme.mockReturnValue({
+      currentTheme: 'dark',
+      selectedTheme: 'dark',
+      setTheme: vi.fn(),
+      isLoading: false,
+    });
+    popup = undefined;
+    Object.defineProperty(window, 'open', {
+      configurable: true,
+      value: vi.fn(() => {
+        popup = { close: vi.fn() };
+        return popup;
+      }),
+    });
+    vi.mocked(externalServicesApi.listExternalServices).mockResolvedValue([
+      OAUTH_SERVICE,
+    ]);
+    mockLoginExternalService.mockResolvedValue({
+      type: ExternalServiceLoginOutcomeType.Success,
+    });
+  });
+
+  it('advertises the relay with the credential gates and ignores requests when they are off', () => {
+    vi.mocked(AppConfigContextModule.useFeatureFlag).mockReturnValue(false);
+    renderIframe();
+    const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
+    expect(new URL(iframe.src).searchParams.get('externalServiceLogin')).toBe(
+      'false',
+    );
+
+    sendRequest();
+
+    expect(window.open).not.toHaveBeenCalled();
+    expect(externalServicesApi.listExternalServices).not.toHaveBeenCalled();
+  });
+
+  it('advertises the relay when both credential gates are on', () => {
+    renderIframe();
+    const iframe = screen.getByTitle('QuickApp') as HTMLIFrameElement;
+    expect(new URL(iframe.src).searchParams.get('externalServiceLogin')).toBe(
+      'true',
+    );
+  });
+
+  it('ignores a request from another window or without an explicit consent choice', () => {
+    renderIframe();
+
+    sendRequest({}, window);
+    sendRequest({ offlineUsageConsent: undefined });
+    sendRequest({ serviceId: '' });
+
+    expect(window.open).not.toHaveBeenCalled();
+    expect(externalServicesApi.listExternalServices).not.toHaveBeenCalled();
+  });
+
+  it('signs in at user level with the forwarded consent and posts success without the credentials dialog', async () => {
+    const postMessageSpy = mountAndSpy();
+
+    sendRequest();
+
+    await expectResult(postMessageSpy, { success: true });
+    expect(externalServicesApi.listExternalServices).toHaveBeenCalledWith(
+      ENCODED_APP_ID,
+    );
+    expect(mockLoginExternalService).toHaveBeenCalledWith({
+      appId: ENCODED_APP_ID,
+      serviceId: 'gitlab-oauth',
+      credentialsLevel: 'USER',
+      authenticationType: 'OAUTH',
+      oauthSettings: {
+        clientId: 'client',
+        authorizationEndpoint: 'https://gitlab.example.com/oauth/authorize',
+        scopes: ['read_repository'],
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        resource: 'https://gitlab.example.com/api/mcp',
+      },
+      offlineUsageConsent: true,
+      forceStale: false,
+      popup,
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('reserves the popup before requesting the service listing', async () => {
+    const postMessageSpy = mountAndSpy();
+
+    sendRequest();
+
+    await expectResult(postMessageSpy, { success: true });
+    expect(vi.mocked(window.open).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(externalServicesApi.listExternalServices).mock
+        .invocationCallOrder[0],
+    );
+  });
+
+  it('forwards a declined consent instead of defaulting it', async () => {
+    const postMessageSpy = mountAndSpy();
+
+    sendRequest({ offlineUsageConsent: false });
+
+    await expectResult(postMessageSpy, { success: true });
+    expect(mockLoginExternalService).toHaveBeenCalledWith(
+      expect.objectContaining({ offlineUsageConsent: false }),
+    );
+  });
+
+  it('posts popup-blocked without requesting the listing', async () => {
+    Object.defineProperty(window, 'open', {
+      configurable: true,
+      value: vi.fn(() => null),
+    });
+    const postMessageSpy = mountAndSpy();
+
+    sendRequest();
+
+    await expectResult(postMessageSpy, {
+      success: false,
+      reason: 'popup-blocked',
+    });
+    expect(externalServicesApi.listExternalServices).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [[], 'not-found'],
+    [
+      [{ ...OAUTH_SERVICE, authenticationType: 'API_KEY' }],
+      'unsupported-auth-type',
+    ],
+    [
+      [{ ...OAUTH_SERVICE, authenticationType: 'NONE' }],
+      'unsupported-auth-type',
+    ],
+  ])(
+    'closes the popup and posts %s → %s without signing in',
+    async (services, reason) => {
+      vi.mocked(externalServicesApi.listExternalServices).mockResolvedValue(
+        services as never,
+      );
+      const postMessageSpy = mountAndSpy();
+
+      sendRequest();
+
+      await expectResult(postMessageSpy, { success: false, reason });
+      expect(popup?.close).toHaveBeenCalledOnce();
+      expect(mockLoginExternalService).not.toHaveBeenCalled();
+    },
+  );
+
+  it('closes the popup and posts failure when the listing fails', async () => {
+    vi.mocked(externalServicesApi.listExternalServices).mockRejectedValue(
+      new Error('boom'),
+    );
+    const postMessageSpy = mountAndSpy();
+
+    sendRequest();
+
+    await expectResult(postMessageSpy, { success: false, reason: 'failure' });
+    expect(popup?.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [ExternalServiceLoginOutcomeType.Cancelled, 'cancelled'],
+    [
+      ExternalServiceLoginOutcomeType.AdminConsentRequired,
+      'admin-consent-required',
+    ],
+    [ExternalServiceLoginOutcomeType.OfflineUnavailable, 'offline-unavailable'],
+    [ExternalServiceLoginOutcomeType.Failure, 'failure'],
+  ])('maps the %s outcome to the %s reason', async (outcome, reason) => {
+    mockLoginExternalService.mockResolvedValue({ type: outcome });
+    const postMessageSpy = mountAndSpy();
+
+    sendRequest();
+
+    await expectResult(postMessageSpy, { success: false, reason });
+  });
+
+  it('signs a DIAL-native service in through the same login and refreshes stale credentials', async () => {
+    vi.mocked(externalServicesApi.listExternalServices).mockResolvedValue([
+      {
+        ...OAUTH_SERVICE,
+        authenticationType: 'DIAL_NATIVE',
+        userLevelAuthStatus: 'FAILED',
+      },
+    ]);
+    const postMessageSpy = mountAndSpy();
+
+    sendRequest();
+
+    await expectResult(postMessageSpy, { success: true });
+    expect(mockLoginExternalService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authenticationType: 'DIAL_NATIVE',
+        credentialsLevel: 'USER',
+        forceStale: true,
+        popup,
+      }),
+    );
+  });
+});
+
+describe('AppEditorIframe — dirty state', () => {
+  const postDirty = (
+    data: Record<string, unknown>,
+    source: MessageEventSource | null = getEditorWindow(),
+  ) =>
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data: { type: AppsEditorEvent.DirtyState, ...data },
+        origin: 'https://editor.example.com',
+        source,
+      }),
+    );
+
+  it('reports clean until the editor says otherwise', () => {
+    const onDirtyChange = vi.fn();
+    renderIframe({ onDirtyChange });
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('reports unsaved edits posted by the editor window', () => {
+    const onDirtyChange = vi.fn();
+    renderIframe({ onDirtyChange });
+
+    postDirty({ isDirty: true });
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    postDirty({ payload: { isDirty: false } });
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('ignores a dirty-state message from another window', () => {
+    const onDirtyChange = vi.fn();
+    renderIframe({ onDirtyChange });
+
+    postDirty({ isDirty: true }, null);
+
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true);
+  });
+
+  it('ignores a non-boolean dirty state', () => {
+    const onDirtyChange = vi.fn();
+    renderIframe({ onDirtyChange });
+
+    postDirty({ isDirty: 'yes' });
+    postDirty({ payload: { isDirty: 1 } });
+
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true);
+  });
+
+  it('clears the dirty state on save success', () => {
+    const onDirtyChange = vi.fn();
+    renderIframe({ onDirtyChange });
+    postDirty({ isDirty: true });
+
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        data: { type: AppsEditorEvent.SaveSuccess },
+        origin: 'https://editor.example.com',
+        source: getEditorWindow(),
+      }),
+    );
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('resets the dirty state when the iframe reloads for a different app', () => {
+    const onDirtyChange = vi.fn();
+    const { rerender } = render(
+      <AppEditorIframe {...DEFAULT_PROPS} onDirtyChange={onDirtyChange} />,
+    );
+    postDirty({ isDirty: true });
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    rerender(
+      <AppEditorIframe
+        {...DEFAULT_PROPS}
+        appId="different-app"
+        onDirtyChange={onDirtyChange}
+      />,
+    );
+
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
   });
 });

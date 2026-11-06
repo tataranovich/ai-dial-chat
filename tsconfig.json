@@ -58,10 +58,16 @@
       "path": "./libs/chat-overlay"
     },
     {
+      "path": "./libs/visualizer-connector"
+    },
+    {
       "path": "./apps/chat-overlay-sandbox"
     },
     {
       "path": "./libs/scheduled-tasks"
+    },
+    {
+      "path": "./libs/projects"
     },
     {
       "path": "./libs/publish-panel"

@@ -1,11 +1,11 @@
 import type { SkillFileContent } from '@epam/ai-dial-chat-hooks/skill-editor';
+import { SkillFilePreviewState } from '@epam/ai-dial-chat-hooks/skill-editor';
 import {
   SkillFileNodeKind,
   type SkillFileTreeNode,
 } from '@epam/ai-dial-skill-editor';
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SkillFilePreviewState } from '../../../types/skill-file-preview';
 import { useSkillFilePreviewSync } from '../useSkillFilePreviewSync';
 
 /*
@@ -47,6 +47,11 @@ const setCanvas = (next: CanvasState) => {
   listeners.forEach((listener) => listener());
 };
 
+let requestToken = 0;
+const beginRequest = () => {
+  const token = ++requestToken;
+  return () => token === requestToken;
+};
 const closeCanvas = vi.fn(() => {
   setCanvas({ isOpen: false, isLoading: false, attachmentId: undefined });
 });
@@ -90,6 +95,7 @@ const openAttachmentCanvas = vi.fn(
 vi.mock('@epam/ai-dial-attachment-canvas', async () => {
   const { useSyncExternalStore } = await import('react');
   return {
+    useLatestCanvasRequest: () => beginRequest,
     useAttachmentCanvas: () => {
       const state = useSyncExternalStore(subscribe, () => canvas);
       return { ...state, closeCanvas };
@@ -145,6 +151,12 @@ const contentRef = (paths: string[]) => ({
 const scopedId = (resourceKey: string, path: string) =>
   `${resourceKey}#${path}`;
 
+interface SyncProps {
+  selectedPath: string;
+  resourceKey: string;
+  contentRevision?: number;
+}
+
 const renderSync = (initial: {
   selectedPath: string;
   resourceKey: string;
@@ -152,14 +164,8 @@ const renderSync = (initial: {
 }) => {
   const files = initial.paths.map(fileNode);
   const filesContentRef = contentRef(initial.paths);
-  return renderHook(
-    ({
-      selectedPath,
-      resourceKey,
-    }: {
-      selectedPath: string;
-      resourceKey: string;
-    }) =>
+  return renderHook<ReturnType<typeof useSkillFilePreviewSync>, SyncProps>(
+    ({ selectedPath, resourceKey, contentRevision }) =>
       useSkillFilePreviewSync({
         selectedPath,
         canvasAttachmentId:
@@ -168,6 +174,7 @@ const renderSync = (initial: {
             : scopedId(resourceKey, selectedPath),
         files,
         filesContentRef,
+        contentRevision,
       }),
     {
       initialProps: {
@@ -361,6 +368,42 @@ describe('useSkillFilePreviewSync', () => {
       expect(openAttachmentCanvas.mock.calls[1][1]).toBe(
         scopedId(shared, 'docs/guide.pdf'),
       );
+    });
+  });
+
+  describe('replaced file content', () => {
+    it('reopens the open preview when the selected file is replaced in place', async () => {
+      const { rerender } = renderSync({
+        selectedPath: 'docs/guide.md',
+        resourceKey: SKILL,
+        paths: ['docs/guide.md'],
+      });
+      await settle('docs/guide.md');
+      expect(openAttachmentCanvas).toHaveBeenCalledOnce();
+
+      rerender({
+        selectedPath: 'docs/guide.md',
+        resourceKey: SKILL,
+        contentRevision: 1,
+      });
+
+      expect(openAttachmentCanvas).toHaveBeenCalledTimes(2);
+      expect(openAttachmentCanvas.mock.calls[1][1]).toBe(
+        scopedId(SKILL, 'docs/guide.md'),
+      );
+    });
+
+    it('does not reopen the preview while the revision is unchanged', async () => {
+      const { rerender } = renderSync({
+        selectedPath: 'docs/guide.md',
+        resourceKey: SKILL,
+        paths: ['docs/guide.md'],
+      });
+      await settle('docs/guide.md');
+
+      rerender({ selectedPath: 'docs/guide.md', resourceKey: SKILL });
+
+      expect(openAttachmentCanvas).toHaveBeenCalledOnce();
     });
   });
 });

@@ -16,8 +16,12 @@ export interface ConversationSourcesPanelLabels {
   searchClearLabel: string;
   /** Text shown in the centred empty state when the panel has no files or sources. */
   noDataLabel: string;
+  /** Secondary line under `noDataLabel`. Omitted when not set. */
+  noDataDescription?: string;
   /** Text shown when a search query matches nothing. */
   noResultsLabel: string;
+  /** Secondary line under `noResultsLabel`. Omitted when not set. */
+  noResultsDescription?: string;
   /** Accessible label for the download-all icon button. */
   downloadAllLabel: string;
   /** Heading text for the uploaded-files section. */
@@ -68,6 +72,8 @@ export interface ConversationSourcesPanelStyles {
   colors?: ConversationSourcesPanelColors;
   /** Typography overrides for section headings and source text. */
   typography?: ConversationSourcesPanelTypography;
+  /** Extra class name(s) merged onto each files/sources section root. Defaults to none. */
+  sectionClassName?: string;
 }
 
 /** Props for the ConversationSourcesPanel component. */
@@ -90,6 +96,8 @@ export interface ConversationSourcesPanelProps {
   onDownloadAll?: () => void;
   /** Whether the viewport is in mobile breakpoint (disables resizing). */
   isMobile: boolean;
+  /** Opt into a bounded overlay without changing mobile content semantics. */
+  isBoundedOverlay?: boolean;
   /** Initial panel width in pixels. */
   defaultWidth?: number;
   /** Minimum panel width in pixels. */

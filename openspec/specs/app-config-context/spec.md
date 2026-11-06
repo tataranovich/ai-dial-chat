@@ -139,15 +139,15 @@ The system SHALL export `useFeatureFlag(key: string): boolean` from `AppConfigCo
 
 ---
 
-### Requirement: AppConfigProvider is mounted before RequireAuth in main.tsx
+### Requirement: AppConfigProvider is mounted before RequireAuth in AppRoot.tsx
 
-`AppConfigProvider` SHALL be moved to wrap the router before `RequireAuth` in `apps/chat/src/main.tsx`. It SHALL appear inside `UserProvider` (whose status gates the load) and after `ThemeProvider`, but before `RequireAuth`, so config is available on the login page and in auth error boundaries.
+`AppConfigProvider` SHALL be moved to wrap `<Routes>` before `RequireAuth` in `apps/chat/src/AppRoot.tsx`. It SHALL appear inside `UserProvider` (whose status gates the load) and after `ThemeProvider`, but before `RequireAuth`, so config is available on the login page and in auth error boundaries.
 
 **RTL impact:** None. **i18n impact:** None.
 
 #### Scenario: Config loads before RequireAuth renders
 
-- **WHEN** `main.tsx` renders
+- **WHEN** `AppRoot.tsx` renders
 - **THEN** `AppConfigProvider` is a descendant of `UserProvider` and an ancestor of `RequireAuth` in the component tree
 - **AND** `useFeatureFlag` is callable from within the login page components without throwing
 
@@ -410,3 +410,59 @@ into libs.
 
 - **WHEN** `useApplicationVisualizers()` is called on two consecutive renders while the config status is not ready
 - **THEN** both calls return the identical object reference
+
+### Requirement: AppConfigContext exposes the project context limits
+
+`AppConfigContext` (`apps/chat/src/context/AppConfigContext.tsx`) SHALL surface three fields from the `GET /api/v1/client-config` response on `AppConfigState.config`:
+
+- `projectContextFileMaxBytes: number`;
+- `projectContextTotalMaxBytes: number`;
+- `projectContextAllowedExtensions: string[]`.
+
+Behaviour:
+
+- Three module-level defaults SHALL be used as the initial values, before the API call completes: `DEFAULT_PROJECT_CONTEXT_FILE_MAX_BYTES = 1_048_576`, `DEFAULT_PROJECT_CONTEXT_TOTAL_MAX_BYTES = 10_485_760` and `DEFAULT_PROJECT_CONTEXT_ALLOWED_EXTENSIONS = ['csv', 'pdf', 'xlsx']`. They are kept on a first-load failure, matching the existing error-preservation semantics.
+- On success, each value is taken from the response when present and valid, and falls back to its default otherwise:
+  - a byte limit must be a positive finite number;
+  - the extension list must be an array of non-empty strings, lower-cased on read.
+- A failed re-fetch keeps the last successfully loaded values.
+
+The only consumer is `ProjectCreatePage`, which passes the values to `ProjectCreateForm` and to `useProjectFileManagerPicker`. No new context is introduced.
+
+**Feature flag:** none. **RTL impact:** none. **i18n impact:** none.
+
+#### Scenario: Values are exposed when config is ready
+
+- **WHEN** the provider has fetched a config with `projectContextFileMaxBytes: 2097152` and `projectContextAllowedExtensions: ['csv', 'md']`
+- **THEN** `useAppConfig().config.projectContextFileMaxBytes` is `2097152`, and `projectContextAllowedExtensions` is `['csv', 'md']`
+
+#### Scenario: Defaults during loading, on error, or for an older BFF
+
+- **WHEN** the config request is in flight or has rejected on first load, or the response omits the three fields
+- **THEN** the fields read `1048576`, `10485760` and `['csv', 'pdf', 'xlsx']`
+
+#### Scenario: Invalid value falls back
+
+- **WHEN** the response carries `projectContextTotalMaxBytes: 0`
+- **THEN** `useAppConfig().config.projectContextTotalMaxBytes` is `10485760`
+
+### Requirement: AppConfigContext exposes additionalContentLocales
+
+`AppConfigState.config` in `apps/chat/src/context/AppConfigContext.tsx` SHALL gain `additionalContentLocales: string[]`. It is initialised to `[]` in `INITIAL_STATE` and stays `[]` on fetch failure. `loadConfig` SHALL populate it from `response.config?.additionalContentLocales ?? []`. `AppConfigContext` owns this state. The value is part of the context value that is already memoised, so no consumer re-renders beyond what a config load already triggers.
+
+The toolset and application editors SHALL read the list through `useAppConfig().config.additionalContentLocales`. They SHALL NOT read the former module constant `ADDITIONAL_CONTENT_LOCALE_CODES`, which is removed from `apps/chat/src/utils/locale.ts`.
+
+#### Scenario: Configured locales are available after the initial fetch
+
+- **WHEN** `AppConfigProvider` has resolved its initial `getClientConfig` call and the response carries `config.additionalContentLocales: ["de"]`
+- **THEN** `useAppConfig().config.additionalContentLocales` is `["de"]`
+
+#### Scenario: Fetch failure leaves the locale control hidden
+
+- **WHEN** `getClientConfig` rejects
+- **THEN** `useAppConfig().config.additionalContentLocales` is `[]`, so no additional locale is offered and stored translations are preserved
+
+#### Scenario: Missing field in an older backend response
+
+- **WHEN** the response's `config` lacks `additionalContentLocales`
+- **THEN** `useAppConfig().config.additionalContentLocales` is `[]`

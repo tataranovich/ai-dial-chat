@@ -1,12 +1,24 @@
-import { PanelEmptyState } from '@epam/ai-dial-chat-shared';
 import { mergeClasses } from '@epam/ai-dial-ui-kit';
-import { Grid } from '@epam/ai-dial-ui-kit/grid';
-import type { GridApi, GridOptions } from 'ag-grid-community';
+import {
+  Grid,
+  GridAppearance,
+  GRID_SELECTION_COLUMN_ID,
+  GridSelectionMode,
+} from '@epam/ai-dial-ui-kit/grid';
+import type {
+  BodyScrollEvent,
+  CellClickedEvent,
+  CellKeyDownEvent,
+  ColDef,
+  GridApi,
+  GridOptions,
+} from 'ag-grid-community';
 import {
   type CSSProperties,
   FC,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
 } from 'react';
@@ -14,199 +26,245 @@ import { CATALOG_CLASS } from '../../constants/public-class-names';
 import type { CatalogItem } from '../../models/catalog-item';
 import { GridContext } from '../../models/grid-context';
 import { ListViewProps } from '../../models/list-props';
-import { useRowWindow } from '../../utils/scroll-window';
+import { CatalogSelectionMode } from '../../types/selection-mode';
+import { mergeGridSelection } from '../../utils/list-selection';
 import { CATALOG_COLUMNS } from './columns';
-import styles from './ListView.module.scss';
 
-/** Height of every row, in pixels. Fixed, so the window's spacers are exact. */
+/** Height of every row, in pixels. */
 const ROW_HEIGHT = 60;
-const EMPTY_TYPOGRAPHY = {};
-const getRowId = (item: CatalogItem) => item.id;
-
-/** ag-grid table view of catalog items, windowed to the rows in view. */
-export const ListView: FC<ListViewProps> = (props) => {
-  if (props.items.length === 0) {
-    return (
-      <div
-        className={mergeClasses(
-          'flex size-full flex-col items-center justify-center',
-          CATALOG_CLASS.listView,
-        )}
-      >
-        <PanelEmptyState label={props.emptyStateTitle ?? 'No results'} />
-      </div>
-    );
-  }
-
-  return <WindowedListView {...props} />;
+/** Field of the Favorite column, whose star button handles its own clicks and keys. */
+const FAVORITE_FIELD = 'isStarred';
+/*
+ * Constant, so the grid options can change (a search, a selection) without the
+ * grid rebuilding its columns: a new `defaultColDef` makes ag-grid recreate
+ * them. `suppressSizeToFit` keeps the kit Grid's `sizeColumnsToFit` (on ready
+ * and on every size change) off the columns, which would reset each to its base
+ * width and spread the rest by it, ignoring `flex`. `flex` alone keeps the
+ * columns fitted to the width.
+ */
+const DEFAULT_COL_DEF: ColDef<CatalogItem> = {
+  filter: false,
+  floatingFilter: false,
+  suppressSizeToFit: true,
 };
+/*
+ * Single mode borrows ag-grid's row selection only to mark `selectedItemId`:
+ * no selection column, and a click picks the item instead of selecting it.
+ */
+const SINGLE_ROW_SELECTION: GridOptions<CatalogItem>['rowSelection'] = {
+  mode: 'singleRow',
+  checkboxes: false,
+  enableClickSelection: false,
+};
+const EMPTY_TYPOGRAPHY = {};
+const EMPTY_SELECTION: ReadonlySet<string> = new Set();
+const SELECT_ALL_ARIA_LABEL = 'Select all';
+/* Selection source reported for a row click; any source but `api` reaches `onSelectionChange`. */
+const ROW_CLICK_SOURCE = 'rowClicked';
+const getRowId = (item: CatalogItem) => item.id;
+const getDefaultRowAriaLabel = (item: CatalogItem) => `Select ${item.name}`;
+const isFavoriteColumn = (event: { colDef: ColDef<CatalogItem> }) =>
+  event.colDef.field === FAVORITE_FIELD;
 
-const WindowedListView: FC<ListViewProps> = ({
+/** ui-kit `Grid` table view of catalog items. */
+export const ListView: FC<ListViewProps> = ({
+  ref,
+  onRowsScroll,
   items,
   type,
   query = '',
   ariaLabel = 'Catalog',
-  emptyStateTitle,
+  emptyStateTitle = 'No results',
+  emptyStateDescription,
+  isEmptyStateLive = false,
   styles: listStyles,
   onToggleFavorite,
   isFavoriteVisible,
   onItemClick,
-  stickyHeaderTop,
   selectedItemId,
   credentialsBadgeLoggedOutLabel,
   isReadonly = false,
   columnVisibility,
+  selectionMode = CatalogSelectionMode.Single,
+  selectedItemIds = EMPTY_SELECTION,
+  onSelectionChange,
+  selectRowAriaLabel = getDefaultRowAriaLabel,
+  selectAllAriaLabel = SELECT_ALL_ARIA_LABEL,
 }) => {
+  const isMultiSelect = selectionMode === CatalogSelectionMode.Multiple;
+  /* The single-row highlight and the checkboxes would mark the same row twice. */
+  const highlightedItemId = isMultiSelect ? undefined : selectedItemId;
   const typography = listStyles?.typography ?? EMPTY_TYPOGRAPHY;
   const colors = listStyles?.colors;
   const cssVars = {
-    '--cat-list-bg': colors?.background,
-    '--cat-list-border': colors?.border,
-    '--cat-list-header-bg': colors?.headerBackground,
-    '--cat-list-row-divider': colors?.rowDivider,
     '--cat-card-star-filled': colors?.starFilled,
     '--cat-list-folder-icon': colors?.folderIcon,
-    '--cat-list-row-even-bg': colors?.rowEvenBackground,
-    '--cat-list-selected-border': colors?.selectedRowBorder,
-    '--cat-list-selected-bg': colors?.selectedRowBackground,
     '--cat-list-selected-check': colors?.selectedRowCheckIcon,
-    ...(stickyHeaderTop != null
-      ? { '--list-header-sticky-top': `${stickyHeaderTop}px` }
-      : {}),
+    '--cat-list-name-text': colors?.nameText,
+    '--cat-list-version-text': colors?.versionText,
   } as CSSProperties;
 
   const gridApiRef = useRef<GridApi<CatalogItem> | null>(null);
-  const handleGridApiChange = useCallback(
-    (api: GridApi<CatalogItem> | null) => {
-      gridApiRef.current = api;
+  /* Read through a ref so a new callback identity does not resubscribe. */
+  const onRowsScrollRef = useRef(onRowsScroll);
+  onRowsScrollRef.current = onRowsScroll;
+  const handleBodyScroll = useCallback(
+    (event: BodyScrollEvent<CatalogItem>) => {
+      if (event.direction !== 'vertical') return;
+      onRowsScrollRef.current?.(event.top);
     },
+    [],
+  );
+  const unsubscribeBodyScroll = useCallback(() => {
+    const api = gridApiRef.current;
+    if (api != null && !api.isDestroyed()) {
+      api.removeEventListener('bodyScroll', handleBodyScroll);
+    }
+  }, [handleBodyScroll]);
+  const handleGridApiChange = useCallback(
+    (api: GridApi<CatalogItem>) => {
+      unsubscribeBodyScroll();
+      gridApiRef.current = api;
+      api.addEventListener('bodyScroll', handleBodyScroll);
+    },
+    [unsubscribeBodyScroll, handleBodyScroll],
+  );
+  useEffect(() => unsubscribeBodyScroll, [unsubscribeBodyScroll]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToTop: () => {
+        const api = gridApiRef.current;
+        if (
+          api == null ||
+          api.isDestroyed() ||
+          api.getDisplayedRowCount() === 0
+        ) {
+          return;
+        }
+        api.ensureIndexVisible(0, 'top');
+      },
+    }),
     [],
   );
   const columnDefs = useMemo(
     () => CATALOG_COLUMNS(type, isReadonly, columnVisibility),
     [type, isReadonly, columnVisibility],
   );
+
+  const listedIds = useMemo(() => items.map(getRowId), [items]);
+  const handleSelectionChange = useCallback(
+    (gridIds: Set<string>) =>
+      onSelectionChange?.(
+        mergeGridSelection(selectedItemIds, gridIds, listedIds),
+      ),
+    [onSelectionChange, selectedItemIds, listedIds],
+  );
+  const highlightedRowIds = useMemo(
+    () => new Set(highlightedItemId == null ? [] : [highlightedItemId]),
+    [highlightedItemId],
+  );
+
   const gridOptions = useMemo<GridOptions<CatalogItem>>(
     () => ({
-      domLayout: 'autoHeight',
       rowHeight: ROW_HEIGHT,
-      /*
-       * Moving the window changes row indexes, not the catalog order. An
-       * animation would move retained rows a second time after the spacer
-       * has already moved them. Draw this bounded slice without deferring
-       * its cells to later animation frames or resetting the scroll position.
-       */
-      animateRows: false,
-      suppressAnimationFrame: true,
-      suppressScrollOnNewData: true,
-      defaultColDef: { filter: false, floatingFilter: false },
+      /* The kit Grid turns cell focus off; the keyboard reaches rows through it. */
+      suppressCellFocus: false,
+      defaultColDef: DEFAULT_COL_DEF,
+      rowSelection: isMultiSelect ? undefined : SINGLE_ROW_SELECTION,
       context: {
         searchQuery: query,
         typography,
         onToggleFavorite,
         isFavoriteVisible,
-        selectedItemId,
+        selectedItemId: highlightedItemId,
         credentialsBadgeLoggedOutLabel,
         isReadonly,
       } satisfies GridContext,
-      onCellClicked: onItemClick
-        ? (event) => {
-            const col = event.column.getColDef();
-            if (col.field === 'isStarred') return; // ignore clicks on the star column
-            if (event.data) onItemClick(event.data);
-          }
-        : undefined,
-      rowClass: onItemClick ? 'cursor-pointer' : undefined,
-      getRowClass: (params) =>
-        params.data?.id === selectedItemId ? styles.selectedRow : undefined,
+      onCellClicked:
+        onItemClick || isMultiSelect
+          ? (event: CellClickedEvent<CatalogItem>) => {
+              if (isFavoriteColumn(event) || !event.data) return;
+              // The kit's checkbox toggles its own row; a cell click would toggle it back.
+              if (event.colDef.colId === GRID_SELECTION_COLUMN_ID) return;
+              /* ag-grid hears the native click, so the star's React
+                 `stopPropagation` cannot keep the row from toggling; the
+                 toggle is made here, where the star column is skipped. */
+              if (isMultiSelect) {
+                event.node.setSelected(
+                  !event.node.isSelected(),
+                  false,
+                  ROW_CLICK_SOURCE,
+                );
+              }
+              onItemClick?.(event.data);
+            }
+          : undefined,
+      onCellKeyDown:
+        onItemClick && !isMultiSelect
+          ? (event: CellKeyDownEvent<CatalogItem>) => {
+              const key = (event.event as KeyboardEvent | null)?.key;
+              if (key !== 'Enter' && key !== ' ') return;
+              if (isFavoriteColumn(event) || !event.data) return;
+              event.event?.preventDefault();
+              onItemClick(event.data);
+            }
+          : undefined,
+      rowClass: onItemClick || isMultiSelect ? 'cursor-pointer' : undefined,
     }),
     [
       query,
       typography,
       onToggleFavorite,
       isFavoriteVisible,
-      selectedItemId,
+      highlightedItemId,
       credentialsBadgeLoggedOutLabel,
       isReadonly,
       onItemClick,
+      isMultiSelect,
     ],
   );
 
   /*
-   * `domLayout: 'autoHeight'` is what lets the table scroll with the page
-   * instead of inside its own box, and it switches ag-grid's own row
-   * virtualisation off: every row it is given goes into the DOM, five React
-   * cell renderers each. So it is only ever given the rows around the
-   * viewport, with a spacer standing in for the rest of the table's height.
-   */
-  const { containerRef, startRow, endRow } = useRowWindow(
-    items.length,
-    ROW_HEIGHT,
-  );
-
-  const windowedItems = useMemo(
-    () => items.slice(startRow, endRow),
-    [items, startRow, endRow],
-  );
-
-  /*
-   * Refresh cell renderers when the search query changes so highlighting updates.
-   * rowData is kept in sync via the prop; no need to call setGridOption here.
+   * Cell renderers read the search query and the highlighted id from the grid
+   * context, which ag-grid does not push to rendered cells on its own.
    */
   useEffect(() => {
     gridApiRef.current?.refreshCells({ force: true });
-  }, [query]);
-
-  /*
-   * getRowClass is only re-evaluated on row redraw, not on refreshCells, so
-   * the selected-row border/tint needs an explicit redraw when selection changes.
-   */
-  useEffect(() => {
-    gridApiRef.current?.redrawRows();
-  }, [selectedItemId]);
+  }, [query, highlightedItemId]);
 
   return (
     <div
       style={cssVars}
-      className={mergeClasses(
-        'w-full rounded-xl border',
-        styles.listContainer,
-        CATALOG_CLASS.listView,
-      )}
+      className={mergeClasses('size-full', CATALOG_CLASS.listView)}
     >
-      <div
-        ref={containerRef}
-        /* AG Grid can append restored columns out of visual order. Its edge
-           classes keep header and cell padding aligned across tab changes. */
-        className={mergeClasses(
-          'rounded-xl [&_.ag-cell.ag-column-first]:ps-4 [&_.ag-cell.ag-column-last]:pe-4 [&_.ag-header-cell.ag-column-first]:ps-4 [&_.ag-header-cell.ag-column-last]:pe-4',
-          styles.gridClip,
-        )}
-      >
-        {startRow > 0 && (
-          <div style={{ height: startRow * ROW_HEIGHT }} aria-hidden />
-        )}
-        <Grid<CatalogItem>
-          columnDefs={columnDefs}
-          rowData={windowedItems}
-          getRowId={getRowId}
-          withoutHeaderBorders
-          /* Nothing here opens a row context menu, so the wrapper ag-grid
-             cells would otherwise get — a dropdown plus a span around every
-             one of the five renderers in every row — is pure weight. */
-          wrapCustomCellRenderers={false}
-          onGridApiChange={handleGridApiChange}
-          emptyStateTitle={emptyStateTitle}
-          additionalGridOptions={gridOptions}
-          ariaLabel={ariaLabel}
-        />
-        {endRow < items.length && (
-          <div
-            style={{ height: (items.length - endRow) * ROW_HEIGHT }}
-            aria-hidden
-          />
-        )}
-      </div>
+      {/* The kit's "Chat table": borderless 12px card with the MD shadow, inset row dividers. */}
+      <Grid<CatalogItem>
+        appearance={GridAppearance.Chat}
+        columnDefs={columnDefs}
+        rowData={items}
+        getRowId={getRowId}
+        withoutHeaderBorders
+        /* Nothing here opens a row context menu, so the wrapper the kit would
+           put around every custom cell renderer is pure weight. */
+        wrapCustomCellRenderers={false}
+        onGridApiChange={handleGridApiChange}
+        emptyStateTitle={emptyStateTitle}
+        emptyStateDescription={emptyStateDescription ?? ''}
+        emptyStateLive={isEmptyStateLive}
+        additionalGridOptions={gridOptions}
+        ariaLabel={ariaLabel}
+        {...(isMultiSelect
+          ? {
+              selectionMode: GridSelectionMode.MULTIPLE,
+              selectedRowIds: selectedItemIds as Set<string>,
+              onSelectionChange: handleSelectionChange,
+              selectRowLabel: selectRowAriaLabel,
+              selectAllLabel: selectAllAriaLabel,
+            }
+          : { selectedRowIds: highlightedRowIds })}
+      />
     </div>
   );
 };

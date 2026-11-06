@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   getPublicTargetFolder,
+  getPublishedAttachmentsFolderUrl,
+  getPublishedAttachmentTargetUrl,
+  getPublishableIconUrl,
+  getPublishedIconTargetUrl,
   getPublishedTargetUrl,
   getResourceName,
   getResourceTypePrefix,
+  getVersionedTargetResourceName,
   stripPublicTargetFolder,
 } from '../publish-target.util';
 
@@ -76,5 +81,149 @@ describe('getPublishedTargetUrl', () => {
     ).toBe(
       `${getResourceTypePrefix(sourceUrl)}/${getPublicTargetFolder(folderPath)}${getResourceName(sourceUrl)}`,
     );
+  });
+});
+
+describe('getVersionedTargetResourceName', () => {
+  it.each([
+    ['toolsets', 'my-tool__1.0.0', '1.0.1', 'my-tool__1.0.1'],
+    ['applications', 'my-app__0.0.1', '2.0.0-beta.1', 'my-app__2.0.0-beta.1'],
+    ['toolsets', 'my-tool__1.0.0', '1.0.0+build.5', 'my-tool__1.0.0%2Bbuild.5'],
+  ])(
+    'replaces the version suffix of a %s resource name',
+    (prefix, name, version, expected) => {
+      expect(getVersionedTargetResourceName(prefix, name, version)).toBe(
+        expected,
+      );
+    },
+  );
+
+  it.each([
+    ['prompts', 'a__b', '1.0.1'],
+    ['skills', 'my-skill', '1.0.1'],
+    ['toolsets', 'no-suffix', '1.0.1'],
+    ['toolsets', 'my-tool__1.0.0', undefined],
+    ['toolsets', 'my-tool__1.0.0', '../evil'],
+  ])('keeps %s "%s" unchanged for version %s', (prefix, name, version) => {
+    expect(getVersionedTargetResourceName(prefix, name, version)).toBe(name);
+  });
+});
+
+describe('getPublishableIconUrl', () => {
+  it('returns an uploaded icon in the app bucket, without query or fragment', () => {
+    expect(
+      getPublishableIconUrl(
+        { iconUrl: 'files/bucket-123/icons/app.png?v=2#x' },
+        'bucket-123',
+      ),
+    ).toBe('files/bucket-123/icons/app.png');
+  });
+
+  it('falls back to icon_url', () => {
+    expect(
+      getPublishableIconUrl(
+        { icon_url: 'files/bucket-123/app.png' },
+        'bucket-123',
+      ),
+    ).toBe('files/bucket-123/app.png');
+  });
+
+  it('matches a percent-encoded bucket segment', () => {
+    expect(
+      getPublishableIconUrl(
+        { iconUrl: 'files/My%20Bucket/app.png' },
+        'My Bucket',
+      ),
+    ).toBe('files/My%20Bucket/app.png');
+  });
+
+  it.each([
+    'files/public/icons/app.png',
+    'files/other-bucket/app.png',
+    'files/bucket-123/../other/app.png',
+    'files/bucket-123/..%2Fother%2Fapp.png',
+    'https://example.com/app.png',
+    'app-theme-icon.svg',
+    '',
+  ])('returns undefined for %s', (iconUrl) => {
+    expect(getPublishableIconUrl({ iconUrl }, 'bucket-123')).toBeUndefined();
+  });
+
+  it('returns undefined when the icon is absent or the application is not an object', () => {
+    expect(getPublishableIconUrl({}, 'bucket-123')).toBeUndefined();
+    expect(
+      getPublishableIconUrl({ iconUrl: 42 }, 'bucket-123'),
+    ).toBeUndefined();
+    expect(getPublishableIconUrl(null, 'bucket-123')).toBeUndefined();
+  });
+});
+
+describe('getPublishedIconTargetUrl', () => {
+  it('nests the icon under the app versioned target name in the public folder', () => {
+    expect(
+      getPublishedIconTargetUrl(
+        'Team A',
+        'My%20App__1.0.1',
+        'files/bucket-123/icons/app%20icon.png',
+      ),
+    ).toBe('files/public/Team%20A/My%20App__1.0.1/app%20icon.png');
+  });
+
+  it('targets the public root when folderPath is empty', () => {
+    expect(
+      getPublishedIconTargetUrl('', 'my-app__1.0.0', 'files/b/app.png'),
+    ).toBe('files/public/my-app__1.0.0/app.png');
+  });
+});
+
+/*
+ * Publish writes the files to `getPublishedAttachmentTargetUrl`, unpublish lists
+ * `getPublishedAttachmentsFolderUrl` and the read path rewrites folder links to
+ * it, so these pin the exact strings and that the two derivations agree.
+ */
+describe('published attachment paths', () => {
+  it('nests a file under the published conversation name and its source bucket, keeping the bucket-relative path', () => {
+    expect(
+      getPublishedAttachmentTargetUrl(
+        'Organization/Data Science',
+        'my-chat',
+        'bucket1',
+        'docs/sub/b.pdf',
+      ),
+    ).toBe(
+      'files/public/Organization/Data%20Science/my-chat/bucket1/docs/sub/b.pdf',
+    );
+  });
+
+  it('uses the public root when folderPath is empty', () => {
+    expect(getPublishedAttachmentTargetUrl('', 'my-chat', 'b', 'a.pdf')).toBe(
+      'files/public/my-chat/b/a.pdf',
+    );
+  });
+
+  it('percent-encodes a non-ASCII folder name like every other published path', () => {
+    expect(
+      getPublishedAttachmentTargetUrl('test 14.04/Ünïcode', 'c', 'b', 'a.pdf'),
+    ).toBe('files/public/test%2014.04/%C3%9Cn%C3%AFcode/c/b/a.pdf');
+  });
+
+  it('derives the attachments folder from the published conversation url', () => {
+    expect(
+      getPublishedAttachmentsFolderUrl('conversations/public/Org/my-chat'),
+    ).toBe('files/public/Org/my-chat/');
+  });
+
+  it('is the folder every published attachment file path starts with', () => {
+    const folder = getPublishedAttachmentsFolderUrl(
+      getPublishedTargetUrl('conversations', 'Org/Chats', 'my-chat'),
+    );
+    expect(
+      getPublishedAttachmentTargetUrl(
+        'Org/Chats',
+        'my-chat',
+        'b',
+        'docs/a.pdf',
+      ),
+    ).toBe(`${folder}b/docs/a.pdf`);
   });
 });

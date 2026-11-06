@@ -27,6 +27,83 @@ describe('describeScheduledTaskTrigger', () => {
     });
   });
 
+  it('describes a weekday list as one weekly schedule, Monday first', () => {
+    expect(
+      describeScheduledTaskTrigger(
+        { cron: { fields: { hour: '7', minute: '0', day_of_week: '4,0,2' } } },
+        { timeZone: 'Europe/Warsaw', referenceDate: new Date('2026-07-15') },
+      ),
+    ).toMatchObject({
+      kind: ScheduledTaskTriggerDescriptionKind.Weekly,
+      dayOfWeek: '0',
+      daysOfWeek: ['0', '2', '4'],
+      time: '09:00',
+    });
+  });
+
+  it('shifts every listed weekday with the time across midnight', () => {
+    expect(
+      describeScheduledTaskTrigger(
+        { cron: { fields: { hour: '22', minute: '30', day_of_week: '1,6' } } },
+        { timeZone: 'Europe/Warsaw', referenceDate: new Date('2026-07-15') },
+      ),
+    ).toMatchObject({
+      kind: ScheduledTaskTriggerDescriptionKind.Weekly,
+      daysOfWeek: ['0', '2'],
+      time: '00:30',
+    });
+  });
+
+  it.each(['0-4', '*/2', '0,0'])(
+    'keeps weekday expression %s as a custom expression',
+    (dayOfWeek) => {
+      const fields = { hour: '9', minute: '0', day_of_week: dayOfWeek };
+      expect(describeScheduledTaskTrigger({ cron: { fields } })).toMatchObject({
+        kind: ScheduledTaskTriggerDescriptionKind.Custom,
+        expression: JSON.stringify(fields),
+      });
+    },
+  );
+
+  it.each(['*/1', '*/2', '2-40', '1,3', '*/12', '2'])(
+    'keeps week expression %s as a custom expression',
+    (week) => {
+      const fields = { week, hour: '9', minute: '0', day_of_week: '0' };
+      expect(describeScheduledTaskTrigger({ cron: { fields } })).toMatchObject({
+        kind: ScheduledTaskTriggerDescriptionKind.Custom,
+        expression: JSON.stringify(fields),
+      });
+    },
+  );
+
+  it.each<Record<string, string>>([
+    { week: '*/2', hour: '*', minute: '*/5' },
+    { week: '*/2', minute: '*/5' },
+    { week: '*/2', hour: '*', minute: '0' },
+    { week: '*/2', hour: '9', minute: '0' },
+  ])('preserves week-constrained non-weekly shapes as custom: %j', (fields) => {
+    expect(describeScheduledTaskTrigger({ cron: { fields } })).toMatchObject({
+      kind: ScheduledTaskTriggerDescriptionKind.Custom,
+      expression: JSON.stringify(fields),
+    });
+  });
+
+  it.each([undefined, null])(
+    'describes minute-step schedules with an unset week (%s)',
+    (week) => {
+      const fields = {
+        week,
+        hour: '*',
+        minute: '*/5',
+      } as unknown as Record<string, string>;
+
+      expect(describeScheduledTaskTrigger({ cron: { fields } })).toMatchObject({
+        kind: ScheduledTaskTriggerDescriptionKind.EveryNMinutes,
+        intervalMinutes: 5,
+      });
+    },
+  );
+
   it('converts fractional timezone offsets and weekday rollover deterministically', () => {
     const options = {
       timeZone: 'Asia/Kathmandu',

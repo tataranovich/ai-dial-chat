@@ -1,40 +1,62 @@
 import {
+  CatalogCreationType,
   TextRefinementPurpose,
   type DeploymentDetailsDto,
 } from '@epam/ai-dial-chat-api-client';
+import {
+  isResourceCreateAdapter,
+  type ResourceSaveAdapter,
+  ResourceSaveOutcome,
+  type ResourceSaveResult,
+} from '@epam/ai-dial-chat-hooks';
 import { NotificationVariant } from '@epam/ai-dial-ui-kit';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { useState } from 'react';
+import { Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ButtonsI18nKeys,
+  CatalogI18nKeys,
   CustomAppI18nKeys,
   EditorI18nKeys,
   TextRefinementI18nKeys,
+  UnsavedChangesI18nKeys,
 } from '../../../constants/translation-keys';
 import { useNotification } from '../../../context/NotificationContext';
+import {
+  resetCatalogCreationState,
+  setCatalogCreationState,
+} from '../../../context/tests/catalog-creation-state';
 import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
+import { renderWithLeaveGuard } from '../../../hooks/unsaved-changes/tests/render-with-leave-guard';
 import {
   createApplication,
   updateApplication,
 } from '../../../server-api/applications';
 import { getDeploymentDetails } from '../../../server-api/deployments';
 import { ApplicationEditorKind } from '../../../types/application-editor';
-import {
-  EntityOperation,
-  NotifiableEntity,
-} from '../../../types/entity-notification';
 import { ROUTES } from '../../../types/routes';
 import ApplicationEditorPage from '../ApplicationEditorPage';
 
 const { refinementConfig, mockRefineText } = vi.hoisted(() => ({
-  refinementConfig: { aiTextRefinementAvailable: false },
+  refinementConfig: {
+    aiTextRefinementAvailable: false,
+    additionalContentLocales: [] as string[],
+  },
   mockRefineText: vi.fn(),
 }));
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({ status: 'ready', config: refinementConfig }),
-}));
+vi.mock('../../../context/AppConfigContext', async () => {
+  const { useCatalogCreationState } =
+    await import('../../../context/tests/catalog-creation-state');
+  return {
+    useAppConfig: () => ({
+      status: 'ready',
+      config: refinementConfig,
+      ...useCatalogCreationState(),
+    }),
+  };
+});
 vi.mock('../../../server-api/text-refinement.api', () => ({
   refineText: mockRefineText,
 }));
@@ -44,11 +66,51 @@ vi.mock('../../../context/auth/UserContext', () => ({
 }));
 vi.mock('../../../context/DeploymentsContext', () => ({
   useDeployments: () => ({
-    items: [],
+    items: mockDeploymentItems.current,
     refetchDeployments: mockRefetchDeployments,
     isLoading: false,
   }),
 }));
+vi.mock(
+  '../../../components/ResourceSavePanelContainer/ResourceSavePanelContainer',
+  () => ({
+    default: (props: {
+      isOpen: boolean;
+      typeLabel: string;
+      adapter: ResourceSaveAdapter;
+      onSaved: (result: ResourceSaveResult) => void;
+    }) => {
+      const [createError, setCreateError] = useState('');
+      /* A create adapter runs the real create into the root folder, the way the panel does. */
+      const handleFinish = async () => {
+        if (!isResourceCreateAdapter(props.adapter)) return;
+        try {
+          const { id } = await props.adapter.createIn([]);
+          props.onSaved({
+            outcome: ResourceSaveOutcome.Saved,
+            savedId: id,
+            isCreated: true,
+            isNewVersion: false,
+            isPublished: false,
+          });
+        } catch {
+          setCreateError('Create failed');
+        }
+      };
+      const handleSaveNewVersion = () => {
+        if (isResourceCreateAdapter(props.adapter)) return;
+        void props.adapter.saveAsNewVersion?.('2.0.0', ['Design']);
+      };
+      return props.isOpen ? (
+        <div role="dialog" aria-label={`Save ${props.typeLabel}`}>
+          <button onClick={handleSaveNewVersion}>Save new version</button>
+          <button onClick={handleFinish}>Finish save</button>
+          <p>{createError}</p>
+        </div>
+      ) : null;
+    },
+  }),
+);
 vi.mock('../../../hooks/useOperationNotification', () => ({
   useOperationNotification: () => ({
     notifyOperationSuccess: mockNotifyOperationSuccess,
@@ -61,30 +123,33 @@ vi.mock(
 vi.mock('../../../server-api/applications', () => ({
   createApplication: vi.fn(),
   updateApplication: vi.fn(),
+  deleteApplication: vi.fn(),
+  listApplicationFolders: vi.fn(),
 }));
 vi.mock('../../../server-api/deployments', () => ({
   getDeploymentDetails: vi.fn(),
 }));
 
 const mockShowNotification = vi.fn();
+const mockDeploymentItems: { current: unknown[] } = { current: [] };
 const mockRefetchDeployments = vi.fn();
 const mockNotifyOperationSuccess = vi.fn();
 
 const APP_ID = 'applications/bucket/my-app__1.0.0';
 
 const renderPage = (initialEntry: string = ROUTES.CustomAppEditor) =>
-  render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      <Routes>
-        <Route
-          path={ROUTES.CustomAppEditor}
-          element={
-            <ApplicationEditorPage kind={ApplicationEditorKind.CustomApp} />
-          }
-        />
-        <Route path={ROUTES.Catalog} element={<div>Catalog</div>} />
-      </Routes>
-    </MemoryRouter>,
+  renderWithLeaveGuard(
+    <Routes>
+      <Route
+        path={ROUTES.CustomAppEditor}
+        element={
+          <ApplicationEditorPage kind={ApplicationEditorKind.CustomApp} />
+        }
+      />
+      <Route path={ROUTES.Catalog} element={<div>Catalog</div>} />
+      <Route path={ROUTES.ScheduledTasks} element={<div>Scheduler</div>} />
+    </Routes>,
+    [initialEntry],
   );
 
 /* The layout renders its actions in the header and again in the mobile bar; take the header copy. */
@@ -101,11 +166,13 @@ describe('ApplicationEditorPage — custom app', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCatalogCreationState();
     vi.mocked(useNotification).mockReturnValue(
       createNotificationContextValue(mockShowNotification),
     );
-    vi.mocked(createApplication).mockResolvedValue({} as never);
+    vi.mocked(createApplication).mockResolvedValue({ id: APP_ID } as never);
     vi.mocked(updateApplication).mockResolvedValue({} as never);
+    mockDeploymentItems.current = [];
     mockRefetchDeployments.mockResolvedValue(undefined);
     refinementConfig.aiTextRefinementAvailable = false;
   });
@@ -174,6 +241,19 @@ describe('ApplicationEditorPage — custom app', () => {
     ).toBeNull();
   });
 
+  it('opens the create form with version 1.0.0 and an empty name', () => {
+    renderPage();
+
+    expect(
+      (
+        screen.getByLabelText(EditorI18nKeys.VersionLabel, {
+          exact: false,
+        }) as HTMLInputElement
+      ).value,
+    ).toBe('1.0.0');
+    expect((getNameInput() as HTMLInputElement).value).toBe('');
+  });
+
   it('shows the name-required error on blur', async () => {
     renderPage();
 
@@ -220,11 +300,27 @@ describe('ApplicationEditorPage — custom app', () => {
     expect(createApplication).not.toHaveBeenCalled();
   });
 
-  it('creates the application in one request, confirms it and returns to the catalog', async () => {
+  const finishSaveInPanel = async () => {
+    await screen.findByRole('dialog', {
+      name: `Save ${CatalogI18nKeys.CreateCustomApp}`,
+    });
+    await user.click(screen.getByRole('button', { name: 'Finish save' }));
+  };
+
+  it('creates the application in one request through the Save panel and returns to the catalog', async () => {
     renderPage();
     await fillValidForm();
 
     await user.click(getAction(ButtonsI18nKeys.Create));
+
+    expect(
+      await screen.findByRole('dialog', {
+        name: `Save ${CatalogI18nKeys.CreateCustomApp}`,
+      }),
+    ).toBeTruthy();
+    expect(createApplication).not.toHaveBeenCalled();
+
+    await finishSaveInPanel();
 
     await screen.findByText('Catalog');
     expect(createApplication).toHaveBeenCalledOnce();
@@ -237,11 +333,8 @@ describe('ApplicationEditorPage — custom app', () => {
       }),
     );
     expect(mockRefetchDeployments).toHaveBeenCalled();
-    expect(mockNotifyOperationSuccess).toHaveBeenCalledWith(
-      NotifiableEntity.CustomApp,
-      EntityOperation.Created,
-      { name: 'My app' },
-    );
+    /* The panel confirms the create; the editor adds no second notification. */
+    expect(mockNotifyOperationSuccess).not.toHaveBeenCalled();
   });
 
   it('asks for confirmation before saving invalid features data', async () => {
@@ -254,29 +347,80 @@ describe('ApplicationEditorPage — custom app', () => {
 
     await user.click(getAction(ButtonsI18nKeys.Create));
 
-    expect(createApplication).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('dialog', {
+        name: `Save ${CatalogI18nKeys.CreateCustomApp}`,
+      }),
+    ).toBeNull();
     await user.click(
       await screen.findByRole('button', {
-        name: CustomAppI18nKeys.SaveConfirmLabel,
+        name: ButtonsI18nKeys.Save,
       }),
     );
+    await finishSaveInPanel();
 
     await waitFor(() => expect(createApplication).toHaveBeenCalledOnce());
   });
 
-  it('raises an error notification and stays on the page when the request fails', async () => {
+  it('stays on the page with the panel showing the error when the create fails', async () => {
     vi.mocked(createApplication).mockRejectedValue(new Error('boom'));
     renderPage();
     await fillValidForm();
 
     await user.click(getAction(ButtonsI18nKeys.Create));
+    await finishSaveInPanel();
 
-    await waitFor(() =>
-      expect(mockShowNotification).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: NotificationVariant.Error }),
-      ),
-    );
+    expect(await screen.findByText('Create failed')).toBeTruthy();
     expect(screen.queryByText('Catalog')).toBeNull();
+    expect(mockRefetchDeployments).not.toHaveBeenCalled();
+    expect(mockNotifyOperationSuccess).not.toHaveBeenCalled();
+    expect(mockShowNotification).not.toHaveBeenCalled();
+  });
+
+  describe('creation permissions', () => {
+    const denyCustomApps = () =>
+      setCatalogCreationState({
+        allowedTypes: Object.values(CatalogCreationType).filter(
+          (type) => type !== CatalogCreationType.CustomApp,
+        ),
+        restrictedSchemaIds: [],
+      });
+
+    it('shows the denied state instead of the create form', () => {
+      denyCustomApps();
+      renderPage();
+
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: CatalogI18nKeys.CreationDenied,
+        }),
+      ).toBeTruthy();
+      expect(
+        screen.queryByLabelText(EditorI18nKeys.NameLabel, { exact: false }),
+      ).toBeNull();
+    });
+
+    it('still saves an existing custom app', async () => {
+      denyCustomApps();
+      vi.mocked(getDeploymentDetails).mockResolvedValue({
+        id: APP_ID,
+        type: 'application',
+        applicationDetails: { endpoint: 'https://api.example.com/chat' },
+      } as DeploymentDetailsDto);
+      renderPage(`${ROUTES.CustomAppEditor}?id=${encodeURIComponent(APP_ID)}`);
+      await waitFor(() =>
+        expect((getCompletionUrlInput() as HTMLInputElement).value).toBe(
+          'https://api.example.com/chat',
+        ),
+      );
+      await user.type(getNameInput(), 'My app');
+
+      await user.click(getAction(ButtonsI18nKeys.Save));
+
+      await waitFor(() => expect(updateApplication).toHaveBeenCalled());
+      expect(createApplication).not.toHaveBeenCalled();
+    });
   });
 
   describe('edit mode', () => {
@@ -340,6 +484,72 @@ describe('ApplicationEditorPage — custom app', () => {
       expect(createApplication).not.toHaveBeenCalled();
     });
 
+    describe('Save panel for an own custom app', () => {
+      beforeEach(() => {
+        mockDeploymentItems.current = [
+          { id: APP_ID, displayName: 'My app', isMy: true },
+        ];
+        vi.mocked(getDeploymentDetails).mockResolvedValue({
+          id: APP_ID,
+          type: 'application',
+          applicationDetails: { endpoint: 'https://api.example.com/chat' },
+        } as DeploymentDetailsDto);
+      });
+
+      const openPanel = async () => {
+        renderPage(editEntry);
+        await waitFor(() =>
+          expect((getCompletionUrlInput() as HTMLInputElement).value).toBe(
+            'https://api.example.com/chat',
+          ),
+        );
+        await user.click(getAction(ButtonsI18nKeys.Save));
+        return screen.findByRole('dialog', {
+          name: `Save ${CatalogI18nKeys.CreateCustomApp}`,
+        });
+      };
+
+      it('opens the Save panel instead of updating in place', async () => {
+        await openPanel();
+        expect(updateApplication).not.toHaveBeenCalled();
+      });
+
+      it('renders the Version read-only', async () => {
+        renderPage(editEntry);
+        expect(
+          (
+            screen.getByLabelText(
+              EditorI18nKeys.VersionLabel,
+            ) as HTMLInputElement
+          ).readOnly,
+        ).toBe(true);
+      });
+
+      it('saves a new version as a create-only write into the chosen folder', async () => {
+        vi.mocked(createApplication).mockResolvedValue({
+          id: 'applications/bucket/Design/my-app__2.0.0',
+        } as never);
+        await openPanel();
+
+        await user.click(
+          screen.getByRole('button', { name: 'Save new version' }),
+        );
+
+        await waitFor(() =>
+          expect(createApplication).toHaveBeenCalledWith(
+            expect.objectContaining({
+              version: '2.0.0',
+              folderPath: 'Design',
+              applicationProperties: expect.objectContaining({
+                endpoint: 'https://api.example.com/chat',
+              }),
+            }),
+          ),
+        );
+        expect(updateApplication).not.toHaveBeenCalled();
+      });
+    });
+
     it('returns to the catalog with an error when the settings cannot be loaded', async () => {
       vi.mocked(getDeploymentDetails).mockRejectedValue(new Error('404'));
 
@@ -352,6 +562,94 @@ describe('ApplicationEditorPage — custom app', () => {
           message: CustomAppI18nKeys.ErrorLoadFailed,
         }),
       );
+    });
+  });
+
+  describe('leave guard', () => {
+    const navigateAway = (router: ReturnType<typeof renderPage>['router']) =>
+      act(() => router.navigate(ROUTES.ScheduledTasks));
+    const editEntry = `${ROUTES.CustomAppEditor}?id=${encodeURIComponent(APP_ID)}`;
+
+    it('leaves a pristine create form without the dialog', async () => {
+      const { router } = renderPage();
+
+      await navigateAway(router);
+
+      expect(await screen.findByText('Scheduler')).toBeTruthy();
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('asks before leaving once a Setup field was edited', async () => {
+      const { router } = renderPage();
+      await user.type(getCompletionUrlInput(), 'https://x');
+
+      await navigateAway(router);
+
+      expect(
+        screen.getByRole('dialog', { name: UnsavedChangesI18nKeys.Title }),
+      ).toBeTruthy();
+      expect(router.state.location.pathname).toBe(ROUTES.CustomAppEditor);
+    });
+
+    it('lands on the chosen route without a request when changes are discarded', async () => {
+      const { router } = renderPage();
+      await fillValidForm();
+      await navigateAway(router);
+
+      await user.click(
+        screen.getByRole('button', {
+          name: UnsavedChangesI18nKeys.ConfirmLabel,
+        }),
+      );
+
+      expect(await screen.findByText('Scheduler')).toBeTruthy();
+      expect(createApplication).not.toHaveBeenCalled();
+    });
+
+    it('keeps the edits when Keep editing is chosen', async () => {
+      const { router } = renderPage();
+      await user.type(getNameInput(), 'My app');
+      await navigateAway(router);
+
+      await user.click(
+        screen.getByRole('button', {
+          name: UnsavedChangesI18nKeys.CancelLabel,
+        }),
+      );
+
+      expect(router.state.location.pathname).toBe(ROUTES.CustomAppEditor);
+      expect((getNameInput() as HTMLInputElement).value).toBe('My app');
+    });
+
+    it('routes Cancel through the same dialog', async () => {
+      renderPage();
+      await user.type(getNameInput(), 'My app');
+
+      await user.click(getAction(ButtonsI18nKeys.Cancel));
+
+      expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(screen.queryByText('Catalog')).toBeNull();
+    });
+
+    it('treats a freshly loaded edited app as clean', async () => {
+      vi.mocked(getDeploymentDetails).mockResolvedValue({
+        id: APP_ID,
+        type: 'application',
+        applicationDetails: {
+          customAppFeatures: { rate: true },
+          endpoint: 'https://api.example.com/chat',
+        },
+      } as DeploymentDetailsDto);
+      const { router } = renderPage(editEntry);
+      await waitFor(() =>
+        expect((getCompletionUrlInput() as HTMLInputElement).value).toBe(
+          'https://api.example.com/chat',
+        ),
+      );
+
+      await navigateAway(router);
+
+      expect(await screen.findByText('Scheduler')).toBeTruthy();
     });
   });
 });

@@ -8,9 +8,11 @@ import {
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   Dropdown,
+  DropdownOverlayRole,
   ElementSize,
   FabButton,
   Input,
+  LiveRegion,
 } from '@epam/ai-dial-ui-kit';
 import type { InputHighlightData } from '@epam/pdf-highlighter-kit';
 import { IconMenu2, IconX } from '@tabler/icons-react';
@@ -183,6 +185,10 @@ export interface PdfContentProps {
   hideHeader?: boolean;
   /** User-visible strings for the thumbnails section. All fields have English defaults. */
   labels?: PdfContentLabels;
+  /** Called with the document URL when fetching the PDF blob rejects. */
+  onLoadError?: (url: string) => void;
+  /** Typography class of the worker-preparation error message. Defaults to `'dial-body-text'`. */
+  errorLabelClassName?: string;
 }
 
 /** Renders a PDF with highlight annotations, a floating collapsible thumbnails panel, and page navigation. */
@@ -194,6 +200,8 @@ export const PdfContent: FC<PdfContentProps> = ({
   loadPdf,
   configurePdfWorker,
   hideHeader = false,
+  onLoadError,
+  errorLabelClassName,
   labels: {
     thumbnailsLabel = 'Thumbnails',
     showThumbnailsLabel = 'Show thumbnails',
@@ -210,6 +218,20 @@ export const PdfContent: FC<PdfContentProps> = ({
       : PdfWorkerPreparationState.Ready,
   );
   const [preparationRetryKey, setPreparationRetryKey] = useState(0);
+
+  /* Must stay referentially stable per loader: `DocumentPreview` re-fetches
+   * the document whenever its `loadFileCb` changes. */
+  const loadPdfFile = useCallback(
+    async (fileUrl: string) => {
+      try {
+        return await (loadPdf ?? fetchBlobFromUrl)(fileUrl);
+      } catch (error) {
+        onLoadError?.(fileUrl);
+        throw error;
+      }
+    },
+    [loadPdf, onLoadError],
+  );
 
   /*
    * `DocumentPreview` below only mounts once this resolves — see the
@@ -570,17 +592,33 @@ export const PdfContent: FC<PdfContentProps> = ({
 
   if (!url) return null;
 
+  /* First child of every branch below, so the worker failure is announced when it replaces the pending state. */
+  const errorRegion = (
+    <LiveRegion visuallyHidden>
+      {preparationState === PdfWorkerPreparationState.Error ? errorLabel : ''}
+    </LiveRegion>
+  );
+
   if (preparationState === PdfWorkerPreparationState.Preparing) {
-    return <LazyContentPending loadingLabel={loadingLabel} />;
+    return (
+      <>
+        {errorRegion}
+        <LazyContentPending loadingLabel={loadingLabel} />
+      </>
+    );
   }
 
   if (preparationState === PdfWorkerPreparationState.Error) {
     return (
-      <LazyContentError
-        errorLabel={errorLabel}
-        retryLabel={retryLabel}
-        onRetry={handleRetryPreparation}
-      />
+      <>
+        {errorRegion}
+        <LazyContentError
+          errorLabel={errorLabel}
+          retryLabel={retryLabel}
+          onRetry={handleRetryPreparation}
+          errorLabelClassName={errorLabelClassName}
+        />
+      </>
     );
   }
 
@@ -611,95 +649,111 @@ export const PdfContent: FC<PdfContentProps> = ({
     Math.max(0, totalPages - endIndex - 1) * itemHeight;
 
   return (
-    <div className="relative flex h-full overflow-hidden">
-      {totalPages > 0 && (
-        <div className="absolute start-3 top-3 z-10">
-          <Dropdown
-            open={isThumbnailsOpen}
-            onOpenChange={setIsThumbnailsOpen}
-            placement="bottom-start"
-            matchReferenceWidth={false}
-            renderOverlay={() => (
-              <div className="flex w-36 flex-col">
-                <div className="shrink-0 p-1">
-                  <Input
-                    size={ElementSize.Small}
-                    aria-label={pageNumberLabel}
-                    value={pageInputValue}
-                    postfix={`/ ${totalPages}`}
-                    inputMode="numeric"
-                    onChange={(value) => setPageInputValue(value ?? '')}
-                    onBlur={() => commitPageInput(pageInputValue)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitPageInput(pageInputValue);
-                    }}
-                  />
+    <>
+      {errorRegion}
+      <div className="relative flex h-full overflow-hidden">
+        {totalPages > 0 && (
+          <div className="absolute inset-s-3 top-3 z-10">
+            <Dropdown
+              open={isThumbnailsOpen}
+              onOpenChange={setIsThumbnailsOpen}
+              /* The only allowed placement, so the panel never flips above the
+               * button; the list below caps itself to the room that is left. */
+              allowedPlacements={['bottom-start']}
+              matchReferenceWidth={false}
+              // Opening by click must not focus the page input: the overlay is
+              // still unpositioned at that moment, and focusing it scrolls the
+              // page to the overlay's initial spot (and raises the mobile
+              // keyboard).
+              initialFocus={-1}
+              /* A page field and thumbnails, not menu items. */
+              overlayRole={DropdownOverlayRole.Dialog}
+              overlayAriaLabel={thumbnailsLabel}
+              renderOverlay={() => (
+                <div className="flex w-36 flex-col">
+                  {/* An 80px field plus the 4px padding on each side. */}
+                  <div className="w-[88px] shrink-0 p-1">
+                    <Input
+                      size={ElementSize.Small}
+                      aria-label={pageNumberLabel}
+                      value={pageInputValue}
+                      postfix={`/ ${totalPages}`}
+                      inputMode="numeric"
+                      onChange={(value) => setPageInputValue(value ?? '')}
+                      onBlur={() => commitPageInput(pageInputValue)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitPageInput(pageInputValue);
+                      }}
+                    />
+                  </div>
+                  <div
+                    ref={setPanelRef}
+                    id={thumbnailsRegionId}
+                    role="region"
+                    aria-label={thumbnailsLabel}
+                    onScroll={handlePanelScroll}
+                    className="max-h-[min(70vh,calc(var(--fui-available-height,70vh)-2.5rem))] min-h-0 scrollbar-gutter-both overflow-x-hidden overflow-y-auto p-1"
+                  >
+                    <div style={{ height: topSpacerHeight }} />
+                    {thumbnailItems}
+                    <div style={{ height: bottomSpacerHeight }} />
+                  </div>
                 </div>
-                <div
-                  ref={setPanelRef}
-                  id={thumbnailsRegionId}
-                  role="region"
-                  aria-label={thumbnailsLabel}
-                  onScroll={handlePanelScroll}
-                  className="max-h-[70vh] min-h-0 overflow-y-auto overflow-x-hidden p-1 [scrollbar-gutter:stable]"
-                >
-                  <div style={{ height: topSpacerHeight }} />
-                  {thumbnailItems}
-                  <div style={{ height: bottomSpacerHeight }} />
-                </div>
-              </div>
-            )}
-          >
-            <FabButton
-              icon={
-                isThumbnailsOpen ? (
-                  <IconX
-                    size={DIAL_ICON_SIZE.LG}
-                    stroke={DIAL_KIT_ICON_STROKE}
-                    aria-hidden
-                  />
-                ) : (
-                  <IconMenu2
-                    size={DIAL_ICON_SIZE.LG}
-                    stroke={DIAL_KIT_ICON_STROKE}
-                    aria-hidden
-                  />
-                )
-              }
-              aria-label={
-                isThumbnailsOpen ? hideThumbnailsLabel : showThumbnailsLabel
-              }
-              aria-expanded={isThumbnailsOpen}
-              aria-controls={isThumbnailsOpen ? thumbnailsRegionId : undefined}
-            />
-          </Dropdown>
-        </div>
-      )}
-      <div
-        ref={viewerContainerRef}
-        className={mergeClasses(
-          'min-w-0 flex-1 overflow-hidden',
-          styles.viewer,
+              )}
+            >
+              <FabButton
+                icon={
+                  isThumbnailsOpen ? (
+                    <IconX
+                      size={DIAL_ICON_SIZE.LG}
+                      stroke={DIAL_KIT_ICON_STROKE}
+                      aria-hidden
+                    />
+                  ) : (
+                    <IconMenu2
+                      size={DIAL_ICON_SIZE.LG}
+                      stroke={DIAL_KIT_ICON_STROKE}
+                      aria-hidden
+                    />
+                  )
+                }
+                aria-label={
+                  isThumbnailsOpen ? hideThumbnailsLabel : showThumbnailsLabel
+                }
+                aria-expanded={isThumbnailsOpen}
+                aria-controls={
+                  isThumbnailsOpen ? thumbnailsRegionId : undefined
+                }
+              />
+            </Dropdown>
+          </div>
         )}
-      >
-        <DocumentPreview
-          fileUrl={url}
-          loadFileCb={loadPdf ?? fetchBlobFromUrl}
-          highlights={highlights}
-          selectedHighlightId={selectedHighlightId}
-          selectedPageNumber={selectedPageNumber}
-          showOccurrences={false}
-          onTotalPagesChange={setTotalPages}
-          thumbnailPageNumbers={requestedThumbnailPages}
-          onThumbnailsLoaded={handleThumbnailsLoaded}
-          onViewerReady={handleViewerReady}
-          onCurrentPageChange={handleCurrentPageChange}
-          viewerOptions={{ enableVirtualScrolling: true }}
-          containerClassName={
-            hideHeader ? '[&>div:first-child]:hidden' : undefined
-          }
-        />
+        <div
+          ref={viewerContainerRef}
+          className={mergeClasses(
+            'min-w-0 flex-1 overflow-hidden',
+            styles.viewer,
+          )}
+        >
+          <DocumentPreview
+            fileUrl={url}
+            loadFileCb={loadPdfFile}
+            highlights={highlights}
+            selectedHighlightId={selectedHighlightId}
+            selectedPageNumber={selectedPageNumber}
+            showOccurrences={false}
+            onTotalPagesChange={setTotalPages}
+            thumbnailPageNumbers={requestedThumbnailPages}
+            onThumbnailsLoaded={handleThumbnailsLoaded}
+            onViewerReady={handleViewerReady}
+            onCurrentPageChange={handleCurrentPageChange}
+            viewerOptions={{ enableVirtualScrolling: true }}
+            containerClassName={
+              hideHeader ? '[&>div:first-child]:hidden' : undefined
+            }
+          />
+        </div>
       </div>
-    </div>
+    </>
   );
 };

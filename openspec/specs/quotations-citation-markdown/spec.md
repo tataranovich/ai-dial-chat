@@ -14,7 +14,7 @@ conversion, or `@epam/ai-dial-attachment-canvas`.
 
 ### Requirement: Citation-aware markdown hook exported from the package root
 
-`@epam/ai-dial-quotations` SHALL export a hook (`useCitationMarkdownComponents`) that, given raw markdown content, a list of `AnnotationGroup`s (which may mix URL-keyed groups and `cit`-id-keyed groups), a callbacks object (`UseCitationMarkdownComponentsCallbacks`: required `onPreview`, `onOpenInBrowser`, `buildLabels`, plus optional `isPreviewable(annotation)` (defaults to allowing preview), `isDownloadEnabled` (defaults to `true`) and `isPreviewOpen` (defaults to `false`), all forwarded to each `CitationDropdown`), and the positional parameters `isStreaming = false`, `isCompactTypography = false`, and `fallbackGroups` (in that order), returns `{ processedContent: string; markdownComponents: Components }` for `react-markdown`. The hook SHALL NOT import `react-i18next`, any application context, any attachment-canvas hook, or any application DTO-conversion helper.
+`@epam/ai-dial-quotations` SHALL export a hook (`useCitationMarkdownComponents`) that, given raw markdown content, a list of `AnnotationGroup`s (which may mix URL-keyed groups and `cit`-id-keyed groups), a callbacks object (`UseCitationMarkdownComponentsCallbacks`: required `onPreview`, `onOpenInBrowser`, `buildLabels`, plus optional `isPreviewable(annotation)` (defaults to allowing preview), `isDownloadEnabled` (defaults to `true`), `isPreviewOpen` (defaults to `false`) and `previewFilesOnMarkerClick` (defaults to `false`), all forwarded to each `CitationDropdown`), and the positional parameters `isStreaming = false`, `isCompactTypography = false`, and `fallbackGroups` (in that order), returns `{ processedContent: string; markdownComponents: Components }` for `react-markdown`. The hook SHALL NOT import `react-i18next`, any application context, any attachment-canvas hook, or any application DTO-conversion helper.
 
 The hook SHALL additionally accept an optional pool of **fallback** `AnnotationGroup`s, supplied by the host, which are groups not belonging to this message. The pool's only effect SHALL be on `data-id` resolution, described below. It SHALL be optional and default to an empty pool, so every existing call site keeps its current behaviour.
 
@@ -69,6 +69,11 @@ Because a pool-only match still needs a `cit` override to exist, the empty-overr
 - **WHEN** `content` contains `<cit data-id="zz"></cit>` and neither `groups` nor the fallback pool has that id
 - **THEN** the element is serialized back to the literal text `<cit data-id="zz"></cit>`
 
+#### Scenario: previewFilesOnMarkerClick is forwarded to every dropdown
+
+- **WHEN** the callbacks object sets `previewFilesOnMarkerClick: true` and the user activates a rendered marker whose displayed annotation is a previewable PDF source
+- **THEN** `onPreview` is called once with that annotation and no citation card is rendered
+
 ### Requirement: A repeated citation marker owns its own popup
 
 When one message's content resolves more than one rendered marker to the **same** `AnnotationGroup` — a `<cit data-id="X"></cit>` element occurring several times, or a reference chip whose group shares a `groupKey` with an inline group — each rendered occurrence SHALL be an independent popup owner.
@@ -77,7 +82,7 @@ The hook SHALL achieve this without changing citation data: it SHALL NOT dedupli
 
 Consequently:
 
-- Activating any marker SHALL open exactly one card, anchored to that marker's own trigger element — except when the host passes `isPreviewOpen: true` and the displayed annotation is previewable, in which case activating the marker calls `onPreview` directly for that annotation and opens no card.
+- Activating any marker SHALL open exactly one card, anchored to that marker's own trigger element — except when the host passes `isPreviewOpen: true`, the group holds a single annotation, and that annotation is previewable, in which case activating the marker calls `onPreview` directly for that annotation and opens no card; and except when the host passes `previewFilesOnMarkerClick: true` and the group holds a single previewable annotation that is not a web link (see the `citation-card` capability), which likewise calls `onPreview` directly and opens no card.
 - At most one citation card SHALL be present in the document at any time within one message.
 - Activating a different occurrence SHALL transfer the open card to it.
 - `onPreview` and `onOpenInBrowser` SHALL each be invoked **exactly once** per user activation, with the `Annotation` the open card is currently displaying, and with that annotation reference-identical to the object held in the `groups` array the hook was given.
@@ -114,6 +119,11 @@ Consequently:
 
 - **WHEN** two occurrences of one `data-id` are in two different paragraphs
 - **THEN** activating either opens exactly one card and its actions fire once
+
+#### Scenario: Repeated file-citation markers each preview their own annotation
+
+- **WHEN** `previewFilesOnMarkerClick` is `true`, the content repeats `<cit data-id="e1"></cit>` twice, `"e1"` resolves to a PDF-source group, and the user activates the second marker
+- **THEN** `onPreview` is invoked exactly once with the group's displayed annotation (reference-identical to the one in `groups`) and no card is present in the document
 
 ### Requirement: Preview and browser-open actions are delegated to injected callbacks
 
@@ -196,3 +206,85 @@ The hook SHALL return `null` for a sentinel marker whose index has no correspond
 
 - **WHEN** `isStreaming` is `true` and `content` ends with `<cit data-id="e438">` followed by more already-streamed text but no `</cit>`
 - **THEN** the dangling tag is escaped and both its markup and the text after it remain visible
+
+### Requirement: Cit-only citation renderer for markdown surfaces other than the message body
+
+`@epam/ai-dial-quotations` SHALL export a hook `useCitationTagRenderer(groups, callbacks, fallbackGroups?)` taking the same `AnnotationGroup[]`, `UseCitationMarkdownComponentsCallbacks` and optional fallback pool as `useCitationMarkdownComponents`. It SHALL return a memoized function `(dataId: string | undefined, children: ReactNode) => ReactNode` that resolves `dataId` against an `html_tag`-selector group — first among `groups`, then among the fallback pool, with `groups` winning a colliding id — and renders that group's `CitationDropdown` with the callbacks and the labels from `buildLabels`. An undefined or unmatched `dataId` SHALL render the element back as literal text (`<cit data-id="…">`, the children, `</cit>`).
+
+The returned function SHALL keep its reference across re-renders while `groups`, the fallback pool and every callback keep theirs. The hook SHALL NOT inject sentinels, SHALL NOT render offset-based (non-`html_tag`) groups, and SHALL NOT return `p`/`li` overrides. `useCitationMarkdownComponents` SHALL render its `cit` matches through the same internal group renderer, with no change to its own behavior. Like the existing hook, it SHALL NOT import `react-i18next`, any application context, any attachment-canvas hook, or any application DTO-conversion helper.
+
+#### Scenario: A claimed id renders a citation dropdown
+
+- **WHEN** the returned function is called with `'c1'` and `groups` contains an `html_tag` group for `c1`
+- **THEN** it renders a `CitationDropdown` for that group, and activating its preview calls `onPreview` with the group's annotation
+
+#### Scenario: A pooled id renders when the message lacks it
+
+- **WHEN** `groups` has no group for `c2` and the fallback pool does
+- **THEN** the function renders the pooled group's `CitationDropdown`
+
+#### Scenario: An unclaimed id renders literal text
+
+- **WHEN** the function is called with `'zz'` and neither `groups` nor the pool has it
+- **THEN** it renders the text `<cit data-id="zz"></cit>`
+
+#### Scenario: The renderer is referentially stable
+
+- **WHEN** the component using the hook re-renders with the same `groups`, pool and callbacks references
+- **THEN** the hook returns the same function reference
+
+#### Scenario: Offset-based groups are ignored
+
+- **WHEN** `groups` contains only a `text_character_range` group and the function is called with any id
+- **THEN** it renders literal text and does not render that group
+
+### Requirement: Shared citation content preparation
+
+`@epam/ai-dial-quotations` SHALL export a pure function `prepareCitationContent(content: string, isStreaming: boolean): string`. While `isStreaming` is `true` it SHALL return `stripCitTagsWhileStreaming(content)`; otherwise it SHALL return `content` with every unsupported `cit` shape escaped for literal display, the exact supported paired element `<cit data-id="…"></cit>` left as markup. It SHALL NOT inject citation sentinels. It SHALL return `content` unchanged when it contains no `<cit`.
+
+#### Scenario: Streaming content hides complete elements
+
+- **WHEN** called with `'a <cit data-id="x"></cit> b'` and `isStreaming: true`
+- **THEN** the result does not contain `<cit data-id="x"></cit>`
+
+#### Scenario: Finished content keeps supported elements and escapes the rest
+
+- **WHEN** called with `isStreaming: false` and content containing `<cit data-id="x"></cit>` and a malformed `<cit data-id="y>`
+- **THEN** the supported element is unchanged and the malformed one is escaped so it renders as literal text
+
+#### Scenario: Content without citation markup is returned unchanged
+
+- **WHEN** called with `'plain text'` and either streaming value
+- **THEN** the result is `'plain text'`
+
+### Requirement: Copied citation text matches the marker label
+
+`replaceCitTagsWithSourceNames(content, groups, fallbackGroups?, formatLabel?)` exported from `@epam/ai-dial-quotations` SHALL accept an optional fourth parameter `formatLabel: (group: AnnotationGroup) => string`. Each supported `<cit data-id="…"></cit>` element that resolves to a group SHALL be replaced by `formatLabel(group)`, Markdown-escaped exactly as `sourceName` is today; when `formatLabel` is omitted the replacement SHALL remain `group.sourceName`. Unresolved tags SHALL stay untouched.
+
+The chat app's Copy actions SHALL pass a `formatLabel` that returns the same text as the group's single-annotation marker label (`MarkerLabelWithPage` when `getCitationGroupPage` returns a page, otherwise `MarkerLabel`), so a copied citation matches what the pill shows.
+
+**i18n**: none in the lib; the app reuses the `citations.marker.*` keys.
+**RTL**: none — text transformation.
+**State**: none.
+**Memoisation**: the app computes the copied content in `ConversationMessageItem`'s `copyContent` `useMemo`, whose deps include `t` alongside the content and citation groups.
+**Feature flag**: none.
+
+#### Scenario: Default replacement is unchanged
+
+- **WHEN** `replaceCitTagsWithSourceNames` is called without `formatLabel` for content `"555 <cit data-id=\"00000\"></cit>"` whose group's `sourceName` is `"clm.pdf"`
+- **THEN** it returns `"555 clm.pdf"`
+
+#### Scenario: Formatter output replaces the tag
+
+- **WHEN** it is called with `formatLabel = () => "clm.pdf, p. 1"` for the same content
+- **THEN** it returns `"555 clm.pdf, p. 1"`
+
+#### Scenario: Formatter output is Markdown-escaped
+
+- **WHEN** `formatLabel` returns `"a|b_c.pdf, p. 1"`
+- **THEN** the replacement is `"a\|b\_c.pdf, p. 1"`
+
+#### Scenario: Copying a message keeps the page
+
+- **WHEN** the user copies an assistant message whose `<cit>` resolves to `clm.pdf` with selector page `1`
+- **THEN** the clipboard text contains `"clm.pdf, p. 1"`

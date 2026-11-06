@@ -12,7 +12,18 @@ import {
 import { SkillFileUploadMode } from '../../../types/skill-file-upload-mode';
 import { SkillFileUploadDialog } from '../SkillFileUploadDialog';
 
-vi.mock('@epam/ai-dial-ui-kit', () => ({
+vi.mock('@epam/ai-dial-ui-kit', async () => ({
+  /* The real live region and ErrorText: a hand-rolled stub would hide the always-mounted region `announce` renders. */
+  ...(await vi
+    .importActual<typeof import('@epam/ai-dial-ui-kit')>('@epam/ai-dial-ui-kit')
+    .then(
+      ({ ErrorText, LiveRegion, LiveRegionElement, LiveRegionPoliteness }) => ({
+        ErrorText,
+        LiveRegion,
+        LiveRegionElement,
+        LiveRegionPoliteness,
+      }),
+    )),
   DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { LG: 24, MD: 20, SM: 16 },
   ButtonVariant: { Primary: 'primary', Neutral: 'neutral', Danger: 'danger' },
@@ -56,16 +67,21 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
         ))}
       </div>
     ) : null,
-  ErrorText: ({ text }: { text?: string }) => <span>{text}</span>,
+  CaptionText: ({ text, className }: { text?: string; className?: string }) =>
+    text ? <span className={className}>{text}</span> : null,
   FileDropzone: ({
+    id,
     label,
+    description,
     ariaLabel,
     multiple,
     accept,
     onChange,
     onReject,
   }: {
+    id?: string;
     label: ReactNode;
+    description?: ReactNode;
     ariaLabel?: string;
     multiple?: boolean;
     accept?: string;
@@ -74,7 +90,9 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   }) => (
     <div>
       <span>{label}</span>
+      {description && <span>{description}</span>}
       <input
+        id={id}
         type="file"
         multiple={multiple}
         accept={accept}
@@ -84,6 +102,12 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       {onReject && (
         <button onClick={() => onReject([])}>Simulate rejected drop</button>
       )}
+    </div>
+  ),
+  FileName: ({ name, details }: { name: string; details?: ReactNode }) => (
+    <div>
+      <span>{name}</span>
+      {details}
     </div>
   ),
   GhostButton: ({
@@ -97,12 +121,18 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     icon,
     onClick,
     'aria-label': ariaLabel,
+    'aria-describedby': ariaDescribedBy,
   }: {
     icon: ReactNode;
     onClick?: () => void;
     'aria-label'?: string;
+    'aria-describedby'?: string;
   }) => (
-    <button aria-label={ariaLabel} onClick={onClick}>
+    <button
+      aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
+      onClick={onClick}
+    >
       {icon}
     </button>
   ),
@@ -118,6 +148,28 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     <button onClick={onClick} disabled={disabled}>
       {label}
     </button>
+  ),
+  RadioGroup: ({
+    items,
+    value,
+    onChange,
+  }: {
+    items: { value: string; label?: ReactNode }[];
+    value?: string;
+    onChange: (value: string) => void;
+  }) => (
+    <div role="radiogroup">
+      {items.map((item) => (
+        <label key={item.value}>
+          <input
+            type="radio"
+            checked={item.value === value}
+            onChange={() => onChange(item.value)}
+          />
+          {item.label}
+        </label>
+      ))}
+    </div>
   ),
   Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
     <div role="status">{ariaLabel}</div>
@@ -226,7 +278,16 @@ describe('SkillFileUploadDialog', () => {
     );
 
     stageFile(new File(['content'], 'huge.md'));
-    await screen.findByText('Too large');
+    const rowError = await screen.findByText('Too large');
+
+    expect(
+      screen
+        .getByRole('button', { name: 'Remove huge.md' })
+        .getAttribute('aria-describedby'),
+    ).toBe(rowError.id);
+    expect(screen.getByRole('status').textContent).toContain(
+      'huge.md: Too large',
+    );
 
     expect(
       (screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement)
@@ -314,6 +375,39 @@ describe('SkillFileUploadDialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('announces a commit failure in an alert region', async () => {
+    const onClose = vi.fn();
+    render(
+      <SkillFileUploadDialog
+        isOpen
+        onClose={onClose}
+        fileActions={buildFileActions({
+          validateBatch: vi.fn(
+            async (candidates: SkillFileUploadCandidate[]) => ({
+              results: candidates.map((c) => ({
+                candidateId: c.id,
+                status: SkillFileValidationStatus.Valid,
+                kind: SkillFileCandidateKind.SupportingFile,
+              })),
+              batchErrors: [],
+            }),
+          ),
+          commitBatch: vi.fn(async () => ({ error: 'Upload failed' })),
+        })}
+      />,
+    );
+
+    stageFile(new File(['content'], 'a.md'));
+    await screen.findByText('a.md');
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await screen.findByText('Upload failed');
+    expect(
+      screen.getAllByRole('alert').map((alert) => alert.textContent),
+    ).toContain('Upload failed');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('prefixes staged paths with the target folder', async () => {
     render(
       <SkillFileUploadDialog
@@ -364,9 +458,9 @@ describe('SkillFileUploadDialog', () => {
       screen.getByRole('button', { name: 'Simulate rejected drop' }),
     );
 
-    expect(screen.getByRole('alert').textContent).toBe(
-      "Couldn't read this archive",
-    );
+    expect(
+      screen.getAllByRole('alert').map((alert) => alert.textContent),
+    ).toContain("Couldn't read this archive");
   });
 
   it('keeps Add disabled while an archive is being read', async () => {
@@ -399,5 +493,152 @@ describe('SkillFileUploadDialog', () => {
 
     expect(await screen.findByText('a.md')).toBeTruthy();
     expect(screen.queryByText('Reading archive')).toBeNull();
+  });
+});
+
+describe('SkillFileUploadDialog — existing file conflicts', () => {
+  const renderWithExisting = (
+    fileActions = buildFileActions(),
+    existingFilePaths = ['notes.md'],
+  ) =>
+    render(
+      <SkillFileUploadDialog
+        isOpen
+        onClose={vi.fn()}
+        fileActions={fileActions}
+        existingFilePaths={existingFilePaths}
+      />,
+    );
+
+  it('asks to replace or duplicate an upload whose path already holds a file', () => {
+    renderWithExisting();
+
+    stageFile(new File(['new'], 'notes.md'));
+
+    expect(
+      screen.getByRole('heading', { name: 'Replace or duplicate it?' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('Item with the same name "notes.md" already exists.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Replace' })).toHaveProperty(
+      'checked',
+      true,
+    );
+  });
+
+  it('stages a replacing upload at the same path once Replace is confirmed', async () => {
+    const user = userEvent.setup({ delay: null });
+    const fileActions = buildFileActions();
+    renderWithExisting(fileActions);
+
+    stageFile(new File(['new'], 'notes.md'));
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    expect(
+      await screen.findByText('Will replace the existing file'),
+    ).toBeTruthy();
+    expect(fileActions.validateBatch).toHaveBeenLastCalledWith([
+      expect.objectContaining({ path: 'notes.md', replacesExisting: true }),
+    ]);
+  });
+
+  it('stages a duplicate under the next free numbered name', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithExisting(buildFileActions(), ['notes.md', 'notes (1).md']);
+
+    stageFile(new File(['new'], 'notes.md'));
+    await user.click(screen.getByRole('radio', { name: 'Duplicate' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    expect(await screen.findByText('notes (2).md')).toBeTruthy();
+    expect(screen.queryByText('Will replace the existing file')).toBeNull();
+  });
+
+  it('moves focus to the question, then back to the drop zone once it is answered', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithExisting();
+
+    stageFile(new File(['new'], 'notes.md'));
+    /* Focus has no semantic query. */
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(document.activeElement).toBe(
+      screen.getByText('Item with the same name "notes.md" already exists.'),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(document.activeElement).toBe(screen.getByLabelText('Upload files'));
+  });
+
+  it('reports the committed batch, including the replacement flag', async () => {
+    const user = userEvent.setup({ delay: null });
+    const onCommitted = vi.fn();
+    render(
+      <SkillFileUploadDialog
+        isOpen
+        onClose={vi.fn()}
+        fileActions={buildFileActions()}
+        existingFilePaths={['notes.md']}
+        onCommitted={onCommitted}
+      />,
+    );
+
+    stageFile(new File(['new'], 'notes.md'));
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await user.click(await screen.findByRole('button', { name: 'Add' }));
+
+    expect(onCommitted).toHaveBeenCalledWith([
+      expect.objectContaining({ path: 'notes.md', replacesExisting: true }),
+    ]);
+  });
+
+  it('drops the conflicting upload on Cancel and keeps the rest staged', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderWithExisting();
+
+    fireEvent.change(screen.getByLabelText('Upload files'), {
+      target: {
+        files: [new File(['a'], 'a.md'), new File(['new'], 'notes.md')],
+      },
+    });
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(await screen.findByText('a.md')).toBeTruthy();
+    expect(screen.queryByText('notes.md')).toBeNull();
+    expect(
+      screen.queryByRole('heading', { name: 'Replace or duplicate it?' }),
+    ).toBeNull();
+  });
+
+  it('never asks about the root SKILL.md, which is a metadata import', () => {
+    renderWithExisting(buildFileActions(), ['notes.md']);
+
+    stageFile(new File(['---'], 'SKILL.md'));
+
+    expect(
+      screen.queryByRole('heading', { name: 'Replace or duplicate it?' }),
+    ).toBeNull();
+    expect(screen.getByText('SKILL.md')).toBeTruthy();
+  });
+});
+
+describe('SkillFileUploadDialog — drop-zone description', () => {
+  it('shows the host description for the active mode', () => {
+    render(
+      <SkillFileUploadDialog
+        isOpen
+        onClose={vi.fn()}
+        fileActions={buildFileActions()}
+        mode={SkillFileUploadMode.Archive}
+        labels={{
+          uploadDropZoneDescription: 'Maximum size: 1 MB',
+          uploadArchiveDropZoneDescription: 'File format .zip',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('File format .zip')).toBeTruthy();
+    expect(screen.queryByText('Maximum size: 1 MB')).toBeNull();
   });
 });

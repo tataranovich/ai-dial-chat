@@ -5,7 +5,6 @@
 Defines the generic app-level `ApplicationEditorPage` and the `ApplicationEditorDefinition` contract (Setup slot, setup validation, payload mappers, create strategy) that renders toolsets, custom apps, quick apps and schema-form apps, and how a new application type is registered.
 
 ## Requirements
-
 ### Requirement: One generic page renders every application kind
 
 `apps/chat/src/pages/ApplicationEditor/ApplicationEditorPage.tsx` SHALL be the route element for every application editor. It takes a `kind: ApplicationEditorKind` prop, where `ApplicationEditorKind` is a string enum declared in `apps/chat/src/types/application-editor.ts` with members `Toolset = 'toolset'`, `CustomApp = 'custom-app'`, `QuickApp = 'quick-app'` and `SchemaApp = 'schema-app'`.
@@ -105,25 +104,25 @@ The primary button SHALL be labelled `buttons.create` in create mode and `button
 
 ### Requirement: Create strategies
 
-`ApplicationFormEditor` SHALL persist each kind according to its definition's `createStrategy`:
+`ApplicationFormEditor` SHALL persist each kind according to its definition's `createStrategy`. For a kind with a `savePanel` (every registered application kind), Create SHALL first open the Save panel (see the `resource-save-panel` capability); the create below runs on the panel's Save, through `definition.create(values, setup, context, { folderPath })` into the chosen Personal folder, and the panel shows the Created notification.
 
-- **`ApplicationCreateStrategy.AllAtOnce`.** A single `create` or `update` call persists metadata and setup together. Success then follows the shared success path.
+- **`ApplicationCreateStrategy.AllAtOnce`.** A single `create` or `update` call persists metadata and setup together. Success then follows the shared success path; a created application can be published to an Organization folder from the panel.
 - **`ApplicationCreateStrategy.MetadataFirst`.**
   - In create mode the `Setup` component SHALL receive no `appId`, and SHALL render the `applicationEditor.setupPendingCreate` placeholder ("Create the application to configure its setup.").
-  - Clicking Create SHALL call `create` with the metadata only and raise the Created notification. It SHALL then replace the URL's search params (`replace: true`) to add the new id, which switches the page into edit mode in place, and start a best-effort `refetchDeployments()` that does not block the form.
+  - The panel SHALL offer the Personal root only. On its Save the page SHALL call `create` with the metadata only. It SHALL then replace the URL's search params (`replace: true`) to add the new id, which switches the page into edit mode in place, and start a best-effort `refetchDeployments()` that does not block the form.
   - After that switch, the page SHALL NOT navigate away. The title becomes the edit title and the primary button becomes Save.
   - In edit mode, when the definition has no `update`, Save SHALL call the `Setup` handle's `save(metadata)`. After it resolves, the page follows the shared success path with `EntityOperation.Edited`.
 
 #### Scenario: Metadata-first create switches to edit mode in place
-- **WHEN** a user fills Name for a quick app and clicks Create, and `createApplication` returns `{ id: "app-1" }`
+- **WHEN** a user fills Name for a quick app, clicks Create, confirms the Save panel, and `createApplication` returns `{ id: "app-1" }`
 - **THEN** a "Quick app created successfully" notification shows
 - **AND** the URL gains `appId=app-1` without a history entry
 - **AND** the header shows the edit title with a Save button
 - **AND** the Setup section loads the schema editor for `app-1`
 
 #### Scenario: All-at-once create exits after one request
-- **WHEN** a user completes a custom app's Metadata and Setup, clicks Create and confirms the popup
-- **THEN** exactly one `createApplication` request is sent with metadata and setup fields, a Created notification shows, and the page navigates to `returnUrl`
+- **WHEN** a user completes a custom app's Metadata and Setup, clicks Create, confirms the popup and confirms the Save panel with Personal `Design`
+- **THEN** exactly one `createApplication` request is sent with metadata, setup fields and `folderPath: "Design"`, a Created notification shows, and the page navigates to `returnUrl`
 
 ### Requirement: Registered kinds
 
@@ -178,3 +177,22 @@ The feature is not gated by `ENABLED_FEATURES`. Catalog entry gating (`OverlayFe
 #### Scenario: Saving overlay hides content from assistive tech
 - **WHEN** a submit is in flight
 - **THEN** the editor body carries the `inert` attribute and a polite live region announces the saving label
+
+### Requirement: Create-mode metadata defaults are uniform across kinds
+Every form-based kind registered in `APPLICATION_EDITOR_DEFINITIONS` (`CustomApp`, `QuickApp`, `SchemaApp`) SHALL declare `defaultMetadata` with `name: ''` and `version: DEFAULT_DEPLOYMENT_VERSION` (from `@epam/ai-dial-builder-form`), with `iconUrl`, `description` empty and `topics`, `otherLocales` empty arrays. The Custom App value is `DEFAULT_CUSTOM_APP_GENERAL_FORM` in `apps/chat/src/constants/custom-apps.ts`; the two schema kinds share `SCHEMA_APP_DEFAULT_METADATA` in `apps/chat/src/pages/ApplicationEditor/definitions/schemaDefinitionHelpers.ts`. No kind SHALL pre-fill a generated or translated default name. Edit mode is unaffected: it continues to seed values from the loaded deployment through `deploymentToMetadata`.
+
+#### Scenario: Every form-based kind opens with the same defaults
+- **WHEN** a unit test inspects `defaultMetadata` of the `custom-app`, `quick-app` and `schema-app` definitions
+- **THEN** each has `name: ''` and `version: '1.0.0'`
+
+#### Scenario: Quick app create form shows the default version
+- **WHEN** a user opens the create form for an application schema with an embedded editor
+- **THEN** the Version field shows `1.0.0` and the Name field is empty
+
+#### Scenario: Schema app create sends the default version
+- **WHEN** a user creates a schema app without editing the Version field
+- **THEN** the create request carries `version: '1.0.0'`
+
+#### Scenario: Clearing the version still omits it
+- **WHEN** a user clears the Version field on any form-based kind and creates the application
+- **THEN** the request omits `version` (as today) and the BFF stores its own `1.0.0` fallback

@@ -1,4 +1,5 @@
-import { CredentialStatus } from '@epam/ai-dial-catalog';
+import { CatalogPricingUnit, CredentialStatus } from '@epam/ai-dial-catalog';
+import type { ModelPricingRateDto } from '@epam/ai-dial-chat-api-client';
 import { describe, expect, it } from 'vitest';
 import {
   AuthenticationType,
@@ -6,6 +7,7 @@ import {
   type ToolsetEntityDetails,
 } from '../entity-details';
 import {
+  DEFAULT_ENTITY_DETAILS_LABELS,
   mapDeploymentDetailsDtoToEntityDetails,
   mapEntityDetailsToCatalogDetails,
   mapToolsetCredentials,
@@ -211,12 +213,9 @@ describe('mapEntityDetailsToCatalogDetails', () => {
   });
 
   describe('MODEL pricing', () => {
-    const mapPricingRows = (pricing: {
-      unit?: string;
-      prompt?: string;
-      completion?: string;
-      cache_read?: string | { rate?: string };
-    }) => {
+    const mapPricing = (
+      pricing: Record<string, string | ModelPricingRateDto>,
+    ) => {
       const dto: Parameters<typeof mapDeploymentDetailsDtoToEntityDetails>[0] =
         {
           id: 'gpt-4o',
@@ -226,8 +225,11 @@ describe('mapEntityDetailsToCatalogDetails', () => {
 
       return mapEntityDetailsToCatalogDetails(
         mapDeploymentDetailsDtoToEntityDetails(dto),
-      ).pricing?.prices;
+      ).pricing;
     };
+
+    const mapPricingRows = (pricing: Parameters<typeof mapPricing>[0]) =>
+      mapPricing(pricing)?.prices;
 
     it('quotes token prices per 1M tokens', () => {
       expect(
@@ -254,18 +256,32 @@ describe('mapEntityDetailsToCatalogDetails', () => {
       ]);
     });
 
-    it('names non-token units instead of re-quoting them per 1M tokens', () => {
+    it('quotes character prices per 1M characters under character labels', () => {
       expect(
-        mapPricingRows({
+        mapPricing({
           unit: 'char_without_whitespace',
-          prompt: '0.000002',
+          prompt: '0.00000015',
+          completion: '0.0000035',
         }),
-      ).toEqual([
-        {
-          label: 'Input tokens',
-          price: '$0.000002/char without whitespace',
-        },
-      ]);
+      ).toEqual({
+        prices: [
+          {
+            label: 'Input characters',
+            price: '$0.15/M chars without whitespace',
+          },
+          {
+            label: 'Output characters',
+            price: '$3.5/M chars without whitespace',
+          },
+        ],
+        unit: CatalogPricingUnit.Character,
+      });
+    });
+
+    it('leaves the unit unset for token pricing', () => {
+      expect(
+        mapPricing({ unit: 'token', prompt: '0.000003' })?.unit,
+      ).toBeUndefined();
     });
 
     it('passes a non-numeric price through unchanged', () => {
@@ -274,12 +290,120 @@ describe('mapEntityDetailsToCatalogDetails', () => {
       ]);
     });
 
-    it('ignores structured conditional prices in the flat pricing view', () => {
+    it('reads a structured `{ rate }` price', () => {
       expect(
         mapPricingRows({
           unit: 'token',
           prompt: '0.000003',
           cache_read: { rate: '0.000001' },
+        }),
+      ).toEqual([
+        { label: 'Input tokens', price: '$3/M tokens' },
+        { label: 'Cached input', price: '$1/M tokens' },
+      ]);
+    });
+
+    it('lists one row per tier of a conditional price, lower tier first', () => {
+      const overLongPrompt = {
+        field: 'promptTokens',
+        operator: '>',
+        value: '200000',
+      };
+
+      expect(
+        mapPricingRows({
+          unit: 'token',
+          prompt: {
+            test: overLongPrompt,
+            ifTrue: '0.000004',
+            ifFalse: '0.000002',
+          },
+          completion: {
+            test: overLongPrompt,
+            ifTrue: '0.000018',
+            ifFalse: '0.000012',
+          },
+          cache_read: {
+            test: overLongPrompt,
+            ifTrue: '4.000000000000003e-7',
+            ifFalse: '2.0000000000000002e-7',
+          },
+        }),
+      ).toEqual([
+        {
+          label: 'Input tokens (prompt tokens ≤ 200K)',
+          price: '$2/M tokens',
+        },
+        {
+          label: 'Input tokens (prompt tokens > 200K)',
+          price: '$4/M tokens',
+        },
+        {
+          label: 'Output tokens (prompt tokens ≤ 200K)',
+          price: '$12/M tokens',
+        },
+        {
+          label: 'Output tokens (prompt tokens > 200K)',
+          price: '$18/M tokens',
+        },
+        {
+          label: 'Cached input (prompt tokens ≤ 200K)',
+          price: '$0.2/M tokens',
+        },
+        {
+          label: 'Cached input (prompt tokens > 200K)',
+          price: '$0.4/M tokens',
+        },
+      ]);
+    });
+
+    it('joins the conditions along a nested conditional price', () => {
+      expect(
+        mapPricingRows({
+          prompt: {
+            test: { field: 'promptTokens', operator: '<=', value: 128000 },
+            ifTrue: '0.000001',
+            ifFalse: {
+              test: { field: 'completionTokens', operator: '==', value: 0 },
+              ifTrue: { rate: '0.000002' },
+              ifFalse: '0.000003',
+            },
+          },
+        }),
+      ).toEqual([
+        { label: 'Input tokens (prompt tokens ≤ 128K)', price: '$1/M tokens' },
+        {
+          label: 'Input tokens (prompt tokens > 128K, completion tokens = 0)',
+          price: '$2/M tokens',
+        },
+        {
+          label: 'Input tokens (prompt tokens > 128K, completion tokens ≠ 0)',
+          price: '$3/M tokens',
+        },
+      ]);
+    });
+
+    it('shows the rows of a deployment priced only conditionally', () => {
+      expect(
+        mapPricingRows({
+          prompt: {
+            test: { field: 'promptTokens', operator: '>', value: '200000' },
+            ifTrue: '0.000004',
+          },
+        }),
+      ).toEqual([
+        { label: 'Input tokens (prompt tokens > 200K)', price: '$4/M tokens' },
+      ]);
+    });
+
+    it('drops a conditional price whose test it cannot read', () => {
+      expect(
+        mapPricingRows({
+          prompt: '0.000003',
+          completion: {
+            test: { field: 'promptTokens', operator: '~' },
+            ifTrue: '0.000004',
+          },
         }),
       ).toEqual([{ label: 'Input tokens', price: '$3/M tokens' }]);
     });
@@ -426,5 +550,67 @@ describe('mapToolsetCredentials', () => {
       isPublic: true,
       isManageableByAdmin: true,
     });
+  });
+});
+
+describe('mapEntityDetailsToCatalogDetails — host-supplied labels', () => {
+  const modelDto: Parameters<typeof mapDeploymentDetailsDtoToEntityDetails>[0] =
+    {
+      id: 'gpt-4o',
+      type: 'model',
+      modelDetails: {
+        owner: 'OpenAI',
+        catalogProperties: { provider: 'OpenAI' },
+      },
+    };
+  const toolsetDto: Parameters<
+    typeof mapDeploymentDetailsDtoToEntityDetails
+  >[0] = {
+    id: 'toolsets/public/search',
+    type: 'toolset',
+    toolsetDetails: {
+      owner: 'Search Inc.',
+      catalogProperties: { provider: 'Search Inc.' },
+    },
+  };
+
+  it('keeps the former English labels by default', () => {
+    expect(DEFAULT_ENTITY_DETAILS_LABELS).toMatchObject({
+      capabilitiesTitle: 'Capabilities',
+      specificationTitle: 'Specification',
+      configurationTitle: 'Configuration',
+      provider: 'Provider',
+      hostedBy: 'Hosted by',
+      knowledgeCutoffDate: 'Knowledge cutoff date',
+      oauthScopes: 'OAuth scopes',
+    });
+    expect(Object.keys(DEFAULT_ENTITY_DETAILS_LABELS)).toHaveLength(24);
+  });
+
+  it.each([
+    ['model', modelDto],
+    ['toolset', toolsetDto],
+  ])('renames only the overridden strings for a %s', (_, dto) => {
+    const details = mapDeploymentDetailsDtoToEntityDetails(dto);
+    const english = mapEntityDetailsToCatalogDetails(details);
+    const french = mapEntityDetailsToCatalogDetails(details, {
+      specificationTitle: 'Spécification',
+      hostedBy: 'Hébergé par',
+    });
+
+    const specification = french.overview?.sections.find(
+      (s) => s.title === 'Spécification',
+    );
+    expect(specification).toBeDefined();
+    expect(specification?.specs.map((spec) => spec.label)).toEqual(
+      english.overview?.sections
+        .find((s) => s.title === 'Specification')
+        ?.specs.map((spec) =>
+          spec.label === 'Hosted by' ? 'Hébergé par' : spec.label,
+        ),
+    );
+    expect(specification?.specs.map((spec) => spec.label)).toContain(
+      'Provider',
+    );
   });
 });

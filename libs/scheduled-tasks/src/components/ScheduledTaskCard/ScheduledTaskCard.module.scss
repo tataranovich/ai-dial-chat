@@ -23,3 +23,53 @@
   border-top: 1px solid
     var(--stc-location-divider-border, var(--stroke-tertiary, #e0e6f0));
 }
+
+/* Below the desktop breakpoint the card sizes to its content (the host's
+ * `cardHeight` applies from 1280px up) and the description clamps to two
+ * lines, matching the compact mobile list. The self-chained selectors beat
+ * the unlayered Tailwind `h-[…]`/`line-clamp-3` utilities, which are injected
+ * after this module's CSS; 1279px mirrors MOBILE_MAX_WIDTH_PX from
+ * @epam/ai-dial-chat-shared (SCSS cannot import it). */
+.card.card {
+  @media (max-width: 1279px) {
+    block-size: auto;
+  }
+}
+
+.description.description {
+  @media (max-width: 1279px) {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+}
+
+/* Stretched button: the title's `::after` covers the card, so the whole card
+ * is the click target while the button stays its single tab stop. */
+.cardButton {
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+/* Painted above the button's `::after`, so the title's truncation tooltip
+ * still receives the pointer. */
+.aboveButton {
+  position: relative;
+  z-index: 1;
+}
+
+.interactive {
+  cursor: pointer;
+
+  &:has(.cardButton:focus-visible) {
+    outline: 2px solid var(--stc-focus-outline, var(--stroke-focus, #161b2d));
+    outline-offset: 2px;
+  }
+}

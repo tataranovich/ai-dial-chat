@@ -1,8 +1,10 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EnvironmentVariables } from '../../../config/environment.config';
 import type { AppConfigEvalContext } from '../../app-config.types';
 import { EnvConfigProvider } from '../../config-registry/env-config.provider';
+import { CelebrationDeliveryMode } from '../../types/celebration-delivery';
 
 const ctx: AppConfigEvalContext = { appId: 'chat-ui' };
 
@@ -326,6 +328,78 @@ describe('EnvConfigProvider', () => {
     });
   });
 
+  describe('features.projectsEnabled', () => {
+    it('returns true when PROJECTS_ENABLED is true', async () => {
+      const { provider } = makeProvider({ PROJECTS_ENABLED: true });
+      expect(await provider.resolve('features.projectsEnabled', ctx)).toBe(
+        true,
+      );
+    });
+
+    it('returns undefined when PROJECTS_ENABLED is absent', async () => {
+      const { provider } = makeProvider({ PROJECTS_ENABLED: undefined });
+      expect(
+        await provider.resolve('features.projectsEnabled', ctx),
+      ).toBeUndefined();
+    });
+
+    it('returns false when user roles do not intersect with PROJECTS_ENABLED_ROLES', async () => {
+      const { provider } = makeProvider({
+        PROJECTS_ENABLED: true,
+        PROJECTS_ENABLED_ROLES: ['projects-beta'],
+      });
+      const ctxWithRole: AppConfigEvalContext = { ...ctx, roles: ['viewer'] };
+      expect(
+        await provider.resolve('features.projectsEnabled', ctxWithRole),
+      ).toBe(false);
+    });
+
+    it('returns true when user holds a role listed in PROJECTS_ENABLED_ROLES', async () => {
+      const { provider } = makeProvider({
+        PROJECTS_ENABLED: true,
+        PROJECTS_ENABLED_ROLES: ['projects-beta'],
+      });
+      const ctxWithRole: AppConfigEvalContext = {
+        ...ctx,
+        roles: ['projects-beta'],
+      };
+      expect(
+        await provider.resolve('features.projectsEnabled', ctxWithRole),
+      ).toBe(true);
+    });
+  });
+
+  describe('projects context limits', () => {
+    it('resolves the configured byte limits and extension list', async () => {
+      const { provider } = makeProvider({
+        PROJECT_CONTEXT_FILE_MAX_BYTES: 2_097_152,
+        PROJECT_CONTEXT_TOTAL_MAX_BYTES: 4_194_304,
+        PROJECT_CONTEXT_ALLOWED_EXTENSIONS: ['csv', 'pdf', 'md'],
+      });
+
+      expect(await provider.resolve('projects.contextFileMaxBytes', ctx)).toBe(
+        2_097_152,
+      );
+      expect(await provider.resolve('projects.contextTotalMaxBytes', ctx)).toBe(
+        4_194_304,
+      );
+      expect(
+        await provider.resolve('projects.contextAllowedExtensions', ctx),
+      ).toEqual(['csv', 'pdf', 'md']);
+    });
+
+    it('returns undefined when the variables are absent, so the registry default applies', async () => {
+      const { provider } = makeProvider({});
+
+      expect(
+        await provider.resolve('projects.contextFileMaxBytes', ctx),
+      ).toBeUndefined();
+      expect(
+        await provider.resolve('projects.contextAllowedExtensions', ctx),
+      ).toBeUndefined();
+    });
+  });
+
   describe('features.responsesApiEnabled', () => {
     it('returns true when RESPONSES_API_ENABLED is true', async () => {
       const { provider } = makeProvider({ RESPONSES_API_ENABLED: true });
@@ -393,6 +467,63 @@ describe('EnvConfigProvider', () => {
     it('uses the registry null default when UI_EVENT is absent', async () => {
       const { provider } = makeProvider();
       expect(await provider.resolve('ui.activeEventId', ctx)).toBeUndefined();
+    });
+  });
+
+  describe('ui.celebrationDelivery', () => {
+    it('returns the validated policy values', async () => {
+      const { provider } = makeProvider({
+        UI_EVENT_DELIVERY_MODE: CelebrationDeliveryMode.PreferExternal,
+        UI_EVENT_DELIVERY_REVISION: '2026-11-15.1',
+        UI_EVENT_EXTERNAL_SCENES: ['new-year/snowman-delivery'],
+        UI_EVENT_EXTERNAL_EVENTS: ['company-anniversary'],
+      });
+
+      expect(await provider.resolve('ui.celebrationDelivery.mode', ctx)).toBe(
+        'prefer-external',
+      );
+      expect(
+        await provider.resolve('ui.celebrationDelivery.revision', ctx),
+      ).toBe('2026-11-15.1');
+      expect(
+        await provider.resolve('ui.celebrationDelivery.externalScenes', ctx),
+      ).toEqual(['new-year/snowman-delivery']);
+      expect(
+        await provider.resolve('ui.celebrationDelivery.externalEvents', ctx),
+      ).toEqual(['company-anniversary']);
+    });
+
+    it('leaves the registry defaults in charge when the env vars are absent', async () => {
+      const { provider } = makeProvider();
+      for (const key of [
+        'ui.celebrationDelivery.mode',
+        'ui.celebrationDelivery.revision',
+        'ui.celebrationDelivery.externalScenes',
+        'ui.celebrationDelivery.externalEvents',
+      ]) {
+        expect(await provider.resolve(key, ctx), key).toBeUndefined();
+      }
+    });
+  });
+
+  describe('ui.celebrationsEnabledByDefault', () => {
+    it.each([true, false])(
+      'returns the parsed UI_EVENT_ENABLED_BY_DEFAULT value %s',
+      async (isEnabled) => {
+        const { provider } = makeProvider({
+          UI_EVENT_ENABLED_BY_DEFAULT: isEnabled,
+        });
+        expect(
+          await provider.resolve('ui.celebrationsEnabledByDefault', ctx),
+        ).toBe(isEnabled);
+      },
+    );
+
+    it('leaves the registry default in charge when the env var is absent', async () => {
+      const { provider } = makeProvider();
+      expect(
+        await provider.resolve('ui.celebrationsEnabledByDefault', ctx),
+      ).toBeUndefined();
     });
   });
 
@@ -673,6 +804,68 @@ describe('EnvConfigProvider', () => {
       expect(
         await provider.resolve('publish.publicationFilterSources', ctx),
       ).toEqual(['roles', 'department', 'title']);
+    });
+  });
+
+  describe('content.additionalLocales', () => {
+    const KEY = 'content.additionalLocales';
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('returns canonical, de-duplicated codes keeping the first occurrence', async () => {
+      const { provider } = makeProvider({
+        ADDITIONAL_CONTENT_LOCALES: ['de-de', 'en', 'DE-DE', 'pt-br', 'en'],
+      });
+      expect(await provider.resolve(KEY, ctx)).toEqual([
+        'de-DE',
+        'en',
+        'pt-BR',
+      ]);
+    });
+
+    it('resolves to undefined when neither variable is set', async () => {
+      const { provider } = makeProvider();
+      expect(await provider.resolve(KEY, ctx)).toBeUndefined();
+    });
+
+    it('resolves a present but empty ADDITIONAL_CONTENT_LOCALES to []', async () => {
+      const { provider } = makeProvider({ ADDITIONAL_CONTENT_LOCALES: [] });
+      expect(await provider.resolve(KEY, ctx)).toEqual([]);
+    });
+
+    it('reads the legacy AVAILABLE_LOCALES when the new variable is absent', async () => {
+      const { provider } = makeProvider({ AVAILABLE_LOCALES: ['ar', 'en'] });
+      expect(await provider.resolve(KEY, ctx)).toEqual(['ar', 'en']);
+    });
+
+    it('lets an empty ADDITIONAL_CONTENT_LOCALES win over AVAILABLE_LOCALES without a warning', async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn');
+      const { provider } = makeProvider({
+        ADDITIONAL_CONTENT_LOCALES: [],
+        AVAILABLE_LOCALES: ['ar'],
+      });
+
+      provider.onModuleInit();
+
+      expect(await provider.resolve(KEY, ctx)).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('logs the deprecation warning once, naming only the variables', async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn');
+      const { provider } = makeProvider({ AVAILABLE_LOCALES: ['ar'] });
+
+      provider.onModuleInit();
+      await provider.resolve(KEY, ctx);
+      await provider.resolve(KEY, ctx);
+
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('ADDITIONAL_CONTENT_LOCALES'),
+      );
+      expect(String(warn.mock.calls[0]?.[0])).not.toContain('ar,');
     });
   });
 

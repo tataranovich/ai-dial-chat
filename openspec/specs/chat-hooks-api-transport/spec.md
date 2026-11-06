@@ -61,7 +61,14 @@ the package instead of hand-copying `apps/chat/src/server-api/*.ts`.
 
 ### Requirement: Upload-with-progress is a factory over an injected XHR factory and host capabilities
 
-`@epam/ai-dial-chat-hooks` SHALL export `createUploadFileWithProgress(deps: { getCsrfToken: () => string | null; setCsrfToken: (token: string | null) => void; notifyUnauthorized: (url: string) => void; createUnauthorizedError: (url: string) => Error; uploadUrl: string; xhrFactory?: () => XMLHttpRequest })` (`libs/chat-hooks/src/files/create-upload-file-with-progress.ts`), returning an `UploadFileWithProgressFn` that `apps/chat/src/server-api/upload-file-with-progress.ts` composes with `uploadUrl: '/api/v1/files'`, with this behavior: progress reporting, abort via `AbortSignal`, `overwrite`/`create-only` upload mode, JSON response parsing, CSRF header attachment and rotation, and unauthorized (401) handling. `xhrFactory` SHALL default to `() => new XMLHttpRequest()` when omitted.
+`@epam/ai-dial-chat-hooks` SHALL export `createUploadFileWithProgress(deps: { getCsrfToken: () => string | null; setCsrfToken: (token: string | null) => void; notifyUnauthorized: (url: string) => void; createUnauthorizedError: (url: string) => Error; uploadUrl: string; bodyEncoding?: UploadBodyEncoding; xhrFactory?: () => XMLHttpRequest })` (`libs/chat-hooks/src/files/create-upload-file-with-progress.ts`), returning an `UploadFileWithProgressFn` that `apps/chat/src/server-api/upload-file-with-progress.ts` composes with `uploadUrl: '/api/v1/files/content'` and `bodyEncoding: UploadBodyEncoding.Raw`, with this behavior: progress reporting, abort via `AbortSignal`, `overwrite`/`create-only` upload mode, JSON response parsing, CSRF header attachment and rotation, and unauthorized (401) handling. `xhrFactory` SHALL default to `() => new XMLHttpRequest()` when omitted.
+
+`UploadBodyEncoding` SHALL be an exported string enum with members `Multipart = 'multipart'` and `Raw = 'raw'`; `bodyEncoding` SHALL default to `UploadBodyEncoding.Multipart`.
+
+- `Multipart`: `POST` to `uploadUrl` with a `FormData` body carrying `file`, `bucket`, `path` and, when set, `uploadMode` (the behavior before this change).
+- `Raw`: `PUT` to `uploadUrl` with the query parameters `bucket`, `path`, `uploadMode` (when set) and `contentType` (when `file.type` is non-empty), request header `Content-Type: application/octet-stream`, and the `File` itself as the body (`xhr.send(file)`), so the browser streams it with its own `Content-Length`.
+
+The upload URL and the encoding are host-supplied values; the lib SHALL NOT hardcode either path.
 
 #### Scenario: Progress events are reported during upload
 - **WHEN** the returned function is called with an `onProgress` callback and the injected (or default) XHR reports upload progress events
@@ -83,9 +90,23 @@ the package instead of hand-copying `apps/chat/src/server-api/*.ts`.
 - **WHEN** `deps.xhrFactory` is supplied
 - **THEN** the returned function uses the XHR instance that factory produces instead of constructing a global `XMLHttpRequest` directly
 
+#### Scenario: Default encoding keeps the multipart request
+- **WHEN** `deps.bodyEncoding` is omitted
+- **THEN** the XHR is opened with `POST` on `uploadUrl` and sent a `FormData` containing `file`, `bucket`, `path` and, when set, `uploadMode`
+
+#### Scenario: Raw encoding sends the file as the body
+- **WHEN** `deps.bodyEncoding` is `UploadBodyEncoding.Raw` and a `File` of type `text/csv` is uploaded to `reports/q3.csv` in bucket `Abc123` with `uploadMode: 'create-only'`
+- **THEN** the XHR is opened with `PUT` on `uploadUrl` with the query `bucket=Abc123&path=reports%2Fq3.csv&uploadMode=create-only&contentType=text%2Fcsv`
+- **AND** the request header `Content-Type` is `application/octet-stream`
+- **AND** `send` is called with that `File` object, not a `FormData`
+
+#### Scenario: Raw encoding omits an empty content type
+- **WHEN** `deps.bodyEncoding` is `UploadBodyEncoding.Raw` and `file.type` is an empty string
+- **THEN** the query carries no `contentType` parameter
+
 ### Requirement: Chat-stream completion transport is a factory over an injected fetch and host capabilities
 
-`@epam/ai-dial-chat-hooks` SHALL export `createChatStreamApi(deps: CreateChatStreamApiDeps)` (`libs/chat-hooks/src/conversation/create-chat-stream-api.ts`; `deps: { getCsrfToken: () => string | null; setCsrfToken: (token: string | null) => void; completionsBasePath: string; getTimezone?: () => string | undefined; fetchImpl?: typeof fetch; idleTimeoutMs?: number }`), returning `ChatStreamApi { streamCompletion, stopCompletion }`, which `apps/chat/src/server-api/chat-stream.api.ts` composes with `completionsBasePath: ApiEndpoints.CONVERSATIONS` and `getTimezone: getBrowserTimezone`. Behavior: streamed completion parsing across partial chunks, comments/blank lines, `[DONE]`, malformed events (skipped), backend error chunks, aborts, missing bodies, non-2xx responses (including 401, reported generically with no distinct unauthorized handling; `409` is reported as `GenerationConflictError`), a rejected `fetch`, a failed read, or a stream silent past `idleTimeoutMs` (default `DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000`) reported as `StreamInterruptedError`, the `X-Timezone` header (present only when `deps.getTimezone` resolves a non-empty value), CSRF header attachment/rotation, and `clientChannelId` inclusion in the request body only when provided. `parseSSELine`'s decoding logic SHALL remain internal to this factory's module, not a separate public export.
+`@epam/ai-dial-chat-hooks` SHALL export `createChatStreamApi(deps: CreateChatStreamApiDeps)` (`libs/chat-hooks/src/conversation/create-chat-stream-api.ts`; `deps: { getCsrfToken: () => string | null; setCsrfToken: (token: string | null) => void; completionsBasePath: string; getTimezone?: () => string | undefined; fetchImpl?: typeof fetch; idleTimeoutMs?: number }`), returning `ChatStreamApi { streamCompletion, stopCompletion }`, which `apps/chat/src/server-api/chat-stream.api.ts` composes with `completionsBasePath: ApiEndpoints.CONVERSATIONS` and `getTimezone: getBrowserTimezone`. Behavior: streamed completion parsing across partial chunks, comments/blank lines, `[DONE]`, malformed events (skipped), backend error chunks (a `conversation_save_failed` chunk's optional numeric `error.status` is exposed as `GenerationPersistenceError.status`, and is `undefined` when absent or not a number), aborts, missing bodies, non-2xx responses (including 401, reported generically with no distinct unauthorized handling; `409` is reported as `GenerationConflictError`), a rejected `fetch`, a failed read, or a stream silent past `idleTimeoutMs` (default `DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000`) reported as `StreamInterruptedError`, the `X-Timezone` header (present only when `deps.getTimezone` resolves a non-empty value), CSRF header attachment/rotation, and `clientChannelId` inclusion in the request body only when provided. `parseSSELine`'s decoding logic SHALL remain internal to this factory's module, not a separate public export.
 
 #### Scenario: Partial SSE chunks are buffered and parsed correctly
 - **WHEN** the response body delivers an SSE event split across multiple `fetch` stream reads
@@ -97,7 +118,7 @@ the package instead of hand-copying `apps/chat/src/server-api/*.ts`.
 
 #### Scenario: Backend error chunks surface through `onError`; malformed events are skipped
 - **WHEN** the stream includes a malformed SSE event or a backend-emitted error chunk
-- **THEN** a malformed event (unparseable JSON) is skipped silently, while a backend error chunk invokes `onError` once — with `GenerationPersistenceError` for `error.type === 'conversation_save_failed'`, otherwise `StreamUpstreamError(error.message)` — and `onComplete` is then not invoked
+- **THEN** a malformed event (unparseable JSON) is skipped silently, while a backend error chunk invokes `onError` once — with `GenerationPersistenceError` for `error.type === 'conversation_save_failed'` (carrying `error.status` when it is a number), otherwise `StreamUpstreamError(error.display_message ?? error.message)` — and `onComplete` is then not invoked
 
 #### Scenario: Abort during streaming stops processing without invoking `onComplete`
 - **WHEN** the caller's `AbortSignal` is aborted mid-stream
@@ -118,6 +139,14 @@ the package instead of hand-copying `apps/chat/src/server-api/*.ts`.
 #### Scenario: `stopCompletion` posts to the configured base path
 - **WHEN** `stopCompletion({ generationId, path })` is called
 - **THEN** it sends a request to `${deps.completionsBasePath}/completions/stop` with the same body shape as the pre-move implementation, and throws when the response is not OK
+
+#### Scenario: A rejected stop exposes the HTTP status
+- **WHEN** the stop request resolves with a non-OK status
+- **THEN** `stopCompletion` rejects with a `StopCompletionError` (message `stopCompletion failed: <status>`) whose `status` is that HTTP status, so callers can tell a `404` ("nothing active to stop") from other failures
+
+#### Scenario: A persistence error chunk exposes the rejected write's status
+- **WHEN** the stream includes `{"error": {"type": "conversation_save_failed", "message": "…", "status": 401}}`
+- **THEN** `onError` receives a `GenerationPersistenceError` whose `status` is `401`; the same chunk without `status`, or with a non-numeric `status`, yields a `GenerationPersistenceError` whose `status` is `undefined`
 
 ### Requirement: Generation attach/replay transport is a factory-provided capability
 

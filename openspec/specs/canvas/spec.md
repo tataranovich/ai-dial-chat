@@ -34,7 +34,7 @@ Ownership note used throughout this document: the dispatch hook and every render
 2. `useOpenAttachmentCanvas` (`libs/attachment-canvas/src/hooks/useOpenAttachmentCanvas/useOpenAttachmentCanvas.ts`) resolves content from the `DisplayAttachment` (fetching file bytes if needed).
 3. Hook calls `openCanvas(content, fileName, attachmentId)` from `useAttachmentCanvas()`. For message attachments, `attachmentId` is a message-scoped composite key (`` `${messageIndex}:${attachment.id}` ``, built by `ConversationView.tsx`) rather than the raw `DisplayAttachment.id` — `id` alone is derived from content and can recur across different messages. Other callers (edit-message tray, `ConversationSourcesPanel`) omit the override and get the raw `attachment.id` default.
 4. `AttachmentCanvasContext` updates `isOpen = true`, `content`, `fileName`, and `attachmentId`. The context treats `attachmentId` as an opaque key — it has no knowledge of the composite-key format.
-5. `AttachmentCanvasContainer` (rendered in `app.tsx` only when `isConversationRoute && isAttachmentsManagerEnabled`) re-renders the panel open.
+5. `AttachmentCanvasContainer` (rendered in `app.tsx` on a conversation route when `isAttachmentsManagerEnabled`, and on the file manager route `/files` regardless of that feature) re-renders the panel open.
 6. `ConversationView.tsx` reads `attachmentId` back from `useAttachmentCanvas()` and passes it to each `ConversationMessageItem` as `selectedAttachmentKey`. Each `ConversationMessageItem` strips its own `` `${index}:` `` prefix (or renders `undefined` if the key doesn't match its own message index) before forwarding a message-scoped `selectedAttachmentId` through `MessageBubble` → `AttachmentGroup`, so only the tile that actually opened the canvas renders selected, even if another message has an attachment with the same content-derived `id` (see `attachment-input-lib` spec, "AttachmentCard, AttachmentGroup, and MessageBubble support a selected-tile visual state").
 
 #### Auto-close
@@ -43,15 +43,15 @@ The canvas closes when the URL `pathname` changes (conversation switch, catalog 
 
 #### Layout
 
-- **Position**: right edge of the conversation layout (`apps/chat/src/app/app.tsx`). Always on the physical right regardless of text direction — a viewer panel is not a directional element.
+- **Position**: right edge of the conversation layout, or of the file manager page when the user chooses Preview there (`apps/chat/src/app/app.tsx`). Always on the physical right regardless of text direction — a viewer panel is not a directional element.
 - **Header**: file name (truncated) on the start side; action buttons + close icon button on the end side.
 - **Download button**: shown only when `onDownload` is provided **and** `isDownloadable(content)` is `true`. `isDownloadable` returns `false` for `content.type === Unsupported` when `url` is `null`, `true` when `url` is present; and always `false` for `content.type === Error` with `errorType === Forbidden` (see "Error rendering" below).
 - **Close button**: calls `onClose` (`closeCanvas`).
 - **Resizability**: enabled on desktop, disabled on mobile (`isMobile` prop from `useIsMobile()`).
-- **Width defaults**: ~50% of the space between the minimum content area and the maximum panel width on desktop, full viewport on mobile. 600 px min. Width is not persisted between sessions.
-- **Resize constraint shared with sidebar**: both `AttachmentCanvas` and `ConversationSourcesPanel` derive their `maxWidth` from the shared `usePanelMaxWidth(minContentAreaWidth)` hook exported from `@epam/ai-dial-chat-hooks`, reactive to window resize. The app passes `MIN_CONTENT_AREA_WIDTH` (400 px, from `apps/chat/src/constants/layout.ts`) so the chat area always retains that much space. The reserved width is a host decision and is therefore a parameter, not a constant baked into the hook. The sidebar has its own `minWidth` of 312 px; the canvas has a separate `minWidth` of 600 px.
-- **Both panels**: `ConversationSourcesPanel` and `AttachmentCanvas` are mutually exclusive — opening either one closes the other. The primary path is synchronous: `useOpenAttachmentCanvas` calls the host-supplied `onBeforeOpen?.()` option before `openCanvasLoading`/`openCanvas` for `Image`, `File`, `Pasted` and `Prompt` attachments (never for `Audio`), before any async content resolution, so panels disappear on click rather than after the file fetch completes. The app's `onBeforeOpen` (from `useAttachmentCanvasResolvers`) calls `closePanel()` and `closeSourcesPanel()`. `SourcesSidebarToggle` calls `closeCanvas()` synchronously before `handleOpen()` for the reverse direction. A `useEffect` in `useConversationPanelRouteState` that watches `isCanvasOpen` acts as a safety net for the few call sites that call `openCanvas` directly (citation preview, collapsed stage attachments).
-- **Conversation panel**: The conversation history panel (`isPanelOpen`, managed by `ConversationPanelContext`) and `AttachmentCanvas` are mutually exclusive — opening either one closes the other. `onBeforeOpen` calls `closePanel()` synchronously before async content resolution; `togglePanel` (returned by `useConversationPanelRouteState`) calls `onCloseCanvas()` before opening the panel. The `isCanvasOpen` safety-net effect in the same hook covers direct `openCanvas` call sites.
+- **Width defaults**: ~50% of the room the navigation sidebar leaves on desktop (the maximum panel width plus the minimum content area), full viewport on mobile. 600 px min. Width is not persisted between sessions. On the file manager page (`/files`) the app passes `minWidth` 400 px and opens the panel at about 33% of the viewport, kept between 400 and 640 px and under the maximum panel width (`resolveCanvasWidth` in `apps/chat/src/utils/canvas-width.ts`; the bounds are in `apps/chat/src/constants/layout.ts`). `AttachmentCanvasContainer` forwards an optional `minWidth` to `AttachmentCanvas` for this.
+- **Resize constraint shared with sidebar**: both `AttachmentCanvas` and `ConversationSourcesPanel` derive their `maxWidth` from the shared `usePanelMaxWidth(minContentAreaWidth)` hook exported from `@epam/ai-dial-chat-hooks`, reactive to window resize. The app passes `MIN_CONTENT_AREA_WIDTH` (400 px, from `apps/chat/src/constants/layout.ts`) so the chat area always retains that much space; for the canvas, `app.tsx` adds the desktop navigation sidebar's current width (`getNavigationSidebarWidth` in `apps/chat/src/utils/canvas-width.ts`: 336 px expanded, 72 px collapsed, none on mobile), so the canvas re-targets its width when the user toggles the sidebar. The reserved width is a host decision and is therefore a parameter, not a constant baked into the hook. The sidebar has its own `minWidth` of 312 px; the canvas has a separate `minWidth` of 600 px, which the `/files` route lowers to 400 px.
+- **Both panels**: `ConversationSourcesPanel` and `AttachmentCanvas` are mutually exclusive — opening either one closes the other. The primary path is synchronous: `useOpenAttachmentCanvas` calls the host-supplied `onBeforeOpen?.()` option before `openCanvasLoading`/`openCanvas` for `Image`, `File`, `Pasted` and `Prompt` attachments (never for `Audio`), before any async content resolution, so panels disappear on click rather than after the file fetch completes. The app's `onBeforeOpen` (from `useAttachmentCanvasResolvers`) is `closeSourcesPanel()`. `SourcesSidebarToggle` calls `closeCanvas()` synchronously before `handleOpen()` for the reverse direction. A `useEffect` in `useConversationPanelRouteState` that watches `isCanvasOpen` closes the sources panel for the few call sites that call `openCanvas` directly (citation preview, collapsed stage attachments).
+- **Navigation sidebar**: The canvas SHALL NOT collapse the navigation sidebar (`isPanelOpen`, managed by `ConversationPanelContext`), and expanding the sidebar SHALL NOT close the canvas — only the user's toggle changes the sidebar (see `navigation-sidebar`). Both stay open side by side; the canvas's width bound leaves the sidebar its room.
 
 #### i18n
 
@@ -93,7 +93,7 @@ Lib-level string props use English defaults and are overridden by the app via `A
 
 #### Feature flag
 
-The canvas is not gated by `ENABLED_FEATURES`, but `app.tsx` renders `AttachmentCanvasContainer` only when `isConversationRoute && isAttachmentsManagerEnabled`, where `isAttachmentsManagerEnabled = useUiFeature(OverlayFeature.AttachmentsManager)`.
+The canvas is not gated by `ENABLED_FEATURES`, but `app.tsx` renders `AttachmentCanvasContainer` on conversation routes only when `isAttachmentsManagerEnabled`, where `isAttachmentsManagerEnabled = useUiFeature(OverlayFeature.AttachmentsManager)`, and on the file manager route `/files` regardless of that feature.
 
 ---
 
@@ -147,7 +147,7 @@ The canvas distinguishes two failure states, both represented by `ErrorCanvasCon
 | `LoadFailed` | Fetch threw (network error) or returned a non-`403` non-OK status | `loadErrorLabel`, default `"Failed to load file"` | Shown when `url` is present (retry via re-download is still possible) |
 | `Forbidden` | Fetch returned HTTP `403` | `forbiddenErrorLabel`, default `"You don't have permission to access this file"` | **Always hidden** — `isDownloadable` returns `false` for `Forbidden` regardless of `url` |
 
-Both messages render centered in the body, the same layout slot as the `Unsupported` message. `isDownloadable(content)` (`libs/attachment-canvas/src/utils/download.ts`) drives the download button's visibility for all content types, including `Error` and `Unsupported`:
+Both messages render centered in the body, the same layout slot as the `Unsupported` message. Under a `LoadFailed` message the body shows a Retry `GhostButton` (`loadErrorRetryLabel`, default `'Retry'`) when `onRetry` is given: `openCanvas` takes an optional `onRetry`, the context exposes it as `retryCanvas` until the canvas closes or starts loading again, `useOpenAttachmentCanvas` passes one for every file it opens, and `AttachmentCanvasContainer` forwards `retryCanvas` as `AttachmentCanvas`'s `onRetry`. `isDownloadable(content)` (`libs/attachment-canvas/src/utils/download.ts`) drives the download button's visibility for all content types, including `Error` and `Unsupported`:
 
 ```ts
 case AttachmentContentType.Unsupported:
@@ -413,7 +413,7 @@ PDF is downloadable. `isDownloadable` returns `true` for `PdfCanvasContent`. `do
 
 ### Citation preview
 
-When a user clicks "Preview" in a `CitationDropdown`, `useCitationMarkdownComponents`'s `onPreview` (bound to `handleCitationPreview` in `apps/chat/src/components/ConversationView/ConversationMessageItem.tsx`) opens the canvas with the full source file: PDF sources through `annotationToPdfCanvasContent`, then Office sources through `annotationToOoxmlCanvasContent`, then the generic fallback below.
+When a user clicks "Preview" in a `CitationDropdown`, `useCitationMarkdownComponents`'s `onPreview` (bound to `handleCitationPreview` in `apps/chat/src/components/ConversationView/ConversationMessageItem.tsx`) opens the canvas with the full source file: PDF sources through `annotationToPdfCanvasContent`, then Office sources through `annotationToOoxmlCanvasContent` (both tried by `resolveAnnotationCanvasContent` from `@epam/ai-dial-chat-hooks`), then the generic fallback below.
 
 #### PDF sources (highlights)
 
@@ -454,7 +454,7 @@ interface PdfBBoxSelector {
 
 ### Requirement: The canvas panel opens beside the conversation and closes on navigation
 
-Activating an attachment SHALL open `AttachmentCanvas` at the right edge of the conversation layout, keyed by the `attachmentId` the caller supplies. The panel SHALL close whenever the URL `pathname` changes, and SHALL be mutually exclusive with both `ConversationSourcesPanel` and the conversation history panel — opening any one of the three closes the other two, synchronously, before any content is fetched. For the canvas this runs through the host's `onBeforeOpen` option of `useOpenAttachmentCanvas`, which is called for image, file, pasted and prompt attachments but not for audio; the pathname auto-close, the `togglePanel` canvas close and the `isCanvasOpen` safety net live in `useConversationPanelRouteState`.
+Activating an attachment SHALL open `AttachmentCanvas` at the right edge of the conversation layout, keyed by the `attachmentId` the caller supplies. Choosing Preview on the file manager page (`/files`) SHALL open it the same way, at the right edge of that page, beside the file grid. Activating a context file card on the New project, edit and view pages (`/projects/new`, `/projects/edit/...`, `/projects/view/...`) SHALL open it on the inline-end side of that page too, beside the form or the project content, at the conversation route's default and resizable width; the container is mounted on those routes without depending on the attachments-manager overlay feature (see the `project-context-file-preview` capability). The panel SHALL close whenever the URL `pathname` changes, and SHALL be mutually exclusive with both `ConversationSourcesPanel` and the conversation history panel — opening any one of the three closes the other two, synchronously, before any content is fetched. For the canvas this runs through the host's `onBeforeOpen` option of `useOpenAttachmentCanvas`, which is called for image, file, pasted and prompt attachments but not for audio; the pathname auto-close, the `togglePanel` canvas close and the `isCanvasOpen` safety net live in `useConversationPanelRouteState`.
 
 #### Scenario: Activating an attachment opens the panel
 
@@ -480,13 +480,40 @@ Activating an attachment SHALL open `AttachmentCanvas` at the right edge of the 
 
 #### Scenario: The chat area keeps a minimum width
 
-- **WHEN** the user drags the canvas resize handle on desktop
+- **WHEN** the user drags the canvas resize handle on desktop on a conversation route
 - **THEN** the width is clamped between 600 px and `usePanelMaxWidth()`, leaving at least 400 px of chat area
 - **AND** on mobile the panel fills the viewport and is not resizable
 
+#### Scenario: The panel on the file manager page opens at a third of the viewport
+
+- **WHEN** the user chooses Preview on `/files` on desktop
+- **THEN** the panel opens at about 33% of the viewport width, never narrower than 400 px and never wider than 640 px or `usePanelMaxWidth()`
+- **AND** the user can resize it, down to 400 px
+
+#### Scenario: Preview from the file manager opens the panel
+
+- **WHEN** the user chooses Preview on a file row on `/files`
+- **THEN** `openCanvas` is called with the resolved content and file name, and the panel renders open at the right edge beside the grid
+
+#### Scenario: A project page opens the panel at the conversation width
+
+- **WHEN** the user activates a context file card on `/projects/view/{bucket}/{path}` on desktop
+- **THEN** the panel opens on the inline-end side at the width a conversation route opens it, the page content shrinks beside it, and the user can resize it within the same bounds
+
+#### Scenario: Leaving a project page closes the panel
+
+- **GIVEN** a context file is open on a project page
+- **WHEN** the `pathname` changes
+- **THEN** `closeCanvas()` runs and the panel is closed
+
+#### Scenario: A project page's mobile header has no sources toggle
+
+- **WHEN** the panel is open on a project page on a mobile viewport
+- **THEN** it fills the viewport and its header offers no sources-panel toggle
+
 ### Requirement: The canvas is an accessible panel
 
-`SidebarPanel` SHALL render with `role="complementary"` and the `ariaLabel` prop as its accessible name, SHALL be `inert` while closed, and SHALL expose every header control by keyboard with an `aria-label` supplied as a prop. App-level strings SHALL come from i18n — canvas-specific ones from `AttachmentCanvasI18nKeys`, copy/retry/reload labels from `ButtonsI18nKeys` — with the lib carrying English defaults. The capability SHALL NOT be gated behind `ENABLED_FEATURES`; the app renders the canvas only on conversation routes and only when the `OverlayFeature.AttachmentsManager` UI feature is enabled.
+`SidebarPanel` SHALL render with `role="complementary"` and the `ariaLabel` prop as its accessible name, SHALL be `inert` while closed, and SHALL expose every header control by keyboard with an `aria-label` supplied as a prop. App-level strings SHALL come from i18n — canvas-specific ones from `AttachmentCanvasI18nKeys`, copy/retry/reload labels from `ButtonsI18nKeys` — with the lib carrying English defaults. The capability SHALL NOT be gated behind `ENABLED_FEATURES`; the app renders the canvas on conversation routes only when the `OverlayFeature.AttachmentsManager` UI feature is enabled, and on the file manager route (`/files`) regardless of that feature.
 
 #### Scenario: The panel is a named landmark
 
@@ -500,8 +527,18 @@ Activating an attachment SHALL open `AttachmentCanvas` at the right edge of the 
 
 #### Scenario: The canvas follows the AttachmentsManager UI feature
 
-- **WHEN** `OverlayFeature.AttachmentsManager` is disabled, or the current route is not a conversation route
+- **WHEN** `OverlayFeature.AttachmentsManager` is disabled and the current route is a conversation route
 - **THEN** `AttachmentCanvasContainer` is not rendered
+
+#### Scenario: The canvas is not rendered on other routes
+
+- **WHEN** the current route is neither a conversation route nor `/files`
+- **THEN** `AttachmentCanvasContainer` is not rendered
+
+#### Scenario: The file manager route renders the canvas without the AttachmentsManager feature
+
+- **WHEN** the current route is `/files` and `OverlayFeature.AttachmentsManager` is disabled
+- **THEN** `AttachmentCanvasContainer` is rendered, so Preview from the file manager can open the panel
 
 ### Requirement: Content type routing resolves a typed payload before rendering
 
@@ -558,6 +595,12 @@ A failed fetch SHALL resolve to `ErrorCanvasContent` carrying `errorType: Forbid
 
 - **WHEN** the fetch fails with a network error or a non-`403` status and a `url` is known
 - **THEN** the body shows `loadErrorLabel` and the download button is still offered
+
+#### Scenario: A failed file load offers Retry
+
+- **GIVEN** `useOpenAttachmentCanvas` opened a file whose load failed with `errorType: LoadFailed`
+- **WHEN** the user activates the Retry button under `loadErrorLabel` (`labels.loadErrorRetryLabel`, default `'Retry'`; the app passes `buttons.retry`)
+- **THEN** the hook opens the same attachment again as a new request (the provider's request starter), so a late answer to the failed request cannot replace it; a `Forbidden` error never shows Retry
 
 #### Scenario: Image failures surface in the renderer, not as error content
 
@@ -641,20 +684,24 @@ interface VisualizerCanvasContent {
 
 ### Requirement: `VisualizerCanvasRenderer` component
 
-`libs/attachment-canvas/src/components/VisualizerCanvasRenderer/VisualizerCanvasRenderer.tsx` SHALL render an iframe host and drive the visualizer handshake and data delivery via the published npm package `@epam/ai-dial-visualizer-connector` (and `@epam/ai-dial-shared` for the request enum). Behaviour:
+`libs/attachment-canvas/src/components/VisualizerCanvasRenderer/VisualizerCanvasRenderer.tsx` SHALL render an iframe host and drive the visualizer handshake and data delivery through the workspace package `@epam/ai-dial-visualizer-connector` (`libs/visualizer-connector`). It imports `VisualizerConnector`, `VisualizerConnectorRequests` and `VisualizerConnectorEvents` from that package. Behaviour:
 
-- On mount, create a `VisualizerConnector` bound to the container element, passing `domain: content.url`, `hostDomain: window.location.origin` (required by the published options type; unused at runtime in the current package), `visualizerName: content.visualizerName`, and `requestTimeout: content.requestTimeout`.
-- Await `.ready()` and then dispatch exactly one request, selected by the content variant it was given:
-  - `AttachmentContentType.Visualizer` → `.send(VisualizerConnectorRequests.sendVisualizeData, { mimeType: content.mimeType, visualizerData: { layout: content.layout, ...content.data } })` (wire value `SEND_VISUALIZE_DATA`).
-  - `AttachmentContentType.GroupedVisualizer` → `.send(VisualizerConnectorRequests.sendGroupedVisualizeData, { attachments: content.attachments, layout: content.layout })` (wire value `SEND_GROUPED_VISUALIZE_DATA`).
+- On mount, it creates a `VisualizerConnector` bound to the container element and passes `domain: content.url`, `visualizerName: content.visualizerName` and `requestTimeout: content.requestTimeout`. It SHALL NOT pass `hostDomain`.
+- It awaits `.ready()` and then dispatches exactly one request, chosen by the content variant it was given:
+  - `AttachmentContentType.Visualizer` → `.send(VisualizerConnectorRequests.SendVisualizeData, { mimeType: content.mimeType, visualizerData: { layout: content.layout, ...content.data } })` (wire value `SEND_VISUALIZE_DATA`).
+  - `AttachmentContentType.GroupedVisualizer` → `.send(VisualizerConnectorRequests.SendGroupedVisualizeData, { attachments: content.attachments, layout: content.layout })` (wire value `SEND_GROUPED_VISUALIZE_DATA`).
+- It sets the `title` attribute of the iframe that the connector created:
+  - to the optional `frameTitle` prop when one is given;
+  - otherwise to `content.visualizerName` with surrounding whitespace removed;
+  - to nothing when that name is empty.
 
-  `VisualizerConnectorRequests` is imported from `@epam/ai-dial-shared` (camelCase members).
-- Set the `title` attribute of the connector-created iframe to the optional `frameTitle` prop, defaulting to `content.visualizerName` with surrounding whitespace removed and setting nothing when that is empty — an unnamed iframe is announced as an anonymous frame. Applied in its own effect so renaming the frame never tears the connector down and refetches.
-- On unmount, call `connector.destroy()` exactly once for that instance.
-- Display a loading state while `.ready()` is pending. Because `.ready()` never times out (see the `custom-visualizers` capability), a visualizer that never completes the handshake leaves the body in this loading state indefinitely — this is intended. Display an error state if the dispatched `send()` rejects (its own timeout) or if `.ready()` rejects due to `destroy()`.
-- The component SHALL keep the connector instance stable across parent re-renders that do not change `url` / `visualizerName` / `requestTimeout`, so those re-renders do not tear down the iframe. This applies to both variants: appending attachments to a grouped payload during streaming changes the content object's identity but MUST NOT remount the iframe.
+  An unnamed iframe is announced as an anonymous frame. The title is applied in its own effect, so renaming the frame never tears down the connector or refetches.
+- On unmount, it calls `connector.destroy()` exactly once for that instance.
+- It shows a loading state while `.ready()` is pending. `.ready()` never times out (see the `custom-visualizers` capability), so a visualizer that never completes the handshake leaves the body in the loading state indefinitely. This is intended.
+- It shows an error state when the dispatched `send()` rejects on its own timeout, or when `.ready()` rejects because of `destroy()`.
+- It SHALL keep the connector instance stable across parent re-renders that do not change `url`, `visualizerName` or `requestTimeout`, so those re-renders do not tear down the iframe. This applies to both variants: appending attachments to a grouped payload during streaming changes the content object's identity but MUST NOT remount the iframe.
 
-The component MUST NOT read from any app-level context (auth, theme, i18n, feature flags) — all data required for the visualizer is passed in through the canvas content object.
+The component MUST NOT read from any app-level context (auth, theme, i18n, feature flags). Everything the visualizer needs arrives through the canvas content object.
 
 #### Scenario: the iframe carries an accessible name
 
@@ -669,30 +716,36 @@ The component MUST NOT read from any app-level context (auth, theme, i18n, featu
 - **THEN** `VisualizerConnector.destroy()` is called
 - **AND** the iframe element is removed from the DOM
 
+#### Scenario: connector is constructed without hostDomain
+
+- **WHEN** the renderer mounts
+- **THEN** the `VisualizerConnector` options contain `domain`, `visualizerName` and `requestTimeout`
+- **AND** they do not contain `hostDomain`
+
 #### Scenario: SEND_VISUALIZE_DATA is dispatched after READY_TO_INTERACT
 
 - **WHEN** the renderer was given a `VisualizerCanvasContent` and the iframe posts `${visualizerName}/READY_TO_INTERACT`
-- **THEN** the renderer calls `connector.send` with the published enum member whose wire value is `SEND_VISUALIZE_DATA` exactly once
+- **THEN** the renderer calls `connector.send(VisualizerConnectorRequests.SendVisualizeData, …)` exactly once, with wire value `SEND_VISUALIZE_DATA`
 - **AND** the payload's `layout` equals `content.layout`
 
 #### Scenario: SEND_GROUPED_VISUALIZE_DATA is dispatched for grouped content
 
 - **WHEN** the renderer was given a `GroupedVisualizerCanvasContent` and the iframe posts `${visualizerName}/READY_TO_INTERACT`
-- **THEN** the renderer calls `connector.send` with the published enum member whose wire value is `SEND_GROUPED_VISUALIZE_DATA` exactly once
+- **THEN** the renderer calls `connector.send(VisualizerConnectorRequests.SendGroupedVisualizeData, …)` exactly once, with wire value `SEND_GROUPED_VISUALIZE_DATA`
 - **AND** the payload is `{ attachments, layout }` taken from the content
 - **AND** no `SEND_VISUALIZE_DATA` request is sent
 
 #### Scenario: send failure surfaces error state
 
-- **WHEN** the dispatched `send()` promise rejects (no `/RESPONSE` within `requestTimeout`)
-- **THEN** the renderer displays an error state
-- **AND** the canvas remains closable via the header's close button
+- **WHEN** the dispatched `send()` promise rejects because no `/RESPONSE` arrived within `requestTimeout`
+- **THEN** the renderer shows an error state
+- **AND** the canvas can still be closed with the header's close button
 
 #### Scenario: incomplete handshake stays in the loading state
 
 - **WHEN** the iframe mounts but never posts `READY_TO_INTERACT`
 - **THEN** the renderer keeps showing the loading state and does not show an error
-- **AND** the canvas remains closable via the header's close button
+- **AND** the canvas can still be closed with the header's close button
 
 ### Requirement: `AttachmentCanvas` switch handles Visualizer variant
 
@@ -1046,6 +1099,8 @@ When opening a citation whose source attachment is a DOCX, XLSX, or PPTX file, t
 2. **New**: `annotationToOoxmlCanvasContent`, attempted only when the PDF mapper returned `null`. When it returns non-`null`, the canvas opens with that content and the same `fileName` derivation the PDF branch already uses (`attachment.title`, falling back to the decoded last URL segment).
 3. `annotationToDisplayAttachment` + `handleAttachmentClick` — unchanged, still the final fallback, now reached only when neither mapper resolves.
 
+Steps 1 and 2, with the `fileName` derivation, are `resolveAnnotationCanvasContent` in `libs/chat-hooks/src/files/attachment-canvas.ts`; `handleCitationPreview` opens its result or falls through to step 3.
+
 The clicked annotation SHALL be the one whose highlight is selected, never the group's `primaryAnnotation` — the same rule the PDF path already follows when a grouped citation's popup has been switched to another annotation.
 
 The annotation list passed to the Office mapper SHALL be the message's resolved annotation list, not a single `AnnotationGroup`, so annotations citing the same document from behind other `cit` markers are included. Same-source identity SHALL be the source attachment URL, never the display title.
@@ -1268,3 +1323,49 @@ The canvas's content-renderer table SHALL carry an `McpApp` row rendered by `Mcp
 
 - **WHEN** `useOpenMcpAppCanvas` opens the canvas with an `McpAppCanvasContent`
 - **THEN** the conversation sources panel and conversation history panel are closed first, per the existing mutual-exclusivity behavior shared by every canvas open trigger
+
+### Requirement: The latest attachment click owns the canvas
+
+An attachment preview SHALL write to the canvas only while it is the latest preview requested from any caller (conversation messages, the input tray, the sources panel, the file manager), including a preview that opens synchronously such as an image, and its requester is still mounted. A preview that a later one supersedes, or that finishes after its requester is gone, SHALL write nothing to the canvas and SHALL NOT close it. Where a click's "could not preview" fallback is a download or a new browser tab, a superseded click SHALL NOT run that fallback and SHALL NOT close the sources sidebar. Underlying content loading is not required to be cancelled.
+
+#### Scenario: Only the last of several quick attachment clicks opens
+
+- **WHEN** the user clicks a large attachment in a message and, before it has loaded, clicks a second attachment
+- **THEN** the canvas shows the second attachment, even if the first finishes loading later
+
+#### Scenario: A superseded sources-panel click does not download or open a tab
+
+- **WHEN** the user clicks a source in the sources panel and, before it has loaded, clicks another attachment
+- **THEN** the first click triggers no download, no new tab and does not close the sources sidebar
+
+#### Scenario: A synchronous preview supersedes a pending one
+
+- **WHEN** the user clicks a large PDF attachment and, before it has loaded, clicks an image attachment
+- **THEN** the canvas keeps the image when the PDF finishes loading
+
+#### Scenario: A click finishing after the page is gone opens nothing
+
+- **WHEN** the user clicks an attachment and navigates away before it has loaded
+- **THEN** the canvas is not opened when the content arrives
+
+#### Scenario: Previews from different callers share one order
+
+- **WHEN** the user clicks a large attachment in a message and, before it has loaded, clicks a source in the sources panel
+- **THEN** only the source from the sources panel is shown
+### Requirement: Tablet canvas overlays without changing conversation or page width
+
+At 768px inclusive through less than 1280px, `AttachmentCanvasContainer` in `libs/attachment-canvas/src/components/AttachmentCanvasContainer/AttachmentCanvasContainer.tsx` SHALL support the bounded tablet-overlay contract, adopted by `apps/chat/src/app/app.tsx` for every canvas mount. Within this range this requirement supersedes the earlier Layout subsection's full-viewport mobile sizing, layout-space reservation and physical-right anchoring: the panel SHALL use logical inline-end anchoring and leave at least 32px of underlying content visible. Outside this range existing canvas behavior SHALL remain unchanged.
+
+`AttachmentCanvasContext` SHALL continue to own canvas state. Existing content resolution, source/canvas exclusion, route close behavior, availability gates, error/loading states, download labels and host integration callbacks SHALL remain unchanged. Tablet bounds SHALL cap the existing 600px canvas and 400px file-manager minima when necessary without overwriting desktop size preference. No new state provider, flag, cache, telemetry or i18n keys are required.
+
+#### Scenario: Canvas mounts share tablet behavior
+- **WHEN** a conversation attachment, project preview, file-manager preview or MCP content opens a canvas at 768, 1024 or 1279px
+- **THEN** the canvas overlays the content, uses bounded panel-specific width and leaves the close button accessible
+
+#### Scenario: Sources and canvas exclusion survives
+- **WHEN** the user switches between sources and a canvas preview on tablet
+- **THEN** the existing mutual-exclusion behavior is retained without changing navigation or conversation-panel state
+
+#### Scenario: Desktop restoration
+- **WHEN** an open canvas returns from tablet to 1280px
+- **THEN** existing desktop sizing and layout behavior resume within desktop bounds

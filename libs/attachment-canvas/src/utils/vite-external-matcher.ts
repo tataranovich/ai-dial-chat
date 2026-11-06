@@ -9,7 +9,6 @@ export const EXTERNAL_PACKAGE_NAMES = [
   'react',
   '@silurus/ooxml',
   '@epam/ai-dial-chat-shared',
-  '@epam/ai-dial-shared',
   '@epam/ai-dial-sidebar',
   '@epam/ai-dial-ui-kit',
   '@epam/ai-dial-visualizer-connector',
@@ -21,6 +20,7 @@ export const EXTERNAL_PACKAGE_NAMES = [
   '@mcp-ui/client',
   '@modelcontextprotocol/sdk',
   '@modelcontextprotocol/ext-apps',
+  'zod',
   'pdfjs-dist',
 ] as const;
 

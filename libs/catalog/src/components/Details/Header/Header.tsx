@@ -1,4 +1,5 @@
 import {
+  buildCssVars,
   CatalogEntityType,
   EntityHeader,
   mergeClasses,
@@ -8,12 +9,15 @@ import {
   DIAL_ICON_SIZE,
   DIAL_KIT_ICON_STROKE,
   Dropdown,
+  DropdownOverlayRole,
   FolderPath,
   NeutralButton,
   NeutralIconButton,
   PrimaryButton,
   Spinner,
   type DropdownItem,
+  LiveRegion,
+  LiveRegionElement,
 } from '@epam/ai-dial-ui-kit';
 import {
   IconArrowRight,
@@ -53,7 +57,10 @@ import {
   CredentialsUiState,
   ToolsetAuthenticationType,
 } from '../../../types/toolset-auth';
-import { getCredentialsUiState } from '../../../utils/toolset-credentials';
+import {
+  getCredentialsUiState,
+  getDirectCredentialsLevel,
+} from '../../../utils/toolset-credentials';
 import { CredentialsApiKeyOverlay } from './CredentialsApiKeyOverlay/CredentialsApiKeyOverlay';
 import styles from './Header.module.scss';
 import { ShareButton } from './ShareButton/ShareButton';
@@ -66,21 +73,26 @@ const defaultManageCredentialsActionLabel = (
     : 'Manage credentials';
 
 const LIMIT_STATUS_CLASSES: Record<CatalogLimitStatus, string> = {
-  [CatalogLimitStatus.LimitReached]: 'bg-error text-error',
-  [CatalogLimitStatus.RunningLow]: 'bg-warning text-warning',
+  [CatalogLimitStatus.LimitReached]: styles.limitReached,
+  [CatalogLimitStatus.RunningLow]: styles.limitRunningLow,
 };
 
 interface LimitStatusBadgeProps {
   status: CatalogLimitStatus;
   label: string;
+  className: string;
 }
 
 /** Small status pill matching `FeaturedChip`'s shape, shown in the same header corner. */
-const LimitStatusBadge: FC<LimitStatusBadgeProps> = ({ status, label }) => (
+const LimitStatusBadge: FC<LimitStatusBadgeProps> = ({
+  status,
+  label,
+  className,
+}) => (
   <div
     className={mergeClasses(
-      'flex h-[24px] items-center justify-center gap-1 whitespace-nowrap rounded-2xl px-2',
-      'dial-caption-lead-semi-text',
+      'flex h-[24px] items-center justify-center gap-1 rounded-2xl px-2 whitespace-nowrap',
+      className,
       LIMIT_STATUS_CLASSES[status],
     )}
   >
@@ -105,10 +117,19 @@ interface ManageAction {
   onClick: () => void;
 }
 
-interface HeaderProps {
+/**
+ * Props for {@link Header}, exported as `DetailsHeaderProps`: the details
+ * view's identity block and action row. Every action is opt-in and hidden
+ * when its prop is absent.
+ */
+export interface HeaderProps {
+  /** The item whose identity, folder and actions are shown. */
   item: CatalogItem;
+  /** Called by the primary "Use in chat" action. The action is hidden when absent. */
   onUseInChat?: (item: CatalogItem) => void;
+  /** Returns `false` to hide the primary action for an item. */
   isPrimaryActionVisible?: (item: CatalogItem) => boolean;
+  /** Called by Share when no `shareOverlay` is given. Share is hidden when both are absent. */
   onShare?: (item: CatalogItem) => void;
   /**
    * Renders the Share popover content. When provided, choosing Share opens
@@ -129,6 +150,7 @@ interface HeaderProps {
    * one surface or the other, never both.
    */
   isSharePrimary?: (item: CatalogItem) => boolean;
+  /** Called by the Manage menu's "Edit" entry, shown only for an editable item. */
   onEdit?: (item: CatalogItem) => void;
   /**
    * Called when "Download" is clicked. In the Manage menu, fire-and-forget:
@@ -159,10 +181,12 @@ interface HeaderProps {
   onFetchRecipientsCount?: (item: CatalogItem) => Promise<number | undefined>;
   /** Additional caller-supplied rule for whether "Revoke access" is shown, combined (AND) with the built-in `isMyApp` rule and the recipient count. Defaults to `true` when absent. */
   isRevokeShareVisible?: (item: CatalogItem) => boolean;
+  /** Called by the credentials action to sign in (OAuth) or to add an API key, for the given credentials level. May return a promise. */
   onLogin?: (
     item: CatalogItem,
     params: { level: CredentialsLevel; apiKey?: string },
   ) => Promise<void> | void;
+  /** Called to sign out or remove an API key for the given credentials level, when no confirmation is requested through `onRequestLogout`. May return a promise. */
   onLogout?: (
     item: CatalogItem,
     params: { level: CredentialsLevel },
@@ -179,7 +203,9 @@ interface HeaderProps {
    * without signing out immediately.
    */
   onRequestLogout?: () => void;
+  /** Text overrides, shared with `DetailsPanel`. */
   texts?: ItemDetailsTexts;
+  /** Style overrides, shared with `DetailsPanel`. */
   detailsStyles?: ItemDetailsStyles;
   /**
    * Controls whether the "Publish" action is shown. Defaults to the same rule
@@ -201,10 +227,11 @@ interface HeaderProps {
    * combined (AND) with `hasPublishedFolders` and the presence of
    * `onOpenUnpublish`. Defaults to `true` when absent. When the entry ends up
    * shown, it replaces "Publish" rather than joining it. Supplying it also
-   * keeps the Manage trigger rendered for an item it returns `true` for while
+   * withholds the Manage slot for an item it returns `true` for while
    * `isPublishHistoryResolved` is still `false`, and lets a lone "Unpublish"
-   * render as its own button once history resolves — so the host should
-   * resolve history for such an item without waiting for hover.
+   * render as its own button once history resolves — so the host must
+   * resolve history for such an item without waiting for hover, and settle
+   * it on failure too.
    */
   isUnpublishVisible?: (item: CatalogItem) => boolean;
   /**
@@ -279,6 +306,7 @@ export const Header: FC<HeaderProps> = ({
     nameClassName = 'dial-body-semi-text',
     folderLabelClassName = 'dial-tiny-text',
     folderLeafClassName = 'dial-tiny-semi-text',
+    limitStatusBadgeClassName = 'dial-caption-lead-semi-text',
   } = detailsStyles?.typography ?? {};
 
   const limitStatus = item.details?.limits?.status;
@@ -286,6 +314,7 @@ export const Header: FC<HeaderProps> = ({
     limitStatus != null ? (
       <LimitStatusBadge
         status={limitStatus}
+        className={limitStatusBadgeClassName}
         label={
           limitStatus === CatalogLimitStatus.LimitReached
             ? (texts?.limitReachedLabel ?? 'Limit reached')
@@ -491,19 +520,18 @@ export const Header: FC<HeaderProps> = ({
     (isUnpublishVisible?.(item) ?? true);
 
   /*
-   * The lookup that produces the "Unpublish" entry is started by hovering,
-   * focusing or opening the Manage trigger — so an item whose only entry
-   * would be "Unpublish" is deadlocked: the trigger is hidden while the menu
-   * is empty, and the menu stays empty while the trigger is hidden. A
-   * published copy under the organization's public area is exactly that item
-   * (its owner-side entries — Share, Edit, Delete, Revoke — are all gated on
-   * `isMyApp`), which is how [#8691](https://github.com/epam/ai-dial-chat/issues/8691) left one with no action at all.
+   * An item the host affirmatively calls unpublishable has its history
+   * resolved up front, without waiting for hover — which is what un-deadlocks
+   * a published copy whose only entry would be "Unpublish" ([#8691](https://github.com/epam/ai-dial-chat/issues/8691)).
+   * While that lookup is outstanding the Manage slot renders nothing at all:
+   * the caller may turn out to have no right to unpublish, and a speculative
+   * trigger shown in the meantime flashed and vanished on every first open
+   * ([#9500](https://github.com/epam/ai-dial-chat/issues/9500)). The slot
+   * appears once, in its settled form.
    *
-   * So the trigger also renders while the lookup is outstanding and the host
-   * has affirmatively said this item is unpublishable. That last part is why
-   * it reads `=== true` rather than defaulting the way `shouldShowUnpublish`
-   * does: a host that supplies no rule at all gets no speculative trigger,
-   * and so keeps its current behaviour exactly.
+   * It reads `=== true` rather than defaulting the way `shouldShowUnpublish`
+   * does: a host that supplies no rule gets no up-front lookup, so holding
+   * the slot back would hide its menu until a hover that could never happen.
    */
   const isUnpublishPending =
     !isReadonly &&
@@ -626,7 +654,7 @@ export const Header: FC<HeaderProps> = ({
         key: 'share',
         label: texts?.shareLabel ?? 'Share',
         Icon: IconShare,
-        iconClassName: 'text-secondary',
+        iconClassName: styles.manageMenuIcon,
         onClick: handleShare,
       });
     }
@@ -635,7 +663,7 @@ export const Header: FC<HeaderProps> = ({
         key: 'edit',
         label: texts?.editActionLabel ?? 'Edit',
         Icon: IconPencil,
-        iconClassName: 'text-secondary',
+        iconClassName: styles.manageMenuIcon,
         onClick: handleEdit,
       });
     }
@@ -644,7 +672,7 @@ export const Header: FC<HeaderProps> = ({
         key: 'download',
         label: texts?.downloadActionLabel ?? 'Download',
         Icon: IconDownload,
-        iconClassName: 'text-secondary',
+        iconClassName: styles.manageMenuIcon,
         onClick: handleDownload,
       });
     }
@@ -653,7 +681,7 @@ export const Header: FC<HeaderProps> = ({
         key: 'publish',
         label: texts?.publishLabel ?? 'Publish',
         Icon: IconWorldShare,
-        iconClassName: 'text-secondary',
+        iconClassName: styles.manageMenuIcon,
         onClick: handleOpenPublish,
       });
     }
@@ -665,7 +693,7 @@ export const Header: FC<HeaderProps> = ({
         key: 'unpublish',
         label: texts?.unpublishLabel ?? 'Unpublish',
         Icon: IconWorldOff,
-        iconClassName: 'text-secondary',
+        iconClassName: styles.manageMenuIcon,
         onClick: handleOpenUnpublish,
       });
     }
@@ -728,6 +756,11 @@ export const Header: FC<HeaderProps> = ({
     handleUnshare,
   ]);
 
+  const manageMenuIcon = detailsStyles?.colors?.manageMenuIcon;
+  const manageMenuIconVars = useMemo(
+    () => buildCssVars({ '--cat-details-manage-menu-icon': manageMenuIcon }),
+    [manageMenuIcon],
+  );
   const manageItems = useMemo<DropdownItem[]>(
     () =>
       manageActions.map(
@@ -739,6 +772,7 @@ export const Header: FC<HeaderProps> = ({
               size={DIAL_ICON_SIZE.SM}
               aria-hidden
               className={iconClassName}
+              style={manageMenuIconVars}
               stroke={DIAL_KIT_ICON_STROKE}
             />
           ),
@@ -746,7 +780,7 @@ export const Header: FC<HeaderProps> = ({
           onClick,
         }),
       ),
-    [manageActions],
+    [manageActions, manageMenuIconVars],
   );
 
   /*
@@ -803,6 +837,10 @@ export const Header: FC<HeaderProps> = ({
   const isApiKeyOverlayTrigger =
     authenticationType === ToolsetAuthenticationType.ApiKey &&
     credentialsUiState !== CredentialsUiState.ManageCredentials;
+  const apiKeyOverlayLevel =
+    item.credentials != null
+      ? getDirectCredentialsLevel(item.credentials)
+      : CredentialsLevel.User;
   /* Once a personal API key is on file, the trigger drops from the
    * call-to-action (primary) look to the same low-emphasis style as Share —
    * matching the design's "Change API key" state. */
@@ -829,11 +867,12 @@ export const Header: FC<HeaderProps> = ({
       onRequestLogout?.();
       return;
     }
-    /* OAuth "Log in" always applies to the current user's own credentials —
-     * there is no admin/global concept here since this branch only runs for
-     * the non-admin states. The org-fallback nudge is conveyed by the banner
-     * below the header, not by the button's wording. */
-    onLogin?.(item, { level: CredentialsLevel.User });
+    /* OAuth "Log in" outside the admin states has no level chooser: a public
+     * toolset signs in personally (`USER`), a private one at the owner's own
+     * `GLOBAL` level. The org-fallback nudge is conveyed by the banner below
+     * the header, not by the button's wording. */
+    if (item.credentials == null) return;
+    onLogin?.(item, { level: getDirectCredentialsLevel(item.credentials) });
   }, [
     credentialsUiState,
     isApiKeyOverlayTrigger,
@@ -894,7 +933,6 @@ export const Header: FC<HeaderProps> = ({
         iconBefore={credentialsIconBefore}
         iconAfter={credentialsIconAfter}
         onClick={handleCredentialsClick}
-        aria-haspopup={isApiKeyOverlayTrigger ? 'dialog' : undefined}
         aria-expanded={isApiKeyOverlayTrigger ? isApiKeyOverlayOpen : undefined}
       />
     );
@@ -909,18 +947,31 @@ export const Header: FC<HeaderProps> = ({
         onOpenChange={setIsApiKeyOverlayOpen}
         trigger={[]}
         outsideClosable
+        /* A form panel, not a menu; the kit derives the trigger's
+         * `aria-haspopup="dialog"` from this role. */
+        overlayRole={DropdownOverlayRole.Dialog}
+        overlayAriaLabel={texts?.personalApiKeyPanelTitle ?? 'Personal API key'}
         renderOverlay={() => (
           <CredentialsApiKeyOverlay
             item={item}
-            level={CredentialsLevel.User}
-            status={item.credentials?.userStatus}
-            apiKeyAddedWhen={item.credentials?.userApiKeyAddedWhen}
+            level={apiKeyOverlayLevel}
+            status={
+              apiKeyOverlayLevel === CredentialsLevel.User
+                ? item.credentials?.userStatus
+                : item.credentials?.globalStatus
+            }
+            apiKeyAddedWhen={
+              apiKeyOverlayLevel === CredentialsLevel.User
+                ? item.credentials?.userApiKeyAddedWhen
+                : item.credentials?.globalApiKeyAddedWhen
+            }
             apiKeyHeader={item.credentials?.apiKeyHeader}
             onLogin={onLogin}
             onLogout={onLogout}
             onClose={() => setIsApiKeyOverlayOpen(false)}
             texts={texts}
             colors={detailsStyles?.colors}
+            typography={detailsStyles?.typography}
           />
         )}
       >
@@ -1016,6 +1067,8 @@ export const Header: FC<HeaderProps> = ({
         onOpenChange={setIsShareOverlayOpen}
         trigger={[]}
         outsideClosable
+        /* The host's share popover carries its own `dialog` role. */
+        overlayRole={DropdownOverlayRole.None}
         renderOverlay={() => shareOverlay(item, handleCloseShareOverlay)}
       >
         {menu}
@@ -1037,8 +1090,7 @@ export const Header: FC<HeaderProps> = ({
     (isPublishInActionRow && shouldShowUnpublish) ||
     (isPublishInActionRow && shouldShowPublish) ||
     (shouldShowCredentialsAction && !isCredentialsActionPrimary) ||
-    manageItems.length > 0 ||
-    isUnpublishPending;
+    (manageItems.length > 0 && !isUnpublishPending);
 
   return (
     <div className="flex flex-col gap-3 px-6 py-4">
@@ -1047,6 +1099,7 @@ export const Header: FC<HeaderProps> = ({
         iconSize={52}
         nameClassName={mergeClasses(nameClassName, styles.name)}
         featuredLabel={texts?.featuredLabel ?? 'Featured'}
+        typeLabel={texts?.entityTypeLabels?.[item.type]}
         featuredChipStyle={detailsStyles?.colors?.featuredChipStyle}
         statusBadge={statusBadge}
         footer={
@@ -1094,11 +1147,12 @@ export const Header: FC<HeaderProps> = ({
                 disabled={isDownloading}
                 aria-busy={isDownloading}
               />
-              {isDownloading && (
-                <span role="status" aria-live="polite" className="sr-only">
-                  {texts?.downloadingStatusLabel ?? 'Downloading'}
-                </span>
-              )}
+              {/* Always mounted so the polite region exists before the download starts. */}
+              <LiveRegion visuallyHidden as={LiveRegionElement.Span}>
+                {isDownloading
+                  ? (texts?.downloadingStatusLabel ?? 'Downloading')
+                  : ''}
+              </LiveRegion>
             </>
           )}
           {isShareInActionRow && shouldShowShareAction && (
@@ -1147,10 +1201,10 @@ export const Header: FC<HeaderProps> = ({
           {shouldShowCredentialsAction &&
             !isCredentialsActionPrimary &&
             renderCredentialsButton(NeutralButton)}
-          {promotedManageAction
-            ? renderPromotedManageAction(promotedManageAction)
-            : (manageItems.length > 0 || isUnpublishPending) &&
-              renderManageMenu()}
+          {!isUnpublishPending &&
+            (promotedManageAction
+              ? renderPromotedManageAction(promotedManageAction)
+              : manageItems.length > 0 && renderManageMenu())}
         </div>
       )}
     </div>

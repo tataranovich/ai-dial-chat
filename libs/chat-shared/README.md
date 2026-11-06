@@ -33,26 +33,21 @@ Shared domain models, utilities, and UI components used across all AI DIAL Chat 
 
 ## Peer Dependencies
 
-`react` (`^19.2.8`) and `@epam/ai-dial-ui-kit` (`^0.15.0-dev.39`) are the mandatory peers,
-required by every entry point below. The markdown stack is **not** a peer any more: the root
-entry imports it unconditionally, so this package installs it itself and a consumer never
-names it.
-
-Only the file-manager pair stays **optional** (`package.json#peerDependenciesMeta` marks it
-`optional: true`) — `npm install` succeeds without it, and only the `./file-manager` entry
-needs it: no other entry, the root included, imports either package anywhere but in type
-position. Importing an entry without its documented optional peer installed does not fail at
-`npm install`; it fails later, at build time, when a bundler or `tsc` tries to resolve that
-entry's own imports.
+The public root declarations include File Manager contracts and the narrow AG Grid
+event-binding hook. Their types must resolve even when a consumer never renders
+a grid, so the peers below are required and AG Grid is a dependency. npm installs
+this closure automatically. Grid rendering remains behind `./file-manager`; installing a
+peer does not load its runtime into a utility-only bundle. The markdown stack
+is installed as dependencies.
 
 Peers:
 
 - `react` ^19.2.8
-- `@epam/ai-dial-ui-kit` ^0.15.0-dev.39
-- `@epam/ai-dial-react-file-manager` ^0.3.0-dev.25 \*
-- `ag-grid-community` ^35.3.0 \*
+- `react-dom` ^19.2.8 (`NotificationStack` portals into `document.body`)
+- `@epam/ai-dial-ui-kit` ^0.16.0
+- `@epam/ai-dial-react-file-manager` ^0.4.1
 
-Installed for you as dependencies: `@tabler/icons-react`, `react-markdown`,
+Installed for you as dependencies: `ag-grid-community`, `@tabler/icons-react`, `react-markdown`,
 `react-syntax-highlighter`, `remark-breaks`, `remark-gfm`, `remark-math`, `rehype-katex`,
 `rehype-raw`, `rehype-sanitize`, `katex`, plus the `unified` pipeline (`remark-parse`,
 `remark-rehype`, `rehype-stringify`), `classnames`, `dompurify` and `tailwind-merge`.
@@ -64,11 +59,8 @@ of this package already has its own test tooling, not this library's).
 
 ### Entry-point-to-peer matrix
 
-| Entry point      | Peers you install beyond `react`                                                |
-| ---------------- | ------------------------------------------------------------------------------- |
-| `.` (root)       | `@epam/ai-dial-ui-kit`                                                          |
-| `./markdown`     | `@epam/ai-dial-ui-kit` — the markdown stack itself ships as dependencies        |
-| `./file-manager` | `@epam/ai-dial-ui-kit`, `@epam/ai-dial-react-file-manager`, `ag-grid-community` |
+All entries share the package's required peer set: `@epam/ai-dial-ui-kit` and
+`@epam/ai-dial-react-file-manager`, in addition to React and React DOM.
 
 The build preserves source-module boundaries so consumers can remove unused features.
 The FilterTab and CodeBlockTheme packed probes verify small root-import bundles without
@@ -77,12 +69,10 @@ markdown or file-manager implementation.
 A root re-export still has to **resolve** before tree-shaking can drop it, which is why
 the markdown stack is a dependency rather than an optional peer: the root entry imports
 it unconditionally, and an optional peer there would let `npm install` succeed and the
-consumer's bundler fail. The same rule is why the root entry stops short of the two
-grid-rendering components: they live behind `./file-manager` so that the optional pair
-above is genuinely optional for a host that imports anything else from this package
-([issue #8719](https://github.com/epam/ai-dial-chat/issues/8719)). Scoped feature
-entries limit resolution to their own peer sets; they do not remove peers required by
-that feature.
+consumer's bundler fail. The two grid-rendering components stay behind `./file-manager` to preserve
+runtime loading boundaries. The root still exposes their reusable types and
+event-binding hook for compatibility; this is why the grid peers are required
+for declaration checking as well as the file-manager entry.
 
 ## Text refinement lifecycle
 
@@ -90,7 +80,7 @@ that feature.
 
 The result exposes `state` (`TextRefinementState`), `isPending`, `canRefine`, `canUndo`, `refine()`, `undo()`, and `reset()`. Public types are `TextRefinementCallback`, `UseTextRefinementOptions`, and `TextRefinementResult`. The host must acknowledge changes through its controlled `value`, and coordinate multiple fields so only one request runs per form and submission is blocked while pending.
 
-Successful changes retain the original baseline across repeated refinements. Undo restores it exactly; manual/external value changes, reset, callback removal, disabling, and unmount invalidate the session state. Identical output does not write a value. Errors and blank output preserve text and any existing baseline; cancellation is silent. Late results cannot overwrite a replaced draft, even if the callback ignores cancellation. No baseline persists after leaving the editing session.
+Successful changes retain the original baseline across repeated refinements, and `refine()` while a baseline exists (Regenerate) sends that baseline to `onRefine`, so each result is a fresh variant of the author's draft. Undo restores it exactly; manual/external value changes, reset, callback removal, disabling, and unmount invalidate the session state. Identical output does not write a value. Errors and blank output preserve text and any existing baseline; cancellation is silent. Late results cannot overwrite a replaced draft, even if the callback ignores cancellation. No baseline persists after leaving the editing session.
 
 ```tsx
 import { useState } from 'react';
@@ -340,6 +330,14 @@ A `Warning` job delivered its file, but not everything the user asked for made i
 
 Warning jobs may also carry `warningNames?: string[]`: untranslated names of skipped attachments. Import jobs retain the same unique names emitted in their warning event so hosts can identify the skipped files after the notification disappears. Names are optional for compatibility with export jobs and older producers.
 
+### ConversationKind
+
+What a conversation is: `ConversationKind.Chat` (`'chat'`) or `ConversationKind.Task` (`'task'`, the run of a scheduled task). The headless items hook sets it on each panel item and the conversation panel's type filter reads it.
+
+```tsx
+import { ConversationKind } from '@epam/ai-dial-chat-shared';
+```
+
 ### FilterTab
 
 Canonical conversation ownership/grouping identifiers shared by the headless mapping hooks and the conversation panel. `@epam/ai-dial-conversation-panel` re-exports the same enum for compatibility.
@@ -369,6 +367,12 @@ reachable instead of being clipped; each container becomes a labelled,
 focusable `role="region"` only while it actually overflows. Pass
 `tableScrollRegionAriaLabel` and `mathScrollRegionAriaLabel` to translate those
 labels — they default to `'Scrollable table'` and `'Scrollable formula'`.
+`colors.mathScrollbar` and `colors.mathFocus` recolor a scrollable formula's
+scrollbar and focus outline (`--cm-math-scrollbar` / `--cm-math-focus`, default
+`--stroke-primary` / `--stroke-focus`). The exported `MarkdownTable` takes
+`colors.actionsBorder` and `colors.actionsBackground` for its copy/download
+toolbar (`--cm-table-actions-border` / `--cm-table-actions-bg`, default
+`--stroke-tertiary` / `--bg-layer-raised`).
 Code blocks take `codeBlockCopyLabel`, `codeBlockCopiedLabel` and
 `codeBlockDownloadLabel` for their copy button, copied announcement and
 download button — they default to `'Copy code'`, `'Copied!'` and
@@ -393,6 +397,10 @@ must explicitly override `components.cit` to turn it into interactive UI.
 Pass `urlTransform` to rewrite `href`/`src` values (for example mapping DIAL
 `files/{bucket}/{path}` ids to host download URLs) before they are rendered;
 the result still goes through react-markdown's protocol allowlist.
+Raw HTML in `content` is parsed into elements (then sanitized) by default; set
+`isRawHtmlEnabled={false}` to show it as the literal characters instead, for
+text a person typed, such as a question about `<div>`. `rehypePlugins` adds
+plugins that run after sanitization.
 
 ```tsx
 import { MarkdownRenderer } from '@epam/ai-dial-chat-shared';
@@ -414,7 +422,8 @@ than an inline object. It forwards the code-block labels (`codeBlockCopyLabel`,
 `codeBlockCopiedLabel`, `codeBlockDownloadLabel`), the table action labels and
 the `tableScrollRegionAriaLabel`/`mathScrollRegionAriaLabel` region labels to
 `MarkdownRenderer`. Pass `urlTransform` to rewrite markdown `href`/`src` values
-the same way as `MarkdownRenderer`. Pass `isPlainText` to render the body
+the same way as `MarkdownRenderer`; `rehypePlugins` and `isRawHtmlEnabled` are
+forwarded to it too. Pass `isPlainText` to render the body
 through `PlainTextRenderer` instead — the conversation's `plain_text` response
 format — in which case the markdown-only props are ignored.
 
@@ -431,6 +440,44 @@ import {
   urlTransform={resolveMarkdownUrl}
 />;
 ```
+
+### Inline segments in markdown
+
+Render React elements (for example skill-mention chips) at their position
+inside markdown text. Describe the text as a `TextSegment[]`: string entries
+are markdown source, and each `InlineTextSegment` (`{ text, node }`) is an
+element plus the literal source text it stands for.
+`buildInlineSegmentSource` swaps every inline segment for an opaque token the
+markdown parser leaves alone; `createRehypeInlineSegments` turns each token
+back into an element, or into the segment's literal `text` inside code, link
+text and `href`/`src` values; `createInlineSegmentComponents` renders those
+elements as each segment's `node`. If a string entry already contains a token
+character, the source falls back to plain text with no inline segments.
+
+```tsx
+import {
+  buildInlineSegmentSource,
+  createInlineSegmentComponents,
+  createRehypeInlineSegments,
+  MDMessageViewer,
+  type TextSegment,
+} from '@epam/ai-dial-chat-shared';
+
+const segments: TextSegment[] = [
+  { text: '/review', node: <SkillChip key="review" name="review" /> },
+  ' this **diff**',
+];
+const { source, inlineSegments } = buildInlineSegmentSource(segments);
+
+<MDMessageViewer
+  content={source}
+  rehypePlugins={[createRehypeInlineSegments(inlineSegments)]}
+  components={createInlineSegmentComponents(inlineSegments)}
+/>;
+```
+
+Memoise the three values on `segments`: `MDMessageViewer` is memoised, so new
+plugin and component references re-parse the markdown.
 
 ### PlainTextRenderer
 
@@ -476,6 +523,8 @@ Blocks exceeding 50,000 UTF-16 code units overall or 2,000 on any line also
 bypass the engine and display complete plain text. Copy and download retain
 the original content, and the language label is preserved. This size guard
 reduces expensive highlighting; it is not an execution timeout.
+`hasContentTopPadding={false}` drops the code's own top padding so it starts
+right under the header, for compact blocks such as an endpoint URL.
 
 ```tsx
 import { MarkdownCodeBlock } from '@epam/ai-dial-chat-shared';
@@ -577,39 +626,120 @@ import { TableHeader } from '@epam/ai-dial-chat-shared';
 
 ### DeploymentIcon
 
-Renders the icon associated with a deployment entity.
+Renders a deployment's icon inside a rounded badge, falling back to the initials of `initialsName` (or a custom `fallback`) when `src` is absent or fails to load. The badge background resolves `styles.colors.background`, then the `--bg-entity-icon` theme token, then `--bg-layer-sunken` — a dark theme sets `--bg-entity-icon` to a light value so a dark, transparent vendor logo stays visible.
 
 ```tsx
 import { DeploymentIcon } from '@epam/ai-dial-chat-shared';
 
-<DeploymentIcon deployment={deployment} size={24} />;
+<DeploymentIcon src={iconUrl} size={24} initialsName="GPT-4o" />;
 ```
 
 ### InitialsAvatar
 
-A square initials badge for an entity without an icon, drawn by the UI kit's `Avatar`: the initials come from `name`, and the same name always gets the same colour from the theme's visual tokens. `textClassName` replaces the default semibold initials sized at 40% of `size`.
+A square initials badge for an entity without an icon, drawn by the UI kit's `Avatar`: the initials come from `name`, and the same name always gets the same colour from the theme's visual tokens. `color` pins an `AVATAR_PALETTE` entry (`@epam/ai-dial-ui-kit`) instead of the name-derived colour, so every avatar of a kind shares one colour. `textClassName` replaces the default semibold initials sized at 40% of `size`.
 
 ```tsx
+import { AVATAR_PALETTE, AvatarColor } from '@epam/ai-dial-ui-kit';
 import { InitialsAvatar } from '@epam/ai-dial-chat-shared';
 
 <InitialsAvatar name="Jane Doe" size={32} />;
+
+<InitialsAvatar
+  name="Dial native"
+  size={40}
+  color={AVATAR_PALETTE[AvatarColor.Violet1]}
+/>;
+```
+
+### ActionMenu
+
+Action menu around a trigger: the kit `Dropdown` on tablet and desktop, a titled
+bottom sheet on a phone (`useIsPhone`). The trigger must accept `onClick`; on a
+phone it receives the click handler plus `aria-haspopup="dialog"` and
+`aria-expanded`. The sheet lists plain actions only — dividers, plain-text rows
+and nested items appear in the dropdown but are skipped in the sheet.
+
+```tsx
+import { ActionMenu } from '@epam/ai-dial-chat-shared';
+
+<ActionMenu
+  title="More actions"
+  closeLabel="Close"
+  items={[{ key: 'delete', label: 'Delete', danger: true, onClick: onDelete }]}
+>
+  <GhostIconButton aria-label="More actions" icon={<IconDotsVertical />} />
+</ActionMenu>;
 ```
 
 ### PanelEmptyState
 
-Generic empty-state placeholder used inside panels. Without `icon` it shows the
-kit's default `NoDataContent` document mark; pass a decorative feature
-illustration to replace it.
+Generic empty-state placeholder used inside panels, built on the kit's
+`NoDataContent`: an illustration, a title (`label`), an optional `description`
+and an optional `action`. Without `icon` it shows the kit's default empty-state
+illustration, which every panel shares. Follow the Patterns 2.0 wording:
+"No [entities] yet" / "[Entities] will appear here once [condition]." for an
+empty list, and "No [entities] found" / "Try a different search term or check
+your filters." after a search or filter.
 
 ```tsx
 import { PanelEmptyState } from '@epam/ai-dial-chat-shared';
-import { IconClockHour3 } from '@tabler/icons-react';
-
-<PanelEmptyState label="No conversations" />;
 
 <PanelEmptyState
-  label="No scheduled tasks yet"
-  icon={<IconClockHour3 size={48} stroke={1} aria-hidden />}
+  label="No chats yet"
+  description="Chats will appear here once you start one."
+/>;
+
+<PanelEmptyState
+  label="No chats found"
+  description="Try a different search term or check your filters."
+  live
+/>;
+```
+
+### NewVersionAlert
+
+Kit `StateScreen` preset shown instead of the app once a newer build has been
+deployed: a refresh icon, the heading as the screen's `h1` (naming the
+`section`), a message and a `PrimaryButton` that takes focus on mount. It has
+no live-region role: the screen is page state, and the focused action is what
+gets announced. Takes `NewVersionAlertLabels` (`heading`, `message`,
+`reloadLabel`, each with an English default) and `onReload`. The host decides
+what reloading means, normally `window.location.reload()`.
+`NewVersionAlertColors.icon` sets the icon color (default `--text-accent`).
+
+```tsx
+import { NewVersionAlert } from '@epam/ai-dial-chat-shared';
+
+<NewVersionAlert
+  onReload={() => window.location.reload()}
+  labels={{ heading: t('appUpdate.heading') }}
+/>;
+```
+
+For a crash screen, use the kit's `ErrorBoundary` from `@epam/ai-dial-ui-kit`:
+it catches the error, draws the same `StateScreen` layout and announces the
+crash.
+
+### NotificationStack
+
+Portalled stack of kit `Notification` toasts. Plain toasts dismiss themselves
+after `dismissDelayMs` (default `5000`); a toast with an `action` or a
+`requestId` stays until closed. A `requestId` renders as a copyable "Request ID"
+row under the message, with the copy result announced through a `LiveRegion`.
+Long messages scroll inside the toast, and the stack scrolls to each new toast.
+Strings, including the close button's accessible name (`close`), come from
+`NotificationStackLabels` (English defaults); `className`
+replaces the default bottom-edge / bottom-end-corner placement; the request-id
+row takes `requestIdClassName` (default `'dial-tiny-text'`). The host owns the
+list and passes `items` in arrival order.
+
+```tsx
+import { NotificationStack } from '@epam/ai-dial-chat-shared';
+
+<NotificationStack
+  items={notifications}
+  onDismiss={dismissNotification}
+  labels={{ requestId: t('notification.requestId.label') }}
 />;
 ```
 
@@ -618,7 +748,9 @@ import { IconClockHour3 } from '@tabler/icons-react';
 Item title row with an optional postfix (version, count) and a trailing slot.
 The title is highlighted when a search `query` is supplied and truncates with a
 tooltip on overflow. Pass `shouldTruncateTitle={false}` for static section
-headings that must always render in full.
+headings that must always render in full. A numeric `postfix` (a count) always
+renders in full; a string `postfix` (a version) is capped at 30% of the row and
+truncates with a tooltip.
 
 ```tsx
 import { ItemHeader } from '@epam/ai-dial-chat-shared';
@@ -635,12 +767,15 @@ import { ItemHeader } from '@epam/ai-dial-chat-shared';
 
 ### EntityTypeLabel
 
-Entity type rendered as plain uppercase text, colored per type.
+Entity type rendered as plain uppercase text, colored per type. It shows the raw
+type value (`MODEL`, `TOOLSET`, …) unless `label` supplies the visible text, e.g. a
+translated type name; the color still follows `type`.
 
 ```tsx
 import { CatalogEntityType, EntityTypeLabel } from '@epam/ai-dial-chat-shared';
 
 <EntityTypeLabel type={CatalogEntityType.Model} />;
+<EntityTypeLabel type={CatalogEntityType.Toolset} label="Toolset" />;
 ```
 
 ### FeaturedChip
@@ -671,7 +806,8 @@ Entity identity block: deployment icon, type label, name, version, and an
 optional featured chip. `item` needs only the `EntityHeaderItem` fields, so any
 richer catalog model can be passed directly. `statusBadge` renders an
 arbitrary badge in the same corner, ahead of the featured chip. `featuredChipStyle`
-forwards to the featured chip's own `style` override (see `FeaturedChip` above).
+forwards to the featured chip's own `style` override (see `FeaturedChip` above). `typeLabel`
+forwards to `EntityTypeLabel`'s `label`.
 
 ```tsx
 import { EntityHeader } from '@epam/ai-dial-chat-shared';
@@ -681,6 +817,7 @@ import { EntityHeader } from '@epam/ai-dial-chat-shared';
   iconSize={48}
   query={searchQuery}
   featuredLabel="Featured"
+  typeLabel="Model"
   footer={<span>{item.lastUsed}</span>}
 />;
 ```
@@ -754,10 +891,12 @@ import { ConfirmationPopupVariant } from '@epam/ai-dial-ui-kit';
 ```
 
 Pass `identity` to replace the default card for a resource that has no
-`EntityHeaderItem`, and `children` for a step that needs an input before it can
+`EntityHeaderItem`, `details` for content between the message and the bullets
+(such as the names a bulk action affects), and `children` for a step that needs an input before it can
 be confirmed — the caller owns that input's state and disables confirming
 until it is satisfied. With neither `item` nor `identity` the card is omitted,
-which suits a confirmation that is not about a particular resource.
+which suits a confirmation that is not about a particular resource. `className`
+is merged onto the view root, e.g. `pt-0` to drop its default top padding.
 
 ### ConfirmationFooter
 
@@ -818,7 +957,11 @@ click all stop working, because dismissing mid-request would leave the surface
 behind contradicting an action that is still running.
 
 `title` is a string rather than a node so the kit names the dialog with it; a
-node header would open the dialog unnamed.
+node header would open the dialog unnamed. `viewClassName` is merged onto the
+content view root and `footerStyles` is forwarded to the action row — e.g.
+`viewClassName="pt-0"` with `footerStyles={{ colors: { border: 'transparent' } }}`
+drops the content view's top padding and the action row's top border, as the
+scheduled-task delete modal does.
 
 ```tsx
 import { ConfirmationDialog } from '@epam/ai-dial-chat-shared';
@@ -845,15 +988,109 @@ import { ConfirmationPopupVariant } from '@epam/ai-dial-ui-kit';
 />;
 ```
 
+### DeleteConfirmationView
+
+The delete confirmation body every delete surface shows, built on
+[`ConfirmationView`](#confirmationview). Pass `names`: one name goes in a
+neutral `ResourceSummary` card (red with `identityVariant={ConfirmationPopupVariant.Danger}`), with the optional `icon` and `typeLabel`;
+several are counted in the card (`labels.itemCount`) and listed under the
+message, up to `maxListedNames` (10), with the rest summed up by
+`labels.moreItems`. `consequences` are listed before the final
+`labels.cannotBeUndone` bullet. Use it bare where a host owns the dialog frame,
+such as the file manager's `deleteConfirmBody`.
+
+```tsx
+import { DeleteConfirmationView } from '@epam/ai-dial-chat-shared';
+
+<DeleteConfirmationView
+  names={['report.pdf', 'notes.txt']}
+  message={
+    <>
+      Are you sure you want to delete <strong>2 items</strong>? This action is
+      permanent and cannot be undone.
+    </>
+  }
+/>;
+```
+
+### DeleteConfirmationDialog
+
+[`DeleteConfirmationView`](#deleteconfirmationview) in the kit's `Popup` with a
+danger [`ConfirmationFooter`](#confirmationfooter), for one resource or a
+selection. Like [`ConfirmationDialog`](#confirmationdialog), it blocks every
+dismissal route while `isLoading` is set. All strings have English defaults and
+can be overridden through `labels` (`confirm`, `cancel`, `deleting`,
+`cannotBeUndone`, `itemCount`, `moreItems`). `children` render after the
+consequences, for an inline error.
+
+```tsx
+import { DeleteConfirmationDialog } from '@epam/ai-dial-chat-shared';
+
+<DeleteConfirmationDialog
+  open={isDeleteOpen}
+  title="Delete chat"
+  names={[conversation.title]}
+  icon={<IconMessageCircle aria-hidden />}
+  message={
+    <>
+      Are you sure you want to delete <strong>{conversation.title}</strong>?
+      This action is permanent and cannot be undone.
+    </>
+  }
+  isLoading={isDeleting}
+  onConfirm={handleDelete}
+  onClose={closeDelete}
+>
+  {error && <ErrorMessageNotification message={error} />}
+</DeleteConfirmationDialog>;
+```
+
+### DeleteConfirmationDrawer
+
+[`DeleteConfirmationView`](#deleteconfirmationview) in the kit's `SideDrawer` — the side panel the catalog shows for an item — with a danger [`ConfirmationFooter`](#confirmationfooter) pinned under the scrolling body. It takes the same props as the view plus `open`, `title`, `isLoading`, `onConfirm` and `onClose`. While `isLoading` is set, Cancel, the close control, Escape and a backdrop press are all blocked. `labels` adds `confirm`, `cancel`, `deleting` and `close` (all English by default) to the view's labels.
+
+```tsx
+import { DeleteConfirmationDrawer } from '@epam/ai-dial-chat-shared';
+
+<DeleteConfirmationDrawer
+  open={isDeleteOpen}
+  title="Delete project"
+  names={[project.name]}
+  message={
+    <>
+      Are you sure you want to delete <strong>{project.name}</strong>? This
+      action is permanent and cannot be undone.
+    </>
+  }
+  consequences={[
+    'All shared configurations will be lost',
+    'Users who rely on it will lose access',
+  ]}
+  isLoading={isDeleting}
+  onConfirm={handleDelete}
+  onClose={closeDelete}
+/>;
+```
+
 ### TextRefinementField
 
-Label row with kit `GhostButton` "Refine with AI" / Undo actions, plus a polite
-status region and an error alert, around one field driven by
-[`useTextRefinement`](#text-refinement-lifecycle). The group is named by the
-label and described by the error while one is shown; Undo returns focus to the
-Refine action. With `isEnabled={false}` it renders `children` alone, so the
-host keeps its own label. Copy comes from `labels` (`TextRefinementLabels`),
-each key with an English default.
+Label row with kit `GhostButton` actions, plus a polite status region and an
+error alert, around one field driven by
+[`useTextRefinement`](#text-refinement-lifecycle). The main action reads
+"Refine with AI", then "Refining" with a spinner (disabled) while a request
+runs, then "Regenerate" once a result has replaced the text; "Restore original"
+appears before it while there is a draft to restore. While a request runs, the
+`input`/`textarea` whose `id` equals `fieldId` is read-only and keeps showing
+the text that was sent. The success and restore messages are announced but not
+shown (the actions already show those states); "No changes were needed." and
+errors are visible. The group is named by the label and described by the error
+while one is shown; Restore original returns focus to the main action. With
+`isEnabled={false}` it renders `children` alone, so the
+host keeps its own label. An optional `caption` (e.g. a `12/500` character
+counter) sits at the end of the row below the control, beside the status, so
+neither shifts the layout when the other appears; it is rendered in both modes.
+Copy comes from `labels` (`TextRefinementLabels`), each key with an English
+default.
 
 ```tsx
 import { useState } from 'react';
@@ -917,6 +1154,33 @@ Options: `bottomGap` (pixels kept below the element, default `16`),
 fold stays usable) and `cssVariable` (default
 `RESIZABLE_FIELD_MAX_HEIGHT_CSS_VARIABLE`).
 
+### useControlErrorAssociation
+
+`useControlErrorAssociation(getControl, errorId, hasError)` links a field
+error to a control that takes no `aria-describedby` / `aria-invalid` prop —
+the kit `MarkdownEditor`, or a host-composed selector (the kit `Calendar`
+takes `ariaDescribedBy` and `invalid` since kit 0.16, so pass those instead). While
+`hasError` is `true` it adds `errorId` to the control's `aria-describedby`
+(keeping any other ids) and sets `aria-invalid`; otherwise it removes both.
+It runs after every render, so a lazily mounted control is picked up once it
+appears. Render the error with the same id — the kit `ErrorText` has no
+live-region role, so the link is what tells a screen reader about it.
+
+```tsx
+import { useControlErrorAssociation } from '@epam/ai-dial-chat-shared';
+import { ErrorText } from '@epam/ai-dial-ui-kit';
+import { useId } from 'react';
+
+const errorId = useId();
+useControlErrorAssociation(
+  () => document.getElementById(editorId),
+  errorId,
+  Boolean(error),
+);
+
+<ErrorText id={errorId} text={error} />;
+```
+
 ### useIsMobile
 
 Returns `true` when the viewport matches the mobile breakpoint.
@@ -925,6 +1189,48 @@ Returns `true` when the viewport matches the mobile breakpoint.
 import { useIsMobile } from '@epam/ai-dial-chat-shared';
 
 const isMobile = useIsMobile();
+```
+
+### useIsTextClipped
+
+`useIsTextClipped(isMeasuring, contentKey)` reports whether an element's text
+overflows horizontally, so a caller can offer an expand control only when
+something is actually hidden. It measures while `isMeasuring` is `true` (the
+element is in its truncated state) and keeps the last result once the caller
+lets the text wrap; a change of `contentKey` forces a re-measure.
+
+```tsx
+import { useIsTextClipped } from '@epam/ai-dial-chat-shared';
+
+const { ref, isClipped } = useIsTextClipped<HTMLSpanElement>(
+  !isExpanded,
+  title,
+);
+
+<span ref={ref} className={isExpanded ? undefined : 'truncate'}>
+  {title}
+</span>;
+```
+
+### useIsVerticallyClamped
+
+`useIsVerticallyClamped(content)` reports whether a `line-clamp-*` (or any
+`overflow: hidden`) element, or one of its direct children such as the kit
+`Highlight` span, hides part of its text vertically, so a caller can show the
+full text in a tooltip only when something is cut off. It re-measures when the
+element resizes and when `content` changes.
+
+```tsx
+import { useIsVerticallyClamped } from '@epam/ai-dial-chat-shared';
+import { Tooltip } from '@epam/ai-dial-ui-kit';
+
+const { ref, isClamped } = useIsVerticallyClamped<HTMLSpanElement>(name);
+
+<Tooltip asChild tooltip={name} hideTooltip={!isClamped}>
+  <span ref={ref} className="line-clamp-2">
+    {name}
+  </span>
+</Tooltip>;
 ```
 
 ### useUnsavedChangesGuard
@@ -954,6 +1260,49 @@ const { guard, isConfirmOpen, confirm, dismiss } =
 />;
 ```
 
+### UnsavedChangesProvider, useUnsavedChanges and the leave-guard hooks
+
+A page-wide unsaved-changes guard: one "Discard unsaved changes?" dialog shared by every form page below the provider, the dirty state of the one form mounted at a time, and a confirm/discard flow for exits that are not router transitions (such as Log out). It knows no router — the host builds its blocker on the two leave-guard hooks. All of it is in the root entry, with no peer beyond the package's own.
+
+- `UnsavedChangesProvider` renders `ConfirmationDialog` with `ConfirmationPopupVariant.Danger`. `labels` (`UnsavedChangesLabels`) takes `title` (default `'Discard unsaved changes?'`), `message` (default `'You have unsaved changes. Leaving now will discard them.'`), `confirmLabel` (default `'Discard changes'`) and `cancelLabel` (default `'Keep editing'`); each omitted field keeps its default. Escape, the close control and an outside click act as Keep editing.
+- `useUnsavedChanges()` returns `{ hasUnsavedChanges, requestDiscard }` (`UnsavedChangesContextValue`) and throws outside the provider. `requestDiscard(onDiscard)` opens the dialog; Discard changes lets the next page unload pass without the native prompt, closes the dialog and runs `onDiscard`; Keep editing runs nothing.
+- `useUnsavedChangesLeaveGuard({ isDirty })` registers the form's dirty state with the provider (cleared on unmount), adds a `beforeunload` listener while `isDirty` is `true` unless a confirmed `requestDiscard` already allowed the unload, and returns `{ shouldBlockLeave, allowNextNavigation }` (`UnsavedChangesLeaveGuardResult`). `shouldBlockLeave(isLeaving)` is stable and reads the latest `isDirty`: it returns `isDirty && isLeaving`, except that the first call after `allowNextNavigation()` returns `false` and consumes that one-shot bypass. Pass your own "does this transition leave the form" decision as `isLeaving`.
+- `useUnsavedChangesLeaveConfirmation({ isBlocked, onDiscard, onKeep })` opens the dialog while `isBlocked` is `true` — Discard changes runs `onDiscard`, Keep editing or a dismissal runs `onKeep` — and closes it without running either once `isBlocked` turns `false` or the caller unmounts. A dialog opened by `requestDiscard` is left open.
+
+Call both leave-guard hooks from one page at a time, inside the provider. With react-router's `useBlocker`:
+
+```tsx
+import {
+  UnsavedChangesProvider,
+  useUnsavedChangesLeaveConfirmation,
+  useUnsavedChangesLeaveGuard,
+} from '@epam/ai-dial-chat-shared';
+import { useCallback } from 'react';
+import { useBlocker, type BlockerFunction } from 'react-router';
+
+const useLeaveGuard = (isDirty: boolean) => {
+  const { shouldBlockLeave, allowNextNavigation } = useUnsavedChangesLeaveGuard(
+    { isDirty },
+  );
+  const shouldBlock = useCallback<BlockerFunction>(
+    ({ currentLocation, nextLocation }) =>
+      shouldBlockLeave(currentLocation.pathname !== nextLocation.pathname),
+    [shouldBlockLeave],
+  );
+  const blocker = useBlocker(shouldBlock);
+  useUnsavedChangesLeaveConfirmation({
+    isBlocked: blocker.state === 'blocked',
+    onDiscard: () => blocker.proceed?.(),
+    onKeep: () => blocker.reset?.(),
+  });
+  return allowNextNavigation;
+};
+
+<UnsavedChangesProvider labels={{ title: t('unsavedChanges.title') }}>
+  <App />
+</UnsavedChangesProvider>;
+```
+
 ## Utilities
 
 ```tsx
@@ -961,6 +1310,7 @@ import {
   mergeClasses,
   buildCssVars,
   copyToClipboard,
+  makeOutsideInert,
   copyMarkdownAsRichText,
   markdownToRichTextHtml,
   formatLastUsed,
@@ -976,6 +1326,8 @@ import {
   ensureDownloadFilename,
   downloadTextFile,
   triggerBlobDownload,
+  encodeJsonToBase64,
+  decodeJsonFromBase64,
   serializeMarkdownTableRows,
   MarkdownTableCopyFormat,
   DEFAULT_MARKDOWN_TABLE_DOWNLOAD_FILENAME,
@@ -1026,17 +1378,33 @@ downloadTextFile(
 // Styling travels inline, so a pasted table keeps its border, header band, dividers, and zebra rows.
 copyMarkdownAsRichText(message.content);
 
+// While an overlay portalled to <body> is open, take every other child of <body>
+// out of the tab order and the accessibility tree; the returned function restores them.
+// A child that was already inert stays inert.
+const restoreOutside = makeOutsideInert(overlayElement);
+
+// Store JSON in web storage as Unicode-safe base64 — the wrap satisfies
+// clear-text-storage security scanning and is an encoding, not encryption;
+// `btoa` alone would throw on characters above U+00FF (e.g. Cyrillic ids).
+// decodeJsonFromBase64 throws on malformed input; the caller handles failures.
+sessionStorage.setItem('flow-state', encodeJsonToBase64({ toolsetId, state }));
+const restored = decodeJsonFromBase64<{ toolsetId: string }>(
+  sessionStorage.getItem('flow-state') ?? '',
+);
+
 // The same HTML on its own, for a caller that writes the clipboard itself or renders an export
 const html = markdownToRichTextHtml(message.content);
 
-// Format a USD amount, keeping decimals for sub-dollar values
+// Format a USD amount, keeping significant digits for sub-dollar values
 formatPrice(0.3); // '$0.3'
+formatPrice(0.00000015); // '$0.00000015'
 
 // Format accumulated USD usage to cents
 formatCost(0.788438); // '$0.79'
 
-// Re-quote a DIAL Core per-unit price for display
+// Re-quote a DIAL Core per-unit price per 1M tokens or characters for display
 formatUnitPrice('0.000003', 'token'); // '$3/M tokens'
+formatUnitPrice('0.00000015', 'char_without_whitespace'); // '$0.15/M chars without whitespace'
 
 // Derive an avatar's initials and its deterministic color from a name
 const initials = extractInitials(user.displayName);
@@ -1099,24 +1467,24 @@ import {
 } from '@epam/ai-dial-chat-shared';
 ```
 
-| Constant                                     | Purpose                                                                   |
-| -------------------------------------------- | ------------------------------------------------------------------------- |
-| `MIME_TYPE_ALIASES`                          | Non-canonical MIME spelling → canonical type, read by `normalizeMimeType` |
-| `MIME_TYPE_EXT_MAP`                          | MIME type → file extension, for labels and download file names            |
-| `MIME_TYPE_WILDCARD`                         | `*/*`, the "any type accepted" sentinel in attachment allowlists          |
-| `MIME_TYPE_AUDIO_PREFIX`                     | `audio/`, used to detect transcription-capable attachment types           |
-| `HIDDEN_FILE`                                | `.dial_folder`, the marker file DIAL Core writes into folders             |
-| `PUBLIC_BUCKET`                              | `public`, the DIAL Core bucket holding organization-wide resources        |
-| `BASE_MD_ICON_PROPS` / `BASE_LG_ICON_PROPS`  | Default `size`/`stroke` pairs for Tabler icons at each scale step         |
-| `ENTITY_TYPE_COLOR` / `ENTITY_TYPE_BG_COLOR` | `CatalogEntityType` → text and surface color tokens                       |
-| `TAG_INPUT_TAG_CLASS_NAME`                   | `tagClassName` for `TagInput`, so its tags stay visible in the field      |
-| `RESIZABLE_TEXTAREA_CLASS_NAME`              | `className` for a resizable `Textarea`, capping drag height at `50vh`     |
-| `RESIZABLE_FIELD_MAX_HEIGHT_CSS_VARIABLE`    | Custom property `useAvailableHeightCap` writes the measured cap to        |
-| `MARKDOWN_EDITOR_MAX_HEIGHT_CLASS_NAME`      | `className` capping `MarkdownEditor`'s drag bar at that measured cap      |
-| `MARKDOWN_EDITOR_FILL_HEIGHT_CLASS_NAME`     | `className` stretching `MarkdownEditor` to that measured cap, bar hidden  |
-| `MARKDOWN_EDITOR_PREVIEW_LIST_CLASS_NAME`    | `className` restoring list markers in the `MarkdownEditor` preview        |
-| `SELECT_LIST_MAX_HEIGHT_PX`                  | `344`, the design's maximum select-list length, for a measured cap        |
-| `SELECT_LIST_MAX_HEIGHT_CLASS_NAME`          | `max-h-[344px]`, the same cap for an options scroll box                   |
+| Constant                                     | Purpose                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `MIME_TYPE_ALIASES`                          | Non-canonical MIME spelling → canonical type, read by `normalizeMimeType`            |
+| `MIME_TYPE_EXT_MAP`                          | MIME type → file extension, for labels and download file names                       |
+| `MIME_TYPE_WILDCARD`                         | `*/*`, the "any type accepted" sentinel in attachment allowlists                     |
+| `MIME_TYPE_AUDIO_PREFIX`                     | `audio/`, used to detect transcription-capable attachment types                      |
+| `HIDDEN_FILE`                                | `.dial_folder`, the marker file DIAL Core writes into folders                        |
+| `PUBLIC_BUCKET`                              | `public`, the DIAL Core bucket holding organization-wide resources                   |
+| `BASE_MD_ICON_PROPS` / `BASE_LG_ICON_PROPS`  | Default `size`/`stroke` pairs for Tabler icons at each scale step                    |
+| `ENTITY_TYPE_COLOR` / `ENTITY_TYPE_BG_COLOR` | `CatalogEntityType` → text and surface color tokens                                  |
+| `TAG_INPUT_TAG_CLASS_NAME`                   | `tagClassName` for `TagInput`, so its tags stay visible in the field                 |
+| `RESIZABLE_TEXTAREA_CLASS_NAME`              | `className` for a resizable `Textarea`, capping drag height at `50vh`                |
+| `RESIZABLE_FIELD_MAX_HEIGHT_CSS_VARIABLE`    | Custom property `useAvailableHeightCap` writes the measured cap to                   |
+| `MARKDOWN_EDITOR_MAX_HEIGHT_CLASS_NAME`      | `className` capping `MarkdownEditor`'s drag bar at that measured cap                 |
+| `MARKDOWN_EDITOR_FILL_HEIGHT_CLASS_NAME`     | `className` stretching `MarkdownEditor` to that cap; pair with `showDragbar={false}` |
+| `MARKDOWN_EDITOR_PREVIEW_LIST_CLASS_NAME`    | `className` restoring list markers in the `MarkdownEditor` preview                   |
+| `SELECT_LIST_MAX_HEIGHT_PX`                  | `344`, the design's maximum select-list length, for a measured cap                   |
+| `SELECT_LIST_MAX_HEIGHT_CLASS_NAME`          | `max-h-[344px]`, the same cap for an options scroll box                              |
 
 ## Stylesheet
 
@@ -1176,6 +1544,19 @@ Pre-translated strings the shell renders as-is. The shell never calls `useTransl
 import type { DialFileManagerShellLabels } from '@epam/ai-dial-chat-shared';
 ```
 
+### DialFileManagerShellStyles
+
+Color overrides for the shell, passed as `styles`. `colors.surface` sets the background of the shell's surface and of the grid area (`--dfms-surface`, default `--bg-layer-base`). A host can instead set `--dfms-surface` on any ancestor, which is how a responsive value is applied. In the attach variant, `colors.treeBackground`, `colors.treeBorder` and `colors.treeShadow` color the folder tree, its divider and the shadow on its end edge (`--dfms-tree-bg` / `--dfms-tree-border` / `--dfms-tree-shadow`, default `--bg-layer-raised` / `--stroke-tertiary` / 10% blue), and `colors.overlayBackdrop` colors the scrim behind the operation spinner (`--dfms-overlay-backdrop`, default `--bg-backdrop`). `operationLoader` (`OperationLoaderModalColors`) is forwarded to the copy/move `OperationLoaderModal`, and `operationLoaderTextClassName` sets its progress-line type (default `'dial-small-text'`).
+
+```ts
+import type { DialFileManagerShellStyles } from '@epam/ai-dial-chat-shared';
+
+const styles: DialFileManagerShellStyles = {
+  colors: { surface: 'transparent' },
+  operationLoader: { text: 'var(--text-secondary)' },
+};
+```
+
 ### AttachResult
 
 Result returned by the file-manager attach modal when the user confirms a selection.
@@ -1229,6 +1610,8 @@ import type { FileManagerAttachModalLabels } from '@epam/ai-dial-chat-shared';
 // … plus every DialFileManagerShellLabels field
 ```
 
+`colors` (`FileManagerAttachModalColors`) sets the dialog background — also used as the file-manager surface inside it —, the title color shown with a header description and the dialog's drop-shadow color (`background` / `title` / `shadow`, default `--bg-layer-raised` / `--text-primary` / 16% black). The header and footer are separated from the body by a divider. `titleClassName` and `descriptionClassName` set the type of that title and description (default `'dial-h1-text'` / `'dial-small-text'`).
+
 ### FileManagerSelectableNode
 
 Minimal node shape that `isRowSelectable` predicates are evaluated against. Satisfied by both grid rows and `DialFile` controller items, so one predicate gates manual grid clicks and programmatic selection changes.
@@ -1260,6 +1643,7 @@ DialFileManagerActionProfile.Browse; // full action set
 
 ```ts
 import {
+  FileUploadFailureReason,
   FileUploadStatus,
   type FileUploadEntry,
   type FileUploadBatchState,
@@ -1267,6 +1651,8 @@ import {
 } from '@epam/ai-dial-chat-shared';
 
 // FileUploadStatus values: Queued | Uploading | Completed | Failed | Cancelled
+// FileUploadEntry.failureReason (set when Failed): FileUploadFailureReason —
+// Conflict | TooLarge | Forbidden | Unavailable | Network | Unknown
 ```
 
 ### getParentFolderPath
@@ -1295,22 +1681,43 @@ const { handleGridApiChange, reset } = useGridEditingScroll();
 
 ### OperationLoaderModal
 
-Internal modal already rendered by `DialFileManagerShell`. Exported for hosts that need to compose it independently outside the shell.
+Internal modal already rendered by `DialFileManagerShell`. Exported for hosts that need to compose it independently outside the shell. `colors.text` (`OperationLoaderModalColors`) sets the progress-line color (`--olm-text`, default `--text-secondary`), and `textClassName` its type (default `'dial-small-text'`). The title and progress line sit in one always-mounted kit `LiveRegion`, so an updated `text` is announced; the spinner is decorative (`aria-hidden`).
 
 ```tsx
 import { OperationLoaderModal } from '@epam/ai-dial-chat-shared';
 ```
 
-### Upload queue
+### Transfer queue (uploads and downloads)
 
-`DialFileManagerShell` shows uploads in the UI kit's `TransferQueue`, fixed to the bottom-end corner. Its heading comes from `labels.getUploadQueueTitle(count)` and its strings from `labels.uploadQueueLabels`. Closing it aborts whatever is still uploading. Two helpers are exported for hosts that render the queue themselves — `isUploadInProgress` from the root entry, and `toUploadQueueItems` from `./file-manager`, since it is a value import of the kit:
+`DialFileManagerShell` shows uploads and downloads in one UI kit `TransferQueue`, fixed to the bottom-end corner. Upload rows come first, then download rows. A download never blocks the page: there is no loader overlay for it, and several can run at once.
+
+- **Title.** From `labels.getTransferQueueTitle({ uploads, downloads })`, falling back to `labels.getUploadQueueTitle(total)`.
+- **Strings.** From `labels.uploadQueueLabels`. Download rows are worded through `labels.downloadQueueLabels` (cancel and progress names), and the aggregate bar is named by `labels.transferQueueProgressAriaLabel` while both kinds run.
+- **Failed rows.** A failed row's tooltip and accessible name come from `labels.uploadFailureMessages[entry.failureReason]`, for both kinds. A reason without a message, or none at all, shows `uploadQueueLabels.failedMessage`.
+- **Cancel and close.** Canceling a row calls `cancelUploadFile` or `cancelDownloadFile` with its entry id. Closing the queue cancels and clears both batches.
+
+Download entries are `FileDownloadEntry` (`{ id, name, status: FileDownloadStatus, percent?, failureReason? }`), where `FileDownloadStatus` is `Downloading | Completed | Failed | Cancelled`, kept in a `FileDownloadBatchState`.
+
+Helpers for hosts that render the queue themselves:
+
+- from the root entry: `isUploadInProgress` and `isDownloadInProgress`;
+- from `./file-manager`, since they import the kit: `toUploadQueueItems`, `toTransferQueueItems` (kind-prefixed row ids, read back with `parseTransferQueueRowId`), and `buildTransferQueueLabels`.
 
 ```ts
-import { isUploadInProgress } from '@epam/ai-dial-chat-shared';
-import { toUploadQueueItems } from '@epam/ai-dial-chat-shared/file-manager';
+import {
+  isDownloadInProgress,
+  isUploadInProgress,
+} from '@epam/ai-dial-chat-shared';
+import { toTransferQueueItems } from '@epam/ai-dial-chat-shared/file-manager';
 
-const items = toUploadQueueItems(uploadBatchState?.files ?? []);
-const isBusy = isUploadInProgress(uploadBatchState);
+const items = toTransferQueueItems(
+  uploadBatchState,
+  downloadBatchState,
+  labels.uploadFailureMessages,
+);
+const isBusy =
+  isUploadInProgress(uploadBatchState) ||
+  isDownloadInProgress(downloadBatchState);
 ```
 
 ## Building
@@ -1390,3 +1797,38 @@ is in [`openspec/lib-styling-guide.md`](../../openspec/lib-styling-guide.md).
 
 Write host overrides with CSS logical properties (`margin-inline-start`,
 `inset-inline-end`) so they keep working under `dir="rtl"`.
+
+## Remaining controller extraction contracts
+
+The following adoption matrix tracks extract-remaining-chat-reuse-controllers.
+B1?B8 and compatibility options A2/D are implemented; Packed-artifact verification and downstream adoption are tracked separately. Existing app exports and defaults are preserved.
+
+| Audit | Contract                                                                | Public entry                     | Host responsibility                                           |
+| ----- | ----------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------- |
+| B1    | createGenerationRegistry (implemented)                                  | chat-hooks root and conversation | Provider lifetime and opaque paths                            |
+| B2    | resolveActiveScheduledTask, useActiveScheduledTaskDetails (implemented) | chat-hooks/scheduled-tasks       | Routes, matcher, flags, loading callback                      |
+| B3    | useConversationTitleEnrichmentController (implemented)                  | chat-hooks/conversation          | Identity, JSON/stream adapters, bounds, protection duration   |
+| B4    | useSkillFilePreviewSyncController (implemented)                         | chat-hooks/skill-editor          | Selection, resource key, canvas operations and request guards |
+| B5    | useExternalServiceLogin (implemented)                                   | chat-hooks/external-services     | Auth callbacks, callback path and reserved popup              |
+| B6    | useDeploymentChangeTracking (implemented)                               | chat-hooks/conversation          | Conversation identity, selected deployment and change sink    |
+| B7    | useHtmlTagAnnotationGroups (implemented)                                | quotations root                  | Extract persisted annotations                                 |
+| B8    | toConversationTransferQueueItems (implemented)                          | chat-shared root                 | Translated error/warning resolvers                            |
+| A2    | uploadMimeTypePolicy (implemented)                                      | Existing transcription API       | Preserve default; normalize opt-in                            |
+| D     | offsetPolicy (implemented)                                              | Existing reset-time formatter    | Current-offset default; reset-instant opt-in                  |
+
+Only B5 adds a subpath. B8 uses the existing shared root and leaves the
+file-manager mapper unchanged. A1 is already complete and outside this work.
+Downstream ExternalService callback dispatch must be adopted in the downstream
+repository; parent implementation does not prove downstream adoption or publish
+packages.
+
+### Conversation transfer queue
+
+toConversationTransferQueueItems accepts readonly ConversationTransferJob entries and
+TransferQueueMessageResolvers. Only failed rows resolve errors; only warning rows resolve
+warnings with warningNames. IDs, file names and progress are preserved without mutation.
+This root export is separate from the file-manager toTransferQueueItems helper.
+
+## Surface-specific responsive queries
+
+The layout hook `useIsMobile` and `mobile`/`desktop` variants retain their 1279/1280px boundary. Use `useIsPhone` for menus (width below 768px) and `useIsTablet` for bounded right overlays (768px inclusive to 1280px exclusive). Both hooks subscribe to media-query changes and safely return false without a browser. `TABLET_BREAKPOINT_PX`, `PHONE_MEDIA_QUERY` and `TABLET_MEDIA_QUERY` are public exports. The matching Tailwind variants are `phone`, `tablet` and `tablet-up`; they do not change layout variants.

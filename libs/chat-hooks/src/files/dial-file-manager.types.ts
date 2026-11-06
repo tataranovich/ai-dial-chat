@@ -2,7 +2,9 @@ import type {
   DialFileManagerActionProfile,
   DialFileManagerVariant,
   FileUploadValidationResult,
+  FileDownloadBatchState,
   FileUploadBatchState,
+  FileUploadFailureReason,
 } from '@epam/ai-dial-chat-shared';
 import type {
   DialCopiedItem,
@@ -93,6 +95,8 @@ export interface FileManagerNotification {
   names?: string[];
   /** Count of additional affected items beyond `names`' limit. */
   restCount?: number;
+  /** Reason shared by every failed file of an `UploadFailed` batch; unset when the failed files have different reasons. */
+  failureReason?: FileUploadFailureReason;
 }
 
 /**
@@ -144,6 +148,8 @@ export enum FileOperationKind {
   /** A copy whose every item landed in its own source folder (Duplicate). */
   FileDuplicated = 'fileDuplicated',
   FilesDuplicated = 'filesDuplicated',
+  /** One or more shared-with-me items were removed from the Shared tab. */
+  FilesUnshared = 'filesUnshared',
 }
 
 /**
@@ -298,10 +304,18 @@ export interface UseDialFileManagerResult {
   /** True while a folder creation request is in flight. */
   isCreatingFolder: boolean;
 
-  /** Download: called when user triggers download on one or more items. */
+  /** Download: called when user triggers download on one or more items; returns without waiting for the transfer. */
   onDownloadFiles: (dialFiles: DialFile[]) => void;
-  /** True while a download is in progress. */
+  /** True while at least one download is in progress. Does not block other actions. */
   isDownloading: boolean;
+  /** Download: current batch state (null when idle). */
+  downloadBatchState: FileDownloadBatchState | null;
+  /** Download: abort one in-flight download by its entry id. */
+  cancelDownloadFile: (id: string) => void;
+  /** Download: abort every in-flight download. */
+  cancelAllDownloads: () => void;
+  /** Download: empty the download batch. */
+  clearDownloadBatch: () => void;
 
   /** Delete: called when user confirms deletion of one or more items. */
   onDeleteFiles: (items: DialDeletedItem[], sourceFolder: string) => void;
@@ -369,7 +383,7 @@ export interface UseDialFileManagerResult {
 
   /**
    * True while any mutating file-manager operation is in flight: the OR of
-   * `isCreatingFolder`, `isDownloading`, `isDeleting`, `isRenaming`, `isCopying`,
+   * `isCreatingFolder`, `isDeleting`, `isRenaming`, `isCopying`,
    * `isMoving`, `isUnsharing`, `isRemovingAccess`, and any upload still queued or running.
    *
    * Deliberately excludes three flags, each already fully contained by its own

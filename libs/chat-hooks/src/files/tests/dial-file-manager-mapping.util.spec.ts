@@ -2,7 +2,10 @@ import {
   ListFilesItemDtoNodeTypeEnum,
   type ListFilesItemDto,
 } from '@epam/ai-dial-chat-api-client';
-import { FileUploadStatus } from '@epam/ai-dial-chat-shared';
+import {
+  FileUploadFailureReason,
+  FileUploadStatus,
+} from '@epam/ai-dial-chat-shared';
 import type { FileUploadBatchState } from '@epam/ai-dial-chat-shared';
 import {
   DialFileManagerTabs,
@@ -17,8 +20,11 @@ import {
   findFirstSuccessfulCopyMoveItem,
   mapCorePermissions,
   mapFileMetadataToDialFile,
+  buildSharedSearchScope,
   mapSearchItem,
   mergeCreatedFolderIntoCache,
+  resolveTransferFailureReason,
+  resolveUploadFailureReason,
   updateEntry,
 } from '../dial-file-manager-mapping.util';
 import type {
@@ -314,6 +320,40 @@ describe('updateEntry', () => {
   });
 });
 
+describe('mapSearchItem on the Shared tab', () => {
+  const nested: ListFilesItemDto = {
+    name: 'a.pdf',
+    path: 'owner/folder/a.pdf',
+    folderId: 'owner',
+    nodeType: ListFilesItemDtoNodeTypeEnum.Item,
+    bucket: 'owner',
+    url: 'files/owner/folder/a.pdf',
+  };
+
+  it('places a file nested in the owner bucket directly under the root, like the listing row', () => {
+    const scope = buildSharedSearchScope('Shared with me', '', new Map());
+    const result = mapSearchItem(nested, 'me', 'Shared with me', scope);
+    expect(result.path).toBe('/Shared with me/a.pdf');
+    expect(result.parentPath).toBe('/Shared with me');
+  });
+
+  it('maps a nested shared-folder result relative to the shared folder', () => {
+    const meta = new Map([
+      ['shared', { bucket: 'owner', dialCorePath: 'files/owner/x/shared/' }],
+    ]);
+    const item: ListFilesItemDto = {
+      ...nested,
+      path: 'owner/x/shared/sub/b.pdf',
+      name: 'b.pdf',
+      url: 'files/owner/x/shared/sub/b.pdf',
+    };
+    const scope = buildSharedSearchScope('Shared with me', 'shared/', meta);
+    expect(mapSearchItem(item, 'me', 'Shared with me', scope).path).toBe(
+      '/Shared with me/shared/sub/b.pdf',
+    );
+  });
+});
+
 describe('mapSearchItem', () => {
   it('maps a search result item to a virtual-path DialFile', () => {
     const item: ListFilesItemDto = {
@@ -537,5 +577,65 @@ describe('fetchForSearch', () => {
       new Map(),
     );
     expect(result).toEqual({ items: [] });
+  });
+});
+
+describe('resolveUploadFailureReason', () => {
+  /* The shape `getApiErrorDetails` reads: an error carrying a response. */
+  const httpError = (status: number) =>
+    Object.assign(new Error(`status ${status}`), {
+      response: { status, json: async () => ({}) },
+    });
+
+  it.each([
+    [403, FileUploadFailureReason.Forbidden],
+    [409, FileUploadFailureReason.Conflict],
+    [413, FileUploadFailureReason.TooLarge],
+    [502, FileUploadFailureReason.Unavailable],
+    [503, FileUploadFailureReason.Unavailable],
+    [400, FileUploadFailureReason.Unknown],
+    [411, FileUploadFailureReason.Unknown],
+    [415, FileUploadFailureReason.Unknown],
+    [500, FileUploadFailureReason.Unknown],
+  ])('maps HTTP %s to %s', async (status, expected) => {
+    await expect(resolveUploadFailureReason(httpError(status))).resolves.toBe(
+      expected,
+    );
+  });
+
+  it('treats an error without a response as unknown', async () => {
+    await expect(
+      resolveUploadFailureReason(
+        new Error('Upload response was not valid JSON'),
+      ),
+    ).resolves.toBe(FileUploadFailureReason.Unknown);
+  });
+});
+
+describe('resolveTransferFailureReason', () => {
+  it('treats a request that never got a response as a network failure', async () => {
+    const fetchError = Object.assign(new Error('The request failed'), {
+      name: 'FetchError',
+    });
+
+    await expect(resolveTransferFailureReason(fetchError)).resolves.toBe(
+      FileUploadFailureReason.Network,
+    );
+    await expect(
+      resolveTransferFailureReason(new TypeError('Failed to fetch')),
+    ).resolves.toBe(FileUploadFailureReason.Network);
+  });
+
+  it('maps a download response error by its status', async () => {
+    const responseError = Object.assign(
+      new Error('Response returned an error code'),
+      {
+        response: { status: 403, json: async () => ({}) },
+      },
+    );
+
+    await expect(resolveTransferFailureReason(responseError)).resolves.toBe(
+      FileUploadFailureReason.Forbidden,
+    );
   });
 });

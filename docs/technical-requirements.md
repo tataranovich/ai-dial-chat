@@ -54,14 +54,15 @@ selection into another conversation.
 #### Token-usage limits control
 
 The app-owned `UsageLimitsControl` is passed to the isolated Conversation Input
-library through `usageLimitsSlot`. It reads `dayTokenStats`, `weekTokenStats`,
+library through `usageLimitsSlot` — only while the `features.usageLimitsControl`
+flag (`USAGE_LIMITS_CONTROL_ENABLED`, off by default) is on. It reads `dayTokenStats`, `weekTokenStats`,
 and `monthTokenStats`, plus the day/week/month cost stats; the minute stats are
 deliberately not shown, being rolling-minute counters the user cannot act on.
 
 Only limits at or past 75% of their cap are listed, and the trigger itself is
 absent while every limit is comfortable — the control warns rather than reports,
-and its presence is the signal. The complete picture lives on Settings → Usage,
-which the popover links to directly at `/settings/usage`. At rest the trigger shows a
+and its presence is the signal. The complete picture lives on the Usage page,
+which the popover links to directly at `/usage`. At rest the trigger shows a
 compact dial — a circular face with a needle pivoting at its centre; hover,
 keyboard focus, and the open state reveal the percentage at the dial's
 inline-start side inside one rounded capsule.
@@ -81,6 +82,45 @@ The dial's needle is aimed by the worst capped row's percentage — resting at t
 `100%` — and the trigger's accessible name names that row's period. Its color follows the group's `CatalogLimitStatus`:
 the theme error color once any capped period has reached its limit, the theme
 warning color from 75%, and the secondary color below that.
+
+**Default: the usage banner.** While the flag is off (the default), neither
+composer mounts the dial. Both instead pass the app-owned `UsageLimitBanner`
+through Conversation Input's generic `aboveInputSlot`, which renders it directly
+above the input within the composer's width. The two surfaces are mutually
+exclusive: for any value of the flag exactly one is composed.
+
+The banner reads the raw `DeploymentLimitsResponseDto` through
+`useDeploymentUsageLimits` rather than the dial's mapped rows, because those
+drop everything below a fixed 75%. Among the capped day/week/month token and
+cost stats (minute stats excluded, as in the dial) it picks the highest
+used/total ratio; a tie goes to the longer period, then to the token stat. It
+renders `UsageLimitBannerView` from `@epam/ai-dial-conversation-input`, a
+presentational kit `Notification` section message. The lib view receives the
+severity, the translated sentences and a close handler, while the data,
+threshold, wording and dismissal stay in the app:
+
+- **Warning** — the worst stat is at or above
+  `config.usageLimitsWarningThresholdPercent` and below 100%: "Daily limit 80%
+  used. Resets at 3:00 AM GMT+3."
+- **Reached** — the worst stat is at or above 100%, error variant: "Monthly
+  limit reached. Resets on Nov 1."
+- Nothing otherwise, before the first response, without a deployment, or after
+  a failed first fetch. A failed refresh keeps the last value.
+
+The reset sentence shows a time with zone offset for a daily period and a short
+date (with the year only when it differs) for a weekly or monthly one, and is
+omitted when DIAL Core sends no `resetsAt`. The banner uses `role="status"`, not
+the kit's assertive default, and refreshes once after a response finishes
+streaming through the `useRefreshUsageAfterGeneration` hook it shares with the
+dial.
+
+The threshold comes from `USAGE_LIMITS_WARNING_THRESHOLD_PERCENT` (integer
+1–99, default 75) and governs the banner only — the dial keeps its fixed 75%.
+Closing the banner records the key `${deploymentId}:${period}:${severity}` in
+an in-memory store shared by both composers (`useUsageLimitBannerDismissal`). It
+stays hidden while that key holds, and reappears when the deployment, the
+triggering period, or the severity changes. A reload clears every dismissal;
+nothing is persisted.
 
 ### FR-2 — Message Feed (`@epam/ai-dial-conversation-messages`)
 
@@ -285,7 +325,8 @@ Simplest path for initial release: client-side truncation from `conversation.mes
 - Only English resources are currently shipped. The earlier full Arabic coverage
   decision describes intent, not the implementation. Reply adds English strings
   only; additional translations are outside this feature's scope.
-- `applyDocumentDirection` wired to `i18n.on('languageChanged')` — sets `document.documentElement.dir` and `lang` on every locale switch
+- `applyDocumentDirection` wired to `i18n.on('languageChanged')` — sets `document.documentElement.dir` and `lang` on every locale switch from `i18n.resolvedLanguage` (the language actually rendered), so a detected browser language without a translation (e.g. `uk`) yields `lang="en"`, not `lang="uk"`
+- `useLanguage()` (`apps/chat/src/hooks/language/useLanguage.ts`) returns both the detected `language` and `displayLanguage` (`i18n.resolvedLanguage`, falling back to `DEFAULT_LANGUAGE`, which is also i18next's `fallbackLng`). `Intl` formatting of weekday names in the scheduled-task form and schedule labels uses `displayLanguage`, so a Russian browser on the English UI shows "Monday", not "понедельник". Other `Intl` call sites still format with the detected `language`.
 - All layout components migrated from physical Tailwind utilities to CSS logical properties
 - Directional icons mirrored via `rtl:scale-x-[-1]`
 - Mobile slide-in panels use `start-0` + `ltr:-translate-x-full rtl:translate-x-full`

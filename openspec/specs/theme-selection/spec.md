@@ -11,8 +11,8 @@ keys.
 
 A DIAL deployment is rebranded by pointing `THEMES_CONFIG_URL` at a themes host; `chat-api` proxies
 its `config.json` at `GET /api/themes`. `ThemeProvider` applies the chosen theme's `colors` as CSS
-custom properties on the `<html>` element, over the light-theme hex fallbacks compiled into
-`tailwind.config.js`. Every theme the host serves is selectable, not only `light` and `dark`.
+custom properties on the `<html>` element, over the light-theme hex fallbacks in
+`tools/tailwind/theme.css`. Every theme the host serves is selectable, not only `light` and `dark`.
 
 **State ownership**: `ThemeContext` (`apps/chat/src/context/ThemeContext.tsx`) owns the preference;
 `useThemeOptions` derives the picker's option list from it. No new context is introduced.
@@ -112,12 +112,13 @@ The provider SHALL NOT fall back to `config.themes[0].id`; the only fallback is 
 
 ### Requirement: Applying a theme clears the previously applied custom properties
 
-`applyThemeColors` (`apps/chat/src/utils/apply-theme-colors.ts`) SHALL remove every CSS custom
+`applyThemeColors` (`libs/chat-hooks/src/shared/theme-colors.ts`, exported from `@epam/ai-dial-chat-hooks`
+and its `./utils` subpath; `ThemeProvider` passes it the resolved theme's `colors`) SHALL remove every CSS custom
 property it previously set on the target element before writing the next theme's properties, using
 `element.style.removeProperty`. The set of previously written property names SHALL be tracked per
 target element.
 
-Calling `applyThemeColors` with no theme SHALL clear the previously applied properties and write
+Calling `applyThemeColors` with no colors SHALL clear the previously applied properties and write
 nothing, returning the element to the stylesheet's own values.
 
 #### Scenario: Keys from the previous theme do not leak
@@ -128,7 +129,7 @@ nothing, returning the element to the stylesheet's own values.
 
 #### Scenario: Clearing restores the stylesheet defaults
 
-- **WHEN** a theme has been applied and `applyThemeColors` is then called with no theme
+- **WHEN** a theme has been applied and `applyThemeColors` is then called with no colors
 - **THEN** every property that theme wrote is removed from the element's inline style
 
 #### Scenario: A theme with an unrecognised key still applies

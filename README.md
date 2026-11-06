@@ -142,7 +142,7 @@ For the production CSP browser check, run
 
 ## Prerequisites
 
-- **Node.js**: 24 or higher (production images build on `node:24.21-alpine3.24`)
+- **Node.js**: 24 or higher (production images build on `node:24.22.2-alpine3.24`)
 - **npm**: 11 or higher (bundled with Node 24)
 - **Git**: Latest version
 
@@ -230,10 +230,10 @@ ai-dial-chat/
 │   │   │   ├── pages/           # Route-level pages
 │   │   │   ├── server-api/      # Backend adapters (the only REST-aware layer)
 │   │   │   ├── main.tsx         # Entry point
+│   │   │   ├── tailwind.css     # Tailwind entry
 │   │   │   └── styles.scss      # Global styles
 │   │   ├── public/              # Static assets
 │   │   ├── vite.config.mts      # Vite configuration
-│   │   ├── tailwind.config.js   # Tailwind config
 │   │   └── README.md            # Frontend docs
 │   │
 │   ├── chat-api/                # NestJS backend application
@@ -265,7 +265,7 @@ ai-dial-chat/
 ├── package.json                 # Root dependencies
 ├── tsconfig.base.json           # Base TypeScript config
 ├── eslint.config.mjs            # ESLint configuration
-└── tailwind.config.js           # Root Tailwind config
+└── tools/tailwind/theme.css     # Shared Tailwind theme (tokens, breakpoints)
 ```
 
 ## Development
@@ -277,10 +277,10 @@ ai-dial-chat/
 - React 19.2
 - TypeScript 6.0
 - Vite 8.0
-- Tailwind CSS 3.4
+- Tailwind CSS 4.3
 - React Router 8.3
 - i18next 26.2 / react-i18next 17
-- EPAM AI DIAL UI Kit 0.13
+- EPAM AI DIAL UI Kit 0.16 (dev prerelease)
 
 **Backend**
 
@@ -292,7 +292,7 @@ ai-dial-chat/
 
 **Development Tools**
 
-- Nx 23.2
+- Nx 24.0
 - ESLint 9.39
 - Prettier 3.9
 - Vitest 4.1
@@ -459,6 +459,7 @@ published to npm today. Each library has its own README with its public API.
 | `@epam/ai-dial-skill-editor`          | [`libs/skill-editor`](libs/skill-editor)                   | Skill authoring form with a file tree and conflict handling                                                   |
 | `@epam/ai-dial-builder-form`          | [`libs/builder-form`](libs/builder-form)                   | Builder/editor form shells, editor layout, and shared deployment-creation field set                           |
 | `@epam/ai-dial-scheduled-tasks`       | [`libs/scheduled-tasks`](libs/scheduled-tasks)             | Scheduled Tasks surfaces — cards, create form, detail view, run history                                       |
+| `@epam/ai-dial-projects`              | [`libs/projects`](libs/projects)                           | Projects page — search, sort and the card grid of available projects                                          |
 
 > `libs/ai-dial-kit/` is a leftover build-output directory from a removed
 > library — it has no `package.json`, no sources, and no importers. Do not add

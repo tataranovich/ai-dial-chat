@@ -1,8 +1,8 @@
-import type {
-  AcceptInvitationResponseDto,
-  DiscardSharedCatalogItemResponseDto,
-  RevokeSharedAccessResponseDto,
-  ShareRecipientsResponseDto,
+import {
+  type AcceptInvitationResponseDto,
+  type DiscardSharedCatalogItemResponseDto,
+  type RevokeSharedAccessResponseDto,
+  type ShareRecipientsResponseDto,
 } from '@epam/ai-dial-chat-api-client';
 import { shareApi } from './api-client';
 

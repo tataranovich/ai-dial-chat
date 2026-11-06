@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import type { UserMenuTriggerVariant } from '../types/user-menu-trigger-variant';
 import type { NavigationMenuGroup } from './navigation-menu';
 import type { NavigationUserProfile } from './user-profile';
 
@@ -10,8 +11,12 @@ export interface UserMenuColors {
   avatarText?: string;
   /** Menu label text color. */
   text?: string;
-  /** Trigger background on hover. */
+  /** Trigger background on hover and keyboard focus. */
   triggerHoverBackground?: string;
+  /** Background of the `Profile` and `Compact` triggers while the menu is open. Defaults to `--bg-control-accent-alpha-active-subtle`. */
+  triggerOpenBackground?: string;
+  /** Focus outline color of the trigger. Defaults to `--stroke-focus`. */
+  focusOutline?: string;
 }
 
 /** Typography overrides for `UserMenu`. */
@@ -20,6 +25,8 @@ export interface UserMenuTypography {
   fontClassName?: string;
   /** `font-family` applied to the menu trigger and overlay content. */
   fontFamily?: string;
+  /** Typography class of the avatar's initials fallback. Defaults to `'dial-tiny-text'`. */
+  avatarInitialsClassName?: string;
 }
 
 /** Combined style overrides for `UserMenu`. */
@@ -58,8 +65,12 @@ export interface UserMenuProps {
   onLogout: () => void;
   /** When provided, renders a Settings entry that invokes this callback. */
   onSettings?: () => void;
+  /** Presentation of the trigger. Defaults to `UserMenuTriggerVariant.Avatar`. */
+  triggerVariant?: UserMenuTriggerVariant;
   /** Hides the avatar tooltip — set on touch layouts where hover never fires. */
   isTooltipHidden?: boolean;
+  /** Omits the identity row — avatar initials and display name — from the top of the dropdown. Defaults to `false`. */
+  isIdentityHidden?: boolean;
   /** Style overrides for colors, typography, and class names. */
   styles?: UserMenuStyles;
 }

@@ -33,6 +33,7 @@ const labels: CatalogEditNavigationLabels = {
   createSkillWriteInstructions: 'Write instructions',
   createSkillUpload: 'Upload',
   createPrompt: 'Create prompt',
+  createRunners: 'Runners',
   deleteError: 'delete-error',
 };
 
@@ -467,7 +468,7 @@ describe('useCatalogEditNavigation', () => {
       );
     });
 
-    it('offers one create option per runner schema, labelled with its display name and sorted with the static options', () => {
+    it('offers one create option per runner schema, labelled with its display name and listed after the entity options under a Runners header', () => {
       const { result, onNavigate } = renderEditNavigation({
         isCustomAppsEnabled: true,
         schemas: [
@@ -506,14 +507,16 @@ describe('useCatalogEditNavigation', () => {
           option.label,
         ]),
       ).toEqual([
-        ['custom-app', 'Create custom app'],
         ['prompt', 'Create prompt'],
         ['toolset', 'Create toolset'],
+        ['skill', 'Skill'],
+        ['create-sections-divider', undefined],
+        ['runners-header', 'Runners'],
+        ['custom-app', 'Create custom app'],
         ['runner:mind-map-schema', 'Mind Map'],
         ['runner:editorless-runner', 'No editor'],
         ['runner:foo-quickapps', 'Quick app'],
         ['runner:foo-quickapps2', 'Quick app 2.0'],
-        ['skill', 'Skill'],
       ]);
 
       result.current.createOptions
@@ -594,6 +597,44 @@ describe('useCatalogEditNavigation', () => {
       expect(
         result.current.createOptions[0].children?.map((child) => child.key),
       ).toEqual(['skill-upload']);
+    });
+
+    it('shows no section divider or header when hide-custom-app-creation leaves no runner section', () => {
+      const { result } = renderEditNavigation({
+        isCustomAppsEnabled: true,
+        isHideCustomAppCreationEnabled: true,
+        schemas: [quickAppSchema],
+      });
+
+      expect(result.current.createOptions.map((option) => option.key)).toEqual([
+        'prompt',
+        'toolset',
+        'skill',
+      ]);
+    });
+
+    it('shows only the runner section, without a header, when no entity option is offered', () => {
+      const { result } = renderEditNavigation({
+        isCustomAppsEnabled: true,
+        isToolsetsEnabled: false,
+        isPromptsEnabled: false,
+        schemas: [quickAppSchema],
+      });
+
+      act(() => result.current.createSearch?.onChange('app'));
+
+      expect(result.current.createOptions.map((option) => option.key)).toEqual([
+        'custom-app',
+        'runner:foo-quickapps2',
+      ]);
+    });
+
+    it('leaves no options when the search matches nothing', () => {
+      const { result } = renderEditNavigation({ schemas: [quickAppSchema] });
+
+      act(() => result.current.createSearch?.onChange('zzz'));
+
+      expect(result.current.createOptions).toEqual([]);
     });
 
     it('offers no search field when no runner option is available', () => {
@@ -695,6 +736,259 @@ describe('useCatalogEditNavigation', () => {
       );
       uploadOption?.onClick?.({ key: 'skill-upload', domEvent: {} as never });
       expect(onSkillUploadClick).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('createMenuByType', () => {
+    const keysOf = (
+      menu: { options: { key: string }[] } | undefined,
+    ): string[] | undefined => menu?.options.map((option) => option.key);
+
+    it('splits the Create menu by entity type and gives models no entry', () => {
+      const { result } = renderEditNavigation({
+        isCustomAppsEnabled: true,
+        schemas: [quickAppSchema],
+      });
+      const menu = result.current.createMenuByType;
+
+      expect(menu[CatalogEntityType.Model]).toBeUndefined();
+      expect(keysOf(menu[CatalogEntityType.Agent])).toEqual([
+        'custom-app',
+        'runner:foo-quickapps2',
+      ]);
+      expect(keysOf(menu[CatalogEntityType.Toolset])).toEqual(['toolset']);
+      expect(keysOf(menu[CatalogEntityType.Skill])).toEqual([
+        'skill-write-instructions',
+        'skill-upload',
+      ]);
+      expect(keysOf(menu[CatalogEntityType.Prompt])).toEqual(['prompt']);
+    });
+
+    it('gives the agent menu the runner search field', () => {
+      const { result } = renderEditNavigation({ schemas: [quickAppSchema] });
+
+      expect(
+        result.current.createMenuByType[CatalogEntityType.Agent]?.search,
+      ).toBe(result.current.createSearch);
+    });
+
+    it('leaves a disabled type with no options', () => {
+      const { result } = renderEditNavigation({
+        isToolsetsEnabled: false,
+        isPromptsEnabled: false,
+      });
+      const menu = result.current.createMenuByType;
+
+      expect(keysOf(menu[CatalogEntityType.Toolset])).toEqual([]);
+      expect(keysOf(menu[CatalogEntityType.Prompt])).toEqual([]);
+      expect(keysOf(menu[CatalogEntityType.Agent])).toEqual([]);
+    });
+  });
+
+  describe('creation permissions', () => {
+    const schemaA: ApplicationSchemaSummaryDto = {
+      id: 'schema-A',
+      displayName: 'Runner',
+    };
+    const schemaB: ApplicationSchemaSummaryDto = {
+      id: 'schema-B',
+      displayName: 'Runner',
+    };
+    const keysOf = (options: { key: string }[] | undefined) =>
+      options?.map((option) => option.key);
+    const ALL_DENIED = {
+      canCreateCustomApp: false,
+      canCreateToolset: false,
+      canCreatePrompt: false,
+      canCreateSkill: false,
+      canCreateSchema: () => false,
+    };
+
+    it('keeps the flag-only menu when a host passes no creation inputs', () => {
+      const { result } = renderEditNavigation({
+        isCustomAppsEnabled: true,
+        schemas: [quickAppSchema],
+      });
+
+      expect(keysOf(result.current.createOptions)).toEqual([
+        'prompt',
+        'toolset',
+        'skill',
+        'create-sections-divider',
+        'runners-header',
+        'custom-app',
+        'runner:foo-quickapps2',
+      ]);
+      expect(result.current.hasCreateOptions).toBe(true);
+      expect(result.current.createSearch).toBeDefined();
+    });
+
+    it('removes only the custom-app option when custom-app creation is denied', () => {
+      const deployment = {
+        id: 'apps/custom',
+        applicationTypeSchemaId: undefined,
+      } as unknown as DeploymentItemDto;
+      const { result, onNavigate } = renderEditNavigation({
+        isCustomAppsEnabled: true,
+        canCreateCustomApp: false,
+        deployments: [deployment],
+        schemas: [quickAppSchema],
+      });
+
+      const keys = keysOf(result.current.createOptions);
+      expect(keys).not.toContain('custom-app');
+      expect(keys).toContain('runner:foo-quickapps2');
+      expect(keys).toContain('toolset');
+
+      result.current.handleEdit(
+        makeCatalogItem({ id: 'apps/custom', type: CatalogEntityType.Agent }),
+      );
+      expect(onNavigate).toHaveBeenCalledWith('edit:custom-app:apps/custom');
+    });
+
+    it.each([
+      ['toolset', { canCreateToolset: false }],
+      ['prompt', { canCreatePrompt: false }],
+    ])('removes the %s option when its creation is denied', (key, denial) => {
+      const { result } = renderEditNavigation(denial);
+
+      expect(keysOf(result.current.createOptions)).not.toContain(key);
+      expect(keysOf(result.current.createOptions)).toContain('skill');
+    });
+
+    it('removes the Skill group and both children from every menu when skill creation is denied', () => {
+      const { result } = renderEditNavigation({ canCreateSkill: false });
+
+      expect(keysOf(result.current.createOptions)).not.toContain('skill');
+      expect(
+        keysOf(
+          result.current.createMenuByType[CatalogEntityType.Skill]?.options,
+        ),
+      ).toEqual([]);
+    });
+
+    it('cannot reach a denied Skill child through the search', () => {
+      const { result } = renderEditNavigation({
+        canCreateSkill: false,
+        schemas: [quickAppSchema],
+      });
+
+      act(() => result.current.createSearch?.onChange('upload'));
+
+      expect(result.current.createOptions).toEqual([]);
+      expect(result.current.hasCreateOptions).toBe(true);
+    });
+
+    it('offers only the permitted one of two schemas sharing a label', () => {
+      const { result, onNavigate } = renderEditNavigation({
+        schemas: [schemaA, schemaB],
+        canCreateSchema: (schemaId) => schemaId === 'schema-B',
+        deployments: [
+          {
+            id: 'apps/a',
+            applicationTypeSchemaId: 'schema-A',
+          } as unknown as DeploymentItemDto,
+        ],
+      });
+
+      const keys = keysOf(result.current.createOptions);
+      expect(keys).toContain('runner:schema-B');
+      expect(keys).not.toContain('runner:schema-A');
+
+      result.current.handleEdit(
+        makeCatalogItem({ id: 'apps/a', type: CatalogEntityType.Agent }),
+      );
+      expect(onNavigate).toHaveBeenCalledWith('edit:quick-app:schema-A:apps/a');
+    });
+
+    it('drops the search when no runner schema is creatable', () => {
+      const { result } = renderEditNavigation({
+        schemas: [schemaA, schemaB],
+        canCreateSchema: () => false,
+      });
+
+      expect(result.current.createSearch).toBeUndefined();
+      expect(
+        result.current.createMenuByType[CatalogEntityType.Agent]?.search,
+      ).toBeUndefined();
+      expect(
+        keysOf(result.current.createOptions)?.filter((key) =>
+          key.startsWith('runner:'),
+        ),
+      ).toEqual([]);
+    });
+
+    it('merges into one list without a header when only one section is creatable', () => {
+      const { result } = renderEditNavigation({
+        isCustomAppsEnabled: true,
+        canCreateCustomApp: false,
+        schemas: [quickAppSchema],
+        canCreateSchema: () => false,
+      });
+
+      expect(keysOf(result.current.createOptions)).toEqual([
+        'prompt',
+        'toolset',
+        'skill',
+      ]);
+    });
+
+    it('reports no create options when every action is denied', () => {
+      const { result } = renderEditNavigation({
+        isCustomAppsEnabled: true,
+        schemas: [quickAppSchema],
+        ...ALL_DENIED,
+      });
+
+      expect(result.current.hasCreateOptions).toBe(false);
+      expect(result.current.createOptions).toEqual([]);
+      expect(result.current.createSearch).toBeUndefined();
+      for (const type of [
+        CatalogEntityType.Agent,
+        CatalogEntityType.Toolset,
+        CatalogEntityType.Skill,
+        CatalogEntityType.Prompt,
+      ]) {
+        expect(result.current.createMenuByType[type]?.options).toEqual([]);
+      }
+    });
+
+    it('keeps hasCreateOptions true when a search matches nothing', () => {
+      const { result } = renderEditNavigation({ schemas: [quickAppSchema] });
+
+      act(() => result.current.createSearch?.onChange('zzz'));
+
+      expect(result.current.createOptions).toEqual([]);
+      expect(result.current.hasCreateOptions).toBe(true);
+      expect(result.current.createSearch?.value).toBe('zzz');
+    });
+
+    it('does not let a creation permission re-enable a disabled feature', () => {
+      const { result } = renderEditNavigation({
+        isToolsetsEnabled: false,
+        isPromptsEnabled: false,
+        isCustomAppsEnabled: false,
+        isSchemaAppsEnabled: false,
+        canCreateSkill: false,
+        canCreateToolset: true,
+        canCreatePrompt: true,
+        canCreateCustomApp: true,
+        schemas: [quickAppSchema],
+      });
+
+      expect(result.current.hasCreateOptions).toBe(false);
+    });
+
+    it('still deletes an item whose type is denied for creation', async () => {
+      const { result, deletePrompt } = renderEditNavigation(ALL_DENIED);
+
+      await act(() =>
+        result.current.handleDelete(
+          makeCatalogItem({ id: 'prompts/p', type: CatalogEntityType.Prompt }),
+        ),
+      );
+
+      expect(deletePrompt).toHaveBeenCalledWith('prompts/p');
     });
   });
 });

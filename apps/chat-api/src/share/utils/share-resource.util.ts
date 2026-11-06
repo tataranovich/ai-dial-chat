@@ -1,9 +1,15 @@
 import type { components } from '@epam/ai-dial-typescript-sdk';
 import { encodeDialResourcePath } from '../../common/utils/encode-dial-path';
 import { safeDecodeURIComponent } from '../../common/utils/uri';
+import { collectConversationAttachmentUrls } from '../../conversations/utils/conversation-attachments.util';
+import {
+  getConversationTitleFromName,
+  isApplicationDeploymentPath,
+} from '../../conversations/utils/conversation.utils';
 import { isPromptResourceUrl } from '../../prompts/utils/prompt-mapper.util';
 
 type ResourceKind = components['schemas']['ResourceTypes'];
+
 type Invitation = components['schemas']['Invitation'];
 
 /*
@@ -20,6 +26,7 @@ const RESOURCE_KIND_BY_PREFIX: [prefix: string, kind: ResourceKind][] = [
   ['conversations/', 'CONVERSATION'],
   ['skills/', 'SKILL'],
   ['prompts/', 'PROMPT'],
+  ['projects/', 'PROJECT'],
 ];
 
 export const resolveResourceKind = (itemId: string): ResourceKind => {
@@ -32,8 +39,21 @@ export const resolveResourceKind = (itemId: string): ResourceKind => {
 };
 
 /*
- * Prompts are the one resource kind whose public `itemId` is deliberately
- * decoded back to a raw, human-readable DIAL Core resource path
+ * DIAL Core project ids the chat hands out are decoded: the projects module
+ * rebuilds them from Core's decoded `name`/`parentPath` (`projects.mapper.ts`)
+ * and encodes them itself at every Core call (`encodeDialResourcePath`). The
+ * share module must do the same, or a project named `Q4 launch` reaches
+ * Core's share API with a raw space, which Core's URI check rejects.
+ */
+const PROJECT_RESOURCE_PREFIX = 'projects/';
+
+/** Kinds whose public `itemId` is the decoded path and must be re-encoded for Core. */
+const hasDecodedItemId = (itemId: string): boolean =>
+  isPromptResourceUrl(itemId) || itemId.startsWith(PROJECT_RESOURCE_PREFIX);
+
+/*
+ * Prompts and projects are the resource kinds whose public `itemId` is
+ * deliberately decoded back to a raw, human-readable DIAL Core resource path
  * (`buildPromptId` rebuilds it from a `safeDecodeURIComponent`d metadata
  * url — see `urlToPromptPath` — so folder/prompt names with spaces stay
  * literal wherever the id is displayed). Every other kind's listing passes
@@ -41,8 +61,10 @@ export const resolveResourceKind = (itemId: string): ResourceKind => {
  * `conversation-listing.service.ts`; applications/toolsets: `raw.id` in
  * their mapper utils), so their `itemId` already matches whatever encoded
  * or unencoded form DIAL Core itself uses — re-encoding it here would risk
- * disagreeing with that native form. Only prompts need re-encoding back to
- * DIAL Core's canonical form before this direct SDK call boundary.
+ * disagreeing with that native form. Only prompts and projects need
+ * re-encoding back to DIAL Core's canonical form before this direct SDK call
+ * boundary. A project name cannot contain `%` (`isValidDialEntityName`), so
+ * `encodeDialResourcePath`'s decode-first step cannot alter one.
  *
  * TODO: once prompts stop decoding at listing time (aligning them with the
  * conversations pattern — using metadata's native `name`/`parentPath`
@@ -50,7 +72,7 @@ export const resolveResourceKind = (itemId: string): ResourceKind => {
  * away entirely and `itemId` can be used as-is for every kind.
  */
 export const toShareResourceUrl = (itemId: string): string =>
-  isPromptResourceUrl(itemId) ? encodeDialResourcePath(itemId) : itemId;
+  hasDecodedItemId(itemId) ? encodeDialResourcePath(itemId) : itemId;
 
 /*
  * The inverse of `toShareResourceUrl`, applied to an itemId read back out of
@@ -59,11 +81,12 @@ export const toShareResourceUrl = (itemId: string): string =>
  * catalog item ids for prompts are the decoded, human-readable form
  * (`buildPromptId`) — so an accepted prompt invitation that redirected with
  * the encoded form matched nothing in the catalog and silently left the
- * details panel closed. Every other kind's id is passed through unchanged,
- * for the same reason `toShareResourceUrl` leaves it alone.
+ * details panel closed. A project invitation lands on the project view the
+ * same way, so its id is decoded too. Every other kind's id is passed through
+ * unchanged, for the same reason `toShareResourceUrl` leaves it alone.
  */
 export const toPublicItemId = (itemId: string): string =>
-  isPromptResourceUrl(itemId)
+  hasDecodedItemId(itemId)
     ? itemId.split('/').map(safeDecodeURIComponent).join('/')
     : itemId;
 
@@ -75,26 +98,29 @@ export const toPublicItemId = (itemId: string): string =>
  * catalog accept-invitation route, conversations on the conversation one, so
  * each redirects into the right place after acceptance.
  *
- * These string literals MUST stay in sync with `ROUTES.SharedInvitation` and
- * `ROUTES.ConversationSharedInvitation` in `apps/chat/src/types/routes.ts` —
- * apps cannot import each other's route constants across the Nx module
- * boundary, so there is no single shared source of truth. Renaming either
- * frontend route without updating the matching constant here (or vice versa)
- * compiles cleanly but silently breaks the generated share link. The tests
- * in `share-invitation.service.spec.ts` assert the exact URL prefix for both
- * kinds — update them alongside any rename here.
+ * These literals mirror `ROUTES.SharedInvitation`,
+ * `ROUTES.ConversationSharedInvitation` and `ROUTES.ProjectSharedInvitation`
+ * in `apps/chat/src/types/routes.ts`; chat-api cannot import that enum across
+ * the Nx module boundary. `share/tests/share-invitation-routes.spec.ts`
+ * compares both sides and fails when only one of them changes.
  */
 const CATALOG_SHARE_INVITATION_ROUTE_PATH = '/catalog/shared';
 const CONVERSATION_SHARE_INVITATION_ROUTE_PATH = '/conversations/shared';
+const PROJECT_SHARE_INVITATION_ROUTE_PATH = '/projects/shared';
 
 /** DIAL Core conversation resource paths always start with this prefix. */
 export const CONVERSATION_RESOURCE_PREFIX = 'conversations/';
 export const FILE_RESOURCE_PREFIX = 'files/';
 
-export const getInvitationRoutePath = (itemId: string): string =>
-  itemId.startsWith(CONVERSATION_RESOURCE_PREFIX)
-    ? CONVERSATION_SHARE_INVITATION_ROUTE_PATH
-    : CATALOG_SHARE_INVITATION_ROUTE_PATH;
+export const getInvitationRoutePath = (itemId: string): string => {
+  if (itemId.startsWith(CONVERSATION_RESOURCE_PREFIX)) {
+    return CONVERSATION_SHARE_INVITATION_ROUTE_PATH;
+  }
+  if (itemId.startsWith(PROJECT_RESOURCE_PREFIX)) {
+    return PROJECT_SHARE_INVITATION_ROUTE_PATH;
+  }
+  return CATALOG_SHARE_INVITATION_ROUTE_PATH;
+};
 
 /*
  * DIAL Core rejects `?accept=true` with 400 and a body like
@@ -110,73 +136,54 @@ export const isAlreadyOwnedError = (errorBody: unknown): boolean =>
   typeof errorBody === 'string' &&
   errorBody.toLowerCase().includes('already belong');
 
-interface AnnotationWithAttachment {
-  body?: {
-    source?: {
-      attachment?: unknown;
-    };
-  };
-}
+/*
+ * DIAL Core rejects `?accept=true` with 400 and a body like
+ * `"Limit is exceeded on the number of accepted users for the invitation: <id>"`
+ * (or `... for the resource: <url>`) once the share's `maxAcceptedUsers` is
+ * reached. Like `isAlreadyOwnedError`, this case has no dedicated status code
+ * or machine-readable field upstream, so it is detected by substring match.
+ */
+export const isAcceptedUsersLimitError = (errorBody: unknown): boolean =>
+  typeof errorBody === 'string' &&
+  errorBody.toLowerCase().includes('number of accepted users');
+
+/**
+ * Title of a shared conversation, derived from its DIAL Core resource url
+ * (`conversations/{bucket}/{...folders}/{filename}`). Returns undefined for
+ * any other resource kind or when the url carries no filename.
+ */
+export const getSharedConversationTitle = (
+  resourceUrl: string,
+): string | undefined => {
+  if (!resourceUrl.startsWith(CONVERSATION_RESOURCE_PREFIX)) return undefined;
+  const segments = resourceUrl.split('/');
+  if (segments.length < 3) return undefined;
+  const filename = safeDecodeURIComponent(segments.at(-1) ?? '');
+  const folderPath = segments
+    .slice(2, -1)
+    .map(safeDecodeURIComponent)
+    .join('/');
+  const title = getConversationTitleFromName(
+    filename,
+    isApplicationDeploymentPath(folderPath),
+  ).trim();
+  return title || undefined;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
-
-const collectAttachmentResourceUrls = (
-  attachments: unknown,
-  resourceUrls: Set<string>,
-): void => {
-  if (!Array.isArray(attachments)) return;
-
-  for (const attachment of attachments) {
-    if (!isRecord(attachment)) continue;
-
-    for (const field of ['url', 'reference_url'] as const) {
-      const url = attachment[field];
-      if (typeof url !== 'string') continue;
-
-      const resourceUrl = url.split('#', 1)[0];
-      if (resourceUrl.startsWith(FILE_RESOURCE_PREFIX)) {
-        resourceUrls.add(resourceUrl);
-      }
-    }
-  }
-};
 
 /** Collects unique DIAL file resources referenced by messages, stages, and citations. */
 export const collectConversationResourceUrls = (
   conversation: unknown,
 ): string[] => {
-  if (!isRecord(conversation) || !Array.isArray(conversation.messages)) {
-    return [];
-  }
-
   const resourceUrls = new Set<string>();
-  for (const message of conversation.messages) {
-    if (!isRecord(message) || !isRecord(message.custom_content)) continue;
-
-    collectAttachmentResourceUrls(
-      message.custom_content.attachments,
-      resourceUrls,
-    );
-
-    const stages = message.custom_content.stages;
-    if (Array.isArray(stages)) {
-      for (const stage of stages) {
-        if (isRecord(stage)) {
-          collectAttachmentResourceUrls(stage.attachments, resourceUrls);
-        }
-      }
-    }
-
-    const annotations = message.custom_content.annotations;
-    if (!Array.isArray(annotations)) continue;
-    for (const annotation of annotations) {
-      const attachment = (annotation as AnnotationWithAttachment)?.body?.source
-        ?.attachment;
-      collectAttachmentResourceUrls([attachment], resourceUrls);
+  for (const value of collectConversationAttachmentUrls(conversation)) {
+    const resourceUrl = value.split('#', 1)[0];
+    if (resourceUrl.startsWith(FILE_RESOURCE_PREFIX)) {
+      resourceUrls.add(resourceUrl);
     }
   }
-
   return [...resourceUrls];
 };
 
@@ -245,21 +252,54 @@ export const collectApplicationPromptResourceUrls = (
   return [...resourceUrls];
 };
 
-const MS_PER_DAY = 86_400_000;
+/*
+ * Returns the app's uploaded icon as a DIAL file resource url, or `undefined`
+ * when the icon is absent, a theme icon name, or an absolute URL. An uploaded
+ * icon is stored as `files/{bucket}/...` in the author's bucket, so a share
+ * recipient cannot download it unless it is granted alongside the app. Both
+ * `iconUrl` and `icon_url` are read because DIAL Core's application schemas
+ * carry either spelling. Query strings, `#`-fragments and `..` traversal
+ * segments are rejected the same way as prompt urls.
+ */
+export const collectApplicationIconResourceUrl = (
+  application: unknown,
+): string | undefined => {
+  if (!isRecord(application)) return undefined;
+  const iconUrl = application.iconUrl ?? application.icon_url;
+  if (typeof iconUrl !== 'string') return undefined;
+
+  const resourceUrl = iconUrl.split(/[?#]/, 1)[0];
+  if (!resourceUrl.startsWith(FILE_RESOURCE_PREFIX)) return undefined;
+  if (safeDecodeURIComponent(resourceUrl).split('/').includes('..'))
+    return undefined;
+
+  return resourceUrl;
+};
+
+const MS_PER_HOUR = 3_600_000;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+/** Remaining lifetime of a DIAL Core invitation, each unit rounded up. */
+export interface InvitationExpiry {
+  expiresInDays: number;
+  expiresInHours: number;
+}
 
 /**
- * Derives the share popover's whole-day expiry from a DIAL Core invitation.
+ * Derives the share popover's expiry from a DIAL Core invitation, in whole
+ * days and in whole hours, each rounded up. Hours let the popover describe a
+ * per-role TTL shorter than a day, which whole days would round up to `1`.
  *
  * The reference time is `max(createdAt, nowMs)`: DIAL Core's own `createdAt`
- * keeps a BFF clock running behind DIAL Core from rounding a whole-day TTL up
- * by an extra day, while `nowMs` still reports remaining time when the BFF
+ * keeps a BFF clock running behind DIAL Core from rounding a whole-unit TTL up
+ * by an extra unit, while `nowMs` still reports remaining time when the BFF
  * clock runs ahead. Returns `undefined` when `expireAt` is unusable or not in
  * the future, so the caller omits the value instead of guessing one.
  */
-export const deriveExpiresInDays = (
+export const deriveInvitationExpiry = (
   invitation: Pick<Invitation, 'createdAt' | 'expireAt'>,
   nowMs: number,
-): number | undefined => {
+): InvitationExpiry | undefined => {
   const { createdAt, expireAt } = invitation;
   if (typeof expireAt !== 'number' || !Number.isFinite(expireAt))
     return undefined;
@@ -271,5 +311,8 @@ export const deriveExpiresInDays = (
   const remainingMs = expireAt - reference;
   if (remainingMs <= 0) return undefined;
 
-  return Math.ceil(remainingMs / MS_PER_DAY);
+  return {
+    expiresInDays: Math.ceil(remainingMs / MS_PER_DAY),
+    expiresInHours: Math.ceil(remainingMs / MS_PER_HOUR),
+  };
 };

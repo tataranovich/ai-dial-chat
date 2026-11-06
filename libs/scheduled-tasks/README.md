@@ -8,7 +8,7 @@ Use this lib when building a host app's Scheduled Tasks pages: wire up i18n, fea
 
 ## Installation
 
-Requires UI Kit ^0.15.0-dev.36 or later with the public `/editors` entry.
+Requires UI Kit ^0.16.0-dev.20 or later with the public `/editors` entry.
 The Markdown loader uses that entry, and library builds keep UI Kit subpaths
 external to preserve the editor's dynamic boundary in consuming applications.
 
@@ -39,11 +39,13 @@ it while preserving the control's accessible name and keyboard behaviour.
 
 ### ScheduledTasks
 
-Page shell: header with title/subtitle/create action, a search + sort toolbar, an optional `banner` slot, and a content region that shows a loading spinner, an error with retry, the empty state, a no-results state, or a section-grouped card grid, depending on `isLoading`/`error`/`items`.
+Page shell: header with title/subtitle and an optional create action (the header renders the create button only while `onCreateClick` is provided — omit the callback to withdraw the affordance entirely), a search + sort toolbar, an optional `banner` slot, and a content region that shows a loading spinner, an error with retry, the empty state, a no-results state, or a section-grouped card grid, depending on `isLoading`/`error`/`items`.
 
 The sort control's trigger shows the active option's label, falling back to `labels.sortLabel` when `sortKey` matches no option. Inside the menu each option is a `menuitemcheckbox` whose `aria-checked` marks the sort currently in effect, with a check icon carrying the same meaning visually; picking one reports through `onSortChange` and closes the menu. The lib never sorts `items` — it renders them in the order it receives them.
 
-`banner` renders between the toolbar and the content region, in every content-region state (loading, error, empty, populated). It is opaque `ReactNode` content — the host app decides what it contains (e.g. a status notice); the lib attaches no behavior or styling to it beyond layout placement.
+`banner` renders between the toolbar and the content region, in every content-region state (loading, error, empty, populated), inside a wrapper capped to the card grid's `maxWidth` (`gridLayout?.maxWidth`, default `SCHEDULED_TASKS_GRID_DEFAULT_MAX_WIDTH` = `'1180px'`) so the banner stays aligned with the cards; pass no `banner` while it would render nothing visible, so the hidden slot adds no gap between the toolbar and the content. It is opaque `ReactNode` content — the host app decides what it contains (e.g. a status notice); the lib attaches no behavior or styling to it beyond layout placement.
+
+The create button collapses to an icon-only 40px circle below 1280px. With no `onCreateClick` callback the header renders no create button at all.
 
 ```tsx
 import {
@@ -66,9 +68,13 @@ import {
       { value: ScheduledTasksSortKey.LastToRun, label: 'Last to run' },
     ],
     emptyStateLabel: 'No scheduled tasks yet',
-    noResultsLabel: 'No results',
+    emptyStateDescription:
+      'Scheduled tasks will appear here once you create one.',
+    noResultsLabel: 'No scheduled tasks found',
+    noResultsDescription: 'Try a different search term or check your filters.',
     errorLabel: 'Something went wrong',
     retryLabel: 'Retry',
+    loadingAriaLabel: 'Loading scheduled tasks',
   }}
   onCreateClick={() => {}}
   searchQuery=""
@@ -82,9 +88,13 @@ import {
 
 ### ScheduledTaskCard
 
-A single scheduled task rendered as a card: title, optional description/prompt preview, a status pill, and optional location breadcrumb and "new" badge. The status pill is resolved by `getScheduledTaskStatus`: an explicit `item.presentationStatus` wins over the derived statuses; otherwise `item.isCompleted: true` renders a "Completed" badge (check icon), `item.isActive: false` renders a "Paused" badge, and otherwise the schedule label renders as the schedule pill — exactly one of the three, never two together. When `onCardClick` is supplied, the whole card becomes an activatable element (click or Enter/Space) reporting the task id.
+A single scheduled task rendered as a card: title, optional description/prompt preview, a status pill, and optional location breadcrumb and "new" badge. The status pill is resolved by `getScheduledTaskStatus`: an explicit `item.presentationStatus` wins over the derived statuses; otherwise `item.isCompleted: true` renders a "Completed" badge (check icon), `item.isActive: false` renders a "Paused" badge, and otherwise the schedule label renders as the schedule pill — exactly one of the three, never two together. When `onCardClick` is supplied, the title renders as a native `<button>` stretched over the whole card (the card stays an unroled `<article>`), so a click anywhere or Enter/Space on the button reports the task id; keyboard focus outlines the card with `styles.colors.focusOutline` (var `--stc-focus-outline`, default `--stroke-focus`).
 
 Supply `labels.completedBadgeLabel` for localized completed-state copy.
+
+The "new" badge reads `labels.newBadgeLabel` (default `'NEW'`); `item.newBadgeLabel` overrides it for one card, e.g. with an unread-run count (`'3 NEW'`).
+
+The description/prompt-preview line defaults to `dial-small-paragraph-text` (14px/24px) and clamps to three lines on desktop cards (two below the desktop breakpoint); override it with `styles.typography.descriptionClassName`. Whitespace in the preview collapses (unlike the detail view's description, which preserves the author's line breaks): the preview is typically the raw `description` field, and preserved blank lines would spend the whole clamp budget before any text.
 
 The Completed badge mirrors the Paused badge's theming contract: `styles.colors.completedBadgeBackground` / `completedBadgeBorder` / `completedBadgeText` (CSS vars `--stc-completed-*`, set on the card root; the badge background defaults to transparent — only the schedule pill keeps a filled background) and `styles.typography.completedBadgeClassName` (defaults to `'dial-tiny-text'`).
 
@@ -109,11 +119,15 @@ import { ScheduledTaskCard } from '@epam/ai-dial-scheduled-tasks';
 
 ### ScheduledTaskCreateForm
 
-Presentational create-task form: a back-navigable header, display name, a one-shot/recurring schedule section (with an optional Start date / End date pair bounding a recurring schedule's activity window), a Model or Agent field, a description field, and a markdown Instructions editor. Field values and validation errors are supplied by the host app; the Model or Agent field's control is a fully-composed `modelSelector` element the host renders — the lib wraps it with the field's required label and error message. Other fields, including the masked time-of-day picker (shown when `repeat` is "daily", "weekly", or "monthly"), is lib-owned: the picker shows the viewer's timezone hint and validates its visible draft on blur, since the ui kit's masked time input only reports complete `HH:mm` values through `onChange` — while that blur error is set, Save stays disabled so a half-typed draft cannot be saved as the stale last-complete value. Every blur reports the visible draft through `onFieldChange('time', …)` — complete or not — so a host that clears a field's error on change also clears its own `errors.time` without the value having to change; the blur pass validates the draft separately and keeps showing its own message for incomplete ones. The one-shot run-at picker is the internal `ScheduledTaskRunAtField` component: it cannot select a moment earlier than the field's mount time — the earliest selectable moment is pinned when the field mounts, so past days render unselectable while the mount date and future days stay selectable. The Start date / End date pair is bounded the same way: both pickers pin the earliest selectable day at the form's mount date, so days before it render unselectable. The form's only internal state is the time field's blur error, which resets when a repeat switch hides the field.
+Presentational create-task form: a back-navigable header, display name, a one-shot/recurring schedule section (with an optional Start date / End date pair bounding a recurring schedule's activity window), a Model or Agent field, a description field, and a markdown Instructions editor. Field values and validation errors are supplied by the host app; the Model or Agent field's control is a fully-composed `modelSelector` element the host renders — the lib wraps it with the field's required label and error message. Other fields, including the masked time-of-day picker (shown when `repeat` is "daily", "weekly", "monthly", or "custom"), is lib-owned: the picker shows the viewer's timezone hint and validates its visible draft on blur, since the ui kit's masked time input only reports complete `HH:mm` values through `onChange` — while that blur error is set, Save stays disabled so a half-typed draft cannot be saved as the stale last-complete value. Every blur reports the visible draft through `onFieldChange('time', …)` — complete or not — so a host that clears a field's error on change also clears its own `errors.time` without the value having to change; the blur pass validates the draft separately and keeps showing its own message for incomplete ones. The one-shot run-at picker is the internal `ScheduledTaskRunAtField` component: it cannot select a moment earlier than the field's mount time — the earliest selectable moment is pinned when the field mounts, so past days render unselectable while the mount date and future days stay selectable. Its popover footer's time control opens an hour/minute list from a clock button, besides accepting typed `HH:mm`. The Start date / End date pair is bounded the same way: both pickers pin the earliest selectable day at the form's mount date, so days before it render unselectable. Every recurring cadence, `custom` included, renders the same date-only pair, so a repeat switch between them keeps both boundaries. The form's only internal state is the time field's blur error, which resets when a repeat switch hides the field.
 
-`isSubmitting` disables Cancel and Save **and** gives Save a busy affordance — a spinner, `aria-busy`, and an announcement of `labels.submittingLabel` (default `'Saving'`). Save is equally disabled whenever a required field is empty or the time draft is invalid, so the affordance is the only thing that separates "submitting" from "not ready".
+When `repeat` is `ScheduledTaskRepeat.Custom`, the schedule section renders the time-of-day picker, below it a multi-select day-of-week button row under a visible required "Days" label (`labels.daysOfWeekLabel`, also the row's accessible name via `aria-labelledby`), and the Start date / End date pair. The row is circular 40×40px kit `Button`s at a 2px gap — Primary Solid selected, Neutral Solid unselected — built from `labels.customDayOptions`, each button carrying its full day name as the accessible name and an `aria-pressed` selection state. Activating a day toggles it in `values.daysOfWeek` (APScheduler `'0'`=Monday–`'6'`=Sunday, kept sorted Monday first), except that the only selected day stays selected; `errors.daysOfWeek` renders under the row. One time applies to every selected day, and Custom blocks Save until a day is selected.
 
-Pass `initialValues` — the values the form was opened with — to guard unsaved edits: while `values` differs from it (compared by `hasScheduledTaskFormChanges`, which treats empty strings, `undefined` and empty skill lists as equal), Back and Cancel open a discard confirmation instead of calling `onBack` / `onCancel`, and the browser warns before the page unloads. The confirmation's copy comes from the optional `labels.discardTitle`, `discardMessage`, `discardConfirmLabel` and `discardCancelLabel` (English defaults). Omit `initialValues` to handle unsaved changes in the host.
+**Migration:** the former Custom every-N-weeks interval is removed — `values.everyWeeks`, `labels.everyLabel`, `labels.everyWeekOptions` and the `ScheduledTaskEveryWeekOption` type no longer exist. Pass `labels.daysOfWeekLabel` and read `values.daysOfWeek` instead of `values.dayOfWeek` for Custom.
+
+`isSubmitting` disables Cancel and Save **and** gives Save a busy affordance — a spinner, `aria-busy`, and an announcement of `labels.submittingLabel` (default `'Saving'`). While the lazy Instructions editor loads, a spinner named `labels.editorLoadingAriaLabel` (default `'Loading editor'`) stands in for it. Save is equally disabled whenever a required field is empty or the time draft is invalid, so the affordance is the only thing that separates "submitting" from "not ready".
+
+Pass `initialValues` — the values the form was opened with — to guard unsaved edits: while `values` differs from it (compared by `hasScheduledTaskFormChanges`, which treats empty strings, `undefined` and empty skill lists as equal), Back and Cancel open a discard confirmation instead of calling `onBack` / `onCancel`, and the browser warns before the page unloads. The confirmation's copy comes from the optional `labels.discardTitle`, `discardMessage`, `discardConfirmLabel`, `discardConfirmMobileLabel` (used below the desktop breakpoint, default `'Discard'`) and `discardCancelLabel` (English defaults). Omit `initialValues` to handle unsaved changes in the host.
 
 ```tsx
 import {
@@ -165,10 +179,12 @@ disabled and, when `labels.startNowBusyLabel` is supplied, exposes that reason
 as its tooltip and accessible description (the button stays focusable via
 `aria-disabled` so the tooltip can open). The host owns
 execution, eligibility, errors, translations, and live announcements. Below
-1280px header actions wrap while retaining their text and 44px targets. The
-back arrow mirrors in RTL, while the Start now play icon does not.
+1280px Delete, Edit and Start now collapse to icon-only 44px targets (their
+labels stay as accessible names), and the back arrow stays on the first row if
+the actions wrap. The back arrow mirrors in RTL, while the Start now play icon
+does not.
 
-Presentational detail page for a single scheduled task: a back-navigable header with an optional Edit action, a Details/Configuration body (description, model/agent, recurrence, activity window, read-only markdown instructions), and a paginated History panel listing past runs with a status icon, timestamp, and duration per row, with a "Show more" button (not scroll-triggered) for loading further pages. A run row renders as clickable only when its item carries a non-empty `conversationId` and `onRunClick` is supplied — rows without a `conversationId` stay static even if `onRunClick` is passed for the list. A row whose item has `isUnread: true` additionally renders a small unread-dot indicator before its timestamp. At the desktop breakpoint the Details, Configuration, and History sections render side by side in a three-column layout and scroll independently beneath the fixed header; below it (mobile and tablet) they render as a tab row — Details active by default — inside one body scroll container, with one section visible at a time and the History panel in standard top-to-bottom page flow (inline "Show more", no self-scrolling card). The page root clips overflow so the document itself does not become the scrolling surface. The header can render an Active switch and a Delete action when their props are supplied; a task with `isCompleted: true` renders no Active switch at all — the completed line in the Details summary carries the state. Field values, runs, and markdown rendering are all supplied by the host app; this component performs no routing, i18n, or network calls, and its only internal state is the selected mobile tab.
+Presentational detail page for a single scheduled task: a back-navigable header with an optional Edit action, a Details/Configuration body (description, model/agent, recurrence, activity window, read-only markdown instructions), and a paginated History panel listing past runs with a status icon, timestamp, and duration per row, with a "Show more" button (not scroll-triggered) for loading further pages. A run row renders as clickable only when its item carries a non-empty `conversationId` and `onRunClick` is supplied — rows without a `conversationId` stay static even if `onRunClick` is passed for the list. A row whose item has `isUnread: true` renders its timestamp semibold and a small unread dot in a fixed slot at the row's end. An `Error` row whose item carries non-empty `errorText` is expandable. Clicking it, or pressing Enter or Space, toggles the error text under the row, and a chevron in the row's end slot shows whether it is open. The row header exposes `aria-expanded`/`aria-controls`, and the error text is not part of its accessible name. When that run also has a `conversationId` and `onRunClick` is supplied, the expanded details add a link labelled `labels.openConversationLabel` (default `'Open conversation'`) that calls `onRunClick`; the header itself only toggles. Rows start collapsed, and the run list keeps which rows are expanded in its own local state. The details text takes `historyStyles.colors.errorDetailsTextColor` (var `--strhl-error-details-text`, default `--text-secondary`) and `ScheduledTaskHistorySection`'s `errorDetailsClassName` (default `'dial-tiny-text'`). The chevron takes `historyStyles.colors.chevronIconColor` (var `--strhl-chevron-icon`, default `--text-secondary`). An expanded header uses `historyStyles.rowExpandedBackground` (var `--strhl-row-expanded-bg`, default `--bg-control-accent-alpha-active`). At the desktop breakpoint the Details, Configuration, and History sections render side by side in a three-column layout and scroll independently beneath the fixed header; below it (mobile and tablet) they render as a tab row — Details active by default — inside one body scroll container, with one section visible at a time and the History panel in standard top-to-bottom page flow (inline "Show more", no self-scrolling card). The page root clips overflow so the document itself does not become the scrolling surface. The header title ellipsizes instead of stretching the header — capped at 600px on every breakpoint (phones never reach the cap and truncate at the row edge; tablets and the desktop header stop the line at 600px) — so a long title never pushes the action buttons out or overflows the header; the title text renders through the kit's `EllipsisTooltip` (the same mechanism as the card title), showing the full name in a tooltip only when actually clipped. The Details description renders at the field-value step (`dial-small-text`, 14px/20px, via `styles.typography.fieldValueClassName`) alongside every other value in the section, while the built-in instructions render at the 14px/24px prose step (`dial-small-paragraph-text` — the same step as the card description and run timestamps, list items included) through a lib-scoped `MarkdownRendererClassNames` record spread from `COMPACT_MARKDOWN_CLASS_NAMES`; the shared presets themselves are untouched, so no other markdown surface changes. The header can render an Active switch and a Delete action when their props are supplied; a task with `isCompleted: true` renders no Active switch at all — the completed line in the Details summary carries the state. Field values, runs, and markdown rendering are all supplied by the host app; this component performs no routing, i18n, or network calls, and its only internal state is the selected mobile tab (plus the run list's set of expanded failed rows).
 
 ```tsx
 import {
@@ -177,7 +193,12 @@ import {
 } from '@epam/ai-dial-scheduled-tasks';
 
 <ScheduledTaskDetailView
-  labels={{/* ..., unreadIndicatorLabel: 'Unread' */}}
+  labels={{
+    /* ...the required labels, plus: */
+    unreadIndicatorLabel: 'Unread',
+    openConversationLabel: 'Open conversation',
+    loadingAriaLabel: 'Loading scheduled task',
+  }}
   onBack={() => {}}
   onEdit={() => {}}
   onStartNow={() => {}}
@@ -194,7 +215,8 @@ import {
     {
       id: 'run_1',
       status: ScheduledTaskRunStatus.Success,
-      timestampLabel: 'today at 9:01 AM (99s)',
+      timestampLabel: 'today at 9:01 AM',
+      durationLabel: '(99s)',
       conversationId: 'conversations/bucket/.scheduler/sched_123/run_1',
       isUnread: true,
     },
@@ -205,15 +227,23 @@ import {
 ```
 
 When the host omits `renderInstructions`, `instructionsMarkdown` is rendered by
-the built-in `MDMessageViewer` from `@epam/ai-dial-chat-shared`. Name its
-controls through the optional `labels.codeBlockCopyLabel`,
-`labels.codeBlockCopiedLabel`, `labels.codeBlockDownloadLabel`,
-`labels.tableScrollRegionAriaLabel` and `labels.mathScrollRegionAriaLabel`
-(the `ScheduledTaskInstructionsMarkdownLabels` fields); each falls back to the
-renderer's English default (`'Copy code'`, `'Copied!'`, `'Download code'`,
-`'Scrollable table'`, `'Scrollable formula'`). `ScheduledTaskDetailsSummary`
-takes the same fields as its `markdownLabels` prop. A host-supplied
-`renderInstructions` owns its own labels, and these are ignored.
+the built-in `MDMessageViewer` from `@epam/ai-dial-chat-shared` at the
+summary's small 14/20 scale (paragraphs and lists at `dial-small-text`,
+headings at `dial-small-semi-text`). Change the type step through
+`styles.typography.instructionsTextClassName` /
+`instructionsHeadingClassName`, or pass `instructionsClassNames` (a
+`MarkdownRendererClassNames` map merged key by key over the defaults). Name the viewer's controls through the optional
+`labels.codeBlockCopyLabel`, `labels.codeBlockCopiedLabel`,
+`labels.codeBlockDownloadLabel`, `labels.tableScrollRegionAriaLabel` and
+`labels.mathScrollRegionAriaLabel` (the `ScheduledTaskInstructionsMarkdownLabels`
+fields); each falls back to the renderer's English default (`'Copy code'`,
+`'Copied!'`, `'Download code'`, `'Scrollable table'`, `'Scrollable formula'`).
+`ScheduledTaskDetailsSummary` takes the same fields as its `markdownLabels`
+prop. A host-supplied `renderInstructions` owns its own labels and classNames,
+and these are ignored. `styles.colors.fieldLabel`
+(`ScheduledTaskDetailsSummaryColors`) sets the field labels' color through
+`--stds-field-label` (default `--text-secondary`); `styles.typography` sets
+their type step (default `'dial-tiny-text'`).
 
 ```tsx
 import {
@@ -238,19 +268,103 @@ const markdownLabels: ScheduledTaskInstructionsMarkdownLabels = {
 />;
 ```
 
+### ScheduledTaskConversationBanner
+
+Compact card above a scheduled-task conversation: the task's `displayName`
+with an optional pre-formatted `timestampLabel` (own line on mobile, inline on
+desktop) and a "Task details" link the host renders through
+`renderDetailsLink`, so the route and router element stay in the host. The
+link receives `className`, `aria-label` and `children` (label plus a
+chevron mirrored in RTL).
+
+- `isLoading` shows a skeleton instead of the name.
+- `isUnavailable` shows `labels.unavailableLabel`, plus a retry button when
+  `onRetry` is set.
+- `isTaskDeleted` replaces the link with `labels.taskDeletedLabel`.
+
+Two polite `LiveRegion`s stay mounted in every state: a visually hidden one
+announces `labels.loadingLabel` while loading, and the visible unavailable
+message is the other. Strings come from `ScheduledTaskConversationBannerLabels`
+(English defaults); colors from `ScheduledTaskConversationBannerColors` — CSS
+vars `--stcb-surface`, `--stcb-border`, `--stcb-text`,
+`--stcb-details-link`, `--stcb-details-link-hover-surface`,
+`--stcb-focus-outline`, `--stcb-deleted-text` on the card root; typography
+from `nameClassName` (default `'dial-small-semi-text'`), `textClassName`
+(default `'dial-small-text'`) and `actionClassName` (default
+`'dial-tiny-semi-text'`).
+
+```tsx
+import { ScheduledTaskConversationBanner } from '@epam/ai-dial-scheduled-tasks';
+import { Link } from 'react-router';
+
+<ScheduledTaskConversationBanner
+  isLoading={isLoading}
+  isUnavailable={isUnavailable}
+  displayName={task.displayName}
+  timestampLabel={runTimeLabel}
+  renderDetailsLink={({ children, ...linkProps }) => (
+    <Link to={`/scheduled-tasks/${scheduleId}`} {...linkProps}>
+      {children}
+    </Link>
+  )}
+  onRetry={hasFailed ? retry : undefined}
+/>;
+```
+
+### ScheduledTasksLoginBanner
+
+Non-dismissible warning banner (kit `WarningMessageNotification`, neutral
+surface) asking the user to log in so scheduled tasks keep running offline.
+`isVisible` draws it; `isLoggingIn` disables the button and shows
+`labels.loggingIn`; a `retryMessage` switches the button to `labels.retry` and
+is announced. A visually hidden `LiveRegion` stays mounted whether or not the
+banner is visible and announces `retryMessage` or, without one,
+`liveAnnouncement`. Omitting `onLogIn` hides the button. Strings come from
+`ScheduledTasksLoginBannerLabels` with English defaults.
+
+```tsx
+import { ScheduledTasksLoginBanner } from '@epam/ai-dial-scheduled-tasks';
+
+<ScheduledTasksLoginBanner
+  isVisible={needsLogin}
+  isLoggingIn={isLoggingIn}
+  retryMessage={retryMessage}
+  liveAnnouncement={announcement}
+  onLogIn={logIn}
+/>;
+```
+
+### ScheduledTasksLimitedAccessBanner
+
+Non-dismissible error section message for missing scheduler access, with the
+bold title and the body on one line. Strings come from
+`ScheduledTasksLimitedAccessBannerLabels` (English defaults); typography from
+`titleClassName` (default `'dial-small-paragraph-semi-text'`) and
+`bodyClassName` (default `'dial-small-paragraph-text'`).
+
+```tsx
+import { ScheduledTasksLimitedAccessBanner } from '@epam/ai-dial-scheduled-tasks';
+
+<ScheduledTasksLimitedAccessBanner labels={{ title, body }} />;
+```
+
 ### ScheduledTaskDeleteConfirmation
 
 Controlled deletion presentation that leaves mutations, routing, notifications,
 and translated copy to the host. The dialog frame is the kit's `Popup`; the
-identity card, the warning sentence, the consequence bullets, and the action row
-are [`ConfirmationIdentityCard`, `ConfirmationView` and
+identity row, the warning sentence, the consequence bullets, and the action row
+are [`ResourceSummary`, `ConfirmationView` and
 `ConfirmationFooter`](../chat-shared/README.md#confirmationview) from
-`@epam/ai-dial-chat-shared`, so a delete confirmation reads the same here as in
-the catalog's details panel.
+`@epam/ai-dial-chat-shared`. The identity row sits on the danger-tinted
+`ResourceSummary` surface — background defaults to `--bg-error` (`#F3D6D8`) and
+border to `--stroke-error-alpha` (`#AE2F2F73`), overridable through
+`styles.colors.summaryBackground` / `styles.colors.summaryBorder`.
 
 `title` is a string rather than a node so the kit names the dialog with it.
 `body` is a node, which is how the host emphasises the task name inside its own
-translated sentence. `isDeleting` disables both actions — and the header close
+translated sentence. The task modal also drops the content view's top padding
+and the action row's top border, so the copy sits close under the identity row
+and the actions sit on the plain dialog surface. `isDeleting` disables both actions — and the header close
 control, Escape and an outside click — puts a spinner in the confirm button, and
 announces `pendingLabel` politely. Use `styles.popupClassName` to apply a host
 popup width.
@@ -287,6 +401,127 @@ import { ScheduledTaskDeleteConfirmation } from '@epam/ai-dial-scheduled-tasks';
 when neither is given. Pass `typeLabel` in sentence case — the label uppercases
 itself.
 
+### ScheduledTaskConversationHistorySection
+
+History accordion of a task conversation's sources panel: the schedule's
+paginated runs with the current run highlighted and a "Show more" footer. It is
+the accordion-wrapped counterpart of `ScheduledTaskRunHistoryList` — expanded by
+default, resetting to expanded whenever `scheduleId` changes — while the list
+itself stays bare for hosts that need their own chrome. Runs, loading/error
+state, pagination callbacks, and labels are all supplied by the host; a run row
+renders as clickable only when its item carries a `conversationId` and
+`onRunClick` is supplied. An `Error` row whose item carries non-empty
+`errorText` is expandable instead. Activating it toggles the error text under
+the row, behind a chevron at the row's end. When the run has a `conversationId`,
+the expanded details add a `labels.openConversationLabel` link (default
+`'Open conversation'`) that calls `onRunClick`. `errorText` is never part of the
+row's accessible name, and is ignored for every other status.
+`colors.unavailableText` (`ScheduledTaskConversationHistorySectionColors`,
+var `--stch-unavailable-text`, default `--text-secondary`) colors the
+unavailable message; `unavailableTextClassName` sets its type step (default
+`'dial-body-text'`). Set
+`isUnavailable` when the history exists but cannot be shown to the viewer (for
+example a task shared by its owner): `labels.unavailableLabel` then replaces the
+runs, the error message, the retry action and the footer — mirroring
+`ScheduledTaskConversationDetailsSection`'s `state: 'unavailable'`.
+
+```tsx
+import {
+  ScheduledTaskConversationHistorySection,
+  ScheduledTaskRunStatus,
+} from '@epam/ai-dial-scheduled-tasks';
+
+<ScheduledTaskConversationHistorySection
+  scheduleId={schedule.id}
+  items={[
+    {
+      id: 'run_1',
+      status: ScheduledTaskRunStatus.Success,
+      timestampLabel: 'today at 9:01 AM',
+      durationLabel: '(99s)',
+      conversationId: 'conversations/bucket/.scheduler/sched_123/run_1',
+    },
+  ]}
+  isLoading={false}
+  isLoadingMore={false}
+  error={null}
+  onRetry={refetchRuns}
+  isUnavailable={false}
+  hasMore={true}
+  onLoadMore={loadMoreRuns}
+  currentRunId="run_1"
+  onRunClick={(run) => navigateToConversation(run.conversationId)}
+  labels={{
+    title: 'History',
+    emptyLabel: 'No runs yet',
+    errorLabel: 'Failed to load history',
+    retryLabel: 'Retry',
+    unavailableLabel: 'History is unavailable',
+    showMoreLabel: 'Show more',
+    runStatusLabels: {
+      [ScheduledTaskRunStatus.Success]: 'Succeeded',
+      [ScheduledTaskRunStatus.Error]: 'Failed',
+      [ScheduledTaskRunStatus.InProgress]: 'Running',
+      [ScheduledTaskRunStatus.Missed]: 'Missed',
+    },
+    currentRunLabel: 'Current run',
+    unreadIndicatorLabel: 'Unread',
+    openConversationLabel: 'Open conversation',
+  }}
+/>;
+```
+
+### ScheduledTaskConversationDetailsSection
+
+Details accordion of a task conversation's sources panel: the run's own
+Model/Skill/Instructions summary via `ScheduledTaskDetailsSummary`, or the
+scoped unavailable message while the task's details cannot load — `state:
+'error'` additionally renders a retry action wired to `onRetry`, `state:
+'unavailable'` does not. Collapsed by default; resets to collapsed whenever
+`scheduleId` changes. All field values and labels are supplied by the host.
+When `renderInstructions` is omitted, the summary's built-in
+`MDMessageViewer` renders the instructions at the summary's small 14/20 scale —
+name its controls through `markdownLabels`
+(`ScheduledTaskInstructionsMarkdownLabels`, the same prop
+`ScheduledTaskDetailsSummary` takes) and rescale it through
+`instructionsClassNames` (the same prop `ScheduledTaskDetailsSummary` takes);
+both are ignored when `renderInstructions` is supplied.
+`colors.unavailableText` (`ScheduledTaskConversationDetailsSectionColors`,
+var `--stcd-unavailable-text`, default `--text-secondary`) colors the
+unavailable message; `unavailableTextClassName` sets its type step (default
+`'dial-body-text'`).
+
+```tsx
+import {
+  ScheduledTaskConversationDetailsSection,
+  ScheduledTaskConversationDetailsState,
+} from '@epam/ai-dial-scheduled-tasks';
+
+<ScheduledTaskConversationDetailsSection
+  scheduleId={schedule.id}
+  state={ScheduledTaskConversationDetailsState.Ready}
+  onRetry={refetchTask}
+  modelDisplayName="GPT-4.1 mini"
+  skillDisplayNames={['Daily digest skill', 'Report skill']}
+  instructionsMarkdown={task.prompt}
+  markdownLabels={{
+    codeBlockCopyLabel: 'Copy code',
+    codeBlockCopiedLabel: 'Copied!',
+    codeBlockDownloadLabel: 'Download code',
+    tableScrollRegionAriaLabel: 'Scrollable table',
+    mathScrollRegionAriaLabel: 'Scrollable formula',
+  }}
+  labels={{
+    title: 'Details',
+    modelLabel: 'Model',
+    instructionsLabel: 'Instructions',
+    skillLabel: 'Skill',
+    unavailableLabel: 'Task details are unavailable',
+    retryLabel: 'Retry',
+  }}
+/>;
+```
+
 ## Validation entry point
 
 ### Optional skill configuration
@@ -313,6 +548,13 @@ optional `skillLabel` / `skillDisplayNames`. `ScheduledTaskDetailView` accepts
 `skillDisplayNames` and `labels.skillLabel`. Supply `skillDisplayNames: string[]`, using the full reference as fallback
 for each unresolved name. Skill appears before Instructions as plain text; absent
 skills and empty instructions render no field. Libraries perform no lookup.
+All four preview components (including `ScheduledTaskConversationDetailsSection`)
+accept `renderSkillName(name, index)` to render host-resolved availability,
+localized text, and tooltips. Without it, names remain plain text.
+`ScheduledTaskDetailView`, `ScheduledTaskDetailsSection`,
+`ScheduledTaskDetailsSummary` and `ScheduledTaskConversationDetailsSection` also
+accept `renderModelName(name)` for host-resolved model availability. Omit the
+model value or pass an empty skill list while the host is resolving metadata.
 
 Use the pure validation entry before an app submits a task. It returns typed
 error codes rather than translated text, and accepts an injected clock for
@@ -323,6 +565,9 @@ import { validateScheduledTaskFormValues } from '@epam/ai-dial-scheduled-tasks/v
 
 const errors = validateScheduledTaskFormValues(values, { now: new Date() });
 ```
+
+A one-shot `runAt` must lie at least `minimumLeadMs` ahead of `now`. The default is the exported
+`SCHEDULED_TASK_MINIMUM_LEAD_MS` (one minute); pass `minimumLeadMs` only to apply a different lead.
 
 For a recurring schedule, an activity-window boundary earlier than the
 injected clock's local today is rejected with `StartDateInPast` /
@@ -398,6 +643,28 @@ String enum of card visual statuses: `Scheduled = 'scheduled'` (schedule pill), 
 
 String enum of host-supplied status overrides — the optional `presentationStatus` input on `ScheduledTaskItem`, not a duplicate of `ScheduledTaskStatus`: `Active = 'active'`, `Paused = 'paused'`, `Completed = 'completed'`. `getScheduledTaskStatus` maps it onto `ScheduledTaskStatus` (`Active` → `Scheduled`), and it wins over the derived `isCompleted`/`isActive` fields. Reach for it only when the host's own status source disagrees with what those fields derive.
 
+### runAtToCalendarValue / calendarValueToRunAt / dateValueToCalendarValue / calendarValueToDateValue
+
+Converters between the kit `Calendar`'s value and the form's strings, for a
+host that drives its own `Calendar` the way the create form does.
+`runAtToCalendarValue(runAt)` and `calendarValueToRunAt(value)` go to and from
+a `datetime-local`-style `YYYY-MM-DDTHH:mm` run time;
+`dateValueToCalendarValue(date)` and `calendarValueToDateValue(value)` go to
+and from a date-only `YYYY-MM-DD` value. An empty value maps to `null`, and
+`null` maps back to an empty string.
+
+```ts
+import {
+  calendarValueToRunAt,
+  runAtToCalendarValue,
+} from '@epam/ai-dial-scheduled-tasks';
+
+<Calendar
+  value={runAtToCalendarValue(values.runAt)}
+  onChange={(value) => setRunAt(calendarValueToRunAt(value))}
+/>;
+```
+
 ## Constants
 
 ### TIME_OF_DAY_PATTERN
@@ -409,6 +676,18 @@ import { TIME_OF_DAY_PATTERN } from '@epam/ai-dial-scheduled-tasks';
 
 TIME_OF_DAY_PATTERN.test('09:30'); // true
 TIME_OF_DAY_PATTERN.test('9:5'); // false
+```
+
+### SCHEDULED_TASK_CREATE_DEFAULT_VALUES
+
+The `ScheduledTaskCreateFormValues` a new task starts with: a daily run at
+`09:00` (`minute: '0'`), with name, model and prompt empty and
+no activity window.
+
+```ts
+import { SCHEDULED_TASK_CREATE_DEFAULT_VALUES } from '@epam/ai-dial-scheduled-tasks';
+
+const [values, setValues] = useState(SCHEDULED_TASK_CREATE_DEFAULT_VALUES);
 ```
 
 ### DESCRIPTION_MAX_LENGTH
@@ -433,9 +712,16 @@ Do not import builder source styles: compiling a module as plain CSS loses
 the class names used by the published JavaScript.
 
 - `gridLayout` (or CardGrid's `layout`) supports `maxColumns` (3),
-  `minCardWidth` (320px), `maxWidth` (1180px), `gap` (20px) and
+  `minCardWidth` (320px), `maxWidth` (`SCHEDULED_TASKS_GRID_DEFAULT_MAX_WIDTH`,
+  1180px), `gap` (20px) and
   `cardHeight` (232px). Columns respond to the available container width;
-  skeletons inherit the same height.
+  skeletons inherit the same height. `cardHeight` applies from the desktop
+  breakpoint (1280px) up; below it cards and skeletons size to their content,
+  the title wraps to two lines and the description clamps to two lines. A
+  description value too long to break at a space (a long URL and the like)
+  wraps inside the card instead of stretching it past its grid track, and a
+  long Description in the detail view's Details section preserves the
+  author's line breaks while wrapping long tokens the same way.
 - CardGrid accepts every card badge label.
 - Form `styles.layout.detailsWidth` and `columnGap` configure the shared
   builder layout. The scheduler uses two wrapping columns without an empty
@@ -471,22 +757,28 @@ application scenarios belong in the separate e2e suite.
 
 The form accepts optional `onRefineDescription` and `onRefineInstructions` callbacks, each `(value: string, signal: AbortSignal) => Promise<string>`. Each callback independently opts its field into refinement; omit it to hide the action. The host owns transport, availability, purpose selection, and translations. Instructions updates the controlled `prompt` field through `onFieldChange`; Description updates `description`. Remount the form with a draft/entity `key` when switching drafts, including equal-text entities.
 
-Both fields stay editable while pending. Editing the active field (including Markdown toolbar edits) aborts and invalidates its request. Both Refine actions and Save are disabled during a request; Cancel/Back abort before invoking the host. Late responses are ignored even if the callback ignores its signal. Repeated refinement retains the original baseline; Undo restores it exactly. Manual/external edits, callback removal, submission, and leaving the editor clear the baseline. Errors preserve text and allow retry. Identical output announces no change without writing the value.
+While a field refines, its control is read-only and keeps showing the text that was sent, and its action reads "Refining" with a spinner; the other field stays editable. An edit that still reaches the refining field (a Markdown toolbar action) aborts and invalidates its request. Both Refine actions and Save are disabled during a request; Cancel/Back abort before invoking the host. Late responses are ignored even if the callback ignores its signal. After a result the field offers "Restore original" and "Regenerate" instead of "Refine with AI"; Regenerate refines the original draft again for a fresh variant, and Restore original restores that draft exactly. Manual/external edits, callback removal, submission, and leaving the editor clear the baseline. Errors preserve text and allow retry. Identical output announces no change without writing the value.
 
 Optional label overrides (English defaults):
 
 | Label                      | Default                                       |
 | -------------------------- | --------------------------------------------- |
 | `refineWithAiLabel`        | Refine with AI                                |
-| `refineUndoLabel`          | Undo                                          |
+| `refineRefiningLabel`      | Refining                                      |
+| `refineRegenerateLabel`    | Regenerate                                    |
+| `refineUndoLabel`          | Restore original                              |
 | `refineErrorLabel`         | Could not refine this text. Please try again. |
 | `refinePendingAriaLabel`   | Refining text                                 |
-| `refineSuccessAriaLabel`   | Text refined. Undo is available.              |
+| `refineSuccessAriaLabel`   | Text refined                                  |
 | `refineUndoAriaLabel`      | Original text restored.                       |
 | `refineUnchangedAriaLabel` | No changes were needed.                       |
 
-`styles.colors.refineActionText` and `refineErrorText` set `--stcf-refine-action-text` and `--stcf-refine-error-text`; `refineErrorText` defaults to `--text-error` with standalone fallback `#ae2f2f`. `refineActionText` colors the status feedback; unset, the status keeps the kit `CaptionText` styling (`dial-tiny-text`, `--text-secondary`), the same as input captions. The Refine and Undo buttons are kit `GhostButton`s and keep the kit's styling. `styles.typography.refineFeedbackClassName` has no default; the kit caption class applies when it is unset. Direction is inherited; label rows wrap, and feedback uses live regions.
+`styles.colors.refineActionText` and `refineErrorText` set `--stcf-refine-action-text` and `--stcf-refine-error-text`; `refineErrorText` defaults to `--text-error` with standalone fallback `#ae2f2f`. `refineActionText` colors the visible status feedback (the no-change message; success and restore are announced only); unset, the status keeps the kit `CaptionText` styling (`dial-tiny-text`, `--text-secondary`), the same as input captions. The Refine with AI, Restore original, and Regenerate buttons are kit `GhostButton`s and keep the kit's styling. `styles.typography.refineFeedbackClassName` has no default; the kit caption class applies when it is unset. Direction is inherited; label rows wrap, and feedback uses live regions.
 
 | Public class key | Class                                  | Element        |
 | ---------------- | -------------------------------------- | -------------- |
 | `refineFeedback` | `dial-scheduled-tasks-refine-feedback` | Field feedback |
+
+`ScheduledTaskCreateForm.isSubmitDisabled` lets the host block Save while it
+checks external selections. Model field errors also disable Save. The host
+must enforce availability again in its submit handler.

@@ -1,15 +1,30 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { CatalogCreationType } from '@epam/ai-dial-chat-api-client';
+import {
+  isResourceCreateAdapter,
+  type ResourceSaveAdapter,
+  ResourceSaveOutcome,
+  type ResourceSaveResult,
+} from '@epam/ai-dial-chat-hooks';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { useState } from 'react';
+import { Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AppsEditorI18nKeys,
   ButtonsI18nKeys,
+  CatalogI18nKeys,
   EditorI18nKeys,
+  UnsavedChangesI18nKeys,
 } from '../../../constants/translation-keys';
 import * as DeploymentsContextModule from '../../../context/DeploymentsContext';
 import { useNotification } from '../../../context/NotificationContext';
+import {
+  resetCatalogCreationState,
+  setCatalogCreationState,
+} from '../../../context/tests/catalog-creation-state';
 import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
+import { renderWithLeaveGuard } from '../../../hooks/unsaved-changes/tests/render-with-leave-guard';
 import { getApplicationSchema } from '../../../server-api/application-schemas';
 import {
   createApplication,
@@ -28,12 +43,21 @@ const { mockNotifyOperationSuccess } = vi.hoisted(() => ({
   mockNotifyOperationSuccess: vi.fn(),
 }));
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({ status: 'ready', config: {} }),
-}));
+vi.mock('../../../context/AppConfigContext', async () => {
+  const { useCatalogCreationState } =
+    await import('../../../context/tests/catalog-creation-state');
+  return {
+    useAppConfig: () => ({
+      status: 'ready',
+      config: { additionalContentLocales: [] },
+      ...useCatalogCreationState(),
+    }),
+  };
+});
 vi.mock('../../../server-api/applications', () => ({
   createApplication: vi.fn(),
   updateApplication: vi.fn(),
+  listApplicationFolders: vi.fn(),
 }));
 vi.mock('../../../server-api/application-schemas', () => ({
   getApplicationSchema: vi.fn(),
@@ -55,6 +79,40 @@ vi.mock(
   '../../../components/DialFileManagerModal/DialFileManagerModal',
   () => ({ default: () => null }),
 );
+vi.mock(
+  '../../../components/ResourceSavePanelContainer/ResourceSavePanelContainer',
+  () => ({
+    default: (props: {
+      isOpen: boolean;
+      adapter: ResourceSaveAdapter;
+      onSaved: (result: ResourceSaveResult) => void;
+    }) => {
+      const [createError, setCreateError] = useState('');
+      /* A create adapter runs the real create into the root folder, the way the panel does. */
+      const handleFinish = async () => {
+        if (!isResourceCreateAdapter(props.adapter)) return;
+        try {
+          const { id } = await props.adapter.createIn([]);
+          props.onSaved({
+            outcome: ResourceSaveOutcome.Saved,
+            savedId: id,
+            isCreated: true,
+            isNewVersion: false,
+            isPublished: false,
+          });
+        } catch {
+          setCreateError('Create failed');
+        }
+      };
+      return props.isOpen ? (
+        <div role="dialog" aria-label="Save panel">
+          <button onClick={handleFinish}>Finish save</button>
+          <p>{createError}</p>
+        </div>
+      ) : null;
+    },
+  }),
+);
 
 const SCHEMA_ID = 'https://example.com/schemas/text-classification';
 const SUMMARY = {
@@ -73,30 +131,48 @@ const APP_ID = 'applications/bucket/classifier';
 const LABELS_REQUIRED = '"Labels" is required';
 
 const renderPage = (search: string) =>
-  render(
-    <MemoryRouter initialEntries={[`${ROUTES.AppsEditor}?${search}`]}>
-      <Routes>
-        <Route
-          path={ROUTES.AppsEditor}
-          element={
-            <ApplicationEditorPage kind={ApplicationEditorKind.QuickApp} />
-          }
-        />
-        <Route path={ROUTES.Catalog} element={<div>Catalog</div>} />
-      </Routes>
-    </MemoryRouter>,
+  renderWithLeaveGuard(
+    <Routes>
+      <Route
+        path={ROUTES.AppsEditor}
+        element={
+          <ApplicationEditorPage kind={ApplicationEditorKind.QuickApp} />
+        }
+      />
+      <Route path={ROUTES.Catalog} element={<div>Catalog</div>} />
+      <Route path={ROUTES.FileManager} element={<div>Files</div>} />
+    </Routes>,
+    [`${ROUTES.AppsEditor}?${search}`],
   );
 
 /* The layout renders its actions in the header and again in the mobile bar; take the header copy. */
 const getAction = (name: string) =>
   screen.getAllByRole('button', { name })[0] as HTMLButtonElement;
-/* The kit's schema renderer names the field's group, not its input, so the input is found inside the group. */
+/* The kit's schema renderer labels each field's input, so the input is found by that name. */
 const findLabelsInput = async () =>
-  within(await screen.findByRole('group', { name: /^Labels/ })).getByRole(
-    'textbox',
-  ) as HTMLInputElement;
+  (await screen.findByRole('textbox', {
+    name: /^Labels/,
+  })) as HTMLInputElement;
 const getNameInput = () =>
   screen.getByLabelText(EditorI18nKeys.NameLabel, { exact: false });
+const getVersionInput = () =>
+  screen.getByLabelText(EditorI18nKeys.VersionLabel, {
+    exact: false,
+  }) as HTMLInputElement;
+
+/* The editor keeps its alert region mounted, so "no alert" means every region is empty. */
+const alertText = () =>
+  screen
+    .queryAllByRole('alert')
+    .map((region) => region.textContent)
+    .join('');
+
+/* Create opens the Save panel; the stub's Finish save runs the create adapter. */
+const createThroughPanel = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.click(getAction(ButtonsI18nKeys.Create));
+  await screen.findByRole('dialog', { name: 'Save panel' });
+  await user.click(screen.getByRole('button', { name: 'Finish save' }));
+};
 
 const createSearch = `schema=${SCHEMA_ID}`;
 const editSearch = `${createSearch}&appId=${encodeURIComponent(APP_ID)}`;
@@ -106,6 +182,7 @@ describe('ApplicationEditorPage — schema app', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCatalogCreationState();
     vi.mocked(getApplicationSchema).mockResolvedValue(FULL_SCHEMA);
     vi.mocked(createApplication).mockResolvedValue({ id: APP_ID } as never);
     vi.mocked(updateApplication).mockResolvedValue({ id: APP_ID } as never);
@@ -178,12 +255,18 @@ describe('ApplicationEditorPage — schema app', () => {
     expect(getApplicationSchema).not.toHaveBeenCalled();
   });
 
-  it('creates the app in one request carrying the form values as applicationProperties', async () => {
+  it('creates the app in one request through the Save panel carrying the form values as applicationProperties', async () => {
     renderPage(createSearch);
 
     await user.type(getNameInput(), 'Classifier');
     await user.type(await findLabelsInput(), 'spam,ham');
     await user.click(getAction(ButtonsI18nKeys.Create));
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Save panel' }),
+    ).toBeTruthy();
+    expect(createApplication).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Finish save' }));
 
     await waitFor(() =>
       expect(createApplication).toHaveBeenCalledWith(
@@ -195,11 +278,97 @@ describe('ApplicationEditorPage — schema app', () => {
       ),
     );
     expect(await screen.findByText('Catalog')).toBeTruthy();
-    expect(mockNotifyOperationSuccess).toHaveBeenCalledWith(
-      NotifiableEntity.SchemaApp,
-      EntityOperation.Created,
-      { name: 'Classifier', type: SUMMARY.displayName },
+    /* The panel confirms the create; the editor adds no second notification. */
+    expect(mockNotifyOperationSuccess).not.toHaveBeenCalled();
+  });
+
+  it('opens the create form with version 1.0.0 and an empty name', async () => {
+    renderPage(createSearch);
+
+    await findLabelsInput();
+    expect(getVersionInput().value).toBe('1.0.0');
+    expect((getNameInput() as HTMLInputElement).value).toBe('');
+  });
+
+  it('sends the default version when the Version field is left untouched', async () => {
+    renderPage(createSearch);
+
+    await user.type(getNameInput(), 'Classifier');
+    await user.type(await findLabelsInput(), 'spam,ham');
+    await createThroughPanel(user);
+
+    await waitFor(() =>
+      expect(createApplication).toHaveBeenCalledWith(
+        expect.objectContaining({ version: '1.0.0' }),
+      ),
     );
+  });
+
+  it('omits the version when the user clears the Version field', async () => {
+    renderPage(createSearch);
+
+    await user.type(getNameInput(), 'Classifier');
+    await user.clear(getVersionInput());
+    await user.type(await findLabelsInput(), 'spam,ham');
+    await createThroughPanel(user);
+
+    await waitFor(() => expect(createApplication).toHaveBeenCalled());
+    expect(
+      vi.mocked(createApplication).mock.calls[0][0].version,
+    ).toBeUndefined();
+  });
+
+  describe('creation permissions', () => {
+    const denySchema = () =>
+      setCatalogCreationState({
+        allowedTypes: Object.values(CatalogCreationType),
+        restrictedSchemaIds: [SCHEMA_ID],
+      });
+
+    it('shows the denied state for a restricted schema-form schema and never loads its form', () => {
+      denySchema();
+      renderPage(createSearch);
+
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: CatalogI18nKeys.CreationDenied,
+        }),
+      ).toBeTruthy();
+      expect(getApplicationSchema).not.toHaveBeenCalled();
+      expect(createApplication).not.toHaveBeenCalled();
+    });
+
+    it('creates from a schema-form schema another rule restricts nothing about', async () => {
+      setCatalogCreationState({
+        allowedTypes: Object.values(CatalogCreationType),
+        restrictedSchemaIds: ['https://example.com/schemas/other'],
+      });
+      renderPage(createSearch);
+
+      expect(await findLabelsInput()).toBeTruthy();
+      expect(alertText()).toBe('');
+    });
+
+    it('opens an existing app of a restricted schema for editing', async () => {
+      denySchema();
+      vi.mocked(getDeploymentDetails).mockResolvedValue({
+        applicationDetails: { applicationProperties: { labels: 'a,b' } },
+      } as never);
+      renderPage(editSearch);
+
+      expect((await findLabelsInput()).value).toBe('a,b');
+      expect(alertText()).toBe('');
+    });
+
+    it('does not turn a failed edit load into creation when creation is denied', async () => {
+      denySchema();
+      vi.mocked(getDeploymentDetails).mockRejectedValue(new Error('404'));
+      renderPage(editSearch);
+
+      await screen.findByText('Catalog');
+      expect(createApplication).not.toHaveBeenCalled();
+    });
   });
 
   describe('editing', () => {
@@ -278,6 +447,20 @@ describe('ApplicationEditorPage — schema app', () => {
     });
   });
 
+  it('shows an empty state for a schema without settings', async () => {
+    vi.mocked(getApplicationSchema).mockResolvedValue({
+      ...FULL_SCHEMA,
+      properties: {},
+      required: undefined,
+    });
+    renderPage(createSearch);
+
+    expect(
+      await screen.findByText(AppsEditorI18nKeys.SchemaFormEmpty),
+    ).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: /^Labels/ })).toBeNull();
+  });
+
   it('shows the load error when the schema cannot be fetched', async () => {
     vi.mocked(getApplicationSchema).mockRejectedValue(new Error('502'));
     renderPage(createSearch);
@@ -285,5 +468,96 @@ describe('ApplicationEditorPage — schema app', () => {
     expect(
       await screen.findByText(AppsEditorI18nKeys.SchemaFormLoadFailed),
     ).toBeTruthy();
+  });
+
+  describe('leave guard', () => {
+    const navigateAway = (router: ReturnType<typeof renderPage>['router']) =>
+      act(() => router.navigate(ROUTES.FileManager));
+
+    it('treats a freshly mounted schema app, schema defaults included, as clean', async () => {
+      vi.mocked(getApplicationSchema).mockResolvedValue({
+        ...FULL_SCHEMA,
+        properties: {
+          ...FULL_SCHEMA.properties,
+          mode: { type: 'string', title: 'Mode', default: 'strict' },
+        },
+      });
+      const { router } = renderPage(createSearch);
+      await waitFor(() =>
+        expect(getAction(ButtonsI18nKeys.Create).disabled).toBe(false),
+      );
+
+      await navigateAway(router);
+
+      expect(await screen.findByText('Files')).toBeTruthy();
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('asks before leaving once the Name was edited', async () => {
+      const { router } = renderPage(createSearch);
+      await findLabelsInput();
+      await user.type(getNameInput(), 'Classifier');
+
+      await navigateAway(router);
+
+      expect(
+        screen.getByRole('dialog', { name: UnsavedChangesI18nKeys.Title }),
+      ).toBeTruthy();
+      expect(router.state.location.pathname).toBe(ROUTES.AppsEditor);
+    });
+
+    it('lands on the chosen route without a request when changes are discarded', async () => {
+      const { router } = renderPage(createSearch);
+      await user.type(await findLabelsInput(), 'spam');
+      await navigateAway(router);
+
+      await user.click(
+        screen.getByRole('button', {
+          name: UnsavedChangesI18nKeys.ConfirmLabel,
+        }),
+      );
+
+      expect(await screen.findByText('Files')).toBeTruthy();
+      expect(createApplication).not.toHaveBeenCalled();
+      expect(updateApplication).not.toHaveBeenCalled();
+    });
+
+    it('keeps the edited values when Keep editing is chosen', async () => {
+      const { router } = renderPage(createSearch);
+      await findLabelsInput();
+      await user.type(getNameInput(), 'Classifier');
+      await navigateAway(router);
+
+      await user.click(
+        screen.getByRole('button', {
+          name: UnsavedChangesI18nKeys.CancelLabel,
+        }),
+      );
+
+      expect(router.state.location.pathname).toBe(ROUTES.AppsEditor);
+      expect((getNameInput() as HTMLInputElement).value).toBe('Classifier');
+    });
+
+    it('treats a reverted edit as clean', async () => {
+      const { router } = renderPage(createSearch);
+      await findLabelsInput();
+      await user.type(getNameInput(), 'X');
+      await user.clear(getNameInput());
+
+      await navigateAway(router);
+
+      expect(await screen.findByText('Files')).toBeTruthy();
+    });
+
+    it('exits after a successful create without the dialog', async () => {
+      renderPage(createSearch);
+      await user.type(getNameInput(), 'Classifier');
+      await user.type(await findLabelsInput(), 'spam,ham');
+
+      await createThroughPanel(user);
+
+      expect(await screen.findByText('Catalog')).toBeTruthy();
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
   });
 });

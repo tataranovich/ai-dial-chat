@@ -1,14 +1,20 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useConversationPanel } from '../../context/ConversationPanelContext';
-import { ROUTES } from '../../types/routes';
+import { StorageKey } from '../../types/storage-key';
+import useLocalStorage from '../useLocalStorage';
 
 interface UseConversationPanelRouteStateParams {
-  /** Current router pathname; every change re-evaluates the panel state. */
+  /** Current router pathname; every change closes the attachment canvas. */
   pathname: string;
   isMobile: boolean;
   isCanvasOpen: boolean;
   /** `showConversationsSectionByDefault` — the initial state, not a lock. */
   isOpenByDefault: boolean;
+  /**
+   * `conversations-panel-toggle`. When `false` no toggle renders, so the
+   * stored choice is ignored and the sidebar keeps its default state.
+   */
+  isToggleEnabled: boolean;
   onCloseCanvas: () => void;
   onCloseSourcesPanel: () => void;
 }
@@ -19,81 +25,81 @@ interface ConversationPanelRouteState {
   togglePanel: () => void;
 }
 
-const isConversationSectionRoute = (pathname: string): boolean =>
-  pathname === ROUTES.Root ||
-  pathname === ROUTES.Conversations ||
-  pathname.startsWith(ROUTES.Conversations);
-
 /**
- * Owns when the conversation panel opens and closes as the route changes.
+ * Owns the desktop sidebar's expanded state.
  *
- * `showConversationsSectionByDefault` is an initial-state modifier: it decides
- * the panel state until the user touches the toggle, and from then on their own
- * choice survives every navigation inside the conversation section. Re-applying
- * the default on each navigation is what collapsed a just-opened panel when the
- * user switched chats or started a new one — the regression overlay hosts
- * running the chat full-screen reported.
+ * `isPanelOpen` means "expanded". `showConversationsSectionByDefault` is an
+ * initial-state modifier: it decides the state until the user touches the
+ * toggle. The user's own choice is stored in `localStorage` under
+ * `StorageKey.NavigationSidebarExpanded`, so it survives navigation and
+ * reloads; only the toggle writes it. When storage is unavailable the choice
+ * lasts for the page session. Neither the page route nor the attachment canvas
+ * collapses or expands the sidebar.
  *
- * Routes outside the section still force the panel shut, because it would
- * otherwise overlap the catalog, settings and file-manager pages; the
- * preference is kept, so returning to a conversation restores the user's last
- * choice rather than the default.
+ * On a mobile viewport the sidebar is a drawer owned by the app shell, so this
+ * state is reset and ignored there; the stored choice is kept and applied again
+ * when the desktop layout returns.
  */
 export const useConversationPanelRouteState = ({
   pathname,
   isMobile,
   isCanvasOpen,
   isOpenByDefault,
+  isToggleEnabled,
   onCloseCanvas,
   onCloseSourcesPanel,
 }: UseConversationPanelRouteStateParams): ConversationPanelRouteState => {
   const { isPanelOpen, openPanel, closePanel } = useConversationPanel();
 
   /* The user's own choice, or `null` while they have made none. */
-  const userPanelPreferenceRef = useRef<boolean | null>(null);
+  const [storedPreference, setStoredPreference] = useLocalStorage<
+    boolean | null
+  >(StorageKey.NavigationSidebarExpanded, null);
+  const userPanelPreference =
+    isToggleEnabled && typeof storedPreference === 'boolean'
+      ? storedPreference
+      : null;
 
   const togglePanel = useCallback(() => {
-    if (!isPanelOpen) {
-      onCloseCanvas();
-    }
-    userPanelPreferenceRef.current = !isPanelOpen;
+    setStoredPreference(!isPanelOpen);
     if (isPanelOpen) {
       closePanel();
     } else {
       openPanel();
     }
-  }, [isPanelOpen, onCloseCanvas, openPanel, closePanel]);
+  }, [isPanelOpen, openPanel, closePanel, setStoredPreference]);
 
-  /* Always close the panel when switching to mobile so a stored desktop `true`
-     doesn't bleed through. */
+  /* Always close the panel when switching to mobile so a desktop `true`
+     doesn't bleed through into the drawer. */
   useEffect(() => {
     if (isMobile) {
       closePanel();
-      userPanelPreferenceRef.current = null;
     }
   }, [isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     onCloseCanvas();
-    if (!isConversationSectionRoute(pathname)) {
-      closePanel();
-      return;
-    }
-    if (isMobile || isCanvasOpen) return;
+  }, [pathname, isOpenByDefault]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const shouldPanelBeOpen = userPanelPreferenceRef.current ?? isOpenByDefault;
+  /* Applies the stored choice, or the default, once the desktop layout is in
+     use, and again if the default itself changes — never on navigation. */
+  useEffect(() => {
+    if (isMobile) return;
+
+    const shouldPanelBeOpen = userPanelPreference ?? isOpenByDefault;
     if (shouldPanelBeOpen) {
       openPanel();
     } else {
       closePanel();
     }
-  }, [pathname, isOpenByDefault]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isMobile, isOpenByDefault]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* Safety net for openCanvas call sites that bypass useOpenAttachmentCanvas
-     (e.g. citation preview, collapsed stage attachments). */
+  /* The canvas and the sources panel share the end edge, so whichever opens
+     replaces the other — including openCanvas call sites that bypass
+     useOpenAttachmentCanvas (e.g. citation preview, collapsed stage
+     attachments). */
   useEffect(() => {
     if (isCanvasOpen) {
-      closePanel();
       onCloseSourcesPanel();
     }
   }, [isCanvasOpen]); // eslint-disable-line react-hooks/exhaustive-deps

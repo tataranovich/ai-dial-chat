@@ -9,6 +9,7 @@ import {
 } from '../../constants/stage-accordion';
 import type {
   StagesPanelLabels,
+  StagesPanelProps,
   StageTypography,
 } from '../../models/stages-props';
 import { mapStageAttachmentsToDisplay } from '../../utils/stage-attachments';
@@ -31,6 +32,10 @@ export interface StageItemProps {
   nameOverride?: string;
   /** Called when a stage attachment tile is clicked/activated. Receives the mapped display attachment. */
   onAttachmentClick?: (attachment: DisplayAttachment) => void;
+  /** Host-owned URL resolvers applied when mapping this stage's attachments. See {@link StagesPanelProps.attachmentDisplayResolvers}. */
+  attachmentDisplayResolvers?: StagesPanelProps['attachmentDisplayResolvers'];
+  /** Host-owned renderer for `<cit>` elements in this stage's content. See {@link StagesPanelProps.renderCitation}. */
+  renderCitation?: StagesPanelProps['renderCitation'];
   /** Nested list of this stage's child stages, rendered after its own markdown and attachments. Makes the row expandable on its own. */
   childList?: ReactNode;
   /** Controlled expanded state of the disclosure; uncontrolled (initially collapsed) when omitted. The body mounts only while expanded. */
@@ -64,7 +69,7 @@ const StageAttachmentRow: FC<StageAttachmentRowProps> = ({
   );
 
   return (
-    <div role="list" className="flex flex-wrap gap-3">
+    <div role="list" className="flex flex-wrap gap-2">
       {attachments.map((attachment) => (
         <div key={attachment.id} role="listitem">
           <AttachmentCard
@@ -86,6 +91,8 @@ export const StageItem: FC<StageItemProps> = ({
   labels,
   nameOverride,
   onAttachmentClick,
+  attachmentDisplayResolvers,
+  renderCitation,
   childList,
   isExpanded,
   onToggle,
@@ -110,8 +117,12 @@ export const StageItem: FC<StageItemProps> = ({
     attachmentClickLabel = 'Preview search result',
   } = labels ?? {};
   const displayAttachments = useMemo(
-    () => mapStageAttachmentsToDisplay(stage.attachments),
-    [stage.attachments],
+    () =>
+      mapStageAttachmentsToDisplay(
+        stage.attachments,
+        attachmentDisplayResolvers,
+      ),
+    [stage.attachments, attachmentDisplayResolvers],
   );
   const { name: cleanedName, durationLabel } = cleanStageName(stage.name);
   const displayName = nameOverride ?? cleanedName;
@@ -133,11 +144,12 @@ export const StageItem: FC<StageItemProps> = ({
       </span>
       <span
         className={mergeClasses(
-          'min-w-0 max-w-[22rem] truncate',
-          typography?.fontClassName ?? 'dial-small-text',
+          'max-w-88 min-w-0 truncate',
+          isMono
+            ? (typography?.monoFontClassName ?? 'dial-code-text')
+            : (typography?.fontClassName ?? 'dial-small-text'),
           styles.stageName,
           isFailed && styles.stageNameFailed,
-          isMono && styles.monoName,
         )}
       >
         <EllipsisTooltip text={displayName || stage.status || ''} />
@@ -212,6 +224,7 @@ export const StageItem: FC<StageItemProps> = ({
                 copiedLabel={codeBlockCopiedLabel}
                 tableScrollRegionAriaLabel={tableScrollRegionAriaLabel}
                 mathScrollRegionAriaLabel={mathScrollRegionAriaLabel}
+                renderCitation={renderCitation}
               />
             </div>
           )}

@@ -4,6 +4,7 @@ import {
   MarkdownRenderer,
   MarkdownRendererClassNames,
   mergeClasses,
+  useIsVerticallyClamped,
 } from '@epam/ai-dial-chat-shared';
 import {
   CardShell,
@@ -11,6 +12,7 @@ import {
   DIAL_KIT_ICON_STROKE,
   ElementSize,
   FolderPath,
+  InteractiveTooltip,
 } from '@epam/ai-dial-ui-kit';
 import { IconCheck } from '@tabler/icons-react';
 import {
@@ -19,11 +21,13 @@ import {
   MouseEvent,
   useCallback,
   useEffect,
+  useMemo,
   useState,
 } from 'react';
 import { CATALOG_CLASS } from '../../constants/public-class-names';
 import type { CardProps } from '../../models/card-props';
 import { DeploymentSize } from '../../types/deployment-icon-size';
+import { getCatalogItemDisplayType } from '../../utils/catalog-tabs';
 import { AppIdentity } from '../AppIdentity/AppIdentity';
 import { CredentialsBadge } from '../CredentialsBadge/CredentialsBadge';
 import { StarToggleButton } from '../StarToggleButton/StarToggleButton';
@@ -36,6 +40,17 @@ const isLinkEvent = (
   event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
 ): boolean =>
   event.target instanceof Element && event.target.closest('a') !== null;
+
+/*
+ * React bubbles events from a portal through its React ancestors, so a click
+ * or key press inside the description panel (portaled out of the card) would
+ * otherwise reach the card's own handlers and open the details.
+ */
+const isOutsideCardEvent = (
+  event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
+): boolean =>
+  !(event.target instanceof Node) ||
+  !event.currentTarget.contains(event.target);
 
 /** Browse grid card: AppIdentity header + description + topic chips + breadcrumbs + star. */
 export const Card: FC<CardProps> = ({
@@ -52,10 +67,13 @@ export const Card: FC<CardProps> = ({
   className,
   styles: cardStyles,
   credentialsBadgeLoggedOutLabel,
+  noFolderLabel = 'No folder',
   isReadonly = false,
   markdownLabels,
+  activeTab,
 }) => {
   const [isStarred, setIsStarred] = useState(initialIsStarred);
+  const displayType = getCatalogItemDisplayType(item, activeTab);
 
   /*
    * Resyncs local optimistic state when the caller's `favoriteIds` reverts
@@ -66,6 +84,9 @@ export const Card: FC<CardProps> = ({
     setIsStarred(initialIsStarred);
   }, [item.id, initialIsStarred]);
 
+  const { ref: descriptionRef, isClamped: isDescriptionClamped } =
+    useIsVerticallyClamped<HTMLDivElement>(item.description);
+
   const descriptionClassName =
     cardStyles?.typography?.descriptionClassName ?? 'dial-small-paragraph-text';
 
@@ -74,6 +95,26 @@ export const Card: FC<CardProps> = ({
     cardStyles?.typography?.folderLabelClassName ?? 'dial-tiny-text';
   const folderLeafClassName =
     cardStyles?.typography?.folderLeafClassName ?? 'dial-tiny-semi-text';
+  const tooltipTextClassName =
+    cardStyles?.typography?.descriptionTooltipClassName ?? 'dial-small-text';
+  const tooltipStrongClassName =
+    cardStyles?.typography?.descriptionTooltipStrongClassName ??
+    'dial-small-semi-text';
+  const tooltipMarkdownClassNames = useMemo(
+    (): MarkdownRendererClassNames => ({
+      p: tooltipTextClassName,
+      ul: tooltipTextClassName,
+      ol: tooltipTextClassName,
+      h1: tooltipTextClassName,
+      h2: tooltipTextClassName,
+      h3: tooltipTextClassName,
+      h4: tooltipTextClassName,
+      h5: tooltipTextClassName,
+      h6: tooltipTextClassName,
+      strong: tooltipStrongClassName,
+    }),
+    [tooltipTextClassName, tooltipStrongClassName],
+  );
 
   const cssVars = buildCssVars({
     '--cg-description-text': cardStyles?.colors?.textSecondary,
@@ -81,6 +122,7 @@ export const Card: FC<CardProps> = ({
     '--cg-selected-bg': cardStyles?.colors?.selectedBackground,
     '--cg-check-icon': cardStyles?.colors?.checkIcon,
     '--cg-footer-border': cardStyles?.colors?.footerBorder,
+    '--cg-focus-outline': cardStyles?.colors?.focusOutline,
   });
 
   const isFeaturedVisible = !isReadonly && item.isFeatured === true;
@@ -91,20 +133,9 @@ export const Card: FC<CardProps> = ({
 
   const handleClick = onClick
     ? (e: MouseEvent<HTMLElement>) => {
-        if (!isLinkEvent(e)) onClick(item);
+        if (!isLinkEvent(e) && !isOutsideCardEvent(e)) onClick(item);
       }
     : undefined;
-
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLElement>) => {
-      if (!onClick || isLinkEvent(e)) return;
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onClick(item);
-      }
-    },
-    [onClick, item],
-  );
 
   const handleStarToggle = useCallback(
     (e: MouseEvent<HTMLElement>) => {
@@ -117,19 +148,17 @@ export const Card: FC<CardProps> = ({
   );
 
   return (
+    /* `CardShell` renders an `<article>`, which may not take `role="button"`
+     * (axe `aria-allowed-role`), and the star and description links inside
+     * would be nested in it (`nested-interactive`). The pointer clicks the
+     * card itself; keyboard and screen-reader users get the visually hidden
+     * native button below, whose click bubbles to the same handler. */
     <CardShell
-      {...(onClick
-        ? {
-            role: 'button' as const,
-            tabIndex: 0,
-            onClick: handleClick,
-            onKeyDown: handleKeyDown,
-          }
-        : {})}
+      onClick={handleClick}
       aria-label={item.name}
       style={cssVars}
       className={mergeClasses(
-        'box-border cursor-pointer gap-3',
+        'box-border cursor-pointer gap-3 p-3',
         styles.card,
         isFeaturedVisible ? styles.featuredCard : undefined,
         isSelected ? styles.selectedCard : undefined,
@@ -137,11 +166,20 @@ export const Card: FC<CardProps> = ({
         CATALOG_CLASS.card,
       )}
     >
+      {onClick && (
+        <button
+          type="button"
+          className={mergeClasses('sr-only', styles.cardButton)}
+        >
+          {item.name}
+        </button>
+      )}
+
       {isFeaturedVisible && (
-        <div className="absolute end-[22px] top-0 -translate-y-1/2">
+        <div className="absolute inset-e-[22px] top-0 -translate-y-1/2">
           <FeaturedChip
             label={featuredLabel}
-            type={item.type}
+            type={displayType}
             className={featuredChipClassName}
             style={cardStyles?.colors?.featuredChipStyle}
           />
@@ -152,7 +190,7 @@ export const Card: FC<CardProps> = ({
         <IconCheck
           size={DIAL_ICON_SIZE.SM}
           className={mergeClasses(
-            'absolute end-3 top-3 shrink-0',
+            'absolute inset-e-3 top-3 shrink-0',
             styles.checkIcon,
           )}
           aria-hidden
@@ -162,7 +200,7 @@ export const Card: FC<CardProps> = ({
 
       <AppIdentity
         icon={item.iconUrl}
-        type={item.type}
+        type={displayType}
         name={item.name}
         version={item.version}
         size={DeploymentSize.SM}
@@ -176,39 +214,66 @@ export const Card: FC<CardProps> = ({
         }
       />
 
-      <div
-        className={mergeClasses(
-          /*
-           * `min-h` is two line-heights, not a fixed px value: `line-clamp-2`
-           * limits the text to 2 lines but `overflow: hidden` clips at the box
-           * height, so any box taller than 2 lines paints the clamped-away
-           * lines. `2lh` tracks whichever typography class is applied.
-           */
-          'line-clamp-2 min-h-[2lh] break-words',
-          styles.description,
-        )}
+      {/* Only while the clamp actually hides text — a description that fits
+       * gets no panel repeating what is already on screen (#9334).
+       * An interactive panel rather than a plain tooltip: it stays open while
+       * the pointer moves into it, so a description taller than the viewport
+       * can be scrolled — the panel is capped at the viewport height, and the
+       * kit's flip/shift keep a side-placed panel inside it (#9363). */}
+      <InteractiveTooltip
+        asChild
+        hideTooltip={!isDescriptionClamped}
+        contentClassName="max-h-[calc(100dvh-16px)] overflow-y-auto"
+        content={
+          item.description && (
+            <MarkdownRenderer
+              content={item.description}
+              classNames={tooltipMarkdownClassNames}
+              components={DESCRIPTION_MARKDOWN_COMPONENTS}
+              {...markdownLabels}
+            />
+          )
+        }
       >
-        {item.description && (
-          <MarkdownRenderer
-            content={item.description}
-            classNames={
-              {
-                p: descriptionClassName,
-                ul: descriptionClassName,
-                ol: descriptionClassName,
-                h1: descriptionClassName,
-                h2: descriptionClassName,
-                h3: descriptionClassName,
-                h4: descriptionClassName,
-                h5: descriptionClassName,
-                h6: descriptionClassName,
-              } satisfies MarkdownRendererClassNames
-            }
-            components={DESCRIPTION_MARKDOWN_COMPONENTS}
-            {...markdownLabels}
-          />
-        )}
-      </div>
+        <div
+          ref={descriptionRef}
+          className={mergeClasses(
+            /*
+             * `min-h` is two line-heights, not a fixed px value: `line-clamp-2`
+             * limits the text to 2 lines but `overflow: hidden` clips at the box
+             * height, so any box taller than 2 lines paints the clamped-away
+             * lines. `2lh` tracks whichever typography class is applied.
+             * Without topic tags their row is free, so the text takes a 3rd line.
+             */
+            item.topics.length > 0
+              ? 'line-clamp-2 min-h-[2lh]'
+              : 'line-clamp-3 min-h-[3lh]',
+            'wrap-break-word',
+            styles.description,
+          )}
+        >
+          {item.description && (
+            <MarkdownRenderer
+              content={item.description}
+              classNames={
+                {
+                  p: descriptionClassName,
+                  ul: descriptionClassName,
+                  ol: descriptionClassName,
+                  h1: descriptionClassName,
+                  h2: descriptionClassName,
+                  h3: descriptionClassName,
+                  h4: descriptionClassName,
+                  h5: descriptionClassName,
+                  h6: descriptionClassName,
+                } satisfies MarkdownRendererClassNames
+              }
+              components={DESCRIPTION_MARKDOWN_COMPONENTS}
+              {...markdownLabels}
+            />
+          )}
+        </div>
+      </InteractiveTooltip>
 
       {/* `mt-auto` pins the topics row and footer to the card bottom — the job
        * `flex-1` on the description used to do before it broke the clamp. */}
@@ -225,12 +290,21 @@ export const Card: FC<CardProps> = ({
         >
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
-              {item.folder.length > 0 && (
+              {item.folder.length > 0 ? (
                 <FolderPath
                   segments={item.folder}
                   labelClassName={folderLabelClassName}
                   leafClassName={folderLeafClassName}
                 />
+              ) : (
+                <span
+                  className={mergeClasses(
+                    folderLabelClassName,
+                    styles.description,
+                  )}
+                >
+                  {noFolderLabel}
+                </span>
               )}
             </div>
             {isStarVisible && (
@@ -243,10 +317,7 @@ export const Card: FC<CardProps> = ({
                     ? removeFromFavoritesAriaLabel
                     : addToFavoritesAriaLabel
                 }
-                className={mergeClasses(
-                  styles.starBtn,
-                  !isStarred && styles.emptyStarHidden,
-                )}
+                className={mergeClasses(!isStarred && styles.emptyStarHidden)}
               />
             )}
           </div>

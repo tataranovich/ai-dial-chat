@@ -17,6 +17,7 @@ import {
   TextRefinementField,
   useTextRefinement,
   type TextRefinementCallback,
+  useControlErrorAssociation,
 } from '@epam/ai-dial-chat-shared';
 import type { DialFile } from '@epam/ai-dial-react-file-manager';
 import {
@@ -24,7 +25,6 @@ import {
   DialFoldersTree,
 } from '@epam/ai-dial-react-file-manager';
 import {
-  Accordion,
   ButtonAppearance,
   ButtonDropdown,
   ButtonVariant,
@@ -33,8 +33,10 @@ import {
   DIAL_KIT_ICON_STROKE,
   EditorThemes,
   ElementSize,
+  ErrorMessageNotification,
   ErrorText,
   GhostButton,
+  GhostIconButton,
   Label,
   PrimaryButton,
   Spinner,
@@ -45,7 +47,6 @@ import {
   IconDatabase,
   IconFileZip,
   IconFolderPlus,
-  IconPlus,
   IconTrashX,
   IconUpload,
   type TablerIcon,
@@ -79,16 +80,25 @@ import type {
   SkillEditorValues,
   SkillFileSourceEntry,
   SkillFileTreeNode,
+  SkillFileUploadCandidate,
 } from '../../models/skill-editor-props';
 import { SkillAddSource } from '../../types/skill-add-source';
 import { SKILL_MANIFEST_PATH } from '../../types/skill-editor-defaults';
 import { SkillFileNodeKind } from '../../types/skill-file-node-kind';
 import { SkillFileUploadMode } from '../../types/skill-file-upload-mode';
 import { SkillFilesPane } from '../../types/skill-files-pane';
-import { buildDialFileTree, resolveAddTarget } from '../../utils/file-tree';
+import {
+  buildDialFileTree,
+  listAncestorPaths,
+  listFolderEntries,
+  resolveAddTarget,
+} from '../../utils/file-tree';
 import { renderIcon } from '../../utils/icon';
+import { SkillCreateFolderDialog } from '../SkillCreateFolderDialog/SkillCreateFolderDialog';
 import { SkillFileDropOverlay } from '../SkillFileDropOverlay/SkillFileDropOverlay';
+import { SkillFilesSummary } from '../SkillFilesSummary/SkillFilesSummary';
 import { SkillFileUploadDialog } from '../SkillFileUploadDialog/SkillFileUploadDialog';
+import { SkillFolderPreview } from '../SkillFolderPreview/SkillFolderPreview';
 import styles from './SkillEditor.module.scss';
 
 /** What the upload dialog was last opened for. */
@@ -113,6 +123,7 @@ type MarkdownEditorComponent = ComponentType<{
   theme?: EditorThemes;
   id?: string;
   ariaLabel?: string;
+  showDragbar?: boolean;
 }>;
 
 const METADATA_FIELDS = [MetadataField.Name, MetadataField.Description];
@@ -122,10 +133,12 @@ const INSTRUCTIONS_EDITOR_BOTTOM_GAP = 24;
 /* Filling never shrinks the editor below a usable height. */
 const INSTRUCTIONS_EDITOR_MIN_HEIGHT = 300;
 
-/* Paddings of the Files column and the selected-file column, as before the shared editor. */
-const FILES_SECTION_CLASS_NAME = 'desktop:px-8 desktop:py-6';
+/* Paddings of the Files column, the selected-file column and the host aside column, as before the shared editor. */
+const FILES_SECTION_CLASS_NAME = 'pb-0 desktop:px-8 desktop:py-6';
+const ASIDE_SECTION_CLASS_NAME = 'desktop:px-8 desktop:py-6';
+/* In the stacked mobile column the Files card sits 20px above the selected file's heading: no bottom padding on the Files section, `pt-5` here. */
 const SETUP_SECTION_CLASS_NAME =
-  'gap-4 px-4 py-6 desktop:gap-5 desktop:px-8 desktop:py-6';
+  'gap-4 px-4 pt-5 pb-6 desktop:gap-5 desktop:px-8 desktop:py-6';
 
 const LazyMarkdown = lazy(async () => {
   const { MarkdownEditor } = await LazyMarkdownEditor();
@@ -154,6 +167,7 @@ export const SkillEditor: FC<SkillEditorProps> = ({
   onRefineInstructions,
   fileActions,
   supportingFileContent,
+  asideData,
   onSubmit,
   onCancel,
   onBack,
@@ -172,6 +186,12 @@ export const SkillEditor: FC<SkillEditorProps> = ({
     instructions: initialValues?.instructions ?? '',
   });
   const instructionsId = useId();
+  const instructionsErrorId = useId();
+  useControlErrorAssociation(
+    () => document.getElementById(instructionsId),
+    instructionsErrorId,
+    Boolean(errors?.instructions),
+  );
   const refinementLock = useRef<AbortSignal | undefined>(undefined);
   const instructionsCapRef = useAvailableHeightCap<HTMLDivElement>({
     bottomGap: INSTRUCTIONS_EDITOR_BOTTOM_GAP,
@@ -241,6 +261,8 @@ export const SkillEditor: FC<SkillEditorProps> = ({
   const seededInitialValuesRef = useRef(initialValues);
   const isReseeding = seededInitialValuesRef.current !== initialValues;
   const seededFilesRef = useRef<SkillFileTreeNode[]>(files);
+  /* A replaced file keeps its node, so `files` alone cannot show that its bytes changed since seeding. */
+  const [hasReplacedFileContent, setHasReplacedFileContent] = useState(false);
   useEffect(() => {
     seededInitialValuesRef.current = initialValues;
     const seeded = {
@@ -251,6 +273,7 @@ export const SkillEditor: FC<SkillEditorProps> = ({
     valuesRef.current = seeded;
     setValues(seeded);
     seededFilesRef.current = files;
+    setHasReplacedFileContent(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seeding is keyed on `initialValues` identity only, per this component's documented contract
   }, [initialValues]);
 
@@ -267,12 +290,20 @@ export const SkillEditor: FC<SkillEditorProps> = ({
     };
     const isDirty =
       JSON.stringify(values) !== JSON.stringify(seededValues) ||
-      sortedFilesKey(files) !== sortedFilesKey(seededFilesRef.current);
+      sortedFilesKey(files) !== sortedFilesKey(seededFilesRef.current) ||
+      hasReplacedFileContent;
     if (isDirty !== isDirtyRef.current) {
       isDirtyRef.current = isDirty;
       onDirtyChange?.(isDirty);
     }
-  }, [values, files, initialValues, isReseeding, onDirtyChange]);
+  }, [
+    values,
+    files,
+    initialValues,
+    isReseeding,
+    hasReplacedFileContent,
+    onDirtyChange,
+  ]);
 
   const [internalSelectedPath, setInternalSelectedPath] =
     useState(SKILL_MANIFEST_PATH);
@@ -346,14 +377,27 @@ export const SkillEditor: FC<SkillEditorProps> = ({
   const helperTextClassName =
     typography.helperTextClassName ?? 'dial-tiny-semi-text';
   const removeIconClassName = typography.removeIconClassName;
-  const menuIconClassName = typography.menuIconClassName ?? 'text-secondary';
+  /* The Add menu renders in a portal outside the editor root, so its icons carry their own var. */
+  const menuIconCssVars = useMemo(
+    () => buildCssVars({ '--se-menu-icon': colors?.menuIcon }),
+    [colors?.menuIcon],
+  );
 
   const cssVars = buildCssVars({
     '--se-title-color': colors?.title,
     '--se-helper-text-color': colors?.helperText,
     '--se-refine-action-text': colors?.refineActionText,
     '--se-refine-error-text': colors?.refineErrorText,
+    '--se-files-card-bg': colors?.filesCardBackground,
+    '--se-files-card-border': colors?.filesCardBorder,
+    '--se-folder-row-border': colors?.folderRowBorder,
+    '--se-folder-row-hover-bg': colors?.folderRowHoverBackground,
+    '--se-drop-overlay-icon': colors?.dropOverlayIcon,
   });
+  const dialogColors = {
+    footerBackground: colors?.dialogFooterBackground,
+    footerBorder: colors?.dialogFooterBorder,
+  };
 
   const refinementStyles = {
     feedbackClassName: mergeClasses(
@@ -400,6 +444,21 @@ export const SkillEditor: FC<SkillEditorProps> = ({
       handleExpandedPathsChange(new Set([...expandedPathsSet, path]));
     },
     [expandedPathsSet, handleExpandedPathsChange],
+  );
+  const uploadTargetFolderPath = uploadRequest.targetFolderPath;
+  /* Reveal the target folder once its upload lands, so the new files are visible without expanding it by hand. */
+  const uploadDialogFileActions = useMemo(
+    () => ({
+      ...fileActions,
+      commitBatch: async (candidates: SkillFileUploadCandidate[]) => {
+        const result = await fileActions.commitBatch(candidates);
+        if (!result.error && uploadTargetFolderPath !== '') {
+          revealFolder(uploadTargetFolderPath);
+        }
+        return result;
+      },
+    }),
+    [fileActions, uploadTargetFolderPath, revealFolder],
   );
   const draftFolder = useDraftFolder({
     files,
@@ -449,6 +508,15 @@ export const SkillEditor: FC<SkillEditorProps> = ({
     [files, selectedPath],
   );
 
+  const selectedFolderEntries = useMemo(
+    () => listFolderEntries(files, selectedPath),
+    [files, selectedPath],
+  );
+  /* A folder is real when it has a node or any path below it; a stale path (its folder was removed) is neither. */
+  const isFolderSelected =
+    selectedNode?.kind === SkillFileNodeKind.Folder ||
+    selectedFolderEntries.length > 0;
+
   const handleTreeItemClick = useCallback(
     (item: DialFile) => {
       if (item.path === draftPath) return;
@@ -457,10 +525,28 @@ export const SkillEditor: FC<SkillEditorProps> = ({
     [handleSelectedPathChange, draftPath],
   );
 
+  const handleOpenFromPreview = useCallback(
+    (path: string, kind: SkillFileNodeKind) => {
+      if (path === '') {
+        handleSelectedPathChange(SKILL_MANIFEST_PATH);
+        return;
+      }
+      const toReveal = [
+        ...listAncestorPaths(path),
+        ...(kind === SkillFileNodeKind.Folder ? [path] : []),
+      ].filter((folderPath) => !expandedPathsSet.has(folderPath));
+      if (toReveal.length > 0) {
+        handleExpandedPathsChange(new Set([...expandedPathsSet, ...toReveal]));
+      }
+      handleSelectedPathChange(path);
+    },
+    [expandedPathsSet, handleExpandedPathsChange, handleSelectedPathChange],
+  );
+
   const handleRemoveNode = useCallback(
     (path: string) => {
       fileActions.onRemoveNode(path);
-      if (selectedPath === path) {
+      if (selectedPath === path || selectedPath.startsWith(`${path}/`)) {
         handleSelectedPathChange(SKILL_MANIFEST_PATH);
       }
     },
@@ -469,6 +555,28 @@ export const SkillEditor: FC<SkillEditorProps> = ({
 
   const { startDraft } = draftFolder;
   const { onCreateFolder, extractArchive, pickFromFileSystem } = fileActions;
+  /* Parent of the folder the mobile Create folder dialog is naming; `null` while it is closed. */
+  const [createFolderParentPath, setCreateFolderParentPath] = useState<
+    string | null
+  >(null);
+  /* Desktop names a new folder inline in the tree; the narrow layout asks in a dialog instead. */
+  const handleCreateFolderClick = useCallback(
+    (parentPath: string, pane: SkillFilesPane) => {
+      if (pane === SkillFilesPane.Mobile) {
+        setCreateFolderParentPath(parentPath);
+        return;
+      }
+      startDraft(parentPath, pane);
+    },
+    [startDraft],
+  );
+  const existingFilePaths = useMemo(
+    () =>
+      files
+        .filter((node) => node.kind === SkillFileNodeKind.File)
+        .map((node) => node.path),
+    [files],
+  );
 
   const handlePickFromFileSystem = useCallback(
     async (targetFolderPath: string) => {
@@ -487,14 +595,14 @@ export const SkillEditor: FC<SkillEditorProps> = ({
   const buildAddMenuItems = useCallback(
     (targetFolderPath: string, pane: SkillFilesPane): DropdownItem[] => {
       const menuIcon = (Icon: TablerIcon) =>
-        renderIcon(Icon, menuIconClassName);
+        renderIcon(Icon, styles.menuIcon, undefined, menuIconCssVars);
       const items: DropdownItem[] = [];
       if (onCreateFolder) {
         items.push({
           key: 'create-folder',
           label: t.createFolderLabel ?? 'Create folder',
           icon: menuIcon(IconFolderPlus),
-          onClick: () => startDraft(targetFolderPath, pane),
+          onClick: () => handleCreateFolderClick(targetFolderPath, pane),
         });
       }
       items.push({
@@ -530,7 +638,7 @@ export const SkillEditor: FC<SkillEditorProps> = ({
       return items;
     },
     [
-      menuIconClassName,
+      menuIconCssVars,
       onCreateFolder,
       extractArchive,
       pickFromFileSystem,
@@ -538,7 +646,7 @@ export const SkillEditor: FC<SkillEditorProps> = ({
       t.uploadFilesLabel,
       t.uploadArchiveLabel,
       t.openFileSystemLabel,
-      startDraft,
+      handleCreateFolderClick,
       openUploadDialog,
       handlePickFromFileSystem,
     ],
@@ -560,53 +668,37 @@ export const SkillEditor: FC<SkillEditorProps> = ({
 
   const buildContextMenuItems = useCallback(
     (item: DialFile, pane: SkillFilesPane): DropdownItem[] => {
-      if (item.path === SKILL_MANIFEST_PATH || item.path === draftPath) {
+      /* A file has no menu: its only action is the inline delete button. */
+      if (
+        item.path === draftPath ||
+        item.nodeType !== DialFileNodeType.FOLDER
+      ) {
         return [];
       }
       const node: SkillFileTreeNode = {
         path: item.path,
         name: item.name,
-        kind:
-          item.nodeType === DialFileNodeType.FOLDER
-            ? SkillFileNodeKind.Folder
-            : SkillFileNodeKind.File,
+        kind: SkillFileNodeKind.Folder,
       };
-      const items: DropdownItem[] = [];
-      if (node.kind === SkillFileNodeKind.Folder) {
-        items.push({
-          key: 'add-child',
-          icon: renderIcon(IconPlus),
-          label: t.addChildLabel ?? 'Add child',
-          children: buildAddMenuItems(
-            resolveAddTarget(SkillAddSource.Child, node),
-            pane,
-          ),
-        });
-      }
-      items.push(
-        {
-          key: 'add-sibling',
-          icon: renderIcon(IconPlus),
-          label: t.addSiblingLabel ?? 'Add sibling',
-          children: buildAddMenuItems(
-            resolveAddTarget(SkillAddSource.Sibling, node),
-            pane,
-          ),
-        },
-        {
-          key: 'delete',
-          label: t.deleteLabel ?? 'Delete',
-          danger: true,
-          icon: renderIcon(IconTrashX, removeIconClassName),
-          onClick: () => handleRemoveNode(item.path),
-        },
+      /* A folder lists its add entries directly, so uploading into it takes
+         one click instead of an extra "Add child" submenu. There is no "Add
+         sibling": the parent folder's own menu and the header Add already
+         cover it (issue #9301). */
+      const items = buildAddMenuItems(
+        resolveAddTarget(SkillAddSource.Child, node),
+        pane,
       );
+      items.push({
+        key: 'delete',
+        label: t.deleteLabel ?? 'Delete',
+        danger: true,
+        icon: renderIcon(IconTrashX, removeIconClassName),
+        onClick: () => handleRemoveNode(item.path),
+      });
       return items;
     },
     [
       draftPath,
-      t.addChildLabel,
-      t.addSiblingLabel,
       t.deleteLabel,
       removeIconClassName,
       buildAddMenuItems,
@@ -623,6 +715,26 @@ export const SkillEditor: FC<SkillEditorProps> = ({
     [buildContextMenuItems],
   );
 
+  const renderItemActions = useCallback(
+    (item: DialFile) => {
+      if (
+        item.nodeType === DialFileNodeType.FOLDER ||
+        item.path === SKILL_MANIFEST_PATH
+      ) {
+        return null;
+      }
+      return (
+        <GhostIconButton
+          size={ElementSize.Small}
+          icon={renderIcon(IconTrashX, removeIconClassName, DIAL_ICON_SIZE.SM)}
+          aria-label={t.deleteLabel ?? 'Delete'}
+          onClick={() => handleRemoveNode(item.path)}
+        />
+      );
+    },
+    [t.deleteLabel, removeIconClassName, handleRemoveNode],
+  );
+
   const renderFilesPane = (pane: SkillFilesPane) => (
     <div className="flex flex-col gap-2 desktop:gap-5">
       <div className="flex items-center justify-between">
@@ -634,13 +746,6 @@ export const SkillEditor: FC<SkillEditorProps> = ({
           variant={ButtonVariant.Neutral}
           appearance={ButtonAppearance.Solid}
           size={ElementSize.Small}
-          iconBefore={
-            <IconPlus
-              size={DIAL_ICON_SIZE.SM}
-              aria-hidden
-              stroke={DIAL_KIT_ICON_STROKE}
-            />
-          }
           items={headerAddItems[pane]}
         />
       </div>
@@ -653,6 +758,7 @@ export const SkillEditor: FC<SkillEditorProps> = ({
           onExpandedPathsChange={handleExpandedPathsChange}
           onItemClick={handleTreeItemClick}
           getContextMenuItems={getContextMenuItems[pane]}
+          renderItemActions={renderItemActions}
           renamedPath={draftPane === pane ? draftPath : undefined}
           onRenameSave={draftFolder.handleSave}
           onRenameCancel={draftFolder.handleCancel}
@@ -752,12 +858,9 @@ export const SkillEditor: FC<SkillEditorProps> = ({
         <EntityEditor
           {...editorProps}
           metadata={
-            <div
-              role="status"
-              aria-label={t.loadingAriaLabel ?? 'Loading skill'}
-              className="flex flex-1 items-center justify-center p-8"
-            >
-              <Spinner />
+            /* The kit Spinner is the status region; a labelled wrapper would nest a second one. */
+            <div className="flex flex-1 items-center justify-center p-8">
+              <Spinner ariaLabel={t.loadingAriaLabel ?? 'Loading skill'} />
             </div>
           }
         />
@@ -771,16 +874,20 @@ export const SkillEditor: FC<SkillEditorProps> = ({
         <EntityEditor
           {...editorProps}
           metadata={
-            <div role="alert" className="flex flex-col items-center gap-4 p-8">
-              <ErrorText
-                text={
+            /* The kit error section message is an assertive `alert` live region, with Retry in its `action` slot. */
+            <div className="p-8">
+              <ErrorMessageNotification
+                message={
                   t.loadErrorMessage ??
                   "Couldn't load this skill. Please try again."
                 }
-              />
-              <PrimaryButton
-                label={t.retryLabel ?? 'Retry'}
-                onClick={onRetry}
+                iconStroke={DIAL_KIT_ICON_STROKE}
+                action={
+                  <PrimaryButton
+                    label={t.retryLabel ?? 'Retry'}
+                    onClick={onRetry}
+                  />
+                }
               />
             </div>
           }
@@ -790,11 +897,12 @@ export const SkillEditor: FC<SkillEditorProps> = ({
   }
 
   const isManifestSelected = selectedPath === SKILL_MANIFEST_PATH;
+  /* An implicit folder has no node, so its name is the last segment of the path, not the whole path. */
+  const selectedName =
+    selectedNode?.name ?? selectedPath.slice(selectedPath.lastIndexOf('/') + 1);
   const setupTitle = isManifestSelected
     ? SKILL_MANIFEST_PATH
-    : (t.selectedFileHeading?.(selectedNode?.name ?? selectedPath) ??
-      selectedNode?.name ??
-      selectedPath);
+    : (t.selectedFileHeading?.(selectedName) ?? selectedName);
 
   const alert =
     submitError != null || conflict != null ? (
@@ -867,6 +975,7 @@ export const SkillEditor: FC<SkillEditorProps> = ({
                 updateValues({ instructions: value });
               }}
               theme={instructionsEditorTheme}
+              showDragbar={false}
               placeholder={
                 t.instructionsPlaceholder ??
                 'Write the skill instructions in Markdown'
@@ -875,7 +984,7 @@ export const SkillEditor: FC<SkillEditorProps> = ({
           </Suspense>
         </div>
         {errors?.instructions != null && (
-          <ErrorText text={errors.instructions} />
+          <ErrorText id={instructionsErrorId} text={errors.instructions} />
         )}
       </div>
     </TextRefinementField>
@@ -885,7 +994,7 @@ export const SkillEditor: FC<SkillEditorProps> = ({
     <div
       dir={dir}
       className={mergeClasses(
-        'relative flex min-h-0 flex-1 flex-col',
+        'relative flex min-h-0 min-w-0 flex-1 flex-col',
         SKILL_EDITOR_CLASS.root,
       )}
       style={cssVars}
@@ -894,25 +1003,32 @@ export const SkillEditor: FC<SkillEditorProps> = ({
       <SkillFileDropOverlay
         isVisible={isSurfaceDragActive && !isUploadDialogOpen}
         labels={labels}
+        titleClassName={typography.dropOverlayTitleClassName}
+        subtitleClassName={typography.dropOverlaySubtitleClassName}
       />
 
       <EntityEditor
         {...editorProps}
+        asideData={asideData}
+        asideSectionClassName={ASIDE_SECTION_CLASS_NAME}
         isSubmitting={isSubmitting}
         metadataSectionClassName={FILES_SECTION_CLASS_NAME}
         metadata={
           <>
             {/* Mobile: collapsible file-list summary, collapsed by default. */}
             <div className="desktop:hidden">
-              <Accordion
-                title={t.editingFileLabel ?? 'Editing file'}
-                description={selectedNode?.name ?? SKILL_MANIFEST_PATH}
-                expanded={isFilesExpanded}
+              <SkillFilesSummary
+                label={t.editingFileLabel ?? 'Editing file'}
+                fileName={
+                  isManifestSelected ? SKILL_MANIFEST_PATH : selectedName
+                }
+                isExpanded={isFilesExpanded}
                 onToggle={setIsFilesExpanded}
-                ariaLabel={t.editingFileLabel ?? 'Editing file'}
+                labelClassName={typography.editingFileLabelClassName}
+                fileNameClassName={typography.editingFileNameClassName}
               >
                 {renderFilesPane(SkillFilesPane.Mobile)}
-              </Accordion>
+              </SkillFilesSummary>
             </div>
 
             {/* Desktop: always-visible Files panel. */}
@@ -934,6 +1050,10 @@ export const SkillEditor: FC<SkillEditorProps> = ({
                 fields={METADATA_FIELDS}
                 isDescriptionRequired
                 isNameReadOnly={isNameReadOnly}
+                nameReadOnlyTooltip={
+                  t.nameReadOnlyTooltip ??
+                  "The skill name can't be changed after creation"
+                }
                 nameCaption={
                   errors?.name
                     ? undefined
@@ -947,8 +1067,23 @@ export const SkillEditor: FC<SkillEditorProps> = ({
             </>
           ) : (
             <>
+              {isFolderSelected && selectedPath !== draftPath && (
+                <SkillFolderPreview
+                  folderPath={selectedPath}
+                  entries={selectedFolderEntries}
+                  onOpen={handleOpenFromPreview}
+                  rootLabel={t.folderPreviewRootLabel}
+                  breadcrumbAriaLabel={t.folderPreviewBreadcrumbAriaLabel}
+                  overflowAriaLabel={t.folderPreviewOverflowAriaLabel}
+                  listAriaLabel={t.folderPreviewListAriaLabel}
+                  emptyTitle={t.folderEmptyTitle}
+                  emptyDescription={t.folderEmptyDescription}
+                  itemCountLabel={t.folderItemCountLabel}
+                  itemCountClassName={typography.folderItemCountClassName}
+                />
+              )}
               {selectedNode?.kind === SkillFileNodeKind.File && (
-                <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex h-[max(320px,60dvh)] min-h-0 min-w-0 flex-none flex-col desktop:h-auto desktop:flex-1">
                   {supportingFileContent ?? (
                     <CaptionText
                       text={
@@ -967,12 +1102,43 @@ export const SkillEditor: FC<SkillEditorProps> = ({
       <SkillFileUploadDialog
         isOpen={isUploadDialogOpen}
         onClose={() => setIsUploadDialogOpen(false)}
-        fileActions={fileActions}
+        fileActions={uploadDialogFileActions}
         mode={uploadRequest.mode}
         targetFolderPath={uploadRequest.targetFolderPath}
         initialFiles={uploadRequest.initialFiles}
         initialEntries={uploadRequest.initialEntries}
+        existingFilePaths={existingFilePaths}
+        onCommitted={(candidates) => {
+          if (candidates.some((candidate) => candidate.replacesExisting)) {
+            setHasReplacedFileContent(true);
+          }
+        }}
+        messageClassName={typography.uploadMessageClassName}
+        rowCaptionClassName={typography.uploadRowCaptionClassName}
         labels={labels}
+        dialogColors={dialogColors}
+        colors={{
+          invalidDropZoneBorder: colors?.uploadInvalidDropZoneBorder,
+          rowBorder: colors?.uploadRowBorder,
+        }}
+      />
+
+      <SkillCreateFolderDialog
+        isOpen={createFolderParentPath != null}
+        onClose={() => setCreateFolderParentPath(null)}
+        validateName={(name) =>
+          draftFolder.validateNewFolder(name, createFolderParentPath ?? '')
+        }
+        onCreate={(name) =>
+          draftFolder.createFolder(name, createFolderParentPath ?? '')
+        }
+        title={t.createFolderLabel ?? 'Create folder'}
+        nameLabel={t.createFolderNameLabel ?? 'Name'}
+        namePlaceholder={t.createFolderNamePlaceholder ?? 'Enter folder name'}
+        createLabel={t.createFolderConfirmLabel ?? 'Create'}
+        cancelLabel={t.cancelLabel ?? 'Cancel'}
+        closeAriaLabel={t.createFolderCloseAriaLabel ?? 'Close'}
+        dialogColors={dialogColors}
       />
     </div>
   );

@@ -1,5 +1,11 @@
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import {
@@ -23,10 +29,27 @@ import { getTopicOptions } from '../../../utils/catalog-filter';
 import { buildCatalogTabs } from '../../../utils/catalog-tabs';
 import { Catalog } from '../Catalog';
 
+const listViewScrollToTop = vi.hoisted(() => vi.fn());
+
 vi.mock('@epam/ai-dial-ui-kit', () => ({
   DIAL_KIT_ICON_STROKE: 1.5,
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
-  Spinner: () => <div role="status" aria-label="Loading" />,
+  Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
+    <div role="status" aria-label={ariaLabel} />
+  ),
+  FabButton: ({
+    icon,
+    onClick,
+    'aria-label': ariaLabel,
+  }: {
+    icon?: React.ReactNode;
+    onClick?: () => void;
+    'aria-label'?: string;
+  }) => (
+    <button aria-label={ariaLabel} onClick={onClick}>
+      {icon}
+    </button>
+  ),
   EllipsisTooltip: ({
     text,
     className,
@@ -67,9 +90,34 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     label: string;
     onClick?: () => void;
   }) => <button onClick={onClick}>{label}</button>,
+  Button: ({ label, onClick }: { label: string; onClick?: () => void }) => (
+    <button onClick={onClick}>{label}</button>
+  ),
+  ButtonDropdown: ({ label }: { label: string }) => (
+    <button aria-haspopup="menu">{label}</button>
+  ),
+  ButtonVariant: { Primary: 'primary', Secondary: 'secondary' },
+  ButtonAppearance: { Solid: 'solid' },
+  NoDataContent: ({
+    title,
+    description,
+    action,
+  }: {
+    title: React.ReactNode;
+    description?: React.ReactNode;
+    action?: React.ReactNode;
+  }) => (
+    <div>
+      <span>{title}</span>
+      <span>{description}</span>
+      {action}
+    </div>
+  ),
 }));
 vi.mock('@tabler/icons-react', () => ({
   IconPlus: () => <svg />,
+  IconChevronDown: () => <svg />,
+  IconArrowNarrowUp: () => <svg />,
 }));
 vi.mock('../../Toolbar/Toolbar', () => ({
   Toolbar: ({
@@ -85,7 +133,9 @@ vi.mock('../../Toolbar/Toolbar', () => ({
     sortKey,
     sortOptions = [],
     onSortChange,
+    searchInputRef,
   }: {
+    searchInputRef?: React.Ref<HTMLInputElement>;
     title?: string;
     query: string;
     onQueryChange: (q: string) => void;
@@ -103,6 +153,7 @@ vi.mock('../../Toolbar/Toolbar', () => ({
       <span>{title ?? 'Browse'}</span>
       <span>{`sortKey:${sortKey}`}</span>
       <input
+        ref={searchInputRef}
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}
         placeholder="search"
@@ -143,13 +194,20 @@ vi.mock('../../CardGrid/CardGrid', () => ({
     items,
     onItemClick,
     selectedItemId,
+    titles,
   }: {
     items: CatalogItem[];
     onItemClick: (item: CatalogItem) => void;
     selectedItemId?: string;
+    titles?: { noResultsTitle?: string; noResultsDescription?: string };
   }) => (
     <div role="grid" aria-label="catalog grid">
       {items.length} items
+      {items.length === 0 && (
+        <p>
+          {titles?.noResultsTitle} {titles?.noResultsDescription}
+        </p>
+      )}
       {items.map((item) => (
         <button
           key={item.id}
@@ -190,24 +248,35 @@ vi.mock('../../Favorites/Favorites', () => ({
 }));
 vi.mock('../../ListView/ListView', () => ({
   ListView: ({
+    ref,
     items,
     onItemClick,
+    onRowsScroll,
   }: {
+    ref?: React.Ref<{ scrollToTop: () => void }>;
     items: CatalogItem[];
     onItemClick?: (item: CatalogItem) => void;
-  }) => (
-    <div role="grid" aria-label="catalog list">
-      {items.map((item) => (
-        <button key={item.id} onClick={() => onItemClick?.(item)}>
-          row-{item.name}
-        </button>
-      ))}
-    </div>
-  ),
+    onRowsScroll?: (top: number) => void;
+  }) => {
+    React.useImperativeHandle(ref, () => ({
+      scrollToTop: listViewScrollToTop,
+    }));
+    return (
+      <div role="grid" aria-label="catalog list">
+        {items.map((item) => (
+          <button key={item.id} onClick={() => onItemClick?.(item)}>
+            row-{item.name}
+          </button>
+        ))}
+        <button onClick={() => onRowsScroll?.(400)}>Scroll rows</button>
+      </div>
+    );
+  },
 }));
 vi.mock('../../Details/DetailsPanel', () => ({
   DetailsPanel: ({
     item,
+    isOpen,
     isPrimaryActionVisible,
     shareOverlay,
     isDetailsLoading,
@@ -220,6 +289,7 @@ vi.mock('../../Details/DetailsPanel', () => ({
     onClose,
   }: {
     item: CatalogItem;
+    isOpen?: boolean;
     isPrimaryActionVisible?: (item: CatalogItem) => boolean;
     shareOverlay?: (item: CatalogItem, onClose: () => void) => React.ReactNode;
     isDetailsLoading?: boolean;
@@ -262,6 +332,7 @@ vi.mock('../../Details/DetailsPanel', () => ({
       {shareOverlay?.(item, () => undefined)}
       <span>{`details:${JSON.stringify(item.details ?? null)}`}</span>
       <span>{`isDetailsLoading:${String(isDetailsLoading)}`}</span>
+      <span>{`isOpen:${String(isOpen)}`}</span>
       <span>{`userStatus:${item.credentials?.userStatus ?? 'none'}`}</span>
     </div>
   ),
@@ -797,6 +868,7 @@ describe('Catalog', () => {
   });
 
   it('applies only the second response when the same item is closed and reopened while a request is pending', async () => {
+    vi.useFakeTimers();
     const first = { overview: { sections: [{ title: 'First', specs: [] }] } };
     const second = { overview: { sections: [{ title: 'Second', specs: [] }] } };
     let resolveFirst: (value: typeof first) => void = () => undefined;
@@ -818,19 +890,33 @@ describe('Catalog', () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: 'Claude' }));
-    await waitFor(() => expect(onFetchDetails).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: 'Claude' }));
+    act(() => vi.advanceTimersByTime(20));
+    expect(onFetchDetails).toHaveBeenCalledOnce();
+    expect(screen.getByText('isOpen:true')).toBeTruthy();
 
-    await userEvent.click(screen.getByRole('button', { name: 'ClosePanel' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Claude' }));
-    await waitFor(() => expect(onFetchDetails).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'ClosePanel' }));
+    expect(screen.getByText('isOpen:false')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Claude' }));
+    expect(onFetchDetails).toHaveBeenCalledTimes(2);
 
-    /* The stale first response resolves after the reopen — must not land. */
-    resolveFirst(first);
-    resolveSecond(second);
+    /* The previous close animation must not clear the reopened panel. */
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.getByText('isDetailsLoading:true')).toBeTruthy();
+    expect(screen.getByText('isOpen:true')).toBeTruthy();
 
-    await screen.findByText(`details:${JSON.stringify(second)}`);
+    await act(async () => resolveSecond(second));
+    expect(screen.getByText(`details:${JSON.stringify(second)}`)).toBeTruthy();
+    expect(screen.getByText('isDetailsLoading:false')).toBeTruthy();
+
+    /* A stale response must not overwrite the newer response. */
+    await act(async () => resolveFirst(first));
+    expect(screen.getByText(`details:${JSON.stringify(second)}`)).toBeTruthy();
     expect(screen.queryByText(`details:${JSON.stringify(first)}`)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ClosePanel' }));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.queryByRole('button', { name: 'ClosePanel' })).toBeNull();
   });
 
   it('applies no state and keeps the panel closed when a response arrives after close', async () => {
@@ -1189,6 +1275,62 @@ describe('Catalog', () => {
     ).toContain('1 items');
   });
 
+  describe('tab membership', () => {
+    const membershipItems = [
+      makeItem('model', 'GPT', { type: CatalogEntityType.Model }),
+      makeItem('dual', 'Dual app', {
+        type: CatalogEntityType.Agent,
+        catalogTabs: [CatalogEntityType.Agent, CatalogEntityType.Toolset],
+      }),
+      makeItem('mcp', 'MCP app', {
+        type: CatalogEntityType.Agent,
+        catalogTabs: [CatalogEntityType.Toolset],
+      }),
+    ];
+
+    it('lists a membership-only Toolsets item outside the Agents tab', () => {
+      render(
+        <Catalog
+          items={membershipItems}
+          favorites={[]}
+          activeTab={CatalogEntityType.Agent}
+        />,
+      );
+
+      expect(screen.getByRole('button', { name: 'Dual app' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'MCP app' })).toBeNull();
+      expect(screen.getByRole('tab', { name: /Toolsets/i })).toBeTruthy();
+    });
+
+    it('shows Toolsets members, including applications, under the Toolsets tab', () => {
+      render(
+        <Catalog
+          items={membershipItems}
+          favorites={[]}
+          activeTab={CatalogEntityType.Toolset}
+        />,
+      );
+
+      expect(screen.getByRole('button', { name: 'Dual app' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'MCP app' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'GPT' })).toBeNull();
+    });
+
+    it('opens the same item details from the Toolsets tab', async () => {
+      render(
+        <Catalog
+          items={membershipItems}
+          favorites={[]}
+          activeTab={CatalogEntityType.Toolset}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: 'Dual app' }));
+
+      expect(screen.getByText('Dual app', { selector: 'span' })).toBeTruthy();
+    });
+  });
+
   it('renders the controlled topicOptions prop instead of options derived from items', () => {
     const wideTopicOptions = getTopicOptions([
       makeItem('1', 'Claude', { topics: ['Free'] }),
@@ -1282,6 +1424,189 @@ describe('Catalog', () => {
     expect(screen.getByText('Nothing here yet')).toBeTruthy();
     expect(screen.queryByLabelText('catalog grid')).toBeNull();
     expect(screen.queryByText('No items')).toBeNull();
+  });
+
+  it('names the active tab in the empty-state title and description', () => {
+    render(
+      <Catalog
+        items={[makeItem('1', 'Claude', { type: CatalogEntityType.Model })]}
+        favorites={[]}
+        activeTab={CatalogEntityType.Agent}
+        titles={{
+          emptyTitle: (tab) => `No ${tab} yet`,
+          emptyDescription: (tab) => `${tab} will appear here.`,
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        `No ${CatalogEntityType.Agent} yet ${CatalogEntityType.Agent} will appear here.`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('passes the active tab to the no-results title', async () => {
+    const noResultsTitle = vi.fn(
+      (query: string, tab: string) => `No ${tab} found for ${query}`,
+    );
+    render(
+      <Catalog
+        items={[makeItem('1', 'Claude', { type: CatalogEntityType.Model })]}
+        favorites={[]}
+        titles={{ noResultsTitle }}
+      />,
+    );
+
+    await userEvent.type(screen.getByPlaceholderText('search'), 'zzz');
+
+    expect(noResultsTitle).toHaveBeenLastCalledWith(
+      'zzz',
+      CatalogEntityType.Model,
+    );
+  });
+
+  it('renders the personal empty state with a Create button when My Apps has nothing to show', () => {
+    const onCreateClick = vi.fn();
+    render(
+      <Catalog
+        items={[makeItem('1', 'Claude', { type: CatalogEntityType.Agent })]}
+        favorites={[]}
+        isMyAppsActive
+        hidePageTitle
+        onCreateClick={onCreateClick}
+        titles={{
+          myAppsEmptyTitle: (tab) => `No personal ${tab} yet`,
+          myAppsEmptyDescription: 'Create your first one.',
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText(`No personal ${CatalogEntityType.Agent} yet`),
+    ).toBeTruthy();
+    expect(screen.getByText('Create your first one.')).toBeTruthy();
+    expect(screen.queryByLabelText('catalog grid')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Create' })).toHaveLength(2);
+  });
+
+  it('omits the Create button from the personal empty state in a read-only catalog', () => {
+    render(
+      <Catalog
+        items={[makeItem('1', 'Claude')]}
+        favorites={[]}
+        isMyAppsActive
+        isReadonly
+      />,
+    );
+
+    expect(screen.getByText('No personal items yet')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create' })).toBeNull();
+  });
+
+  it("runs the active tab's lone create option from the personal empty state", async () => {
+    const onCreateToolset = vi.fn();
+    const onCreateClick = vi.fn();
+    render(
+      <Catalog
+        items={[makeItem('1', 'Tools', { type: CatalogEntityType.Toolset })]}
+        favorites={[]}
+        isMyAppsActive
+        hidePageTitle
+        onCreateClick={onCreateClick}
+        createMenuByTab={{
+          [CatalogEntityType.Toolset]: {
+            options: [
+              {
+                key: 'toolset',
+                label: 'Create toolset',
+                onClick: onCreateToolset,
+              },
+            ],
+          },
+        }}
+      />,
+    );
+
+    const [, emptyStateCreate] = screen.getAllByRole('button', {
+      name: 'Create',
+    });
+    await userEvent.click(emptyStateCreate);
+
+    expect(onCreateToolset).toHaveBeenCalledOnce();
+    expect(onCreateClick).not.toHaveBeenCalled();
+  });
+
+  it('runs the lone option directly even when the header has a full create menu', async () => {
+    const onCreatePrompt = vi.fn();
+    render(
+      <Catalog
+        items={[makeItem('1', 'Prompt', { type: CatalogEntityType.Prompt })]}
+        favorites={[]}
+        isMyAppsActive
+        hidePageTitle
+        createOptions={[
+          { key: 'prompt', label: 'Prompt', onClick: vi.fn() },
+          { key: 'toolset', label: 'Toolset', onClick: vi.fn() },
+        ]}
+        createMenuByTab={{
+          [CatalogEntityType.Prompt]: {
+            options: [
+              { key: 'prompt', label: 'Prompt', onClick: onCreatePrompt },
+            ],
+          },
+        }}
+      />,
+    );
+
+    const [, emptyStateCreate] = screen.getAllByRole('button', {
+      name: 'Create',
+    });
+    await userEvent.click(emptyStateCreate);
+
+    expect(onCreatePrompt).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the default empty state on a tab without a create menu', () => {
+    render(
+      <Catalog
+        items={[makeItem('1', 'Claude', { type: CatalogEntityType.Model })]}
+        favorites={[]}
+        isMyAppsActive
+        hidePageTitle
+        onCreateClick={vi.fn()}
+        createMenuByTab={{
+          [CatalogEntityType.Toolset]: {
+            options: [{ key: 'toolset', label: 'Create toolset' }],
+          },
+        }}
+      />,
+    );
+
+    expect(screen.queryByText('No personal items yet')).toBeNull();
+    expect(screen.getByLabelText('catalog grid')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Create' })).toHaveLength(1);
+  });
+
+  it('keeps the default empty state when My Apps is off', () => {
+    render(<Catalog items={[]} favorites={[]} />);
+
+    expect(screen.queryByText('No personal items yet')).toBeNull();
+    expect(screen.getByLabelText('catalog grid')).toBeTruthy();
+  });
+
+  it('prefers renderEmptyState over the personal empty state', () => {
+    render(
+      <Catalog
+        items={[]}
+        favorites={[]}
+        isMyAppsActive
+        renderEmptyState={() => <span>Nothing here yet</span>}
+      />,
+    );
+
+    expect(screen.getByText('Nothing here yet')).toBeTruthy();
+    expect(screen.queryByText('No personal items yet')).toBeNull();
   });
 
   it('does not invoke renderEmptyState when the result set is non-empty', () => {
@@ -1450,6 +1775,61 @@ describe('Catalog', () => {
   });
 });
 
+describe('Catalog — creation gating', () => {
+  const toolset: CatalogItem = {
+    id: 't1',
+    type: CatalogEntityType.Toolset,
+    name: 'Tools',
+    version: '1',
+    lastUsed: 'now',
+    description: '',
+    folder: [],
+    topics: [],
+  };
+
+  it('renders no focusable Create control anywhere when hideCreateButton is set', () => {
+    render(
+      <Catalog
+        items={[toolset]}
+        favorites={[]}
+        isMyAppsActive
+        hideCreateButton
+        createOptions={[{ key: 'toolset', label: 'Toolset', onClick: vi.fn() }]}
+        createMenuByTab={{
+          [CatalogEntityType.Toolset]: {
+            options: [{ key: 'toolset', label: 'Toolset', onClick: vi.fn() }],
+          },
+        }}
+      />,
+    );
+
+    expect(screen.queryAllByRole('button', { name: 'Create' })).toEqual([]);
+    expect(screen.getByText('No personal items yet')).toBeTruthy();
+  });
+
+  it("drops the empty-state Create of a tab whose type cannot be created, keeping the header's", () => {
+    render(
+      <Catalog
+        items={[{ ...toolset, type: CatalogEntityType.Skill }]}
+        favorites={[]}
+        isMyAppsActive
+        hidePageTitle
+        createOptions={[{ key: 'prompt', label: 'Prompt', onClick: vi.fn() }]}
+        createMenuByTab={{
+          [CatalogEntityType.Skill]: { options: [] },
+          [CatalogEntityType.Prompt]: {
+            options: [{ key: 'prompt', label: 'Prompt', onClick: vi.fn() }],
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('No personal items yet')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Create' })).toHaveLength(1);
+    expect(screen.queryByText('Skill')).toBeNull();
+  });
+});
+
 describe('Catalog — read-only', () => {
   const favorite: CatalogItem = {
     id: 'f1',
@@ -1494,5 +1874,183 @@ describe('Catalog — public class names', () => {
     expect(screen.getByRole('region', { name: 'Catalog' }).classList).toContain(
       CATALOG_CLASS.root,
     );
+  });
+});
+
+describe('Catalog — scroll to top', () => {
+  const CLIENT_HEIGHT = 600;
+  let pendingFrames: FrameRequestCallback[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pendingFrames = [];
+    vi.stubGlobal(
+      'requestIdleCallback',
+      vi.fn(() => 1),
+    );
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      pendingFrames.push(callback);
+      return pendingFrames.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockReturnValue({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      } as unknown as MediaQueryList),
+    );
+  });
+
+  /* Not afterEach: the unmount that follows each test still cancels idle work. */
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const flushFrames = () => {
+    act(() => {
+      const frames = pendingFrames;
+      pendingFrames = [];
+      frames.forEach((frame) => frame(0));
+    });
+  };
+
+  /*
+   * The scroll body has no role of its own, so it is reached from the search
+   * field it contains; jsdom has no layout, so its geometry is stubbed here.
+   */
+  const getScrollBody = () => {
+    const search = screen.getByPlaceholderText('search');
+    // eslint-disable-next-line testing-library/no-node-access -- see above
+    const scrollBody = search.closest('.overflow-y-auto') as HTMLElement;
+    Object.defineProperty(scrollBody, 'clientHeight', {
+      configurable: true,
+      value: CLIENT_HEIGHT,
+    });
+    const scrollTo = vi.fn();
+    scrollBody.scrollTo = scrollTo as unknown as typeof scrollBody.scrollTo;
+    return { scrollBody, scrollTo };
+  };
+
+  const scrollBodyTo = (scrollBody: HTMLElement, top: number) => {
+    scrollBody.scrollTop = top;
+    fireEvent.scroll(scrollBody);
+    flushFrames();
+  };
+
+  const items = [makeItem('1', 'Claude'), makeItem('2', 'GPT')];
+
+  it('does not offer the button at the top of the catalog', () => {
+    render(<Catalog items={items} favorites={[]} />);
+    const { scrollBody } = getScrollBody();
+
+    scrollBodyTo(scrollBody, 0);
+
+    expect(screen.queryByRole('button', { name: 'Scroll to top' })).toBeNull();
+  });
+
+  it('offers the button once scrolled down by one screen', () => {
+    render(<Catalog items={items} favorites={[]} />);
+    const { scrollBody } = getScrollBody();
+
+    scrollBodyTo(scrollBody, CLIENT_HEIGHT);
+
+    expect(screen.getByRole('button', { name: 'Scroll to top' })).toBeTruthy();
+  });
+
+  it('scrolls back to the top and focuses search when clicked', async () => {
+    render(<Catalog items={items} favorites={[]} />);
+    const { scrollBody, scrollTo } = getScrollBody();
+    scrollBodyTo(scrollBody, CLIENT_HEIGHT);
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Scroll to top' }),
+    );
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    // Focus is a document-level fact; no Testing Library query reports it.
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('search'));
+    expect(listViewScrollToTop).not.toHaveBeenCalled();
+  });
+
+  it('names the button with the host label', () => {
+    render(
+      <Catalog
+        items={items}
+        favorites={[]}
+        titles={{ scrollToTopLabel: 'Nach oben' }}
+      />,
+    );
+    const { scrollBody } = getScrollBody();
+
+    scrollBodyTo(scrollBody, CLIENT_HEIGHT);
+
+    expect(screen.getByRole('button', { name: 'Nach oben' })).toBeTruthy();
+  });
+
+  it('counts the list rows offset in list view', async () => {
+    render(
+      <Catalog
+        items={items}
+        favorites={[]}
+        initialViewMode={CatalogViewMode.Cards}
+      />,
+    );
+    const { scrollBody } = getScrollBody();
+    scrollBodyTo(scrollBody, 200);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Scroll rows' }));
+    flushFrames();
+
+    expect(screen.getByRole('button', { name: 'Scroll to top' })).toBeTruthy();
+  });
+
+  it('resets the page and the list rows and focuses search with Enter', async () => {
+    render(
+      <Catalog
+        items={items}
+        favorites={[]}
+        initialViewMode={CatalogViewMode.Cards}
+      />,
+    );
+    const { scrollBody, scrollTo } = getScrollBody();
+    scrollBodyTo(scrollBody, CLIENT_HEIGHT);
+
+    screen.getByRole('button', { name: 'Scroll to top' }).focus();
+    await userEvent.keyboard('{Enter}');
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(listViewScrollToTop).toHaveBeenCalledOnce();
+    // Focus is a document-level fact; no Testing Library query reports it.
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('search'));
+  });
+
+  it('does not offer the button while loading', () => {
+    render(<Catalog items={items} favorites={[]} isLoading />);
+
+    expect(screen.queryByRole('button', { name: 'Scroll to top' })).toBeNull();
+  });
+
+  it('names the loading spinner with the English default', () => {
+    render(<Catalog items={items} favorites={[]} isLoading />);
+
+    expect(screen.getByRole('status', { name: 'Loading…' })).toBeTruthy();
+  });
+
+  it('names the loading spinner with titles.loadingLabel', () => {
+    render(
+      <Catalog
+        items={items}
+        favorites={[]}
+        isLoading
+        titles={{ loadingLabel: 'Chargement…' }}
+      />,
+    );
+
+    expect(screen.getByRole('status', { name: 'Chargement…' })).toBeTruthy();
   });
 });

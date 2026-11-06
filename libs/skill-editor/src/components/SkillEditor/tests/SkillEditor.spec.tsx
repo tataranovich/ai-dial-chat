@@ -1,3 +1,4 @@
+import { BUILDER_FORM_CLASS } from '@epam/ai-dial-builder-form';
 import type { DialFile } from '@epam/ai-dial-react-file-manager';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -8,6 +9,7 @@ import type {
   SkillEditorFileActions,
   SkillEditorProps,
 } from '../../../models/skill-editor-props';
+import { SkillFileNodeKind } from '../../../types/skill-file-node-kind';
 import { SkillEditor } from '../SkillEditor';
 
 const renderFileNode = (
@@ -33,7 +35,15 @@ vi.mock('@epam/ai-dial-react-file-manager', async (importOriginal) => {
   };
 });
 
-vi.mock('@epam/ai-dial-ui-kit', () => ({
+vi.mock('@epam/ai-dial-ui-kit', async () => ({
+  /* The real live region: a hand-rolled stub would hide its always-mounted markup. */
+  ...(await vi
+    .importActual<typeof import('@epam/ai-dial-ui-kit')>('@epam/ai-dial-ui-kit')
+    .then(({ LiveRegion, LiveRegionElement, LiveRegionPoliteness }) => ({
+      LiveRegion,
+      LiveRegionElement,
+      LiveRegionPoliteness,
+    }))),
   ButtonDropdown: ({ label }: { label: ReactNode }) => (
     <button aria-haspopup="menu">{label}</button>
   ),
@@ -42,32 +52,53 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
   EditorThemes: { dark: 'dark', light: 'light' },
   TextareaResize: { Vertical: 'vertical' },
   TagInput: () => null,
+  DialItemType: { File: 'file', Folder: 'folder' },
+  FileIcon: () => null,
   Accordion: ({
     title,
-    children,
+    description,
     expanded,
     onToggle,
+    children,
   }: {
     title: ReactNode;
-    children: ReactNode;
+    description?: ReactNode;
     expanded?: boolean;
-    onToggle?: (next: boolean) => void;
+    onToggle?: (expanded: boolean) => void;
+    children?: ReactNode;
   }) => (
-    <section>
-      <h3>
-        <button
-          type="button"
-          aria-expanded={expanded ?? false}
-          onClick={() => onToggle?.(!expanded)}
-        >
-          {title}
-        </button>
-      </h3>
-      {expanded !== false && children}
-    </section>
+    <div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => onToggle?.(!expanded)}
+      >
+        {title} {description}
+      </button>
+      <div inert={!expanded}>{children}</div>
+    </div>
+  ),
+  FileName: ({ name, details }: { name: string; details?: ReactNode }) => (
+    <span>
+      {name}
+      {details}
+    </span>
   ),
   CaptionText: ({ text }: { text?: string }) => <span>{text}</span>,
-  ErrorText: ({ text }: { text?: string }) => <span>{text}</span>,
+  ErrorText: ({ text, id }: { text?: string; id?: string }) =>
+    text ? <span id={id}>{text}</span> : null,
+  ErrorMessageNotification: ({
+    message,
+    action,
+  }: {
+    message: ReactNode;
+    action?: ReactNode;
+  }) => (
+    <div role="alert">
+      {message}
+      {action}
+    </div>
+  ),
   FileDropzone: ({
     label,
     ariaLabel,
@@ -153,6 +184,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     caption,
     disabled,
     readOnly,
+    tooltipText,
   }: {
     id?: string;
     labelProps?: { label: ReactNode; required?: boolean };
@@ -162,6 +194,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     caption?: string;
     disabled?: boolean;
     readOnly?: boolean;
+    tooltipText?: string;
   }) => (
     <label>
       {labelProps?.label}
@@ -172,6 +205,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
         value={value ?? ''}
         disabled={disabled}
         readOnly={readOnly}
+        title={tooltipText}
         onChange={(e) => onChange?.(e.target.value)}
       />
       {error && <span>{error}</span>}
@@ -268,13 +302,16 @@ vi.mock('@epam/ai-dial-ui-kit/editors', () => ({
   LazyMarkdownEditor: () =>
     Promise.resolve({
       MarkdownEditor: ({
+        id,
         value,
         onChange,
       }: {
+        id?: string;
         value: string;
         onChange: (value: string) => void;
       }) => (
         <textarea
+          id={id}
           aria-label="Instructions"
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -285,6 +322,7 @@ vi.mock('@epam/ai-dial-ui-kit/editors', () => ({
 
 vi.mock('@tabler/icons-react', () => ({
   IconArrowNarrowLeft: () => <svg />,
+  IconChevronDown: () => <svg />,
   IconDatabase: () => <svg />,
   IconFileZip: () => <svg />,
   IconFolderPlus: () => <svg />,
@@ -450,16 +488,19 @@ describe('SkillEditor', () => {
     expect(screen.getByRole('textbox', { name: /Name/ })).toBeTruthy();
   });
 
-  it('renders the Name field read-only when isNameReadOnly is set', () => {
+  it('renders the Name field disabled when isNameReadOnly is set', () => {
     renderEditor({
       isNameReadOnly: true,
       initialValues: { name: 'good-morning-breakfast' },
     });
 
-    expect(
-      (screen.getByDisplayValue('good-morning-breakfast') as HTMLInputElement)
-        .readOnly,
-    ).toBe(true);
+    const nameField = screen.getByDisplayValue(
+      'good-morning-breakfast',
+    ) as HTMLInputElement;
+    expect(nameField.disabled).toBe(true);
+    expect(nameField.title).toBe(
+      "The skill name can't be changed after creation",
+    );
   });
 
   it('calls onDirtyChange(true) on the first edit and onDirtyChange(false) when reverted', async () => {
@@ -515,6 +556,32 @@ describe('SkillEditor', () => {
     const message = screen.getByText('Remove the front matter block');
     expect(message.className).not.toMatch(
       /\b(ml-|mr-|pl-|pr-|left-|right-|text-left|text-right)/,
+    );
+  });
+
+  it('links the Instructions error to the editor through aria-describedby', async () => {
+    const props: SkillEditorProps = {
+      title: 'Test Skill',
+      onBack: vi.fn(),
+      files: [],
+      fileActions,
+      onSubmit: vi.fn(),
+      onCancel: vi.fn(),
+    };
+    const { rerender } = render(<SkillEditor {...props} />);
+    const editor = await screen.findByRole('textbox', { name: 'Instructions' });
+    expect(editor.getAttribute('aria-invalid')).toBeNull();
+
+    rerender(
+      <SkillEditor
+        {...props}
+        errors={{ instructions: 'Instructions are required' }}
+      />,
+    );
+
+    expect(editor.getAttribute('aria-invalid')).toBe('true');
+    expect(editor.getAttribute('aria-describedby')).toBe(
+      screen.getByText('Instructions are required').id,
     );
   });
 
@@ -603,20 +670,37 @@ describe('SkillEditor', () => {
 
     expect(
       screen
-        .getByRole('button', { name: 'Editing file' })
+        .getByRole('button', { name: 'Editing file SKILL.md' })
         .getAttribute('aria-expanded'),
     ).toBe('false');
+  });
+
+  it('names the selected file in the mobile Files summary', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderEditor({
+      files: [
+        { path: 'notes.md', name: 'notes.md', kind: SkillFileNodeKind.File },
+      ],
+    });
+
+    await user.click(screen.getAllByRole('button', { name: 'notes.md' })[0]);
+
+    expect(
+      screen.getByRole('button', { name: 'Editing file notes.md' }),
+    ).toBeTruthy();
   });
 
   it('expands the mobile Files accordion once its header is activated', async () => {
     const user = userEvent.setup();
     renderEditor();
 
-    await user.click(screen.getByRole('button', { name: 'Editing file' }));
+    await user.click(
+      screen.getByRole('button', { name: 'Editing file SKILL.md' }),
+    );
 
     expect(
       screen
-        .getByRole('button', { name: 'Editing file' })
+        .getByRole('button', { name: 'Editing file SKILL.md' })
         .getAttribute('aria-expanded'),
     ).toBe('true');
   });
@@ -654,5 +738,40 @@ describe('SkillEditor — public class names', () => {
     );
     expect(root).toBeTruthy();
     expect(root?.getAttribute('dir')).toBe('rtl');
+  });
+});
+
+describe('SkillEditor — asideData', () => {
+  it('renders no side panel by default', () => {
+    renderEditor();
+
+    expect(screen.queryByText('quality check')).toBeNull();
+  });
+
+  it('renders the host panel next to the form', () => {
+    renderEditor({ asideData: <p>quality check</p> });
+
+    expect(screen.getByText('quality check')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /Name/ })).toBeTruthy();
+  });
+
+  it('pads the aside section like the Files and selected-file sections', () => {
+    renderEditor({ asideData: <p>quality check</p> });
+
+    const section = closestWithClass(
+      screen.getByText('quality check'),
+      BUILDER_FORM_CLASS.asideSection,
+    );
+    expect(section?.classList.contains('desktop:px-8')).toBe(true);
+    expect(section?.classList.contains('desktop:py-6')).toBe(true);
+  });
+
+  it.each([
+    ['loading', { isLoading: true }],
+    ['a load error', { hasLoadError: true }],
+  ])('does not render the panel while %s', (_name, props) => {
+    renderEditor({ ...props, asideData: <p>quality check</p> });
+
+    expect(screen.queryByText('quality check')).toBeNull();
   });
 });

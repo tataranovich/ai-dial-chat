@@ -24,12 +24,45 @@ import {
   TextRefinementPurpose,
 } from './dto/refine-text.dto';
 import { APPLICATION_DESCRIPTION_PROMPT } from './prompts/application-description.prompt';
+import { PROJECT_DESCRIPTION_PROMPT } from './prompts/project-description.prompt';
+import { PROJECT_INSTRUCTIONS_PROMPT } from './prompts/project-instructions.prompt';
 import { PROMPT_DESCRIPTION_PROMPT } from './prompts/prompt-description.prompt';
+import { PROMPT_INSTRUCTIONS_PROMPT } from './prompts/prompt-instructions.prompt';
+import {
+  unwrapRefinementDraft,
+  wrapRefinementDraft,
+} from './prompts/refinement-draft.prompt';
 import { SCHEDULED_TASK_DESCRIPTION_PROMPT } from './prompts/scheduled-task-description.prompt';
 import { SCHEDULED_TASK_INSTRUCTIONS_PROMPT } from './prompts/scheduled-task-instructions.prompt';
 import { SKILL_DESCRIPTION_PROMPT } from './prompts/skill-description.prompt';
 import { SKILL_INSTRUCTIONS_PROMPT } from './prompts/skill-instructions.prompt';
 import { TOOLSET_DESCRIPTION_PROMPT } from './prompts/toolset-description.prompt';
+
+/*
+ * Purposes that belong to a flag-gated domain also require that domain's
+ * feature decision (including its role restriction), so a direct call
+ * cannot use refinement for a feature the caller cannot open.
+ */
+const PURPOSE_FEATURE_GATES: Partial<
+  Record<TextRefinementPurpose, { feature: FeatureKey; message: string }>
+> = {
+  [TextRefinementPurpose.ScheduledTaskDescription]: {
+    feature: FeatureKey.ScheduledTasksEnabled,
+    message: 'Scheduled tasks are not enabled',
+  },
+  [TextRefinementPurpose.ScheduledTaskInstructions]: {
+    feature: FeatureKey.ScheduledTasksEnabled,
+    message: 'Scheduled tasks are not enabled',
+  },
+  [TextRefinementPurpose.ProjectDescription]: {
+    feature: FeatureKey.ProjectsEnabled,
+    message: 'Projects are not enabled',
+  },
+  [TextRefinementPurpose.ProjectInstructions]: {
+    feature: FeatureKey.ProjectsEnabled,
+    message: 'Projects are not enabled',
+  },
+};
 
 @Injectable()
 export class TextRefinementService {
@@ -58,13 +91,11 @@ export class TextRefinementService {
         'Invalid text for the selected refinement purpose',
       );
     }
-    if (
-      dto.purpose === TextRefinementPurpose.ScheduledTaskDescription ||
-      dto.purpose === TextRefinementPurpose.ScheduledTaskInstructions
-    ) {
+    const gate = PURPOSE_FEATURE_GATES[dto.purpose];
+    if (gate) {
       const roles = user.claims['roles'];
       if (
-        !(await this.features.isEnabled(FeatureKey.ScheduledTasksEnabled, {
+        !(await this.features.isEnabled(gate.feature, {
           appId: 'chat-ui',
           userId: user.sub,
           roles: Array.isArray(roles)
@@ -72,7 +103,7 @@ export class TextRefinementService {
             : undefined,
         }))
       )
-        throw new ForbiddenException('Scheduled tasks are not enabled');
+        throw new ForbiddenException(gate.message);
     }
     const model = this.config.get('UTILITY_MODEL', { infer: true })?.trim();
     if (!model)
@@ -88,6 +119,9 @@ export class TextRefinementService {
         APPLICATION_DESCRIPTION_PROMPT,
       [TextRefinementPurpose.ToolsetDescription]: TOOLSET_DESCRIPTION_PROMPT,
       [TextRefinementPurpose.PromptDescription]: PROMPT_DESCRIPTION_PROMPT,
+      [TextRefinementPurpose.PromptInstructions]: PROMPT_INSTRUCTIONS_PROMPT,
+      [TextRefinementPurpose.ProjectDescription]: PROJECT_DESCRIPTION_PROMPT,
+      [TextRefinementPurpose.ProjectInstructions]: PROJECT_INSTRUCTIONS_PROMPT,
     }[dto.purpose];
     const promptKey = {
       [TextRefinementPurpose.SkillDescription]:
@@ -104,6 +138,12 @@ export class TextRefinementService {
         'TEXT_REFINEMENT_TOOLSET_DESCRIPTION_PROMPT',
       [TextRefinementPurpose.PromptDescription]:
         'TEXT_REFINEMENT_PROMPT_DESCRIPTION_PROMPT',
+      [TextRefinementPurpose.PromptInstructions]:
+        'TEXT_REFINEMENT_PROMPT_INSTRUCTIONS_PROMPT',
+      [TextRefinementPurpose.ProjectDescription]:
+        'TEXT_REFINEMENT_PROJECT_DESCRIPTION_PROMPT',
+      [TextRefinementPurpose.ProjectInstructions]:
+        'TEXT_REFINEMENT_PROJECT_INSTRUCTIONS_PROMPT',
     } as const;
     const prompt = resolvePrompt(
       this.config.get(promptKey[dto.purpose], { infer: true }),
@@ -135,7 +175,7 @@ export class TextRefinementService {
           body: {
             messages: [
               { role: 'system', content: prompt },
-              { role: 'user', content: dto.text },
+              { role: 'user', content: wrapRefinementDraft(dto.text) },
             ],
             stream: false,
           } as Parameters<
@@ -171,7 +211,9 @@ export class TextRefinementService {
             message?: { content?: unknown };
           }
         | undefined;
-      const text = choice?.message?.content;
+      const content = choice?.message?.content;
+      const text =
+        typeof content === 'string' ? unwrapRefinementDraft(content) : content;
       if (
         choice?.finish_reason !== 'stop' ||
         typeof text !== 'string' ||

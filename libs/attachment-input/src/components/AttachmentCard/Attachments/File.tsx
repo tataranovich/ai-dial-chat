@@ -2,22 +2,31 @@ import {
   AttachmentErrorReason,
   mergeClasses,
   RequestStatus,
+  useIsVerticallyClamped,
 } from '@epam/ai-dial-chat-shared';
-import { Spinner, Highlight } from '@epam/ai-dial-ui-kit';
 import {
-  type FC,
-  type HTMLAttributes,
-  type KeyboardEvent,
-  useCallback,
-  useId,
-  useMemo,
-} from 'react';
-import { ATTACHMENT_TILE_BASE_CLASS } from '../../../constants/attachment-group';
+  DialItemType,
+  DIAL_ICON_SIZE,
+  DIAL_KIT_ICON_STROKE,
+  FileIcon,
+  Highlight,
+  Spinner,
+  LiveRegion,
+  LiveRegionElement,
+  Tooltip,
+} from '@epam/ai-dial-ui-kit';
+import { type FC, useCallback, useId, useMemo } from 'react';
+import {
+  ATTACHMENT_TILE_BASE_CLASS,
+  ATTACHMENT_TILE_FOCUS_RING_CLASS,
+} from '../../../constants/attachment-group';
 import { ATTACHMENT_INPUT_CLASS } from '../../../constants/public-class-names';
 import type { FileAttachmentProps } from '../../../models/attachment-file-row';
 import {
   getAttachmentCardState,
+  getAttachmentExtension,
   getNameWithoutExtension,
+  hasFileTypeGlyph,
 } from '../../../utils/attachment';
 import {
   DownloadAction,
@@ -43,7 +52,6 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
   labels,
   styles: rowStyles,
   onDownload,
-  isPasted,
   isLink,
   cssVars,
   onExpand,
@@ -78,6 +86,7 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
     : '';
 
   const { BottomIcon: Glyph, typeLabel } = getAttachmentCardState(attachment);
+  const isFileTypeGlyph = hasFileTypeGlyph(attachment);
 
   const canDownload = !isError && !isLoading && onDownload && !isLink;
 
@@ -87,18 +96,6 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
     errorReason !== AttachmentErrorReason.UnsupportedType &&
     errorReason !== AttachmentErrorReason.FileTooLarge;
 
-  const cornerActionCount =
-    Number(!!canDownload) +
-    Number(!!canRetry) +
-    Number(!!isLink) +
-    Number(!!onRemove);
-  const cornerIconSpacing =
-    cornerActionCount > 1
-      ? 'pe-11'
-      : cornerActionCount === 1
-        ? 'pe-5'
-        : undefined;
-
   /*
    * Expanding a pasted tile takes precedence over `onClick`. The tile is a
    * button only when one of the two applies; otherwise it is a plain element so
@@ -106,6 +103,17 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
    */
   const isExpandAction = !!isExpandable && onExpand !== undefined;
   const hasAction = isExpandAction || onClick !== undefined;
+  const actionCount =
+    Number(!!canDownload) +
+    Number(!!canRetry) +
+    Number(!!isLink) +
+    Number(!!onRemove);
+  /*
+   * With a single focus stop inside a non-interactive tile, the tile ring
+   * stands for that action's focus. Otherwise each focus stop keeps its own
+   * ring, so it stays clear which one has focus.
+   */
+  const isProxyFocus = !hasAction && actionCount === 1;
 
   const handleClick = (): void => {
     if (isExpandAction) {
@@ -115,23 +123,15 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
     }
   };
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    /*
-     * Only the tile itself activates on Enter/Space. Without this guard the
-     * preventDefault() below cancels the native activation of the corner
-     * action buttons whose key events bubble through here, leaving retry and
-     * remove dead to the keyboard.
-     */
-    if (e.target !== e.currentTarget) return;
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      handleClick();
-    }
-  };
+  const displayName = useMemo(() => getNameWithoutExtension(name), [name]);
 
-  const displayName = useMemo(() => {
-    return isPasted ? name : getNameWithoutExtension(name);
-  }, [isPasted, name]);
+  /*
+   * The tile's action button covers the whole tile, so the name's own `title`
+   * (and the `Highlight` tooltip) never sees the pointer. While the name is
+   * clamped, the button carries the full name in a kit tooltip instead.
+   */
+  const { ref: nameRef, isClamped: isNameClamped } =
+    useIsVerticallyClamped<HTMLDivElement>(displayName);
 
   const onOpenInNewTab = useCallback((): void => {
     window.open(attachment.referenceUrl, '_blank', 'noopener,noreferrer');
@@ -139,22 +139,25 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
 
   const tileClassName = mergeClasses(
     ATTACHMENT_TILE_BASE_CLASS,
-    'group/attachment-tile relative flex-col justify-between items-start gap-1 overflow-hidden p-1.5',
+    'group/attachment-tile relative flex-col justify-between items-start gap-2 overflow-hidden p-3',
     styles.tile,
-    !isError && styles.hovered,
+    hasAction && !isError && !isLoading && styles.hovered,
+    isLoading && styles.loading,
     isSelected && styles.selected,
     isError && styles.tileError,
+    isProxyFocus && styles.proxyFocus,
     ATTACHMENT_INPUT_CLASS.tile,
     isSelected && ATTACHMENT_INPUT_CLASS.tileSelected,
   );
 
   const nameEl = (
     <div
+      ref={nameRef}
       title={displayName}
       className={mergeClasses(
-        typography?.nameClassName ?? 'dial-caption-text',
+        typography?.nameClassName ?? 'dial-tiny-text',
         /*
-         * `w-full` is load-bearing here: the tile is a fixed-width (84px)
+         * `w-full` is load-bearing here: the tile is a fixed-width (100px)
          * column flex container with `items-start`, so the name div is sized to
          * its min-content width. `break-words` (overflow-wrap: break-word) does
          * not shrink min-content, so a filename with one long unbreakable run
@@ -162,9 +165,8 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
          * tile's `overflow-hidden` instead of wrapping and clamping with an
          * ellipsis.
          */
-        'line-clamp-2 w-full min-w-0 break-words',
+        'line-clamp-2 w-full min-w-0 wrap-break-word',
         styles.nameText,
-        !isError && cornerIconSpacing,
         ATTACHMENT_INPUT_CLASS.tileName,
       )}
     >
@@ -179,16 +181,30 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
   const typeRow = Glyph && (
     <div
       className={mergeClasses(
-        'flex w-full items-center gap-1',
-        isError && cornerIconSpacing,
+        'flex w-full items-end gap-1',
         ATTACHMENT_INPUT_CLASS.tileType,
       )}
     >
-      <Glyph size={16} className={styles.typeText} aria-hidden />
+      {isFileTypeGlyph ? (
+        <FileIcon
+          type={DialItemType.File}
+          name={name ?? ''}
+          fileExtension={getAttachmentExtension(attachment)}
+          size={DIAL_ICON_SIZE.MD}
+          decorative
+        />
+      ) : (
+        <Glyph
+          size={DIAL_ICON_SIZE.MD}
+          className={styles.typeText}
+          stroke={DIAL_KIT_ICON_STROKE}
+          aria-hidden
+        />
+      )}
 
       <span
         className={mergeClasses(
-          typography?.metaClassName ?? 'dial-caption-text',
+          typography?.metaClassName ?? 'dial-tiny-text',
           'min-w-0 flex-1 truncate',
           styles.typeText,
         )}
@@ -198,24 +214,35 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
     </div>
   );
 
-  /*
-   * Role, Tab stop, name and handlers travel together, so the tile is either a
-   * complete button or a plain element — never a focusable no-op.
-   */
-  const interactiveProps: HTMLAttributes<HTMLDivElement> = hasAction
-    ? {
-        role: 'button',
-        tabIndex: 0,
-        'aria-label': isExpandAction ? expandLabel : clickLabel,
-        onClick: handleClick,
-        onKeyDown: handleKeyDown,
-      }
-    : {};
-
   const tileContent = (
     <>
       {nameEl}
       {typeRow}
+
+      {/* A full-size sibling of the corner actions rather than a role on the
+          tile, so no control is nested inside another (WCAG 4.1.2). It comes
+          before the actions so they stack above it. */}
+      {hasAction && (
+        <Tooltip
+          tooltip={name}
+          hideTooltip={!isNameClamped}
+          triggerClassName="absolute inset-0"
+        >
+          <button
+            type="button"
+            aria-label={isExpandAction ? expandLabel : clickLabel}
+            /* A selected state carried only by a CSS class is invisible to assistive technology, so a tile whose action is `onClick` reports it as pressed. An expandable pasted tile is not a toggle, so it never does. */
+            aria-pressed={
+              !isExpandAction && onClick !== undefined ? isSelected : undefined
+            }
+            onClick={handleClick}
+            className={mergeClasses(
+              'absolute inset-0 cursor-pointer rounded-[11px]',
+              styles.tileAction,
+            )}
+          />
+        </Tooltip>
+      )}
 
       {isLoading && (
         /*
@@ -228,15 +255,18 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
           role="progressbar"
           aria-label={uploadingLabel}
           className={mergeClasses(
-            'absolute start-[-1px] top-[-1px] flex size-full items-center justify-center rounded',
+            'absolute inset-0 flex items-center justify-center rounded-[11px]',
             styles.track,
           )}
         >
-          <Spinner size={32} />
+          {/* The progressbar already names the state; the kit Spinner would add its own English "Loading" status. */}
+          <span aria-hidden className="flex">
+            <Spinner size={32} />
+          </span>
         </div>
       )}
 
-      <div className="absolute end-1 top-1 flex gap-1">
+      <div className="absolute inset-e-1 top-1 flex">
         {canDownload && (
           <DownloadAction
             ariaLabel={downloadLabel}
@@ -270,33 +300,27 @@ export const FileAttachment: FC<FileAttachmentProps> = ({
             errorDescId={errorDescId}
             onClick={onRemove}
             id={id}
+            isAlwaysVisible={isLoading}
           />
         )}
       </div>
 
-      {isError && (
-        <span
-          id={errorDescId}
-          role="status"
-          aria-live="polite"
-          className="sr-only"
-        >
-          {errorTitle}
-        </span>
-      )}
+      {/* Always mounted so the polite region exists before the error text arrives. */}
+      <LiveRegion id={errorDescId} visuallyHidden as={LiveRegionElement.Span}>
+        {isError ? errorTitle : ''}
+      </LiveRegion>
     </>
   );
 
   return (
     <div style={cssVars} className={mergeClasses('inline-flex', className)}>
       <div
-        {...interactiveProps}
         aria-busy={isLoading}
         style={cssVars}
         className={mergeClasses(
           tileClassName,
           hasAction && 'cursor-pointer',
-          'focus-within:outline focus-within:outline-1 focus-within:outline-offset-1',
+          ATTACHMENT_TILE_FOCUS_RING_CLASS,
         )}
       >
         {tileContent}

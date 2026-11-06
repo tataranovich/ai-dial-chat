@@ -1,5 +1,10 @@
 import { mergeClasses } from '@epam/ai-dial-chat-shared';
-import { DIAL_KIT_ICON_STROKE, Spinner } from '@epam/ai-dial-ui-kit';
+import {
+  DIAL_KIT_ICON_STROKE,
+  Spinner,
+  LiveRegion,
+  LiveRegionPoliteness,
+} from '@epam/ai-dial-ui-kit';
 import type { XlsxSelectionContext } from '@silurus/ooxml/xlsx';
 import { IconAlertTriangle } from '@tabler/icons-react';
 import { type FC, useEffect, useRef, useState } from 'react';
@@ -275,10 +280,14 @@ interface OoxmlContentProps {
   formulaLabel: string;
   /** CSS class applied to the decorative `fx` label. */
   formulaLabelClassName: string;
+  /** CSS class applied to the active cell content shown in the formula bar. */
+  formulaValueClassName: string;
   /** Accessible label for the cited-locations overlay region. Defaults to `'Cited locations'`. */
   highlightsLabel?: string;
   /** Status announced once the cited location has been brought into view. Defaults to `'Scrolled to the cited location'`. */
   highlightNavigatedLabel?: string;
+  /** Accessible name of the loading spinner. Defaults to `'Loading…'`. */
+  loadingLabel?: string;
 }
 
 /** Renders DOCX, XLSX, PPTX, and CSV attachments with `@silurus/ooxml`, optionally highlighting cited locations. */
@@ -288,8 +297,10 @@ export const OoxmlContent: FC<OoxmlContentProps> = ({
   loadErrorLabel,
   formulaLabel,
   formulaLabelClassName,
+  formulaValueClassName,
   highlightsLabel = 'Cited locations',
   highlightNavigatedLabel = 'Scrolled to the cited location',
+  loadingLabel = 'Loading…',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -549,8 +560,9 @@ export const OoxmlContent: FC<OoxmlContentProps> = ({
             tabIndex={0}
             aria-live="polite"
             className={mergeClasses(
-              'h-8 min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded border px-2 py-1 text-sm focus-visible:outline focus-visible:outline-focus',
+              'h-8 min-w-0 flex-1 overflow-x-auto rounded border px-2 py-1 whitespace-nowrap focus-visible:outline',
               styles.formulaValue,
+              formulaValueClassName,
             )}
           >
             {activeCellContent}
@@ -599,20 +611,22 @@ export const OoxmlContent: FC<OoxmlContentProps> = ({
           </div>
         )}
       </div>
-      <div role="status" aria-live="polite" className="sr-only">
+      <LiveRegion visuallyHidden>
         {hasNavigated ? highlightNavigatedLabel : ''}
-      </div>
+      </LiveRegion>
+      {/* Mounted before the overlay, so the load failure is announced when it replaces the spinner. */}
+      <LiveRegion politeness={LiveRegionPoliteness.Assertive} visuallyHidden>
+        {!isLoading && hasError ? loadErrorLabel : ''}
+      </LiveRegion>
       {(isLoading || hasError) && (
         <div
-          role={hasError ? 'alert' : undefined}
-          aria-live="polite"
           className={mergeClasses(
             'absolute inset-0 flex items-center justify-center',
             styles.statusOverlay,
           )}
         >
           {isLoading ? (
-            <Spinner size={48} />
+            <Spinner size={48} ariaLabel={loadingLabel} />
           ) : (
             <div className="flex flex-col items-center gap-2">
               <IconAlertTriangle
@@ -621,7 +635,9 @@ export const OoxmlContent: FC<OoxmlContentProps> = ({
                 stroke={DIAL_KIT_ICON_STROKE}
                 className={styles.errorIcon}
               />
-              <p className="text-center">{loadErrorLabel}</p>
+              <p aria-hidden className="text-center">
+                {loadErrorLabel}
+              </p>
             </div>
           )}
         </div>

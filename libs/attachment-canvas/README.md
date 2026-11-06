@@ -25,8 +25,8 @@ Canvas/viewer component for rendering attachment content inline — images, audi
 Everything else this package needs it installs itself, as a `dependency`: the
 PDF stack (`@epam/ai-dial-react-pdf-highlighter`, `@epam/pdf-highlighter-kit`,
 `pdfjs-dist`), the MCP stack (`@mcp-ui/client`, `@modelcontextprotocol/sdk`,
-`@modelcontextprotocol/ext-apps`), the visualizer stack
-(`@epam/ai-dial-shared`, `@epam/ai-dial-visualizer-connector`),
+`@modelcontextprotocol/ext-apps`, `zod`), the visualizer connector
+(`@epam/ai-dial-visualizer-connector`, a sibling workspace package),
 `@tabler/icons-react`, `react-json-view-lite` and
 `react-syntax-highlighter`. A host rendering the
 canvas names none of them, and a host that never imports this package installs
@@ -47,6 +47,12 @@ Although this library does not import `pdfjs-dist` directly,
 is declared here as well — as a dependency pinning the tested `^5.4.149` line,
 rather than relying on whatever a transitive resolution happens to produce.
 
+The public MCP host-context type comes directly from ext-apps. Zod 4 is an
+explicit dependency because ext-apps' public schemas require its compatible
+type API; consumers do not need the workspace's MCP client override to check
+canvas declarations. Other feature packages derive that context type from
+`McpAppCanvasContent['hostContext']`.
+
 The library installs `@silurus/ooxml` as a runtime dependency and leaves its
 format entry points external in the published artifact. A consuming bundler
 loads the DOCX, XLSX/CSV, and PPTX entry points independently on demand, so
@@ -64,7 +70,7 @@ a user opens a PDF or a syntax-highlighted code file. While that import is
 pending, `AttachmentCanvasBody`/`CodeContent` render an accessible
 `role="status"` loading state (a `Spinner` for PDF; the plain-text fallback
 for code, which stays visible instead of being replaced by a spinner). If the
-import fails, a `role="alert"` message and a retry control are shown instead;
+import fails, a `role="status"` message and a retry control are shown instead;
 activating retry genuinely re-attempts the import (recreating the underlying
 `lazy()` reference), not just re-rendering the cached failure — see
 `pdfContentLoadingLabel`/`pdfContentErrorLabel`/`pdfContentRetryLabel` and
@@ -139,7 +145,7 @@ import {
 
 ### AttachmentCanvasBody
 
-Content-only renderer shared by `AttachmentCanvas` — the same Markdown/JSON/code/HTML/PDF/OOXML/image/audio/visualizer/unsupported/error rendering, with no sidebar chrome (no panel, header, close/download/copy actions). Use it when a host wants to mount an attachment preview inline in its own layout instead of the resizable side panel `AttachmentCanvas`/`AttachmentCanvasContainer` render. For content type `MarkdownTable`, pass the table copy/download labels in `labels` (and optionally `tableDownloadFilename`) to show the table's own inline copy/download header, same as `AttachmentCanvas`. The code-block, table and formula labels (`codeBlockCopyLabel`, `codeBlockCopiedLabel`, `codeBlockDownloadLabel`, `tableScrollRegionAriaLabel`, `mathScrollRegionAriaLabel`) are part of `AttachmentCanvasBodyLabels` too. For content type `McpApp`, pass `onAppInfo` to be notified once the mounted app completes its `ui/initialize` handshake, with its declared name/version.
+Content-only renderer shared by `AttachmentCanvas` — the same Markdown/JSON/code/HTML/PDF/OOXML/image/audio/visualizer/unsupported/error rendering, with no sidebar chrome (no panel, header, close/download/copy actions). Use it when a host wants to mount an attachment preview inline in its own layout instead of the resizable side panel `AttachmentCanvas`/`AttachmentCanvasContainer` render. For content type `MarkdownTable`, pass the table copy/download labels in `labels` (and optionally `tableDownloadFilename`) to show the table's own inline copy/download header, same as `AttachmentCanvas`. The code-block, table and formula labels (`codeBlockCopyLabel`, `codeBlockCopiedLabel`, `codeBlockDownloadLabel`, `tableScrollRegionAriaLabel`, `mathScrollRegionAriaLabel`) are part of `AttachmentCanvasBodyLabels` too. `loadingLabel` (default `'Loading…'`) is the accessible name of every loading spinner the body renders — the whole-body spinner while `isLoading`, the HTML source fetch and iframe load, the OOXML/CSV viewer and the MCP App handshake; `AttachmentCanvas` and `AttachmentCanvasContainer` forward it from `AttachmentCanvasLabels`. For content type `McpApp`, pass `onAppInfo` to be notified once the mounted app completes its `ui/initialize` handshake, with its declared name/version.
 
 ```tsx
 import { AttachmentCanvasBody } from '@epam/ai-dial-attachment-canvas';
@@ -153,7 +159,7 @@ import { AttachmentCanvasBody } from '@epam/ai-dial-attachment-canvas';
 
 ### AttachmentCanvasContainer
 
-Context-connected container that reads state from `AttachmentCanvasProvider` and renders `AttachmentCanvas` with download support wired up. Every prop is optional — `labels` fields all have English defaults. Forwards the table copy/download labels and `tableDownloadFilename` to `AttachmentCanvas` for the `MarkdownTable` content type, and the code-block and formula labels for `Markdown`/`MarkdownTable` content. `leftActions` is forwarded to `AttachmentCanvas` unchanged — use it for host navigation that the full-width mobile panel would otherwise cover.
+Context-connected container that reads state from `AttachmentCanvasProvider` and renders `AttachmentCanvas` with download support wired up. Every prop is optional — `labels` fields all have English defaults. Forwards the table copy/download labels and `tableDownloadFilename` to `AttachmentCanvas` for the `MarkdownTable` content type, and the code-block and formula labels for `Markdown`/`MarkdownTable` content. `defaultWidth`, `minWidth` and `maxWidth` size the resizable desktop panel (`minWidth` defaults to 600). `leftActions` is forwarded to `AttachmentCanvas` unchanged — use it for host navigation that the full-width mobile panel would otherwise cover.
 
 Pass `loadPdf?: (url: string) => Promise<Blob>` to provide a host-owned PDF
 loader. It is forwarded to the viewer, just as on `AttachmentCanvas` and
@@ -183,7 +189,7 @@ shown in full as plain text without loading or invoking the syntax highlighter.
 The limits use the shared `isSyntaxHighlightingAllowed` guard from
 `@epam/ai-dial-chat-shared` and apply to every highlighting language.
 
-Standalone syntax-highlighted code view used by the canvas for `CodeCanvasContent`. Exported for hosts that need the same rendering outside the panel. `labels` customizes the loading/error/retry strings shown while the syntax-highlighter engine's dynamic import is pending or fails — see [Styling](#styling) above.
+Standalone syntax-highlighted code view used by the canvas for `CodeCanvasContent`. Exported for hosts that need the same rendering outside the panel. `labels` customizes the loading/error/retry strings shown while the syntax-highlighter engine's dynamic import is pending or fails — see [Styling](#styling) above. `codeClassName` (default `'dial-code-text'`) and `errorLabelClassName` (default `'dial-body-text'`) set the code and error-message type.
 
 ```tsx
 import {
@@ -204,7 +210,7 @@ import {
 
 ### McpAppCanvasRenderer
 
-Mounts an MCP tool's `ui://` resource via `@mcp-ui/client`'s `AppFrame` and a host-owned `AppBridge`, inside the isolated-origin sandbox proxy named by `content.sandboxUrl`, seeded with the original invocation's `content.toolInput`/`content.toolResult`. Handles its own loading/error overlay while the app initializes. Exported so a host can also mount a compact preview outside the full canvas — e.g. inline under a chat message — using the same `McpAppCanvasContent` payload it builds for `AttachmentCanvas`.
+Mounts an MCP tool's `ui://` resource via `@mcp-ui/client`'s `AppFrame` and a host-owned `AppBridge`, inside the isolated-origin sandbox proxy named by `content.sandboxUrl`, seeded with the original invocation's `content.toolInput`/`content.toolResult`. Handles its own loading/error overlay while the app initializes. `loadingLabel` (default `'Loading…'`) names the overlay's spinner for assistive tech. Exported so a host can also mount a compact preview outside the full canvas — e.g. inline under a chat message — using the same `McpAppCanvasContent` payload it builds for `AttachmentCanvas`.
 
 Watches its own container with a `ResizeObserver` and reports the live pixel size to the mounted app via `hostContext.containerDimensions`, so a resize (the host dragging a resizable panel, a window resize) reaches a well-behaved app after mount, not just once. When `content.hostContext.displayMode` is `'fullscreen'` (the value `AttachmentCanvas`'s own usage sets), the mounted iframe is also forced to fill 100% of that container — overriding the mounted app's own reported content size, which is otherwise what drives the iframe's dimensions and is a better default for a compact inline preview.
 
@@ -237,6 +243,7 @@ const content: McpAppCanvasContent = {
 <McpAppCanvasRenderer
   content={content}
   errorLabel="Failed to load app"
+  loadingLabel="Loading…"
   onAppInfo={(appInfo) => console.log(appInfo.name, appInfo.version)}
 />;
 ```
@@ -267,7 +274,32 @@ openCanvas(
 );
 ```
 
+`openCanvas` takes an optional fourth argument, `onRetry`, which the context
+exposes as `retryCanvas` until the canvas closes or starts loading again.
+`useOpenAttachmentCanvas` passes one for every file it opens, so a file that
+fails to load (`Error` content with `errorType: LoadFailed`) can be opened
+again as a new request. `AttachmentCanvasContainer` forwards `retryCanvas` to
+`AttachmentCanvas`'s `onRetry`, and the body then shows a Retry button
+(`labels.loadErrorRetryLabel`, default `'Retry'`) under the load error. A
+`Forbidden` error never offers Retry.
+
 ## Hooks
+
+### useLatestCanvasRequest
+
+Call this hook inside `AttachmentCanvasProvider` and call its returned function
+at preview-click time. It returns a `ShouldCommitCanvas` guard suitable for
+`useOpenAttachmentCanvas`: the guard stays true only while the caller remains
+mounted and no newer request has started under the same provider. File,
+message and source previews share ordering when they share a provider;
+independently embedded providers do not invalidate one another. A later
+synchronous preview also invalidates earlier pending requests.
+
+```ts
+import { useLatestCanvasRequest } from '@epam/ai-dial-attachment-canvas';
+
+const usePreviewRequest = () => useLatestCanvasRequest();
+```
 
 ### useOpenAttachmentCanvas
 
@@ -670,11 +702,24 @@ Style overrides go through `AttachmentCanvasStyles` (`AttachmentCanvasColors`,
 `AttachmentCanvasLabels`. `AttachmentCanvasProps`,
 `AttachmentCanvasContainerProps`, `CodeContentProps`, `CodeContentLabels`, and
 `AttachmentCanvasContextValue` are exported for hosts building those objects.
+Every color the canvas paints has an `AttachmentCanvasColors` field, falling
+back to the app theme token: besides the content-body fields, `headerBorder`
+(`--stroke-tertiary`) colors the panel header's bottom border, `focusOutline`
+(`--stroke-focus`) the XLSX formula field's focus ring, `codeBackground`
+(`--bg-layer-raised`, or `--bg-layer-base` on a light syntax theme) the code
+viewer, and `mcpAppLoadingBackground` (`--bg-layer-1`) and `mcpAppStatusText`
+(`--text-primary`) the MCP App loading/error overlay, whose error icon and
+detail line follow `errorIcon` and `statusText`.
 Use `xlsxFormulaLabel` to localize the persistent XLSX `fx` bar's accessible
 label; it defaults to `Formula`. The visual `fx` mark is direction-neutral and
 does not replace that label for assistive technology. Its typography defaults
 to the UI Kit's `dial-italic-text` and can be overridden through
-`styles.typography.xlsxFormulaLabelClassName`.
+`styles.typography.xlsxFormulaLabelClassName`. The active cell content beside
+it defaults to `dial-code-text` and can be overridden through
+`styles.typography.xlsxFormulaValueClassName`. Source code takes
+`codeClassName` (`dial-code-text`), a collapsed JSON node
+`jsonCollapsedClassName` (`dial-caption-text`), and the code/PDF load-error
+message `errorMessageClassName` (`dial-body-text`).
 
 `McpAppDisplayMode` is the display-mode union of the MCP UI protocol
 (`'inline'` | `'fullscreen'` | `'pip'`) — the accepted values for
@@ -719,3 +764,7 @@ is in [`openspec/lib-styling-guide.md`](../../openspec/lib-styling-guide.md).
 
 Write host overrides with CSS logical properties (`margin-inline-start`,
 `inset-inline-end`) so they keep working under `dir="rtl"`.
+
+## Tablet presentation
+
+`AttachmentCanvas` and `AttachmentCanvasContainer` accept optional `isBoundedOverlay` (false by default), forwarded to SidebarPanel. A host can pass `useIsTablet()` for a bounded overlay at 768-1279px while preserving existing `isMobile` behavior elsewhere. Provide a positioned containing block and the preferred panel width; the overlay clamps even the default 600px minimum to available width minus 32px. This applies to every content type, including MCP. Route policy, source-panel exclusion and any persistence remain host responsibilities.

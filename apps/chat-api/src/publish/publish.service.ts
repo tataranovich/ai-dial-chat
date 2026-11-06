@@ -1,16 +1,21 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   BadGatewayException,
+  ForbiddenException,
+  HttpException,
   Inject,
   Injectable,
   Logger,
 } from '@nestjs/common';
 import type { Cache } from 'cache-manager';
+import { AdminRoleService } from '../auth/admin-role.service';
+import type { SessionUser } from '../auth/session/session.types';
 import {
   extractDialErrorMessage,
   mapDialHttpStatus,
 } from '../common/dial/dial-error.mapper';
 import { getBearerAuthHeaders } from '../common/utils/auth-header';
+import { parseDialApplicationResource } from '../common/utils/dial-application-resource';
 import { encodeDialResourcePath } from '../common/utils/encode-dial-path';
 import { safeDecodeURIComponent } from '../common/utils/uri';
 import { readPublicationDisplayAuthor } from '../common/utils/user-display-name';
@@ -20,18 +25,26 @@ import { CatalogEntityType } from './dto/catalog-entity-params.dto';
 import { PublishHistoryEntryDto } from './dto/publish-history-entry.dto';
 import { PublishResultDto } from './dto/publish-result.dto';
 import type { PublishRuleDto } from './dto/publish-rule.dto';
+import type { UnpublishAccessDto } from './dto/unpublish-access.dto';
 import { UnpublishResultDto } from './dto/unpublish-result.dto';
 import {
   getPublicationSourceCredentials,
+  getPublicationSourceTargetUrl,
+  publishesCopy,
+  resolvePublicationDetails,
   resolvePublicationsForSource,
   toPublicationList,
 } from './publication.util';
 import {
   getPublicationsListScope,
   getPublicTargetFolder,
+  getPublishableIconUrl,
+  getPublishedIconTargetUrl,
   getPublishedTargetUrl,
+  getResourceBucket,
   getResourceName,
   getResourceTypePrefix,
+  getVersionedTargetResourceName,
   stripPublicTargetFolder,
 } from './publish-target.util';
 
@@ -42,6 +55,15 @@ import {
  */
 const historyCacheKey = (entityType: CatalogEntityType, entityId: string) =>
   `publish-history:${entityType}:${entityId}`;
+
+/* Keyed by the caller's bucket, so one caller's answer is never served to another. */
+const unpublishAccessCacheKey = (
+  bucket: string,
+  entityType: CatalogEntityType,
+  entityId: string,
+) => `unpublish-access:${bucket}:${entityType}:${entityId}`;
+
+const UNPUBLISH_ACCESS_TTL_MS = 60 * 1000;
 
 /**
  * Catalog entity names are always `{name}__{version}` (see
@@ -62,6 +84,15 @@ const splitEntityNameAndVersion = (
     name: safeDecodeURIComponent(resourceName.slice(0, separatorIndex)),
     version: resourceName.slice(separatorIndex + 2),
   };
+};
+
+/** The version suffix of a published copy's `targetUrl`, or `fallback` when there is no target or it carries none. */
+const getPublishedVersion = (
+  targetUrl: string | undefined,
+  fallback: string | undefined,
+): string => {
+  const version = targetUrl ? splitEntityNameAndVersion(targetUrl).version : '';
+  return version ? safeDecodeURIComponent(version) : (fallback ?? '');
 };
 
 /**
@@ -89,6 +120,7 @@ export class PublishService {
   constructor(
     private readonly dialClient: DialClientService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly adminRoleService: AdminRoleService,
   ) {}
 
   /**
@@ -122,11 +154,18 @@ export class PublishService {
      */
     const sourceUrl = encodeDialResourcePath(entityId);
     const publicTargetFolder = getPublicTargetFolder(folderPath);
-    const targetUrl = getPublishedTargetUrl(
-      getResourceTypePrefix(sourceUrl),
-      folderPath,
+    const resourceTypePrefix = getResourceTypePrefix(sourceUrl);
+    const targetResourceName = getVersionedTargetResourceName(
+      resourceTypePrefix,
       getResourceName(sourceUrl),
+      version,
     );
+    const targetUrl = getPublishedTargetUrl(
+      resourceTypePrefix,
+      folderPath,
+      targetResourceName,
+    );
+    const iconUrl = await this.getApplicationIconUrl(accessToken, sourceUrl);
     const { name: entityName, version: resourceVersion } =
       splitEntityNameAndVersion(sourceUrl);
     const publicationVersion = version || resourceVersion;
@@ -146,6 +185,19 @@ export class PublishService {
           targetUrl,
           ...(publishCredentials ? { publishCredentials: true } : {}),
         },
+        ...(iconUrl != null
+          ? [
+              {
+                action: 'ADD' as const,
+                sourceUrl: iconUrl,
+                targetUrl: getPublishedIconTargetUrl(
+                  folderPath,
+                  targetResourceName,
+                  iconUrl,
+                ),
+              },
+            ]
+          : []),
       ],
       displayAuthor: author,
       rules: rules ?? [],
@@ -207,6 +259,43 @@ export class PublishService {
     };
   }
 
+  /*
+   * Reads an application before publishing it and returns its uploaded icon
+   * file, so the icon is published alongside the app and DIAL Core rewrites
+   * the published copy's `iconUrl` to the public path (#9446). Returns
+   * `undefined` for any other resource type. Best-effort: a failed read is
+   * logged and the app is published without its icon, exactly as before this
+   * lookup existed, rather than failing the publish.
+   */
+  private async getApplicationIconUrl(
+    accessToken: string,
+    sourceUrl: string,
+  ): Promise<string | undefined> {
+    const resource = parseDialApplicationResource(sourceUrl);
+    if (resource == null) return undefined;
+
+    try {
+      const result = await this.dialClient.client.getCustomApplication(
+        resource.bucket,
+        resource.path,
+        { headers: getBearerAuthHeaders(accessToken) },
+      );
+      if (result.error != null || result.data == null) {
+        this.logger.warn(
+          `Could not read application "${sourceUrl}" before publishing (status ${result.response?.status}); publishing without its icon`,
+        );
+        return undefined;
+      }
+      return getPublishableIconUrl(result.data, resource.bucket);
+    } catch (err) {
+      this.logger.warn(
+        `Failed to read application "${sourceUrl}" before publishing; publishing without its icon`,
+        err instanceof Error ? err.stack : undefined,
+      );
+      return undefined;
+    }
+  }
+
   /**
    * Submits a removal request for one already-published folder of a catalog
    * entity. DIAL Core models removal as a *publication* whose single resource
@@ -219,27 +308,59 @@ export class PublishService {
    * published copy stays visible to everyone who could already see it until an
    * administrator approves. Nothing in the result may assert otherwise.
    *
+   * Only an administrator or the copy's publisher may ask (see
+   * `canUnpublish`); anyone else is refused before Core is called.
+   *
    * @throws {NotFoundException} When Core reports the entity or target as unknown
-   * @throws {ForbiddenException} When the caller lacks write access to `folderPath`
+   * @throws {ForbiddenException} When the caller is neither an administrator nor the publisher, or lacks write access to `folderPath`
    * @throws {BadGatewayException} When Core returns an unexpected error, a 5xx, or is unreachable
    */
   async unpublish(
-    accessToken: string,
-    bucket: string,
+    user: SessionUser,
     entityType: CatalogEntityType,
     entityId: string,
     folderPath: string,
     version: string | undefined,
     author: string,
   ): Promise<UnpublishResultDto> {
+    const { at: accessToken, bucket } = user;
+    if (!(await this.canUnpublish(user, entityType, entityId))) {
+      this.logger.warn(
+        `Refused unpublish of ${entityType} "${entityId}": caller is neither an administrator nor its publisher`,
+      );
+      throw new ForbiddenException(
+        'You can only unpublish resources you published',
+      );
+    }
+
     /* See the matching `sourceUrl` encoding comment in `publish` above. */
     const sourceUrl = encodeDialResourcePath(entityId);
     const publicTargetFolder = getPublicTargetFolder(folderPath);
-    const targetUrl = getPublishedTargetUrl(
-      getResourceTypePrefix(sourceUrl),
-      folderPath,
-      getResourceName(sourceUrl),
-    );
+    const resourceTypePrefix = getResourceTypePrefix(sourceUrl);
+    /*
+     * The copy in this folder may carry a different version than the entity
+     * does now (a new version is published under a new name, see
+     * `getVersionedTargetResourceName`), so the target is read off the
+     * folder's own publication. Deriving it is the fallback for a folder
+     * whose publication cannot be read.
+     */
+    const targetUrl =
+      (await this.findPublishedTargetUrl(
+        accessToken,
+        bucket,
+        entityId,
+        folderPath,
+        version,
+      )) ??
+      getPublishedTargetUrl(
+        resourceTypePrefix,
+        folderPath,
+        getVersionedTargetResourceName(
+          resourceTypePrefix,
+          getResourceName(sourceUrl),
+          version,
+        ),
+      );
     const { name: entityName, version: resourceVersion } =
       splitEntityNameAndVersion(sourceUrl);
     const publicationVersion = version || resourceVersion;
@@ -304,6 +425,69 @@ export class PublishService {
   }
 
   /**
+   * Whether the caller may request removal of `entityId`: an administrator
+   * (`AdminRoleService`), the owner of a resource in their own bucket, or the
+   * publisher of a public copy — the bucket holding the live `ADD` publication
+   * that created it (`publishesCopy`). Names (`displayAuthor`, `author`) never
+   * count: they are free text.
+   *
+   * Only the publisher lookup is cached, per caller and entity, for 60 s;
+   * ownership changes when an administrator approves a publication in Core,
+   * which this service is not told about, so the TTL bounds staleness.
+   *
+   * Fails closed: an unreadable publication list throws instead of answering.
+   *
+   * @throws {BadGatewayException} When Core returns an error for the publication list or is unreachable
+   */
+  async canUnpublish(
+    user: SessionUser,
+    entityType: CatalogEntityType,
+    entityId: string,
+  ): Promise<boolean> {
+    if (this.adminRoleService.isAdmin(user)) {
+      return true;
+    }
+    /* An unresolved (empty) bucket owns nothing, so a bare id cannot match it. */
+    if (user.bucket && getResourceBucket(entityId) === user.bucket) {
+      return true;
+    }
+
+    const cacheKey = unpublishAccessCacheKey(user.bucket, entityType, entityId);
+    /* An object, not a bare boolean, so a cached `false` still reads as a hit. */
+    const cached = await this.cacheManager.get<UnpublishAccessDto>(cacheKey);
+    if (cached) {
+      return cached.canUnpublish;
+    }
+
+    const context = `unpublish access to ${entityType} "${entityId}"`;
+    let publications: Awaited<ReturnType<typeof this.listResolvedPublications>>;
+    try {
+      publications = await this.listResolvedPublications(
+        user.at,
+        user.bucket,
+        context,
+      );
+    } catch (err) {
+      if (err instanceof HttpException) {
+        throw err;
+      }
+      this.logger.error(
+        `Unexpected error checking ${context}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+      throw new BadGatewayException(
+        'Failed to read publications from DIAL Core',
+      );
+    }
+
+    const access: UnpublishAccessDto = {
+      canUnpublish: publishesCopy(publications, entityId),
+    };
+    await this.cacheManager.set(cacheKey, access, UNPUBLISH_ACCESS_TTL_MS);
+    return access.canUnpublish;
+  }
+
+  /**
    * @throws {BadGatewayException} When Core returns an unexpected error
    * @throws {ServiceUnavailableException} When Core is unreachable or times out
    */
@@ -321,49 +505,11 @@ export class PublishService {
       context: `get publish history for ${entityType} "${entityId}"`,
       logger: this.logger,
       fetch: async () => {
-        /*
-         * `url` is the caller's own-bucket list scope, not `entityId` itself
-         * (see `getPublicationsListScope`'s doc comment) — Core has no
-         * per-resource filter, so every publication in this bucket is
-         * fetched and narrowed to this entity by
-         * `resolvePublicationsForSource` below — which has to re-read each
-         * candidate individually, because this list response carries
-         * publication metadata only and no `resources` array.
-         *
-         * The scope comes from the session `bucket`, never from `entityId`:
-         * only some entity ids are full `{type}/{bucket}/{name}` resource
-         * paths. A deployment id can be a bare name (`gemini-pro-vision`),
-         * which made the extracted bucket `undefined` and the scope
-         * `publications/undefined/`; a public resource
-         * (`applications/public/...`) yielded the admin-only
-         * `publications/public/` scope instead. Both returned no history
-         * while publishing kept working, which silently hid Unpublish.
-         * `conversation-publish.service.ts` already scoped by session bucket.
-         */
-        const result = await this.dialClient.client.getPublications({
-          headers: getBearerAuthHeaders(accessToken),
-          body: { url: getPublicationsListScope(bucket) },
-        });
-        if (result.error) {
-          return mapDialHttpStatus(
-            result.response.status,
-            `get publish history for ${entityType} "${entityId}"`,
-            this.logger,
-            result.error,
-            extractDialErrorMessage(result.error),
-          );
-        }
-        const { version } = splitEntityNameAndVersion(sourceUrl);
-
-        const publications = await resolvePublicationsForSource(
-          toPublicationList<(typeof result.data)[number]>(
-            result.data,
-            this.logger,
-            `publish history for ${entityType} "${entityId}"`,
-          ),
+        const { version: sourceVersion } = splitEntityNameAndVersion(sourceUrl);
+        const publications = await this.listSourcePublications(
+          accessToken,
+          bucket,
           sourceUrl,
-          (url) => this.fetchPublication(accessToken, url),
-          this.logger,
           `publish history for ${entityType} "${entityId}"`,
         );
 
@@ -372,7 +518,15 @@ export class PublishService {
             entityId,
             entityType,
             folderPath: stripPublicTargetFolder(publication.targetFolder ?? ''),
-            version,
+            /*
+             * The version this publication put in the folder, read off its
+             * target — the source's own suffix only records the version the
+             * entity was created with (see `getVersionedTargetResourceName`).
+             */
+            version: getPublishedVersion(
+              getPublicationSourceTargetUrl(publication, sourceUrl),
+              sourceVersion,
+            ),
             publishedAt: publication.createdAt
               ? new Date(publication.createdAt).toISOString()
               : '',
@@ -385,6 +539,146 @@ export class PublishService {
           .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
       },
     });
+  }
+
+  /**
+   * Every live publication of `sourceUrl` in the caller's bucket, with its
+   * `resources` resolved.
+   *
+   * @throws {BadGatewayException} When Core returns an unexpected error
+   */
+  private async listSourcePublications(
+    accessToken: string,
+    bucket: string,
+    sourceUrl: string,
+    context: string,
+  ) {
+    /*
+     * `url` is the caller's own-bucket list scope, not `sourceUrl` itself
+     * (see `getPublicationsListScope`'s doc comment) — Core has no
+     * per-resource filter, so every publication in this bucket is fetched
+     * and narrowed to this entity by `resolvePublicationsForSource` below —
+     * which has to re-read each candidate individually, because this list
+     * response carries publication metadata only and no `resources` array.
+     *
+     * The scope comes from the session `bucket`, never from the entity id:
+     * only some entity ids are full `{type}/{bucket}/{name}` resource paths.
+     * A deployment id can be a bare name (`gemini-pro-vision`), which made
+     * the extracted bucket `undefined` and the scope `publications/undefined/`;
+     * a public resource (`applications/public/...`) yielded the admin-only
+     * `publications/public/` scope instead. Both returned no history while
+     * publishing kept working, which silently hid Unpublish.
+     * `conversation-publish.service.ts` already scoped by session bucket.
+     */
+    return resolvePublicationsForSource(
+      await this.listPublications(accessToken, bucket, context),
+      sourceUrl,
+      (url) => this.fetchPublication(accessToken, url),
+      this.logger,
+      context,
+    );
+  }
+
+  /**
+   * Every publication in the caller's bucket whose full record can be read,
+   * `resources` included — whatever it publishes.
+   *
+   * @throws {BadGatewayException} When Core returns an unexpected error
+   */
+  private async listResolvedPublications(
+    accessToken: string,
+    bucket: string,
+    context: string,
+  ) {
+    return resolvePublicationDetails(
+      await this.listPublications(accessToken, bucket, context),
+      (url) => this.fetchPublication(accessToken, url),
+      this.logger,
+      context,
+    );
+  }
+
+  /**
+   * The caller's own publication list — metadata only, no `resources`.
+   *
+   * @throws {BadGatewayException} When Core returns an unexpected error
+   */
+  private async listPublications(
+    accessToken: string,
+    bucket: string,
+    context: string,
+  ) {
+    const result = await this.dialClient.client.getPublications({
+      headers: getBearerAuthHeaders(accessToken),
+      body: { url: getPublicationsListScope(bucket) },
+    });
+    if (result.error) {
+      return mapDialHttpStatus(
+        result.response.status,
+        `get ${context}`,
+        this.logger,
+        result.error,
+        extractDialErrorMessage(result.error),
+      );
+    }
+
+    return toPublicationList<(typeof result.data)[number]>(
+      result.data,
+      this.logger,
+      context,
+    );
+  }
+
+  /**
+   * The published copy of `sourceUrl` in `folderPath` that an unpublish must
+   * remove: the newest live publication there, preferring one of `version`
+   * when the folder holds several. `undefined` when none can be found.
+   */
+  private async findPublishedTargetUrl(
+    accessToken: string,
+    bucket: string,
+    sourceUrl: string,
+    folderPath: string,
+    version: string | undefined,
+  ): Promise<string | undefined> {
+    const context = `published target of "${sourceUrl}" in "${folderPath}"`;
+    let publications: Awaited<ReturnType<typeof this.listSourcePublications>>;
+    try {
+      publications = await this.listSourcePublications(
+        accessToken,
+        bucket,
+        sourceUrl,
+        context,
+      );
+    } catch (err) {
+      /* The lookup only refines the target; the unpublish itself must not fail on it. */
+      this.logger.warn(
+        `Could not read ${context}; deriving it instead`,
+        err instanceof Error ? err.stack : undefined,
+      );
+      return undefined;
+    }
+    const targetUrls = publications
+      .filter(
+        (publication) =>
+          stripPublicTargetFolder(publication.targetFolder ?? '') ===
+          folderPath,
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt ?? 0).getTime() -
+          new Date(a.createdAt ?? 0).getTime(),
+      )
+      .map((publication) =>
+        getPublicationSourceTargetUrl(publication, sourceUrl),
+      )
+      .filter((targetUrl): targetUrl is string => targetUrl != null);
+
+    return (
+      targetUrls.find(
+        (targetUrl) => getPublishedVersion(targetUrl, undefined) === version,
+      ) ?? targetUrls[0]
+    );
   }
 
   /**

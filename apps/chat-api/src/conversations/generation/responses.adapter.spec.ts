@@ -374,6 +374,29 @@ describe('ResponsesAdapter', () => {
   });
 
   describe('buildInputItem — exercised via buildRequest', () => {
+    it('replays an assistant message with attachments as plain text, never input_text parts', () => {
+      const { adapter } = makeAdapter();
+      const request = adapter.buildRequest({
+        model: 'gpt-4o',
+        startConversation: { prompt: '' } as never,
+        messagesForCompletion: [
+          {
+            role: ConversationMessageRole.Assistant,
+            content: 'Rates found',
+            custom_content: {
+              attachments: [{ type: 'image/png', url: 'files/bucket/img.png' }],
+            },
+          } as never,
+        ],
+        temperatureSupported: false,
+      });
+
+      expect(request.input[0]).toEqual({
+        role: 'assistant',
+        content: 'Rates found',
+      });
+    });
+
     it('maps a URL-referenced image attachment to an input_image content part', () => {
       const { adapter } = makeAdapter();
       const request = adapter.buildRequest({
@@ -542,6 +565,44 @@ describe('ResponsesAdapter', () => {
     });
   });
 
+  describe('project id header', () => {
+    it('adds the extra headers to createResponse', async () => {
+      const { adapter, mockDialClient } = makeAdapter();
+      const createResponse = vi
+        .spyOn(mockDialClient.client, 'createResponse')
+        .mockResolvedValue({
+          response: new Response(
+            textToStream([
+              'data: {"type":"response.completed","response":{"id":"r","status":"completed"}}\n\n',
+            ]),
+            { status: 200 },
+          ),
+        } as never);
+
+      const iterator = adapter.stream(
+        { model: 'gpt-4o', input: [], stream: true, store: false },
+        'test-token',
+        new AbortController().signal,
+        { role: ConversationMessageRole.Assistant, content: '' } as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { extraHeaders: { 'x-project-id': 'projects/a1b2c3/q4' } },
+      );
+      let next = await iterator.next();
+      while (!next.done) next = await iterator.next();
+
+      const [init] = createResponse.mock.calls[0] as unknown as [
+        { headers: Record<string, string> },
+      ];
+      expect(init.headers['x-project-id']).toBe('projects/a1b2c3/q4');
+    });
+  });
+
   describe('stream pass-through', () => {
     it('relays normalized chunks without assembling the answer or publishing chunks', async () => {
       const { adapter, mockDialClient } = makeAdapter();
@@ -577,6 +638,7 @@ describe('ResponsesAdapter', () => {
         undefined,
         undefined,
         undefined,
+        undefined,
         onChunkApplied,
         undefined,
         { isPassThrough: true },
@@ -603,6 +665,7 @@ describe('ResponsesAdapter', () => {
       streamChunks: string[],
       status = 200,
       timezone?: string,
+      lang?: string,
     ) => {
       vi.spyOn(mockDialClient.client, 'createResponse').mockResolvedValue({
         response: new Response(textToStream(streamChunks), {
@@ -619,6 +682,7 @@ describe('ResponsesAdapter', () => {
         { role: ConversationMessageRole.Assistant, content: '' } as never,
         undefined,
         timezone,
+        lang,
       );
       return { result, res };
     };
@@ -655,6 +719,29 @@ describe('ResponsesAdapter', () => {
       const request = vi.mocked(mockDialClient.client.createResponse).mock
         .calls[0][0];
       expect(request.headers).not.toHaveProperty('X-Timezone');
+    });
+
+    it('forwards X-Lang to DIAL Core when provided', async () => {
+      const { adapter, mockDialClient } = makeAdapter();
+
+      await relay(
+        adapter,
+        mockDialClient,
+        [
+          'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+        ],
+        200,
+        undefined,
+        'uk',
+      );
+
+      expect(mockDialClient.client.createResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'X-Lang': 'uk',
+          }),
+        }),
+      );
     });
 
     it('assembles text deltas into the assistant message and sets responseId on completion', async () => {
@@ -700,6 +787,18 @@ describe('ResponsesAdapter', () => {
       expect(mockDialClient.client.createResponse).toHaveBeenCalledOnce();
     });
 
+    it('prefers display_message over message on an in-band error event', async () => {
+      const { adapter, mockDialClient } = makeAdapter();
+      const { result } = await relay(adapter, mockDialClient, [
+        'data: {"type":"error","error":{"message":"Error code: 429","display_message":"Weekly token limit exceeded"}}\n\n',
+      ]);
+
+      expect(result.outcome).toBe('error');
+      if (result.outcome === 'error') {
+        expect(result.displayMessage).toBe('Weekly token limit exceeded');
+      }
+    });
+
     it('skips unknown event types without forwarding them or breaking the stream', async () => {
       const { adapter, mockDialClient } = makeAdapter();
       const { result, res } = await relay(adapter, mockDialClient, [
@@ -738,6 +837,18 @@ describe('ResponsesAdapter', () => {
       }
       expect(res.getWritten()).not.toContain('[DONE]');
       expect(mockDialClient.client.createResponse).toHaveBeenCalledOnce();
+    });
+
+    it('prefers display_message over message on response.failed', async () => {
+      const { adapter, mockDialClient } = makeAdapter();
+      const { result } = await relay(adapter, mockDialClient, [
+        'data: {"type":"response.failed","response":{"id":"resp-9","error":{"message":"Error code: 429","display_message":"Weekly token limit exceeded"}}}\n\n',
+      ]);
+
+      expect(result.outcome).toBe('error');
+      if (result.outcome === 'error') {
+        expect(result.displayMessage).toBe('Weekly token limit exceeded');
+      }
     });
 
     it('exposes no user-facing text when the stream ends without a terminal signal', async () => {

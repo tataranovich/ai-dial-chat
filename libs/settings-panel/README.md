@@ -2,16 +2,23 @@
 
 ## Overview
 
-Provides `SettingsPanel`, a presentational vertical navigation panel: an optional 64px section
-header followed by icon + label rows, with the active row highlighted. The panel uses the raised
-background token; its header uses `dial-h1-text` and the primary text token. The component is fully
-host-agnostic — it takes already-localized labels, host-resolved icons, and the active/selected
-state via props, and calls back via `onSelect`. It implements the ARIA "automatic activation"
-tabs pattern adapted to a vertical layout: roving `tabIndex`, `ArrowUp`/`ArrowDown` move focus and
-selection between enabled rows (wrapping at the ends), `Home`/`End` jump to the first/last enabled
-row, and disabled rows are skipped entirely by keyboard navigation. A single row remains
-semantically selected but uses the neutral visual state because there is no alternative tab to
-distinguish it from.
+Provides two presentational, host-agnostic surfaces for a chat application's Settings area:
+
+- `SettingsPanel`, a vertical navigation panel: an optional 64px section header followed by
+  icon + label rows, with the active row highlighted. The panel uses the raised background token;
+  its header uses `dial-h1-text` and the primary text token. It takes already-localized labels,
+  host-resolved icons, and the active/selected state via props, and calls back via `onSelect`. It
+  implements the ARIA "automatic activation" tabs pattern adapted to a vertical layout: roving
+  `tabIndex`, `ArrowUp`/`ArrowDown` move focus and selection between enabled rows (wrapping at the
+  ends), `Home`/`End` jump to the first/last enabled row, and disabled rows are skipped entirely
+  by keyboard navigation. A single row remains semantically selected but uses the neutral visual
+  state because there is no alternative tab to distinguish it from.
+- `ExtensionsSection`, the Extensions services table: a Name / Description / Actions header row
+  (the Actions header is screen-reader-only text over a visually empty column) plus one row per
+  service. Each row renders an initials avatar with an optional corner warning badge, the service
+  name, the service description, and a host-supplied trailing action or limited-access badge. All user-visible
+  strings, the warning flag, and the action arrive via props — the host owns `t()`, service state, and the
+  login/logout wiring.
 
 ## Installation
 
@@ -59,16 +66,62 @@ import { SettingsPanel } from '@epam/ai-dial-settings-panel';
 />;
 ```
 
-Pass `styles={{ typography }}` to override the section-header typography class. The rows are
+When the panel sits under a heading of its own (a dialog title), omit `sectionLabel` and pass
+`ariaLabel` to name the list instead. Pass `styles={{ colors, typography }}` to override the
+panel background (`colors.background`, as a CSS custom property defaulting to `--bg-layer-raised`) and the
+section-header typography class. The rows are
 drawn by the UI kit's `Tabs`, so their colors and typography (`dial-small-text` /
 `dial-small-semi-text`) come from the kit and are not overridable here.
+
+### ExtensionsSection
+
+```tsx
+import { ExtensionsSection } from '@epam/ai-dial-settings-panel';
+
+<ExtensionsSection
+  rows={[
+    {
+      id: 'dial-native',
+      displayName: 'DIAL Scheduler',
+      description: 'Run tasks on a timetable.',
+      isWarningVisible: false,
+      action: <button type="button">Log in</button>,
+    },
+  ]}
+  labels={{
+    tableAriaLabel: 'Extensions',
+    nameColumnLabel: 'Name',
+    descriptionColumnLabel: 'Description',
+    actionsColumnLabel: 'Actions',
+  }}
+/>;
+```
+
+The section renders the table shell (ARIA `table`/`row`/`columnheader` roles, the divider rules,
+and the desktop column grid) and one row per `rows` entry. The header row is hidden below the
+`desktop:` breakpoint, where the rows stack. `action` is the trailing cell's content and is owned
+entirely by the host — an empty `null` renders an empty cell with no layout shift.
+
+Pass `styles={{ colors, typography }}` to override the container background, column-header,
+name, description, and warning-badge colors (as CSS custom properties) and the column-header,
+name, description, and limited-access tooltip (`tooltipTitleClassName`,
+`tooltipDescriptionClassName`) and avatar-initials (`avatarInitialsClassName`) typography classes. `descriptionColor` and `descriptionClassName`
+apply to both the service description and the visible limited-access explanation. Without
+a color override, the explanation uses `--text-primary` with a `#161b2d` fallback.
 
 ## Types
 
 - `SettingsPanelItem` — `{ id, label, icon?, disabled? }`
-- `SettingsPanelProps` — `{ items, activeId, onSelect, sectionLabel?, styles?, className? }`
-- `SettingsPanelStyles` — `{ typography? }`
+- `SettingsPanelProps` — `{ items, activeId, onSelect, sectionLabel?, ariaLabel?, styles?, className? }`
+- `SettingsPanelStyles` — `{ colors?, typography? }`
+- `SettingsPanelColors` — `{ background? }`
 - `SettingsPanelTypography` — `{ sectionLabelClassName? }`
+- `ExtensionServiceItem` — `{ id, displayName, avatarColor?, description, isWarningVisible, limitedAccessLabel?, limitedAccessTooltipTitle?, limitedAccessTooltipDescription?, action }` — `avatarColor` is an `AVATAR_PALETTE` entry (`@epam/ai-dial-ui-kit`) pinned by the host; omitted keeps the name-derived colour — while `limitedAccessLabel` is set the row renders the red limited-access `Badge` with a two-line hover tooltip (bold `limitedAccessTooltipTitle`, normal `limitedAccessTooltipDescription`) instead of the `action`; `limitedAccessTooltipDescription` also remains visible below the badge at every breakpoint, wrapping within the action cell so keyboard and touch users can read it without hovering. The `Badge` references this visible explanation through `aria-describedby` for screen readers
+- `ExtensionsLabels` — `{ tableAriaLabel, nameColumnLabel, descriptionColumnLabel, actionsColumnLabel }`
+- `ExtensionsSectionProps` — `{ rows, labels, styles? }`
+- `ExtensionsStyles` — `{ colors?, typography? }`
+- `ExtensionsColors` — `{ containerBackground?, columnHeaderColor?, rowDividerColor?, nameColor?, descriptionColor?, warningBadgeColor? }`
+- `ExtensionsTypography` — `{ columnHeaderClassName?, nameClassName?, descriptionClassName?, tooltipTitleClassName?, tooltipDescriptionClassName?, avatarInitialsClassName? }`
 
 ## Public class names
 

@@ -15,6 +15,7 @@ import {
 import { getBearerAuthHeaders } from '../common/utils/auth-header';
 import { encodeDialResourcePath } from '../common/utils/encode-dial-path';
 import { readPublicationDisplayAuthor } from '../common/utils/user-display-name';
+import { DeploymentsService } from '../deployments/deployments.service';
 import { withCachedDialRequest } from '../dial/cached-dial-request.helper';
 import { DialClientService } from '../dial/dial-client.service';
 import type { PublishRuleDto } from '../publish/dto/publish-rule.dto';
@@ -25,14 +26,20 @@ import {
 import {
   getPublicationsListScope,
   getPublicTargetFolder,
+  getPublishedAttachmentsFolderUrl,
   getPublishedTargetUrl,
   getResourceName,
   stripPublicTargetFolder,
 } from '../publish/publish-target.util';
+import { ConversationPublishAttachmentsService } from './conversation-publish-attachments.service';
 import type { ConversationMessageDto } from './dto/conversation-message.dto';
 import { PublishConversationResultDto } from './dto/publish-conversation-result.dto';
 import { UnpublishConversationResultDto } from './dto/unpublish-conversation-result.dto';
 import { findPendingBackgroundMessage } from './generation/background-message';
+import {
+  assertModelNotHidden,
+  getConversationModelId,
+} from './utils/hidden-model';
 
 const CONVERSATION_RESOURCE_PREFIX = 'conversations';
 
@@ -70,11 +77,13 @@ export class ConversationPublishService {
   constructor(
     private readonly dialClient: DialClientService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly deploymentsService: DeploymentsService,
+    private readonly attachmentsService: ConversationPublishAttachmentsService,
   ) {}
 
   /**
    * @throws {NotFoundException} When the conversation or target folder is unknown
-   * @throws {ForbiddenException} When the caller lacks write access to `folderPath`
+   * @throws {ForbiddenException} When the caller lacks write access to `folderPath`, or (`code: conversationModelHidden`) the conversation's model is hidden
    * @throws {BadGatewayException} When Core returns an unexpected error
    * @throws {ServiceUnavailableException} When Core is unreachable or times out
    */
@@ -98,7 +107,12 @@ export class ConversationPublishService {
     } = (await this.dialClient.client.getConversation(bucket, encodedPath, {
       headers: getBearerAuthHeaders(accessToken),
     })) as {
-      data?: { name: string; messages?: ConversationMessageDto[] };
+      data?: {
+        name: string;
+        messages?: ConversationMessageDto[];
+        assistantModelId?: string;
+        model?: { id?: string };
+      };
       error?: unknown;
       response: globalThis.Response;
     };
@@ -119,6 +133,16 @@ export class ConversationPublishService {
       throw new ConflictException(PUBLISH_WHILE_GENERATING_MESSAGE);
     }
 
+    /* A published copy would put a hidden model back in front of everyone (#9183). */
+    await assertModelNotHidden(
+      this.deploymentsService,
+      getConversationModelId(conversation),
+      accessToken,
+      bucket,
+      this.logger,
+      `publish "${sourceUrl}"`,
+    );
+
     const publicTargetFolder = getPublicTargetFolder(folderPath);
     const targetUrl = getPublishedTargetUrl(
       CONVERSATION_RESOURCE_PREFIX,
@@ -126,10 +150,21 @@ export class ConversationPublishService {
       getResourceName(sourceUrl),
     );
 
+    const attachmentResources = await this.attachmentsService.buildAddResources(
+      accessToken,
+      bucket,
+      conversation,
+      folderPath,
+      getResourceName(sourceUrl),
+    );
+
     const requestBody = {
       name: conversation.name,
       targetFolder: publicTargetFolder,
-      resources: [{ action: 'ADD' as const, sourceUrl, targetUrl }],
+      resources: [
+        { action: 'ADD' as const, sourceUrl, targetUrl },
+        ...attachmentResources,
+      ],
       displayAuthor: author,
       rules: rules ?? [],
     };
@@ -148,7 +183,12 @@ export class ConversationPublishService {
       throw new BadGatewayException('Failed to publish to DIAL Core');
     }
 
-    if (result.error) {
+    /*
+     * An empty error body (Core's `409` has none) leaves `result.error`
+     * undefined, so the status decides — see the same guard in
+     * `publish.service.ts`.
+     */
+    if (!result.response.ok || result.error != null) {
       return mapDialHttpStatus(
         result.response.status,
         `publish conversation "${sourceUrl}"`,
@@ -168,7 +208,7 @@ export class ConversationPublishService {
     return {
       path: sourceUrl,
       folderPath,
-      publishedAt: publication.createdAt
+      publishedAt: publication?.createdAt
         ? new Date(publication.createdAt).toISOString()
         : new Date().toISOString(),
       publishedBy: readPublicationDisplayAuthor(publication, author),
@@ -238,6 +278,24 @@ export class ConversationPublishService {
     );
 
     /*
+     * The attachment files are removed only when the publish history confirms
+     * this conversation is published to `folderPath`. The published folder is
+     * named after the conversation's resource name, which another author's
+     * conversation in the same folder can share, so listing it without that
+     * check could name files the caller never published.
+     */
+    const history = await this.getPublishHistory(accessToken, bucket, path);
+    const isPublishedToFolder = history.some(
+      (entry) => entry.folderPath === folderPath,
+    );
+    const attachmentResources = isPublishedToFolder
+      ? await this.attachmentsService.buildDeleteResources(
+          accessToken,
+          getPublishedAttachmentsFolderUrl(targetUrl),
+        )
+      : [];
+
+    /*
      * `sourceUrl` is sent even though Core allows it to be omitted for a
      * `DELETE` action: it keeps the resource shape identical to the ADD one
      * publish sends. `rules` is omitted entirely.
@@ -245,7 +303,10 @@ export class ConversationPublishService {
     const requestBody = {
       name: conversation.name,
       targetFolder: publicTargetFolder,
-      resources: [{ action: 'DELETE' as const, sourceUrl, targetUrl }],
+      resources: [
+        { action: 'DELETE' as const, sourceUrl, targetUrl },
+        ...attachmentResources,
+      ],
       displayAuthor: author,
     };
 
@@ -265,7 +326,7 @@ export class ConversationPublishService {
       );
     }
 
-    if (result.error) {
+    if (!result.response.ok || result.error != null) {
       return mapDialHttpStatus(
         result.response.status,
         `unpublish conversation "${sourceUrl}"`,
@@ -285,7 +346,7 @@ export class ConversationPublishService {
     return {
       path: sourceUrl,
       folderPath,
-      requestedAt: publication.createdAt
+      requestedAt: publication?.createdAt
         ? new Date(publication.createdAt).toISOString()
         : new Date().toISOString(),
       requestedBy: readPublicationDisplayAuthor(publication, author),

@@ -4,7 +4,7 @@ Message display components for rendering conversation history — user, assistan
 
 ## Overview
 
-`@epam/ai-dial-conversation-messages` provides the visual building blocks for rendering a chat transcript. It solves the problem of consistently displaying messages from different roles — users, assistant, and system — without duplicating bubble layout, markdown rendering, or action toolbar logic across every view that needs a conversation thread. Each role has a dedicated bubble component: `UserMessageBubble` renders plain text with collapse-on-overflow and optional attachments, `AssistantMessageBubble` renders streaming markdown with code blocks, quick-reply starters, a deployment icon, and a slot for extra content such as a stages panel, and `StatusMessageBubble` renders a full-width info banner for in-timeline notices like a model switch. The `MessageActions` toolbar provides role-appropriate actions in a consistent position relative to any bubble — copy, edit, and delete for user messages, regenerate, copy, and like/dislike for assistant messages. All components accept `styles` overrides so host applications can theme the transcript area without forking the components.
+`@epam/ai-dial-conversation-messages` provides the visual building blocks for rendering a chat transcript. It solves the problem of consistently displaying messages from different roles — users, assistant, and system — without duplicating bubble layout, markdown rendering, or action toolbar logic across every view that needs a conversation thread. Each role has a dedicated bubble component: `UserMessageBubble` renders markdown (with raw HTML kept literal) with collapse-on-overflow and optional attachments, `AssistantMessageBubble` renders streaming markdown with code blocks, quick-reply starters, a deployment icon, and a slot for extra content such as a stages panel, and `StatusMessageBubble` renders a full-width info banner for in-timeline notices like a model switch. The `MessageActions` toolbar provides role-appropriate actions in a consistent position relative to any bubble — copy, edit, and delete for user messages, regenerate, copy, and like/dislike for assistant messages. All components accept `styles` overrides so host applications can theme the transcript area without forking the components.
 
 ## Installation
 
@@ -81,30 +81,43 @@ For a complete hook, message body, action and upload composition, see
 
 ### UserMessageBubble
 
-Renders a user message with text content and optional attachments. Long messages collapse to `collapsedLineCount` lines (default `10`) behind a toggle. Pass `textSegments` to render an ordered array of content in place of `text` inside the same paragraph — interleaved plain-text runs and inline elements (e.g. skill-mention chips at their text position). `text` is still required alongside `textSegments`: it stays the identity/measurement input for the collapse-height calculation even when `textSegments` is what actually renders. With no `textSegments`, `text` renders unchanged.
+Renders a user message with optional attachments. The text renders as markdown through the same pipeline as `AssistantMessageBubble` (code blocks, lists, tables, links, `$$` math), except that raw HTML in the text is shown as literal characters rather than parsed. Long messages collapse to `collapsedLineCount` lines (default `10`) behind a toggle; the measured height includes code blocks and tables.
+
+The markdown presentation props are shared with the assistant bubble: `markdownClassNames`, `markdownUrlTransform`, `codeBlockTheme`, `tableOnOpenInCanvas`, and the code-block, table and formula labels on `labels` (`UserMessageBubbleLabels`, which extends `MarkdownContentLabels`). The bubble takes no `markdownComponents` and no `responseFormat`: user text always renders as markdown.
+
+Pass `textSegments` (a `TextSegment[]` from `@epam/ai-dial-chat-shared`) to render inline elements such as skill-mention chips at their text position. String entries are markdown source; each `{ text, node }` entry renders `node` at its position in the markdown output, or its literal `text` inside code and link text. `text` is still required alongside `textSegments`: it stays the identity input for the collapse state. With no `textSegments`, `text` renders as markdown directly.
 
 ```tsx
+import type { TextSegment } from '@epam/ai-dial-chat-shared';
 import {
   UserMessageBubble,
   BubblePosition,
 } from '@epam/ai-dial-conversation-messages';
 
+const messageTextSegments: TextSegment[] = [
+  { text: '/review', node: <SkillChip key="review" name="review" /> },
+  ' this `diff`, please',
+];
+
 <UserMessageBubble
-  text={message.content}
+  text="/review this `diff`, please"
   position={BubblePosition.Bottom}
   attachments={message.attachments}
   textSegments={messageTextSegments}
+  markdownUrlTransform={resolveMarkdownUrl}
+  codeBlockTheme={codeBlockTheme}
   onAttachmentClick={handleAttachmentClick}
   onDownloadAll={handleDownloadAll}
   labels={{
     attachmentClickLabel: 'Open in canvas',
     attachmentDownloadLabel: 'Download file',
+    codeBlockCopyLabel: 'Copy code',
   }}
   actions={{ onEdit: handleEdit, onDelete: handleDelete }}
 />;
 ```
 
-Both bubbles forward their attachment labels to `AttachmentGroup`: `labels.attachmentClickLabel` names an interactive tile (rendered when `onAttachmentClick` is given) and `labels.attachmentDownloadLabel` names each file tile's own download button (rendered when `onDownloadAll` is given; default `'Download attachment'`). Pass two distinct, translated strings when the tile does something other than download, so the two buttons stay distinguishable to assistive technology.
+Both bubbles forward their attachment labels to `AttachmentGroup`: `labels.attachmentClickLabel` names an interactive tile (rendered when `onAttachmentClick` is given) and `labels.attachmentDownloadLabel` names each file tile's own download button (rendered when `onDownloadAll` is given; default `'Download attachment'`). Pass two distinct, translated strings when the tile does something other than download, so the two buttons stay distinguishable to assistive technology. `isAttachmentDownloadable` is forwarded too: an attachment it rejects (e.g. a folder) gets no download button and is left out of "download all".
 
 ### AssistantMessageBubble
 
@@ -185,13 +198,93 @@ import { StatusMessageBubble } from '@epam/ai-dial-conversation-messages';
 
 ### MessageBubble
 
-Role-dispatching wrapper — `AssistantMessageBubbleProps` plus the user-only fields (`position`, `collapsedLineCount`, `textSegments`) and a required `role`. Use it when the caller iterates a mixed transcript and does not want to branch itself; reach for the specialised bubbles when the role is already known. `beforeContent` is forwarded only to the assistant bubble; `textSegments` is forwarded only to the user bubble (status messages ignore both).
+Role-dispatching wrapper — `AssistantMessageBubbleProps` plus the user-only fields (`position`, `collapsedLineCount`, `textSegments`) and a required `role`. Use it when the caller iterates a mixed transcript and does not want to branch itself; reach for the specialised bubbles when the role is already known. `beforeContent`, `markdownComponents` and `responseFormat` are forwarded only to the assistant bubble; `textSegments` is forwarded only to the user bubble (status messages ignore all of them). The shared markdown props (`markdownClassNames`, `markdownUrlTransform`, `codeBlockTheme`, `tableOnOpenInCanvas`) reach both bubbles.
 
 ```tsx
 import { MessageBubble } from '@epam/ai-dial-conversation-messages';
 
 <MessageBubble role={message.role} text={message.content} />;
 ```
+
+Pass `timestamp` (the message's ISO send time) to show a relative time (`3 hours ago`) with the full date and time in a tooltip. The time:
+
+- sits on the outer edge of the actions row: before the buttons of a user message, after those of an assistant response;
+- appears while the bubble is hovered or holds keyboard focus, and is always shown on devices without hover;
+- refreshes every minute.
+
+`locale` sets the BCP 47 locale for the wording and the date; it defaults to the runtime default. `styles.timestampClassName` replaces the default `'dial-small-text'` typography; `styles.colors.timestampText` sets its color (defaults to `--text-secondary`). Formatting uses `Intl`, so no labels are needed.
+
+```tsx
+import { MessageBubble } from '@epam/ai-dial-conversation-messages';
+
+<MessageBubble
+  role={message.role}
+  text={message.content}
+  timestamp={message.timestamp}
+  locale={language}
+/>;
+```
+
+### ConversationStartTimestamp
+
+Centered label for when a conversation started:
+
+- `Today 11:51 AM` or `Yesterday 3:24 PM`, by local calendar day;
+- otherwise the full date and time (`Sep 20, 2026, 10:15 AM`).
+
+It renders nothing for a missing or unparsable `timestamp`. Time and date come from `Intl` in `locale`. The `labels.today` and `labels.yesterday` templates receive the localized time and default to English. The host decides _when_ to show the label (for example, not for a conversation the user has just created). `className` sets typography (defaults to `'dial-small-text'`); `colors.text` (`ConversationStartTimestampColors`) sets the color, defaulting to `--text-secondary`.
+
+```tsx
+import { ConversationStartTimestamp } from '@epam/ai-dial-conversation-messages';
+
+<ConversationStartTimestamp
+  timestamp={conversation.messages[0].timestamp}
+  locale={language}
+  labels={{
+    today: (time) => t('conversation.startedToday', { time }),
+    yesterday: (time) => t('conversation.startedYesterday', { time }),
+  }}
+/>;
+```
+
+### NegativeFeedbackModal
+
+Popup shown before a dislike is sent. The user picks a required `NegativeFeedbackCategory` and, when `isCommentEnabled` (default `true`), types an optional comment. `onSubmit` receives the rating comment: the category value, followed by `: <comment>` when one was typed (`'Incomplete response: Too short'`). The host mounts it while a dislike is pending and sends the comment with the rating. Category values are fixed English strings; `labels.categoryLabels` only changes what is shown.
+
+```tsx
+import {
+  NegativeFeedbackCategory,
+  NegativeFeedbackModal,
+} from '@epam/ai-dial-conversation-messages';
+
+{
+  pendingDislikeIndex != null && (
+    <NegativeFeedbackModal
+      onClose={() => setPendingDislikeIndex(null)}
+      onSubmit={(comment) =>
+        rateMessage(pendingDislikeIndex, MessageRating.Dislike, comment)
+      }
+      isCommentEnabled={isDislikeCommentEnabled}
+      labels={{
+        title: t('rate.negativeFeedbackTitle'),
+        sendLabel: t('buttons.send'),
+        categoryLabels: {
+          [NegativeFeedbackCategory.UiBug]: t('rate.feedbackCategories.uiBug'),
+        },
+      }}
+    />
+  );
+}
+```
+
+| Label                | Default                                       |
+| -------------------- | --------------------------------------------- |
+| `title`              | `'Send negative feedback'`                    |
+| `feedbackTypeLabel`  | `'What type of feedback you want to give?'`   |
+| `selectPlaceholder`  | `'Select'`                                    |
+| `commentPlaceholder` | `'Type an optional comment to your feedback'` |
+| `sendLabel`          | `'Send'`                                      |
+| `categoryLabels`     | each category's own value                     |
 
 ### MessageActions
 
@@ -215,6 +308,17 @@ import { MessageActions } from '@epam/ai-dial-conversation-messages';
       copiedMessageStatus: 'Message copied to clipboard',
     },
   }}
+/>;
+```
+
+`leadingContent` renders host content at the start of the toolbar row, before the buttons, and `trailingContent` at its end, after them — for example a send time with its own tooltip. The library does not format or style either; the host passes a ready element. The toolbar renders when either slot is set even if no action handler is passed.
+
+```tsx
+import { MessageActions } from '@epam/ai-dial-conversation-messages';
+
+<MessageActions
+  onCopy={handleCopy}
+  leadingContent={<time dateTime={message.timestamp}>{relativeTime}</time>}
 />;
 ```
 
@@ -302,11 +406,23 @@ BubblePosition.Bottom; // first bubble in a group — bottom-start corner square
 BubblePosition.Top; // subsequent bubble in a group — top-start corner squared
 ```
 
+```tsx
+import { NegativeFeedbackCategory } from '@epam/ai-dial-conversation-messages';
+
+NegativeFeedbackCategory.UiBug; // 'UI bug'
+NegativeFeedbackCategory.OveractiveRefusal; // 'Overactive refusal'
+NegativeFeedbackCategory.IncompleteResponse; // 'Incomplete response'
+NegativeFeedbackCategory.ShouldHaveTriggeredThinking; // 'Should have triggered thinking'
+NegativeFeedbackCategory.ShouldHaveSearchedTheWeb; // 'Should have searched the web'
+```
+
 ## Types
 
 ```tsx
 import type {
   MessageBubbleProps,
+  NegativeFeedbackModalLabels,
+  NegativeFeedbackModalProps,
   UserMessageBubbleProps,
   AssistantMessageBubbleProps,
   StatusMessageBubbleProps,
@@ -315,12 +431,17 @@ import type {
   MessageBubbleColors,
   MessageBubbleTypography,
   MessageBubbleLabels,
+  UserMessageBubbleLabels,
   AssistantMessageBubbleLabels,
+  MarkdownContentLabels,
   MessageActionsProps,
   MessageActionLabels,
   MessageActionColors,
   MessageActionTooltips,
   MessageActionAriaLabels,
+  ConversationStartTimestampProps,
+  ConversationStartTimestampLabels,
+  ConversationStartTimestampColors,
 } from '@epam/ai-dial-conversation-messages';
 ```
 

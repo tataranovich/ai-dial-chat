@@ -1,5 +1,6 @@
 import { CatalogEntityType } from '@epam/ai-dial-chat-shared';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { CATALOG_CLASS } from '../../../constants/public-class-names';
 import type { CatalogItem } from '../../../models/catalog-item';
@@ -75,6 +76,36 @@ describe('FavoriteCard — favorite visibility', () => {
 
     expect(
       screen.getByRole('button', { name: 'Remove from favorites' }),
+    ).toBeTruthy();
+  });
+});
+
+describe('FavoriteCard — name width (#9325)', () => {
+  it('gives the name the whole row and moves the version and star below it', () => {
+    render(
+      <FavoriteCard
+        item={makeItem({
+          name: 'Anthropic Claude 3.5 Sonnet',
+          version: 'V2',
+          lastUsed: '2 days ago',
+        })}
+      />,
+    );
+
+    const name = screen.getByText('Anthropic Claude 3.5 Sonnet');
+    expect(name.className).toContain('flex-1');
+    expect(name.className).not.toContain('flex-[66_1_0%]');
+    expect(name.parentElement?.textContent).not.toContain('V2');
+
+    /* The version, last-used time and star share the meta row below the name.
+       DOM traversal is the only way to assert which row each sits on. */
+    // eslint-disable-next-line testing-library/no-node-access
+    const metaRow = screen.getByText('2 days ago').parentElement;
+    expect(metaRow?.textContent).toContain('V2');
+    expect(
+      within(metaRow as HTMLElement).getByRole('button', {
+        name: 'Remove from favorites',
+      }),
     ).toBeTruthy();
   });
 });
@@ -166,5 +197,24 @@ describe('FavoriteCard — public class names', () => {
     expect(screen.getByLabelText('Claude').classList).toContain(
       CATALOG_CLASS.favoriteCard,
     );
+  });
+});
+
+describe('FavoriteCard — keyboard activation', () => {
+  it('keeps the article unroled and opens the item from its native button', async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    const item = makeItem();
+    render(<FavoriteCard item={item} onClick={onClick} />);
+
+    // An `<article>` may not take `role="button"` (axe aria-allowed-role).
+    const card = screen.getByLabelText('Claude');
+    expect(card.getAttribute('role')).toBeNull();
+
+    // The card button is the first tab stop; Space on it opens the item.
+    await user.tab();
+    await user.keyboard(' ');
+
+    expect(onClick).toHaveBeenCalledWith(item);
   });
 });

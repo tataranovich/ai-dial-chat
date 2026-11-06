@@ -20,6 +20,7 @@ import type {
   CatalogItemDetailsFetchResult,
 } from './item-details-data';
 import type { ItemDetailsTexts } from './item-details-props';
+import type { BrowseSettingsSheetLabels } from './toolbar-props';
 
 /**
  * Live search/filter/tab state passed to `CatalogProps.renderEmptyState` when
@@ -49,10 +50,24 @@ export interface CatalogTitles {
   /** Search input placeholder. Default: 'Search models, tools, agents…'. */
   searchPlaceholder?: string;
   /**
-   * Returns the "no results" heading given the active query.
-   * Default: (q) => `No results for "${q}"`.
+   * Returns the "no results" heading given the active query and tab, shown when a search or topic filter leaves the tab empty.
+   * The query is `''` when only topic filters are applied. Default: () => 'No items found'.
    */
-  noResultsTitle?: (query: string) => string;
+  noResultsTitle?: (query: string, activeTab: string) => string;
+  /** Secondary line under the "no results" heading. Default: 'Try a different search term or check your filters.'. */
+  noResultsDescription?: string;
+  /** Heading shown when the active tab has nothing to show and no search or topic filter is applied, or a function of the active tab returning it. Default: 'No items yet'. */
+  emptyTitle?: string | ((activeTab: string) => string);
+  /** Secondary line under `emptyTitle`, or a function of the active tab returning it. Omitted when not set. */
+  emptyDescription?: string | ((activeTab: string) => string);
+  /**
+   * Returns the empty-state heading shown while the "My Apps" filter is on, no
+   * search or topic filter is applied and the active tab has nothing to show.
+   * Default: () => 'No personal items yet'.
+   */
+  myAppsEmptyTitle?: (activeTab: string) => string;
+  /** Secondary line of the "My Apps" empty state. Default: "Create your first one, it'll show up right here.". */
+  myAppsEmptyDescription?: string;
   /** The sort control's own name, prepended to its accessible name. Default: 'Sort'. */
   sortLabel?: string;
   /** Label for the "Recently Updated" sort option. Default: 'Recently Updated'. */
@@ -63,6 +78,8 @@ export interface CatalogTitles {
   sortNameAZLabel?: string;
   /** Label for the "Featured" tag on cards. Default: 'Featured'. */
   featuredLabel?: string;
+  /** Text shown in a card's footer when the item is in no folder. Default: 'No folder'. */
+  noFolderLabel?: string;
   /** Accessible label for switching to grid view. Default: 'Grid view'. */
   gridViewLabel?: string;
   /** Accessible label for switching to list view. Default: 'List view'. */
@@ -71,6 +88,10 @@ export interface CatalogTitles {
   viewToggleLabel?: string;
   /** ARIA label for the page/grid. Default: 'Catalog'. */
   ariaLabel?: string;
+  /** Accessible name and tooltip of the button that returns a scrolled catalog to its top. Default: 'Scroll to top'. */
+  scrollToTopLabel?: string;
+  /** Accessible name of the spinner shown while `isLoading` is set. Default: 'Loading…'. */
+  loadingLabel?: string;
   /**
    * Display labels for entity-type filter tabs. Only types present in `items`
    * are shown, and the row is hidden entirely when fewer than two types are
@@ -90,6 +111,12 @@ export interface CatalogTitles {
   createSearchClearLabel?: string;
   /** Text shown when the Create menu search leaves no options. Default: 'No results found'. */
   createNoResultsLabel?: string;
+  /** Accessible name of the back button in the mobile Create menu sheet. Default: 'Back'. */
+  createMenuBackLabel?: string;
+  /** Accessible name of the close button in the mobile Create menu sheet. Default: 'Close'. */
+  createMenuCloseLabel?: string;
+  /** Text of the mobile browse-settings button and sheet, which replaces the view, sort and filter controls below the desktop breakpoint. */
+  browseSettings?: Partial<BrowseSettingsSheetLabels>;
 }
 
 /** Controlled search field rendered at the top of the Create menu. */
@@ -98,6 +125,14 @@ export interface CatalogCreateSearch {
   value: string;
   /** Called with the new query on every edit, and with `''` when the menu closes. */
   onChange: (value: string) => void;
+}
+
+/** Create menu offered for one entity type, e.g. by the personal empty state of that type's tab. */
+export interface CatalogTabCreateMenu {
+  /** Menu options; a single option without `children` makes the button run its `onClick` directly. */
+  options: DropdownItem[];
+  /** When provided, the menu shows a search field; the host filters `options` by its value. */
+  search?: CatalogCreateSearch;
 }
 
 /** Props for Catalog. */
@@ -400,6 +435,14 @@ export interface CatalogProps {
   onCreateClick?: () => void;
   /** When provided, the Create menu shows a search field; the host filters `createOptions` by its value. */
   createSearch?: CatalogCreateSearch;
+  /**
+   * Create menu per entity-type tab, used by the personal empty state so its
+   * Create button only creates the active tab's type. A tab with no entry has
+   * no personal entities and keeps the default empty state; an entry with no
+   * options shows the personal empty state without a button. When omitted, the empty state reuses
+   * `createOptions` / `onCreateClick` / `createSearch`.
+   */
+  createMenuByTab?: Partial<Record<CatalogEntityType, CatalogTabCreateMenu>>;
   /** Hides the "Create" button entirely, e.g. when rendering as a read-only picker. Default: false. */
   hideCreateButton?: boolean;
   /**
@@ -424,6 +467,8 @@ export interface CatalogProps {
    * and the wider container yields more card columns. Default: false.
    */
   isFullWidth?: boolean;
+  /** Drops the favorites pager: the desktop grid shows every favorite at once, and the mobile row is only swiped. Default: false. */
+  isFavoritesPaginationHidden?: boolean;
   /** ID of an item to visually mark as selected (border, tint, and checkmark) in the Browse grid. */
   selectedItemId?: string;
   /**

@@ -13,6 +13,7 @@ import type { CatalogItem } from '../../../models/catalog-item';
 import type {
   CatalogContentFilePreview,
   CatalogContentTreeNode,
+  ToolsLabels,
 } from '../../../models/item-details-data';
 import {
   CatalogContentNodeType,
@@ -193,6 +194,7 @@ vi.mock('../Header/Header', () => ({
     onOpenUnpublish,
     isUnpublishVisible,
     hasPublishedFolders,
+    isPublishHistoryResolved,
     onRequestPublishHistory,
   }: {
     item: CatalogItem;
@@ -208,9 +210,11 @@ vi.mock('../Header/Header', () => ({
     onOpenUnpublish?: () => void;
     isUnpublishVisible?: (item: CatalogItem) => boolean;
     hasPublishedFolders?: boolean;
+    isPublishHistoryResolved?: boolean;
     onRequestPublishHistory?: () => void;
   }) => (
     <>
+      {isPublishHistoryResolved && <span>PublishHistorySettled</span>}
       <button onClick={onOpenPublish}>Publish</button>
       {/* Stands in for hovering/opening the real Manage menu, which is what
        * starts the panel's publish-history lookup. */}
@@ -285,7 +289,15 @@ vi.mock('../TabsContent/Limits/Limits', () => ({
   LimitsTab: () => <div>Limits content</div>,
 }));
 vi.mock('../TabsContent/Tools/Tools', () => ({
-  Tools: () => <div>Tools</div>,
+  Tools: ({ labels }: { labels?: Partial<ToolsLabels> }) => (
+    <div
+      data-testid="tools-tab"
+      data-search-placeholder={labels?.searchPlaceholder}
+      data-tool-count={labels?.toolCount?.(1)}
+    >
+      Tools
+    </div>
+  ),
 }));
 vi.mock('../ApiDetails', () => ({
   ApiDetails: ({ endpointSectionLabel }: { endpointSectionLabel?: string }) => (
@@ -300,7 +312,8 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
   return {
     ...actual,
     PublishPanel: ({
-      onSelectedFolderPathChange,
+      onChangeFolderClick,
+      onPendingFolderPathChange,
       onCreateFolder,
       author,
       onAuthorChange,
@@ -311,8 +324,11 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
       hasRulesLoadError,
       publishCredentials,
       onPublishCredentialsChange,
+      allowReplace,
     }: {
-      onSelectedFolderPathChange: (path: string[]) => void;
+      allowReplace?: boolean;
+      onChangeFolderClick: () => void;
+      onPendingFolderPathChange: (path: string[]) => void;
       onCreateFolder: (parentPath: string[], name: string) => Promise<void>;
       author: string;
       onAuthorChange: (author: string) => void;
@@ -326,6 +342,7 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
     }) => (
       <div>
         <span>Publish panel</span>
+        <span>panelAllowReplace:{String(allowReplace)}</span>
         <span>author:{author}</span>
         <button onClick={() => onAuthorChange('DIAL Team')}>Set author</button>
         <span>ruleSourceOptions:{ruleSourceOptions.join(',')}</span>
@@ -341,7 +358,12 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
             Toggle credentials:{String(publishCredentials)}
           </button>
         )}
-        <button onClick={() => onSelectedFolderPathChange(['Shared'])}>
+        <button
+          onClick={() => {
+            onChangeFolderClick();
+            onPendingFolderPathChange(['Shared']);
+          }}
+        >
           Select Shared
         </button>
         <button onClick={() => void onCreateFolder(['Shared'], 'New')}>
@@ -366,12 +388,18 @@ vi.mock('@epam/ai-dial-publish-panel', async (importOriginal) => {
     PublishFooter: ({
       onCancel,
       onSubmit,
+      allowReplace,
+      onSelectFolder,
     }: {
       onCancel: () => void;
       onSubmit: () => void;
+      allowReplace?: boolean;
+      onSelectFolder?: () => void;
     }) => (
       <div>
+        <span>footerAllowReplace:{String(allowReplace)}</span>
         <button onClick={onCancel}>Cancel</button>
+        <button onClick={onSelectFolder}>Confirm folder</button>
         <button onClick={onSubmit}>Submit</button>
       </div>
     ),
@@ -419,11 +447,27 @@ const toolsetWithCredentials = (
   credentials: CatalogItem['credentials'],
 ): CatalogItem => makeItem({ type: CatalogEntityType.Toolset, credentials });
 
+/* The mocked body drills into the folder view and picks Shared; the footer's Select commits it. */
+const selectSharedFolder = async () => {
+  await userEvent.click(screen.getByRole('button', { name: 'Select Shared' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Confirm folder' }));
+};
+
 const openPublish = async () =>
   userEvent.click(screen.getByRole('button', { name: 'Publish' }));
 
 const credentialsToggle = () =>
   screen.queryByRole('button', { name: /^Toggle credentials:/ });
+
+describe('DetailsPanel — republishing an existing version', () => {
+  it('tells the publish panel and footer that an existing version cannot be replaced', async () => {
+    renderPanel({ item: makeItem({ type: CatalogEntityType.Toolset }) });
+    await openPublish();
+
+    expect(screen.getByText('panelAllowReplace:false')).toBeTruthy();
+    expect(screen.getByText('footerAllowReplace:false')).toBeTruthy();
+  });
+});
 
 describe('DetailsPanel — publish credentials opt-in', () => {
   it('offers the option for an OAuth toolset whose publisher is signed in globally', async () => {
@@ -439,16 +483,30 @@ describe('DetailsPanel — publish credentials opt-in', () => {
   });
 
   /* A shared team API key is the common internal case. */
-  it('offers the option for an API-key toolset whose publisher is signed in personally', async () => {
+  it('offers the option for an API-key toolset signed in at the global level', async () => {
     renderPanel({
       item: toolsetWithCredentials({
         authenticationType: ToolsetAuthenticationType.ApiKey,
-        userStatus: CredentialStatus.SignedIn,
+        globalStatus: CredentialStatus.SignedIn,
       }),
     });
     await openPublish();
 
     expect(credentialsToggle()).toBeTruthy();
+  });
+
+  /* Core copies only the global credential, so a personal one has nothing to pass on. */
+  it('offers no option for a toolset signed in at the user level only', async () => {
+    renderPanel({
+      item: toolsetWithCredentials({
+        authenticationType: ToolsetAuthenticationType.ApiKey,
+        userStatus: CredentialStatus.SignedIn,
+        globalStatus: CredentialStatus.SignedOut,
+      }),
+    });
+    await openPublish();
+
+    expect(credentialsToggle()).toBeNull();
   });
 
   it('offers no option for a toolset that needs no login', async () => {
@@ -522,9 +580,7 @@ describe('DetailsPanel — publish credentials opt-in', () => {
     renderPanel({ item: eligibleItem, onPublish });
     await openPublish();
 
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(credentialsToggle() as HTMLElement);
     await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
 
@@ -549,9 +605,7 @@ describe('DetailsPanel — publish credentials opt-in', () => {
     });
     await openPublish();
 
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(credentialsToggle() as HTMLElement);
     expect(
       screen.getByRole('button', { name: 'Toggle credentials:true' }),
@@ -1497,9 +1551,7 @@ describe('DetailsPanel', () => {
     const onPublishSuccess = vi.fn();
     renderPanel({ onPublish, onPublishSuccess });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
     expect(onPublish).toHaveBeenCalledWith(item, ['Shared'], [], '', false);
     expect(onPublishSuccess).toHaveBeenCalledWith(item, ['Shared']);
@@ -1516,9 +1568,7 @@ describe('DetailsPanel', () => {
     const onPublish = vi.fn().mockResolvedValue(undefined);
     renderPanel({ onPublish, publishDefaultAuthor: 'Daniil Pavlov' });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(screen.getByRole('button', { name: 'Set author' }));
     await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
 
@@ -1535,9 +1585,7 @@ describe('DetailsPanel', () => {
     const onPublish = vi.fn().mockResolvedValue(undefined);
     renderPanel({ onPublish, publishDefaultAuthor: 'Daniil Pavlov' });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
 
     expect(onPublish).toHaveBeenCalledWith(
@@ -1553,9 +1601,7 @@ describe('DetailsPanel', () => {
     const onPublish = vi.fn().mockResolvedValue(undefined);
     renderPanel({ onPublish });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(
       screen.getByRole('button', { name: 'Add mock rule' }),
     );
@@ -1592,9 +1638,7 @@ describe('DetailsPanel', () => {
     ]);
     renderPanel({ onFetchExistingRules });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
 
     expect(onFetchExistingRules).toHaveBeenCalledWith(['Shared']);
     await waitFor(() => {
@@ -1609,9 +1653,7 @@ describe('DetailsPanel', () => {
     const onPublish = vi.fn().mockResolvedValue(undefined);
     renderPanel({ onFetchExistingRules, onPublish });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
 
     await waitFor(() => {
       expect(screen.getByText('rulesLoadError:true')).toBeTruthy();
@@ -1624,9 +1666,7 @@ describe('DetailsPanel', () => {
   it('returns to the details content after a successful publish submit', async () => {
     renderPanel();
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
     expect(screen.getByRole('tablist')).toBeTruthy();
     expect(screen.queryByText('Publish panel')).toBeNull();
@@ -1637,9 +1677,7 @@ describe('DetailsPanel', () => {
     const onPublishSuccess = vi.fn();
     renderPanel({ onPublish, onPublishSuccess });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
     expect(screen.getByText('Publish panel')).toBeTruthy();
     expect(screen.queryByRole('tablist')).toBeNull();
@@ -1652,9 +1690,7 @@ describe('DetailsPanel', () => {
     const onPublishError = vi.fn();
     renderPanel({ onPublish, onPublishError });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
 
     expect(onPublishError).toHaveBeenCalledWith(item, ['Shared'], rejection);
@@ -1670,9 +1706,7 @@ describe('DetailsPanel', () => {
     );
     renderPanel({ onPublish });
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Select Shared' }),
-    );
+    await selectSharedFolder();
     await userEvent.click(screen.getByRole('button', { name: 'Submit' }));
     expect(
       screen.getByRole('button', { name: 'Back' }).hasAttribute('disabled'),
@@ -1693,8 +1727,10 @@ describe('DetailsPanel', () => {
       />,
     );
     expect(
-      screen.getByRole('status', { name: 'Loading details' }),
-    ).toBeTruthy();
+      screen
+        .getAllByRole('status')
+        .some((status) => status.textContent === 'Loading details'),
+    ).toBe(true);
   });
 
   it('does not show a loading placeholder when isDetailsLoading is false', () => {
@@ -1706,9 +1742,7 @@ describe('DetailsPanel', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(
-      screen.queryByRole('status', { name: 'Loading details' }),
-    ).toBeNull();
+    expect(screen.queryByText('Loading details')).toBeNull();
   });
 
   it('uses a custom detailsLoadingAriaLabel', () => {
@@ -1722,14 +1756,17 @@ describe('DetailsPanel', () => {
       />,
     );
     expect(
-      screen.getByRole('status', { name: 'Fetching details' }),
-    ).toBeTruthy();
+      screen
+        .getAllByRole('status')
+        .some((status) => status.textContent === 'Fetching details'),
+    ).toBe(true);
   });
 
   it('renders the description on the About tab, not in the summary section', () => {
     render(
       <DetailsPanel
         item={makeItem({
+          description: 'A capable model',
           details: { overview: { sections: [] } },
         })}
         isOpen
@@ -1778,6 +1815,32 @@ describe('DetailsPanel', () => {
 
     const tablist = screen.getByRole('tablist');
     expect(tablist.textContent).toBe('AboutToolsConnect');
+  });
+
+  it('passes the host-supplied Tools search and count texts to the Tools tab', async () => {
+    render(
+      <DetailsPanel
+        item={makeItem({
+          details: { tools: { tools: [{ name: 'notion-fetch' }] } },
+        })}
+        texts={{
+          toolsSearchPlaceholder: 'Rechercher',
+          toolsCountLabel: (count) => `${count} outil`,
+        }}
+        isOpen
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      within(screen.getByRole('tablist')).getByRole('button', {
+        name: 'Tools',
+      }),
+    );
+
+    const toolsTab = screen.getByTestId('tools-tab');
+    expect(toolsTab.dataset.searchPlaceholder).toBe('Rechercher');
+    expect(toolsTab.dataset.toolCount).toBe('1 outil');
   });
 
   it('places Connect last among every other available tab', () => {
@@ -2502,6 +2565,24 @@ describe('DetailsPanel — Unpublish', () => {
     expect(getPublishHistory).toHaveBeenCalledTimes(2);
   });
 
+  /*
+   * [#9500](https://github.com/epam/ai-dial-chat/issues/9500): the header
+   * holds its Manage slot back until the up-front lookup settles, so a failed
+   * lookup must settle too or every other entry stays hidden with Unpublish.
+   */
+  it('settles the up-front lookup with no folder when it fails', async () => {
+    renderPanel({
+      getPublishHistory: vi.fn().mockRejectedValue(new Error('503')),
+      onUnpublish: vi.fn(),
+      isUnpublishVisible: () => true,
+    });
+
+    expect(await screen.findByText('PublishHistorySettled')).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: 'UnpublishTrigger' }),
+    ).toBeNull();
+  });
+
   it('requests the history up front for an item the host calls unpublishable', async () => {
     const getPublishHistory = vi
       .fn()
@@ -2782,5 +2863,49 @@ describe('DetailsPanel — markdown table label', () => {
     expect(
       screen.getByRole('region', { name: 'Scrollbare Tabelle' }),
     ).toBeTruthy();
+  });
+});
+
+describe('DetailsPanel — tab list', () => {
+  it('renders the tabs getCatalogDetailsTabs lists for the item, in order', () => {
+    const modelWithDetails = makeItem({
+      details: {
+        overview: { sections: [] },
+        pricing: { prices: [] },
+        limits: { groups: [] },
+      },
+    });
+
+    renderPanel({ item: modelWithDetails });
+
+    const tabNames = within(screen.getByRole('tablist'))
+      .getAllByRole('button')
+      .map((tab) => tab.textContent);
+    expect(tabNames).toEqual(['About', 'Overview', 'Pricing', 'Limits']);
+  });
+});
+
+describe('DetailsPanel — empty tabs', () => {
+  it('shows the empty state on an About tab with no description or topics', () => {
+    renderPanel({ item: makeItem({ description: '', topics: [] }) });
+
+    expect(screen.getByText('No data')).toBeTruthy();
+  });
+
+  it('uses the host emptyTabLabel', () => {
+    renderPanel({
+      item: makeItem({ description: '', topics: [] }),
+      texts: { emptyTabLabel: 'Nothing here' },
+    });
+
+    expect(screen.getByText('Nothing here')).toBeTruthy();
+  });
+
+  it('renders the description instead of the empty state when there is one', () => {
+    renderPanel({ item: makeItem({ description: 'A capable model' }) });
+
+    // AboutTab is mocked in this file as 'about content'.
+    expect(screen.getByText('about content')).toBeTruthy();
+    expect(screen.queryByText('No data')).toBeNull();
   });
 });

@@ -1,3 +1,7 @@
+import {
+  useLatestCanvasRequest,
+  AttachmentCanvasProvider,
+} from '@epam/ai-dial-attachment-canvas';
 import type {
   ScheduledTaskDto,
   ScheduledTaskRunDto,
@@ -11,9 +15,24 @@ import {
 import type { QuotationSource } from '@epam/ai-dial-source-panel';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ConversationSourcesPanelContainer from '../ConversationSourcesPanel';
+
+let startCanvasRequest: () => () => boolean;
+const CanvasRequestProbe = () => {
+  const startRequest = useLatestCanvasRequest();
+  useEffect(() => {
+    startCanvasRequest = startRequest;
+  }, [startRequest]);
+  return null;
+};
+const CanvasTestWrapper = ({ children }: { children: ReactNode }) => (
+  <AttachmentCanvasProvider>
+    <CanvasRequestProbe />
+    {children}
+  </AttachmentCanvasProvider>
+);
 vi.mock('../../../context/SkillsContext', () => ({
   useSkills: () => ({ skills: [], publicSkills: [], sharedWithMe: [] }),
 }));
@@ -72,16 +91,29 @@ vi.mock('@epam/ai-dial-source-panel', () => ({
     additionalSections,
     sources,
     onSourceClick,
+    uploaded,
+    onAttachmentClick,
   }: {
     onDownloadAll?: () => void;
     title?: ReactNode;
     additionalSections?: ReactNode;
     sources?: QuotationSource[];
     onSourceClick?: (source: QuotationSource) => void;
+    uploaded?: DisplayAttachment[];
+    onAttachmentClick?: (attachment: DisplayAttachment) => void;
   }) => (
     <div>
       {title && <h1>{title}</h1>}
       {additionalSections}
+      {uploaded?.map((attachment) => (
+        <button
+          key={attachment.id}
+          type="button"
+          onClick={() => onAttachmentClick?.(attachment)}
+        >
+          {`Open ${attachment.name}`}
+        </button>
+      ))}
       {sources?.map((source) => (
         <button
           key={source.url}
@@ -171,7 +203,8 @@ vi.mock('../../../hooks/attachment/useAttachmentCanvasResolvers', () => ({
   useAttachmentCanvasResolvers: () => ({ resolvers: {}, options: {} }),
 }));
 
-vi.mock('../../../hooks/breakpoint/useBreakpoint', () => ({
+vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@epam/ai-dial-chat-shared')>()),
   useIsMobile: () => false,
 }));
 
@@ -280,7 +313,9 @@ describe('ConversationSourcesPanelContainer — derivation while closed', () => 
   it('derives sources from an empty list while the sidebar is closed', () => {
     mockSidebarIsOpen = false;
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     const lastInput =
       sourcesDerivationInputs[sourcesDerivationInputs.length - 1];
@@ -291,7 +326,9 @@ describe('ConversationSourcesPanelContainer — derivation while closed', () => 
   it('derives sources from the published messages while the sidebar is open', () => {
     mockSidebarIsOpen = true;
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(sourcesDerivationInputs[sourcesDerivationInputs.length - 1]).toBe(
       mockSidebarMessages,
@@ -318,7 +355,9 @@ describe('ConversationSourcesPanelContainer — download all', () => {
     mockUploaded = [
       makeAttachment('reference.pdf', { url: 'https://external.com/f.pdf' }),
     ];
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(screen.queryByRole('button', { name: 'Download all' })).toBeNull();
   });
@@ -327,7 +366,9 @@ describe('ConversationSourcesPanelContainer — download all', () => {
     mockUploaded = [
       makeAttachment('upload.pdf', { url: 'files/bucket/f.pdf' }),
     ];
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(
       (
@@ -350,7 +391,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       prompt: '',
       skillUrls: ['skills/public/deleted'],
     } as ScheduledTaskDto;
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
     await userEvent.click(
       screen.getByRole('button', {
         name: 'scheduledTasks.create.detailsSectionTitle',
@@ -372,7 +415,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     } as ScheduledTaskDto;
     mockSidebarConversationModelId = 'gpt-4o';
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
     await userEvent.click(
       screen.getByRole('button', {
         name: 'scheduledTasks.create.detailsSectionTitle',
@@ -392,7 +437,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
   });
 
   it('renders no History/Details sections for a non-task conversation', () => {
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(screen.queryByText('scheduledTasks.detail.historyTitle')).toBeNull();
     expect(
@@ -412,12 +459,37 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       prompt: 'Do the thing',
     } as ScheduledTaskDto;
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(screen.getByText('scheduledTasks.detail.historyTitle')).toBeTruthy();
     expect(
       screen.getByText('scheduledTasks.create.detailsSectionTitle'),
     ).toBeTruthy();
+  });
+
+  it('shows History as unavailable without a retry action when the task details are unavailable', () => {
+    activeScheduledTaskMock.status = 'task-conversation';
+    activeScheduledTaskMock.scheduleId = 'schedule-1';
+    activeScheduledTaskMock.runId = 'run-1';
+    activeScheduledTaskMock.taskState = 'unavailable';
+    activeScheduledTaskMock.task = null;
+    activeScheduledTaskMock.historyError = new Error('Not found');
+
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
+
+    expect(
+      screen.getByText(
+        'scheduledTasks.conversationPanel.historyUnavailableLabel',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText('scheduledTasks.detail.historyErrorLabel'),
+    ).toBeNull();
+    expect(screen.queryByRole('button', { name: 'buttons.retry' })).toBeNull();
   });
 
   it('shows the task display name as the panel title once loaded', () => {
@@ -430,7 +502,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       displayName: 'Weekly digest',
     } as ScheduledTaskDto;
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(
       screen.getByRole('heading', { level: 1, name: 'Weekly digest' }),
@@ -444,7 +518,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     activeScheduledTaskMock.taskState = 'loading';
     activeScheduledTaskMock.conversationTitle = 'Weekly AI Research Digest';
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(
       screen.getByRole('heading', {
@@ -469,7 +545,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       { id: 'run-1', status: 'Success', startTime: new Date().toISOString() },
     ];
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     const historyButton = screen.getByRole('button', {
       name: 'scheduledTasks.detail.historyTitle',
@@ -481,12 +559,26 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     expect(detailsButton.getAttribute('aria-expanded')).toBe('false');
 
     expect(historyButton.getAttribute('aria-controls')).toBeTruthy();
+    const historyRegion = screen.getByRole('region', {
+      name: 'scheduledTasks.detail.historyTitle',
+      hidden: true,
+    });
+    expect(historyRegion).toBeTruthy();
+    /* The History rows sit at a 12px start inset instead of the kit's 16px. */
+    expect(historyRegion.className).toContain('ps-3');
+    /* The title spans render as blocks with py-1 so their own 12/16 line-height beats the kit's dial-body-text strut and the element reaches the 24px design height. */
     expect(
-      screen.getByRole('region', {
-        name: 'scheduledTasks.detail.historyTitle',
-        hidden: true,
-      }),
-    ).toBeTruthy();
+      screen.getByText('scheduledTasks.detail.historyTitle').className,
+    ).toContain('block');
+    expect(
+      screen.getByText('scheduledTasks.detail.historyTitle').className,
+    ).toContain('py-1');
+    expect(
+      screen.getByText('scheduledTasks.create.detailsSectionTitle').className,
+    ).toContain('block');
+    expect(
+      screen.getByText('scheduledTasks.create.detailsSectionTitle').className,
+    ).toContain('py-1');
   });
 
   it('does not render search or download-all when only task sections are present', () => {
@@ -499,7 +591,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       displayName: 'Weekly digest',
     } as ScheduledTaskDto;
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(screen.queryByRole('button', { name: 'Download all' })).toBeNull();
   });
@@ -519,7 +613,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     ];
     activeScheduledTaskMock.historyHasMore = true;
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     const showMoreButton = screen.getByRole('button', {
       name: 'buttons.showMore',
@@ -542,7 +638,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     ];
     activeScheduledTaskMock.historyHasMore = false;
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(
       screen.queryByRole('button', {
@@ -557,14 +655,20 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     activeScheduledTaskMock.runId = 'run-1';
     activeScheduledTaskMock.taskState = 'error';
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
     await userEvent.click(
       screen.getByRole('button', {
         name: 'scheduledTasks.create.detailsSectionTitle',
       }),
     );
 
-    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(
+      screen
+        .getByText('scheduledTasks.conversationBanner.unavailableLabel')
+        .getAttribute('role'),
+    ).toBe('status');
   });
 
   it('a run-history error does not hide the Details section', async () => {
@@ -580,7 +684,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     } as ScheduledTaskDto;
     activeScheduledTaskMock.historyError = new Error('run-history failed');
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
     await userEvent.click(
       screen.getByRole('button', {
         name: 'scheduledTasks.create.detailsSectionTitle',
@@ -588,6 +694,39 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     );
 
     expect(screen.getByText('Do the thing')).toBeTruthy();
+  });
+
+  it('renders the Instructions text on the small scale and the field labels secondary', async () => {
+    activeScheduledTaskMock.status = 'task-conversation';
+    activeScheduledTaskMock.scheduleId = 'schedule-1';
+    activeScheduledTaskMock.runId = 'run-1';
+    activeScheduledTaskMock.taskState = 'success';
+    activeScheduledTaskMock.task = {
+      id: 'schedule-1',
+      displayName: 'Weekly digest',
+      model: 'gpt-5',
+      prompt: 'Do the thing',
+    } as ScheduledTaskDto;
+    mockSidebarConversationModelId = 'gpt-4o';
+
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: 'scheduledTasks.create.detailsSectionTitle',
+      }),
+    );
+
+    expect(screen.getByText('Do the thing').className).toContain(
+      'dial-small-text',
+    );
+    expect(
+      screen.getByText('scheduledTasks.conversationPanel.modelLabel').className,
+    ).toMatch(/fieldLabel/);
+    expect(
+      screen.getByText('scheduledTasks.create.instructionsLabel').className,
+    ).toMatch(/fieldLabel/);
   });
 
   it('a task-detail error does not hide the History section', () => {
@@ -599,7 +738,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       { id: 'run-1', status: 'Success', startTime: new Date().toISOString() },
     ];
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(
       screen.getByRole('button', {
@@ -622,9 +763,11 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     } as ScheduledTaskDto;
     activeScheduledTaskMock.historyError = new Error('run-history failed');
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
     const historyRetryButtons = screen.getAllByRole('button', {
-      name: 'scheduledTasks.list.retryLabel',
+      name: 'buttons.retry',
     });
     await userEvent.click(historyRetryButtons[0]);
 
@@ -643,7 +786,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     } as ScheduledTaskDto;
     mockUploaded = [makeAttachment('upload.pdf')];
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     const headingTexts = screen
       .getAllByRole('button')
@@ -658,7 +803,14 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
     expect(detailsIndex).toBeGreaterThan(historyIndex);
   });
 
-  it('resets History to expanded and Details to collapsed when scheduleId changes', () => {
+  /*
+   * The memoized container re-renders through real context updates in
+   * production, which the plain-function context mocks here cannot simulate —
+   * so the reset-on-schedule-change behavior itself is covered by
+   * TaskHistorySection's and TaskDetailsSection's own specs; this only pins
+   * the composed default states.
+   */
+  it('composes History expanded and Details collapsed by default', () => {
     activeScheduledTaskMock.status = 'task-conversation';
     activeScheduledTaskMock.scheduleId = 'schedule-1';
     activeScheduledTaskMock.runId = 'run-1';
@@ -668,14 +820,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       displayName: 'Weekly digest',
     } as ScheduledTaskDto;
 
-    const { rerender } = render(<ConversationSourcesPanelContainer />);
-
-    activeScheduledTaskMock.scheduleId = 'schedule-2';
-    activeScheduledTaskMock.task = {
-      id: 'schedule-2',
-      displayName: 'Other task',
-    } as ScheduledTaskDto;
-    rerender(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     const historyButton = screen.getByRole('button', {
       name: 'scheduledTasks.detail.historyTitle',
@@ -699,7 +846,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       prompt: 'Do the thing',
     } as ScheduledTaskDto;
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     /* The Accordion keeps collapsed content mounted, so keyboard reachability
        is governed by the inert wrapper rather than by unmounting. */
@@ -726,7 +875,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       } as ScheduledTaskRunDto,
     ];
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     await userEvent.click(
       screen.getByRole('button', { name: /historyDateAt/ }),
@@ -754,7 +905,9 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       } as ScheduledTaskRunDto,
     ];
 
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     const row = screen.getByRole('listitem');
     expect(row.getAttribute('role')).toBeNull();
@@ -789,6 +942,7 @@ describe('ConversationSourcesPanelContainer — scheduled-task sections', () => 
       <MockConversationsContext.Provider value={mockConversations}>
         <ConversationSourcesPanelContainer />
       </MockConversationsContext.Provider>,
+      { wrapper: CanvasTestWrapper },
     );
 
     expect(
@@ -818,7 +972,9 @@ describe('ConversationSourcesPanelContainer — source clicks', () => {
   });
 
   const clickSource = async () => {
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
     await userEvent.click(screen.getByRole('button', { name: 'Report' }));
   };
 
@@ -893,6 +1049,35 @@ describe('ConversationSourcesPanelContainer — source clicks', () => {
     );
   });
 
+  const supersedeNextOpen = () => {
+    mockOpenAttachmentCanvas.mockImplementationOnce(async () => {
+      startCanvasRequest();
+      return false;
+    });
+  };
+
+  it('does not download, open a tab or close the sidebar for a click a later click supersedes', async () => {
+    supersedeNextOpen();
+    mockSources = [makeSource('files/bucket/report.pdf', MIMEType.PDF)];
+
+    await clickSource();
+
+    expect(mockHandleAttachmentClick).not.toHaveBeenCalled();
+    expect(window.open).not.toHaveBeenCalled();
+    expect(mockHandleClose).not.toHaveBeenCalled();
+  });
+
+  it('does not download or open a tab for a page-reference click a later click supersedes', async () => {
+    supersedeNextOpen();
+    mockSources = [makeSource('files/bucket/report.pdf#page=81')];
+
+    await clickSource();
+
+    expect(mockHandleAttachmentClick).not.toHaveBeenCalled();
+    expect(window.open).not.toHaveBeenCalled();
+    expect(mockHandleClose).not.toHaveBeenCalled();
+  });
+
   it('opens a PDF without a page fragment through its regular URL', async () => {
     mockSources = [makeSource('files/bucket/report.pdf', MIMEType.PDF)];
 
@@ -919,6 +1104,52 @@ describe('ConversationSourcesPanelContainer — source clicks', () => {
   });
 });
 
+describe('ConversationSourcesPanelContainer — attachment clicks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUploaded = [
+      makeAttachment('upload.pdf', { url: 'files/bucket/u.pdf' }),
+    ];
+    mockGenerated = [];
+    mockSources = [];
+    mockConversations = [];
+    mockSidebarConversationModelId = undefined;
+    resetActiveScheduledTaskMock();
+    mockOpenAttachmentCanvas.mockResolvedValue(true);
+  });
+
+  const clickAttachment = async () => {
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Open upload.pdf' }),
+    );
+  };
+
+  it('downloads the attachment when the canvas cannot open it', async () => {
+    mockOpenAttachmentCanvas.mockResolvedValue(false);
+
+    await clickAttachment();
+
+    expect(mockHandleAttachmentClick).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'upload.pdf' }),
+    );
+  });
+
+  it('does not download the attachment when a later click supersedes it', async () => {
+    mockOpenAttachmentCanvas.mockImplementationOnce(async () => {
+      startCanvasRequest();
+      return false;
+    });
+
+    await clickAttachment();
+
+    expect(mockHandleAttachmentClick).not.toHaveBeenCalled();
+    expect(mockHandleClose).not.toHaveBeenCalled();
+  });
+});
+
 describe('ConversationSourcesPanelContainer — sidebar reset on subject change', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -931,7 +1162,9 @@ describe('ConversationSourcesPanelContainer — sidebar reset on subject change'
    * sidebar is open does not close it.
    */
   it('does not close the sidebar on initial mount while it is open', () => {
-    render(<ConversationSourcesPanelContainer />);
+    render(<ConversationSourcesPanelContainer />, {
+      wrapper: CanvasTestWrapper,
+    });
 
     expect(mockHandleClose).not.toHaveBeenCalled();
   });

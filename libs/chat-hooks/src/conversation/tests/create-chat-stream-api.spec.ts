@@ -4,6 +4,7 @@ import {
   DEFAULT_GENERATION_CONFLICT_MESSAGE,
   GenerationConflictError,
   GenerationPersistenceError,
+  StopCompletionError,
   StreamInterruptedError,
   StreamUpstreamError,
 } from '../create-chat-stream-api';
@@ -17,6 +18,7 @@ const setCsrfToken = (token: string | null) => {
 describe('createChatStreamApi', () => {
   const fetchMock = vi.fn();
   let getTimezone: () => string | undefined;
+  let getLanguage: () => string | undefined;
 
   const makeApi = () =>
     createChatStreamApi({
@@ -24,6 +26,7 @@ describe('createChatStreamApi', () => {
       setCsrfToken,
       completionsBasePath: '/api/v1/conversations',
       getTimezone: () => getTimezone(),
+      getLanguage: () => getLanguage(),
       fetchImpl: fetchMock,
     });
 
@@ -31,6 +34,7 @@ describe('createChatStreamApi', () => {
     fetchMock.mockReset();
     csrfToken = null;
     getTimezone = () => undefined;
+    getLanguage = () => undefined;
   });
 
   afterEach(() => {
@@ -47,6 +51,19 @@ describe('createChatStreamApi', () => {
         path: 'gpt-4o__Hello__uuid',
       }),
     ).rejects.toThrow('stopCompletion failed: 500');
+  });
+
+  it('exposes the HTTP status on the error a rejected stop throws', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
+    const { stopCompletion } = makeApi();
+
+    const error = await stopCompletion({
+      generationId: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb',
+      path: 'gpt-4o__Hello__uuid',
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(StopCompletionError);
+    expect((error as StopCompletionError).status).toBe(404);
   });
 
   it('sends the stop request body to the completion stop endpoint', async () => {
@@ -130,6 +147,37 @@ describe('createChatStreamApi', () => {
     expect(error.message).not.toContain('private upstream detail');
   });
 
+  it.each([
+    ['a numeric status', '"status":401', 401],
+    ['no status', '', undefined],
+    ['a non-numeric status', '"status":"401"', undefined],
+  ])(
+    'exposes the rejected write status of a persistence failure carrying %s',
+    async (_label, statusField, expectedStatus) => {
+      const encoder = new TextEncoder();
+      const extra = statusField ? `,${statusField}` : '';
+      fetchMock.mockResolvedValue(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: {"error":{"type":"conversation_save_failed","message":"saved failed"${extra}}}\n\n`,
+                ),
+              );
+              controller.close();
+            },
+          }),
+        ),
+      );
+
+      const error = await failStreamRequest();
+
+      expect(error).toBeInstanceOf(GenerationPersistenceError);
+      expect((error as GenerationPersistenceError).status).toBe(expectedStatus);
+    },
+  );
+
   it('reports any other non-OK completion response as a plain transport error', async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 502 }));
 
@@ -159,6 +207,100 @@ describe('createChatStreamApi', () => {
 
     expect(error).toBeInstanceOf(StreamUpstreamError);
     expect(error.message).toBe('Model overloaded');
+  });
+
+  it('reports the display_message of an in-band DIAL Core error chunk over its raw message', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        streamOf(
+          `data: ${JSON.stringify({
+            error: {
+              message:
+                "Error code: 429 - {'error': {'message': 'Hit token rate limit.'}}",
+              display_message:
+                "You've exceeded your weekly token limit. Please try again in 4 days 16 hours",
+              type: 'rate_limit_exceeded',
+            },
+          })}\n\n`,
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const error = await failStreamRequest();
+
+    expect(error).toBeInstanceOf(StreamUpstreamError);
+    expect(error.message).toBe(
+      "You've exceeded your weekly token limit. Please try again in 4 days 16 hours",
+    );
+  });
+
+  it('reports the persistence failure that follows an in-band error, with its terminal marker', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        streamOf(
+          'data: {"error":{"message":"Rate limit exceeded"}}\n\n' +
+            'data: [DONE]\n\n' +
+            'data: {"error":{"type":"conversation_save_failed","message":"saved failed","status":401,"streamErrorMessage":"Rate limit exceeded"}}\n\n',
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const error = await failStreamRequest();
+
+    expect(error).toBeInstanceOf(GenerationPersistenceError);
+    expect((error as GenerationPersistenceError).status).toBe(401);
+    expect((error as GenerationPersistenceError).terminalMarker).toEqual({
+      streamErrorMessage: 'Rate limit exceeded',
+    });
+  });
+
+  it('reports an in-band error once, and ignores chunks after it', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        streamOf(
+          'data: {"error":{"message":"Model overloaded"}}\n\n' +
+            'data: {"choices":[{"delta":{"content":"late"}}]}\n\n' +
+            'data: {"error":{"message":"Second failure"}}\n\n',
+        ),
+        { status: 200 },
+      ),
+    );
+    const onChunk = vi.fn();
+    const onError = vi.fn();
+
+    await new Promise<void>((resolve) => {
+      makeApi().streamCompletion('gpt-4o__Hello__uuid', 'hello', 'gpt-4o', {
+        onChunk,
+        onComplete: () => resolve(),
+        onError: (error) => {
+          onError(error);
+          resolve();
+        },
+      });
+    });
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError.mock.calls[0][0].message).toBe('Model overloaded');
+    expect(onChunk).not.toHaveBeenCalled();
+  });
+
+  it('reports a stopped answer marker on a persistence failure', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        streamOf(
+          'data: {"error":{"type":"conversation_save_failed","message":"saved failed","status":401,"wasStoppedByUser":true}}\n\n',
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const error = await failStreamRequest();
+
+    expect((error as GenerationPersistenceError).terminalMarker).toEqual({
+      wasStoppedByUser: true,
+    });
   });
 
   describe('non-network transport failures stay untagged', () => {
@@ -461,6 +603,50 @@ describe('createChatStreamApi', () => {
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(new Headers(request.headers).has('X-Timezone')).toBe(false);
+  });
+
+  it('sends the current UI language with each completion request', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(emptyStream(), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    );
+    const languages = ['en', 'uk'];
+    let call = 0;
+    getLanguage = () => languages[call++];
+
+    await completeStreamRequest();
+    await completeStreamRequest();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/conversations/completions',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Lang': 'en' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/conversations/completions',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Lang': 'uk' }),
+      }),
+    );
+  });
+
+  it('omits the language header when the resolver has no value', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(emptyStream(), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    );
+
+    await completeStreamRequest();
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).has('X-Lang')).toBe(false);
   });
 
   it('preserves CSRF and request body behavior when adding the timezone', async () => {

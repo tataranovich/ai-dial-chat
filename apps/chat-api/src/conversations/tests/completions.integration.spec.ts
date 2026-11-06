@@ -18,14 +18,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthSource } from '../../auth/auth-source.enum';
 import type { SessionUser } from '../../auth/session/session.types';
 import { SSE_RELEASE_TIMEOUT_MS } from '../../common/utils/sse';
+import { ConversationGenerationController } from '../conversation-generation.controller';
+import { ConversationService } from '../conversation.service';
+import type { SendCompletionDto } from '../dto/send-completion.dto';
 import {
   ConversationGenerationService,
   GenerationStatus,
   type GenerationLease,
-} from '../conversation-generation.service';
-import { ConversationController } from '../conversation.controller';
-import { ConversationService } from '../conversation.service';
-import type { SendCompletionDto } from '../dto/send-completion.dto';
+} from '../generation/conversation-generation.service';
+import { ConversationCompletionsResponder } from '../streaming/conversation-completions.responder';
+import { createConversationGenerationController } from './conversation-controller.fixture';
 
 const TEST_USER = {
   sid: 'test-sid',
@@ -64,6 +66,7 @@ describe('POST /conversations/completions (integration)', () => {
   let app: INestApplication;
   let mockService: {
     streamCompletion: ReturnType<typeof vi.fn>;
+    markConversationUnviewed: ReturnType<typeof vi.fn>;
     resolveBackgroundAttach?: ReturnType<typeof vi.fn>;
     stopBackgroundGeneration?: ReturnType<typeof vi.fn>;
   };
@@ -79,6 +82,7 @@ describe('POST /conversations/completions (integration)', () => {
 
   beforeEach(async () => {
     mockService = {
+      markConversationUnviewed: vi.fn().mockResolvedValue(undefined),
       resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
       stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
       streamCompletion: vi.fn().mockImplementation(async function* (
@@ -111,8 +115,9 @@ describe('POST /conversations/completions (integration)', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ConversationController],
+      controllers: [ConversationGenerationController],
       providers: [
+        ConversationCompletionsResponder,
         { provide: ConversationService, useValue: mockService },
         {
           provide: ConversationGenerationService,
@@ -216,6 +221,34 @@ describe('POST /conversations/completions (integration)', () => {
     expect(mockService.streamCompletion).not.toHaveBeenCalled();
   });
 
+  it('passes a valid lang header to the completion service', async () => {
+    await request(app.getHttpServer())
+      .post('/conversations/completions')
+      .set('X-Lang', 'en')
+      .send(VALID_COMPLETION_BODY)
+      .expect(200);
+
+    expect(mockService.streamCompletion).toHaveBeenCalledOnce();
+    expect(mockService.streamCompletion.mock.calls[0][14]).toBe('en');
+  });
+
+  it.each([
+    ['malformed', 'en US'],
+    ['empty-subtag', 'en-'],
+    ['leading separator', '-en'],
+    ['double separator', 'en--US'],
+    ['oversized', 'a'.repeat(36)],
+    ['multiple', 'en, uk'],
+  ])('returns 400 for a %s lang header', async (_case, lang) => {
+    await request(app.getHttpServer())
+      .post('/conversations/completions')
+      .set('X-Lang', lang)
+      .send(VALID_COMPLETION_BODY)
+      .expect(400);
+
+    expect(mockService.streamCompletion).not.toHaveBeenCalled();
+  });
+
   it('returns 409 when ConversationService throws ConflictException (duplicate active generation)', async () => {
     mockService.streamCompletion.mockImplementation(() => {
       throw new ConflictException('Another generation is already active');
@@ -238,6 +271,50 @@ describe('POST /conversations/completions (integration)', () => {
    * browser tab submitting into the same conversation saw an empty LLM answer
    * instead of a conflict.
    */
+  it('removes the conversation from the viewed ids once the generation is accepted', async () => {
+    await request(app.getHttpServer())
+      .post('/conversations/completions')
+      .send(VALID_COMPLETION_BODY)
+      .expect(200);
+
+    expect(
+      mockService.markConversationUnviewed,
+    ).toHaveBeenCalledExactlyOnceWith(
+      VALID_COMPLETION_BODY.path,
+      TEST_USER.at,
+      TEST_USER.bucket,
+    );
+  });
+
+  it('refuses a project conversation locator before any generation starts', async () => {
+    await request(app.getHttpServer())
+      .post('/conversations/completions')
+      .send({
+        ...VALID_COMPLETION_BODY,
+        path: 'projects/a1b2c3/q4/conversations/gpt-4o__Hi__1',
+      })
+      .expect(400);
+
+    expect(mockService.streamCompletion).not.toHaveBeenCalled();
+    expect(mockService.markConversationUnviewed).not.toHaveBeenCalled();
+  });
+
+  it('leaves the viewed ids alone when the generation is rejected with 409', async () => {
+    mockService.streamCompletion.mockImplementation(
+      // eslint-disable-next-line require-yield
+      async function* () {
+        throw new ConflictException('Another generation is already active');
+      },
+    );
+
+    await request(app.getHttpServer())
+      .post('/conversations/completions')
+      .send(VALID_COMPLETION_BODY)
+      .expect(409);
+
+    expect(mockService.markConversationUnviewed).not.toHaveBeenCalled();
+  });
+
   it('returns 409 when the generator rejects before the stream opens', async () => {
     mockService.streamCompletion.mockImplementation(
       // eslint-disable-next-line require-yield
@@ -308,6 +385,25 @@ describe('POST /conversations/completions (integration)', () => {
       .post('/conversations/completions')
       .send({ ...VALID_COMPLETION_BODY, path: 'bucket/../secret' })
       .expect(400);
+  });
+
+  it('returns 400 when a path segment is a percent-encoded traversal (%2e%2e)', async () => {
+    await request(app.getHttpServer())
+      .post('/conversations/completions')
+      .send({ ...VALID_COMPLETION_BODY, path: 'bucket/%2e%2e/secret' })
+      .expect(400);
+  });
+
+  it('accepts a path whose title contains an ellipsis (#9600)', async () => {
+    await request(app.getHttpServer())
+      .post('/conversations/completions')
+      .send({
+        ...VALID_COMPLETION_BODY,
+        path: 'test-bucket/gpt-4o__Hi... there__uuid',
+      })
+      .expect(200);
+
+    expect(mockService.streamCompletion).toHaveBeenCalledOnce();
   });
 
   it('accepts a valid regenerate request with messageIndex', async () => {
@@ -416,7 +512,7 @@ describe('POST /conversations/completions (integration)', () => {
       reachedNaturalEnd = true;
     });
 
-    await new ConversationController(
+    await createConversationGenerationController(
       mockService as unknown as ConversationService,
       mockGenerationService as unknown as ConversationGenerationService,
     ).streamCompletion(
@@ -426,6 +522,7 @@ describe('POST /conversations/completions (integration)', () => {
       } as unknown as ExpressRequest,
       res,
       VALID_COMPLETION_BODY as unknown as SendCompletionDto,
+      undefined,
       undefined,
     );
 
@@ -463,6 +560,7 @@ describe('POST /conversations/completions — backpressure-driven detachment (di
     const mockService = {
       resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
       stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
+      markConversationUnviewed: vi.fn().mockResolvedValue(undefined),
       streamCompletion: vi.fn().mockImplementation(async function* (
         ...args: unknown[]
       ) {
@@ -483,7 +581,7 @@ describe('POST /conversations/completions — backpressure-driven detachment (di
       getStatus: vi.fn().mockReturnValue(GenerationStatus.Active),
     };
 
-    const controller = new ConversationController(
+    const controller = createConversationGenerationController(
       mockService as unknown as ConversationService,
       mockGenerationService as unknown as ConversationGenerationService,
     );
@@ -499,6 +597,7 @@ describe('POST /conversations/completions — backpressure-driven detachment (di
       TEST_REQUEST,
       res,
       VALID_COMPLETION_BODY as unknown as SendCompletionDto,
+      undefined,
       undefined,
     );
 
@@ -544,6 +643,7 @@ describe('POST /conversations/completions/stop (integration)', () => {
     const mockService = {
       resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
       stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
+      markConversationUnviewed: vi.fn().mockResolvedValue(undefined),
       streamCompletion: vi.fn(),
     };
     mockGenerationService = {
@@ -557,8 +657,9 @@ describe('POST /conversations/completions/stop (integration)', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ConversationController],
+      controllers: [ConversationGenerationController],
       providers: [
+        ConversationCompletionsResponder,
         { provide: ConversationService, useValue: mockService },
         {
           provide: ConversationGenerationService,
@@ -660,6 +761,7 @@ describe('completions endpoints — header-authenticated (bearer) caller', () =>
   let app: INestApplication;
   let mockService: {
     streamCompletion: ReturnType<typeof vi.fn>;
+    markConversationUnviewed: ReturnType<typeof vi.fn>;
     resolveBackgroundAttach?: ReturnType<typeof vi.fn>;
     stopBackgroundGeneration?: ReturnType<typeof vi.fn>;
   };
@@ -677,6 +779,7 @@ describe('completions endpoints — header-authenticated (bearer) caller', () =>
     mockService = {
       resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
       stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
+      markConversationUnviewed: vi.fn().mockResolvedValue(undefined),
       streamCompletion: vi.fn().mockImplementation(async function* (
         ...args: unknown[]
       ) {
@@ -696,8 +799,9 @@ describe('completions endpoints — header-authenticated (bearer) caller', () =>
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ConversationController],
+      controllers: [ConversationGenerationController],
       providers: [
+        ConversationCompletionsResponder,
         { provide: ConversationService, useValue: mockService },
         {
           provide: ConversationGenerationService,
@@ -821,6 +925,7 @@ describe('generation ownership isolation (real registry)', () => {
     const mockService = {
       resolveBackgroundAttach: vi.fn().mockResolvedValue(null),
       stopBackgroundGeneration: vi.fn().mockResolvedValue('not_background'),
+      markConversationUnviewed: vi.fn().mockResolvedValue(undefined),
       streamCompletion: vi.fn().mockImplementation(async function* (
         ...args: unknown[]
       ) {
@@ -835,8 +940,9 @@ describe('generation ownership isolation (real registry)', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [ConversationController],
+      controllers: [ConversationGenerationController],
       providers: [
+        ConversationCompletionsResponder,
         { provide: ConversationService, useValue: mockService },
         { provide: ConfigService, useValue: { get: vi.fn() } },
         ConversationGenerationService,

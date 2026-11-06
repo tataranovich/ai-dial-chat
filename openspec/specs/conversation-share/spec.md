@@ -73,7 +73,9 @@ Before calling DIAL Core's `shareResource`, `ShareInvitationService.createShareL
 
 The service SHALL collect unique DIAL prompt resource URLs from `application_properties.skills[]` entries whose `type` is exactly `'dial-prompt'`. Only entries whose `url` is a DIAL Core prompt resource url (`prompts/{bucket}/{path}`, per `isPromptResourceUrl`) are shareable. The `orchestrator.system_prompt` (`type: 'custom'`, inline content), `contexts[]` (file resources), `tool_sets[]`, and every other skill kind carry no separate DIAL resource and SHALL NOT be added to the sharing request. Deduplication is by exact url string, in first-seen order.
 
-The application resource SHALL remain the first item in `shareResource.resources`, followed by each unique related prompt resource. Every related prompt SHALL receive the same resolved permissions as the application (`READ` for view access, `READ` and `WRITE` for edit access).
+The service SHALL also collect the application's uploaded icon via `collectApplicationIconResourceUrl` (`apps/chat-api/src/share/utils/share-resource.util.ts`): the top-level `iconUrl` (falling back to `icon_url`) when it is a DIAL file resource (`files/{bucket}/{path}`), with any query string or `#`-fragment stripped and any `..` traversal segment rejected. Absolute URLs and theme icon names carry no DIAL resource and SHALL NOT be added. Without this grant the recipient cannot download an icon stored in the author's private bucket and sees no icon ([#9317](https://github.com/epam/ai-dial-chat/issues/9317)).
+
+The application resource SHALL remain the first item in `shareResource.resources`, followed by each unique related prompt resource and then the icon file. Every related prompt and the icon SHALL receive the same resolved permissions as the application (`READ` for view access, `READ` and `WRITE` for edit access).
 
 A referenced prompt whose bucket (`getResourceBucket`, segment `[1]` of a `prompts/{bucket}/...` url) is not the application's own bucket SHALL be silently omitted rather than failing the share. This covers two distinct cases: a prompt in another user's private bucket — DIAL Core rejects a single share request mixing more than one owning bucket, and the caller cannot grant access to a resource it doesn't own — and a prompt in the public/organization bucket (`PUBLIC_BUCKET`, `apps/chat-api/src/conversations/constants/conversation.constants.ts`), which is dropped for a different reason: `public` is DIAL Core's globally-readable bucket, already accessible to every authenticated user without a grant, and is not an owned resource `shareResource` can create an ACL entry for. Including a public-bucket resource in the request makes DIAL Core reject the whole batch with `"Incorrect resource link provided prompts/public/..."`.
 
@@ -102,6 +104,18 @@ The application pre-read is best-effort: it MUST NOT block sharing the applicati
 - **GIVEN** a quick app references `prompts/public/shared` via a `dial-prompt` skill
 - **WHEN** a share link is created for `applications/owner-bucket/my-app__1.0`
 - **THEN** `prompts/public/shared` is omitted from `shareResource.resources` and the share still succeeds
+
+#### Scenario: Uploaded icon is shared alongside the application
+
+- **GIVEN** an owned quick app has `iconUrl: 'files/owner-bucket/icons/app%20icon.png'`
+- **WHEN** a view share link is created for `applications/owner-bucket/my-app__1.0`
+- **THEN** `shareResource.resources` contains the icon file after the application and its prompts, with `permissions: ['READ']`
+
+#### Scenario: Icon outside the app bucket or not a DIAL file is excluded
+
+- **GIVEN** a quick app's icon is `files/public/...`, `files/other-bucket/...`, an absolute URL, or a theme icon name
+- **WHEN** a share link is created for `applications/owner-bucket/my-app__1.0`
+- **THEN** no icon resource is added to `shareResource.resources` and the share still succeeds
 
 #### Scenario: Application pre-read failure degrades to app-only sharing without blocking
 
@@ -189,6 +203,8 @@ A related file in the public/organization bucket (`PUBLIC_BUCKET`, `apps/chat-ap
 The frontend SHALL register `ROUTES.ConversationSharedInvitation = '/conversations/shared/:invitationId'` (`apps/chat/src/types/routes.ts`) alongside the existing `ROUTES.SharedInvitation`, both as top-level routes in `app.tsx` (not nested under `ChatLayout`).
 
 `SharedInvitationPage` (`apps/chat/src/pages/SharedInvitation/SharedInvitation.tsx`) SHALL accept optional `getTargetRoute?: (itemId: string) => string` and `errorFallbackRoute?: string` props, defaulting to the existing catalog behavior (`${ROUTES.Catalog}?itemId=...` / `ROUTES.Catalog`) so no existing catalog-invitation behavior changes. A new `ConversationSharedInvitationPage` (`apps/chat/src/pages/ConversationSharedInvitation/`) SHALL render `SharedInvitationPage` with `getTargetRoute={getConversationRoute}` and `errorFallbackRoute={ROUTES.Root}`.
+
+The accept-once flow and its error classification SHALL live in `libs/chat-hooks` as `useAcceptShareInvitation` and `resolveAcceptShareInvitationError` (`libs/chat-hooks/src/share-invitation/`, exported from the root and `@epam/ai-dial-chat-hooks/sharing`). `SharedInvitationPage` SHALL stay a thin adapter that passes the server-api `acceptInvitation`, the catalog-list refresh, the context merge callbacks, translated labels, and the navigate/notification side effects into that hook.
 
 #### Scenario: Conversation share link routes to the conversation accept page
 
@@ -350,6 +366,16 @@ The `itemId` SHALL be the URL of the **primary resource** in the peek response: 
 
 - **WHEN** the accepting call returns `400` with an error body that does not indicate the resource is already owned (e.g. an expired invitation)
 - **THEN** `acceptInvitation` throws `BadRequestException`, matching pre-existing behavior for other `400` responses
+
+#### Scenario: An expired or missing invitation carries a machine-readable code
+
+- **WHEN** either the peek or the accepting call returns `404` (DIAL Core purges an expired invitation on read and answers "Invitation <id> is not found", indistinguishable from a revoked or never-existing one)
+- **THEN** `acceptInvitation` throws `NotFoundException` whose body carries `code: shareInvitationNotFound` (`ShareInvitationErrorCode.NotFound`), and `SharedInvitationPage` shows the `share.invitationNotFound` translation key's text without a Request ID instead of the backend message
+
+#### Scenario: An invitation over its accepted-users limit carries a code and the conversation title
+
+- **WHEN** the accepting call returns `400` with an error body containing `"number of accepted users"` (DIAL Core's "Limit is exceeded on the number of accepted users for the invitation/resource: …")
+- **THEN** `acceptInvitation` throws `BadRequestException` whose body carries `code: shareInvitationAcceptedUsersLimitReached` and, when the shared resource is a conversation, `itemName` set to the title parsed from its url by `getSharedConversationTitle`; `SharedInvitationPage` shows the `share.invitationUsersLimitReached` translation key's text with that name, or the `share.invitationUsersLimitReachedUnnamed` translation key's text when no name is sent
 
 ### Requirement: Accepting an invitation invalidates the user's deployments and toolsets list caches
 

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useSyncExternalStore } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AuthI18nKeys,
@@ -66,16 +67,16 @@ describe('OverlayLoginGate', () => {
       isLoadingProviders: true,
     });
 
-    const { container } = render(<OverlayLoginGate />);
+    render(<OverlayLoginGate />);
 
+    const loading = screen.getByText(AuthI18nKeys.OverlayProviderPickerLoading);
+    // The StateScreen section is a landmark named by its h1.
     expect(
-      screen.getByText(AuthI18nKeys.OverlayProviderPickerLoading),
+      screen.getByRole('region', { name: AuthI18nKeys.OverlayLoginTitle }),
     ).toBeTruthy();
-    // The root <section> has no accessible name/role of its own (it's a plain
-    // wrapper), so there is no semantic query that can reach its aria-busy
-    // attribute; falling back to container access is the only option here.
-    // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
-    expect(container.querySelector('section')?.getAttribute('aria-busy')).toBe(
+    // aria-busy sits on the action block, which has no role of its own.
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(loading.closest('[aria-busy]')?.getAttribute('aria-busy')).toBe(
       'true',
     );
   });
@@ -87,9 +88,10 @@ describe('OverlayLoginGate', () => {
     });
 
     render(<OverlayLoginGate />);
-    expect(screen.getByRole('alert').textContent).toBe(
-      AuthI18nKeys.OverlayProvidersError,
-    );
+    /* Both alerts stay mounted; only the providers one carries text. */
+    expect(
+      screen.getAllByRole('alert').map((alert) => alert.textContent),
+    ).toEqual([AuthI18nKeys.OverlayProvidersError, '']);
 
     fireEvent.click(
       screen.getByRole('button', { name: ButtonsI18nKeys.Retry }),
@@ -159,9 +161,9 @@ describe('OverlayLoginGate', () => {
 
     render(<OverlayLoginGate />);
 
-    expect(screen.getByRole('alert').textContent).toBe(
-      AuthI18nKeys.OverlayExternalLoginBlocked,
-    );
+    expect(
+      screen.getAllByRole('alert').map((alert) => alert.textContent),
+    ).toEqual(['', AuthI18nKeys.OverlayExternalLoginBlocked]);
   });
 
   it('announces a long-running attempt politely', () => {
@@ -173,5 +175,35 @@ describe('OverlayLoginGate', () => {
 
     const message = screen.getByText(AuthI18nKeys.OverlayLoginTakingLonger);
     expect(message.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('keeps the polite status region mounted before the attempt runs long and fills it afterwards', () => {
+    /* The gate is memoized and prop-less, so drive the hook through a tiny
+     * external store to re-render it the way the real hook state would. */
+    let loginStatus = OverlayExternalLoginStatus.Waiting;
+    const listeners = new Set<() => void>();
+    const subscribe = (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    };
+    mockHook();
+    const baseResult = mockUseOverlayProviderLogin();
+    mockUseOverlayProviderLogin.mockImplementation(() => ({
+      ...baseResult,
+      externalLoginStatus: useSyncExternalStore(subscribe, () => loginStatus),
+    }));
+    render(<OverlayLoginGate />);
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('');
+
+    act(() => {
+      loginStatus = OverlayExternalLoginStatus.TakingLonger;
+      listeners.forEach((listener) => listener());
+    });
+
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status.textContent).toBe(AuthI18nKeys.OverlayLoginTakingLonger);
   });
 });

@@ -1,4 +1,7 @@
-import type { ToolsetOAuthSettings } from './models';
+import type {
+  ToolsetOAuthSettings,
+  ToolsetOAuthSettingsSource,
+} from './models';
 
 /**
  * Resolves the OAuth callback location against the current origin. The
@@ -8,34 +11,20 @@ import type { ToolsetOAuthSettings } from './models';
 export const getToolsetRedirectUri = (callbackPath: string): string =>
   `${window.location.origin}${callbackPath}`;
 
-/**
- * Hosts on the loopback interface, matched exactly so a public host that
- * merely starts with `localhost` is never mistaken for one.
+/*
+ * Schemes a popup may be navigated to. Anything else (`javascript:`,
+ * `data:`, …) would run in, or replace, the popup instead of reaching the
+ * provider. Plain `http:` is accepted for any host, matching what DIAL Core
+ * stores for the endpoint (issue #9311).
  */
-const isLoopbackHost = (hostname: string): boolean =>
-  hostname === 'localhost' ||
-  hostname === '[::1]' ||
-  /^127(?:\.\d{1,3}){3}$/.test(hostname);
-
-/**
- * Whether the provider can be reached without exposing the authorization
- * code it returns. `https:` always qualifies. Plain `http:` qualifies only on
- * the loopback interface, where the request never reaches a network that could
- * observe it (RFC 8252 §7.3) — a remote `http:` authorization endpoint would
- * leak the code in the redirect URL to any passive observer, which PKCE does
- * not prevent when the challenge is verified server-side.
- */
-const isEndpointTransportSecure = (url: URL): boolean => {
-  if (url.protocol === 'https:') return true;
-  return url.protocol === 'http:' && isLoopbackHost(url.hostname);
-};
+const ALLOWED_ENDPOINT_PROTOCOLS = new Set(['http:', 'https:']);
 
 /**
  * Builds the OAuth authorize URL for a given, already-generated `state`
  * value. The caller owns what `state` carries — see `initiateOAuthLogin`.
  * Returns `null` rather than throwing for a configuration that cannot
- * produce a valid URL, including one whose authorization endpoint is not
- * reachable over a secure transport.
+ * produce a valid URL, including one whose authorization endpoint is not an
+ * `http:`/`https:` URL.
  */
 export const buildToolsetAuthorizeUrl = (
   auth: ToolsetOAuthSettings,
@@ -47,7 +36,7 @@ export const buildToolsetAuthorizeUrl = (
   }
   try {
     const url = new URL(auth.authorizationEndpoint.trim());
-    if (!isEndpointTransportSecure(url)) {
+    if (!ALLOWED_ENDPOINT_PROTOCOLS.has(url.protocol)) {
       return null;
     }
     url.searchParams.set('response_type', 'code');
@@ -63,8 +52,33 @@ export const buildToolsetAuthorizeUrl = (
     if (auth.scopes && auth.scopes.length > 0) {
       url.searchParams.set('scope', auth.scopes.join(' '));
     }
+    /*
+     * Sent verbatim: DIAL Core validated it on save and sends the same string
+     * on the token exchange, and servers enforcing RFC 8707 on both legs
+     * reject a mismatch with `invalid_target`.
+     */
+    const resource = auth.resource?.trim();
+    if (resource) {
+      url.searchParams.set('resource', resource);
+    }
     return url.toString();
   } catch {
     return null;
   }
 };
+
+/**
+ * Maps the public OAuth client fields of a DIAL Core auth-settings DTO onto
+ * the settings `buildToolsetAuthorizeUrl` reads, so every login entry point
+ * copies the same fields. An absent source yields all-`undefined` settings.
+ */
+export const toToolsetOAuthSettings = (
+  source?: ToolsetOAuthSettingsSource,
+): ToolsetOAuthSettings => ({
+  clientId: source?.clientId,
+  authorizationEndpoint: source?.authorizationEndpoint,
+  scopes: source?.scopesSupported,
+  codeChallenge: source?.codeChallenge,
+  codeChallengeMethod: source?.codeChallengeMethod,
+  resource: source?.resource,
+});

@@ -4,6 +4,7 @@ import {
   ButtonVariant,
   DIAL_KIT_ICON_STROKE,
   ElementSize,
+  LiveRegion,
 } from '@epam/ai-dial-ui-kit';
 import { IconArrowBackUp } from '@tabler/icons-react';
 import { useLayoutEffect, useState, type FC, type RefObject } from 'react';
@@ -125,7 +126,7 @@ export const MessageSelectionReply: FC<MessageSelectionReplyProps> = ({
         <div
           ref={actionRef}
           className={mergeClasses(
-            'fixed left-0 top-0 z-50 max-w-[calc(100vw-16px)]',
+            'fixed top-0 left-0 z-50 max-w-[calc(100vw-16px)]',
             className,
           )}
           style={{
@@ -156,13 +157,13 @@ export const MessageSelectionReply: FC<MessageSelectionReplyProps> = ({
           />
         </div>
       )}
-      <div role="status" aria-live="polite" className="sr-only">
+      <LiveRegion visuallyHidden>
         {rect ? (
           labels.selectionAvailable
         ) : addedRevision > 0 ? (
           <span key={addedRevision}>{labels.attachmentAdded}</span>
         ) : null}
-      </div>
+      </LiveRegion>
     </>,
     container,
   );

@@ -9,6 +9,15 @@ import {
 } from '../../../models/scheduled-task-item';
 import { ScheduledTaskCard } from '../ScheduledTaskCard';
 
+const { mockUseIsMobile } = vi.hoisted(() => ({
+  mockUseIsMobile: vi.fn(() => false),
+}));
+
+vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@epam/ai-dial-chat-shared')>()),
+  useIsMobile: mockUseIsMobile,
+}));
+
 vi.mock('@epam/ai-dial-ui-kit', () => ({
   DIAL_KIT_ICON_STROKE: 1.5,
   CardShell: ({
@@ -22,12 +31,19 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     text,
     query,
     className,
+    maxLines,
   }: {
     text: string;
     query?: string;
     className?: string;
+    maxLines?: number;
   }) => {
-    if (!query) return <span className={className}>{text}</span>;
+    if (!query)
+      return (
+        <span className={className} data-max-lines={maxLines}>
+          {text}
+        </span>
+      );
     const index = text.toLowerCase().indexOf(query.toLowerCase());
     if (index === -1) return <span className={className}>{text}</span>;
     return (
@@ -108,12 +124,42 @@ describe('ScheduledTaskCard', () => {
     expect(screen.getByText('NEW')).toBeTruthy();
   });
 
+  it("renders the item's own badge text over the shared label", () => {
+    render(
+      <ScheduledTaskCard
+        item={buildItem({ isNew: true, newBadgeLabel: '3 NEW' })}
+        labels={{ newBadgeLabel: 'NEW' }}
+      />,
+    );
+
+    expect(screen.getByText('3 NEW')).toBeTruthy();
+  });
+
   it('renders the card with a fixed height', () => {
     render(<ScheduledTaskCard item={buildItem()} />);
 
-    expect(screen.getByRole('group').className).toContain(
-      'h-[var(--st-card-height,232px)]',
+    expect(screen.getByRole('article').className).toContain(
+      'h-(--st-card-height,232px)',
     );
+  });
+
+  it('keeps the title on one line at desktop widths', () => {
+    mockUseIsMobile.mockReturnValue(false);
+    render(<ScheduledTaskCard item={buildItem()} />);
+
+    expect(
+      screen.getByText('Competitor Updates').getAttribute('data-max-lines'),
+    ).toBe('1');
+  });
+
+  it('lets the title wrap to two lines at mobile widths', () => {
+    mockUseIsMobile.mockReturnValue(true);
+    render(<ScheduledTaskCard item={buildItem()} />);
+
+    expect(
+      screen.getByText('Competitor Updates').getAttribute('data-max-lines'),
+    ).toBe('2');
+    mockUseIsMobile.mockReturnValue(false);
   });
 
   it('clamps a long description instead of growing the card', () => {
@@ -126,8 +172,56 @@ describe('ScheduledTaskCard', () => {
     );
 
     expect(screen.getByText('a'.repeat(600)).className).toContain(
-      'line-clamp-4',
+      'line-clamp-3',
     );
+    /* A flex-grown box is taller than its clamped lines, and the lines past
+     * the ellipsis would show through — the clamp needs the auto height. */
+    expect(screen.getByText('a'.repeat(600)).className).not.toContain('flex-1');
+  });
+
+  it('renders the description as dial-small-paragraph-text by default', () => {
+    render(
+      <ScheduledTaskCard
+        item={buildItem({ descriptionPreview: 'Daily inbox summary' })}
+      />,
+    );
+
+    expect(screen.getByText('Daily inbox summary').className).toContain(
+      'dial-small-paragraph-text',
+    );
+  });
+
+  it('wraps an unbreakable description inside the card instead of stretching it past the grid track', () => {
+    render(
+      <ScheduledTaskCard
+        item={buildItem({
+          descriptionPreview: 'a'.repeat(600),
+        })}
+      />,
+    );
+
+    const description = screen.getByText('a'.repeat(600));
+    expect(description.className).toContain('min-w-0');
+    expect(description.className).toContain('wrap-anywhere');
+    expect(screen.getByRole('article').className).toContain('min-w-0');
+  });
+
+  it('collapses whitespace in the description preview instead of preserving the author line breaks', () => {
+    render(
+      <ScheduledTaskCard
+        item={buildItem({
+          descriptionPreview: '\n\nSummarize the daily inbox\nby sender',
+        })}
+      />,
+    );
+
+    /* The preview is the raw textarea description — preserved blank lines
+     * would spend the clamp budget before any text (unlike the detail
+     * view, which pre-wraps the full description). getByText matches
+     * against the whitespace-collapsed text — the same collapse the card
+     * applies without pre-wrap. */
+    const description = screen.getByText('Summarize the daily inbox by sender');
+    expect(description.className).not.toContain('whitespace-pre-wrap');
   });
 
   it('invokes onCardClick with the item id when the card body is clicked', async () => {
@@ -139,6 +233,17 @@ describe('ScheduledTaskCard', () => {
     );
 
     expect(onCardClick).toHaveBeenCalledWith('sched_1');
+  });
+
+  it('renders a clickable card as an unroled article holding a native button', () => {
+    render(<ScheduledTaskCard item={buildItem()} onCardClick={vi.fn()} />);
+
+    // An `<article>` may not take `role="button"` (axe aria-allowed-role).
+    const card = screen.getByRole('article');
+    expect(card.getAttribute('role')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Competitor Updates' }).tagName,
+    ).toBe('BUTTON');
   });
 
   it('invokes onCardClick on Enter/Space keyboard activation', async () => {
@@ -158,7 +263,7 @@ describe('ScheduledTaskCard', () => {
     expect(
       screen.queryByRole('button', { name: 'Competitor Updates' }),
     ).toBeNull();
-    expect(screen.getByRole('group')).toBeTruthy();
+    expect(screen.getByRole('article')).toBeTruthy();
   });
 
   it('renders the "Paused" badge instead of the schedule pill when isActive is false', () => {
@@ -211,13 +316,13 @@ describe('ScheduledTaskCard', () => {
 describe('ScheduledTaskCard — public class names', () => {
   it('stamps the card whether or not it is clickable', () => {
     const { unmount } = render(<ScheduledTaskCard item={buildItem()} />);
-    expect(screen.getByRole('group').classList).toContain(
+    expect(screen.getByRole('article').classList).toContain(
       SCHEDULED_TASKS_CLASS.card,
     );
     unmount();
 
     render(<ScheduledTaskCard item={buildItem()} onCardClick={vi.fn()} />);
-    expect(screen.getByRole('button').classList).toContain(
+    expect(screen.getByRole('article').classList).toContain(
       SCHEDULED_TASKS_CLASS.card,
     );
   });

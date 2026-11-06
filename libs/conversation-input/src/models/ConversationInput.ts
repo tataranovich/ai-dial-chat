@@ -118,6 +118,13 @@ export interface EditMessageInputProps {
    * during edit.
    */
   menuOverlays?: MenuOverlayConfig[];
+  /**
+   * Controls which key combination submits the edited message. Forwarded to
+   * the inner `Input`.
+   * - `SendOnEnter.Enter` (default): Enter submits; Shift+Enter inserts a newline.
+   * - `SendOnEnter.MetaEnter`: ⌘+Enter (macOS) / Ctrl+Enter (Windows/Linux) submits; bare Enter inserts a newline.
+   */
+  sendOnEnter?: SendOnEnter;
   /** Pre-existing attachments from the original message, shown in the attachment tray. */
   initialAttachments?: DisplayAttachment[];
   /** Called when the user clicks the Cancel button. */
@@ -287,6 +294,8 @@ export interface ConversationInputProps {
   descriptionText?: string;
   /** Slot rendered between the welcome heading and the input, e.g. conversation starters. */
   belowWelcomeSlot?: ReactNode;
+  /** Slot rendered directly above the input within the composer's width, e.g. a host notice. Omitted or `null` leaves the layout unchanged. */
+  aboveInputSlot?: ReactNode;
   /** Called when the user submits a message (Enter or send button). Receives the current local attachments as the second argument. */
   onSend?: (message: string, attachments: Attachment[]) => void;
   /** Called immediately after an attachment is added. Returns the uploaded attachment URL and stored name. */
@@ -486,6 +495,8 @@ export interface ConversationInputProps {
    * popover after a selection or an explicit dismiss.
    */
   modelPickerOverlay?: (onClose: () => void) => ReactNode;
+  /** Reports picker open/dismiss events so host-owned search can reset on dismissal; breakpoint changes keep it open. */
+  onModelPickerOpenChange?: (open: boolean) => void;
   /** Resolved tool toggle items rendered in a "Tools" submenu. When empty or absent, no Tools item is shown. */
   toolsMenuItems?: ToolMenuItem[];
   /** Called when a tool row is toggled. Receives the tool id. */

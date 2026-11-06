@@ -42,6 +42,10 @@ export interface UseModelSelectorOptions {
 
 /** Values returned by `useModelSelector`. */
 export interface UseModelSelectorResult {
+  /** Shared query retained while a selector changes presentation. */
+  searchQuery: string;
+  /** Updates the shared phone/desktop search query. */
+  onSearchQueryChange: (query: string) => void;
   /** Icon node for the trigger button. */
   selectorIcon: ReactNode;
   /** Accessible label for the trigger button. */
@@ -209,7 +213,7 @@ export const useModelSelector = ({
             '--ms-search-header-bg': menuStyles?.colors?.searchHeaderBackground,
           })}
           className={mergeClasses(
-            'sticky top-0 z-10 pb-1 pe-2 pt-2',
+            'sticky top-0 z-10 pe-2 pt-2 pb-1',
             styles.searchHeader,
             menuStyles?.searchHeaderClassName,
             CONVERSATION_INPUT_CLASS.modelMenuSearch,
@@ -239,6 +243,8 @@ export const useModelSelector = ({
   };
 
   return {
+    searchQuery,
+    onSearchQueryChange: setSearchQuery,
     selectorIcon,
     selectorAriaLabel,
     selectedLabel,

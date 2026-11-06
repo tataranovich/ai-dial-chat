@@ -21,8 +21,10 @@ import { useStreamedMarkdownContent } from '../../hooks/useStreamedMarkdownConte
 import { CodeBlockTheme } from '../../types/code-editor';
 import { buildCssVars } from '../../utils/build-css-vars';
 import { preprocessLaTeX } from '../../utils/latex';
+import { rehypeRawAsText } from '../../utils/markdown-html';
 import { mergeClasses } from '../../utils/merge-class';
 import { MarkdownCodeBlock } from './CodeBlock/CodeBlock';
+import { rehypePreserveSpaces } from './markdown-whitespace';
 import styles from './MarkdownRenderer.module.scss';
 import { MarkdownMathBlock } from './Math/MarkdownMathBlock';
 import {
@@ -114,6 +116,8 @@ export interface MarkdownRendererProps {
   urlTransform?: (url: string) => string;
   /** Extra rehype plugins, applied after the built-in KaTeX pass. Defaults to none. */
   rehypePlugins?: NonNullable<Options['rehypePlugins']>;
+  /** When `false`, raw HTML in `content` renders as literal text instead of being parsed into elements. Defaults to `true`. */
+  isRawHtmlEnabled?: boolean;
   /**
    * Label shown with a shimmer animation while `isStreaming` is true and no content has arrived yet.
    * Defaults to `'Thinking'`. Pass a translated string from the consuming app.
@@ -138,6 +142,8 @@ export interface MarkdownRendererProps {
   tableScrollRegionAriaLabel?: string;
   /** Accessible label for a block formula's horizontally scrollable region. Defaults to `'Scrollable formula'`. */
   mathScrollRegionAriaLabel?: string;
+  /** Accessible label for a code block's scrollable region. Defaults to `'Scrollable code'`. */
+  codeBlockScrollRegionAriaLabel?: string;
 }
 
 /** CSS custom-property overrides for the `MarkdownRenderer` component. */
@@ -164,6 +170,10 @@ export interface MarkdownRendererColors {
   inlineCodeBackground?: string;
   /** Text color for inline `<code>` spans. Defaults to `--text-primary`. */
   inlineCodeText?: string;
+  /** Scrollbar thumb color of a horizontally scrolling display formula. Defaults to `--stroke-primary`. */
+  mathScrollbar?: string;
+  /** Focus-visible outline color of a scrollable display formula. Defaults to `--stroke-focus`. */
+  mathFocus?: string;
 }
 
 /**
@@ -247,6 +257,14 @@ const mathMLAttributes: Record<string, string[]> = {
  */
 const preKatexRehypePlugins: NonNullable<Options['rehypePlugins']> = [
   rehypeRaw,
+];
+
+/*
+ * Replaces `rehypeRaw` when raw HTML is disabled: `rehypeSanitize` drops
+ * `raw` nodes outright, so they are turned into text before it runs.
+ */
+const rawAsTextRehypePlugins: NonNullable<Options['rehypePlugins']> = [
+  rehypeRawAsText,
 ];
 
 /**
@@ -413,6 +431,7 @@ interface MarkdownComponentOptions {
   tableOnOpenInCanvas?: (markdown: string) => void;
   tableScrollRegionAriaLabel?: string;
   mathScrollRegionAriaLabel?: string;
+  codeBlockScrollRegionAriaLabel?: string;
 }
 
 const buildMarkdownComponents = (
@@ -428,6 +447,7 @@ const buildMarkdownComponents = (
     tableOnOpenInCanvas,
     tableScrollRegionAriaLabel,
     mathScrollRegionAriaLabel,
+    codeBlockScrollRegionAriaLabel,
   }: MarkdownComponentOptions,
 ): Components => ({
   h1: ({ children }) => <h1 className={cn.h1}>{children}</h1>,
@@ -442,7 +462,7 @@ const buildMarkdownComponents = (
    * (typically a long URL) would otherwise overflow its container and get
    * clipped by any ancestor that hides overflow, e.g. a line-clamped quote. */
   p: ({ children }) => (
-    <p className={mergeClasses('break-words', cn.p)}>{children}</p>
+    <p className={mergeClasses('wrap-break-word', cn.p)}>{children}</p>
   ),
   /* An `outside` marker is painted in the list's start padding, so that padding
      has to be wide enough for the widest marker or the marker overflows and is
@@ -477,6 +497,7 @@ const buildMarkdownComponents = (
           copyLabel={codeBlockCopyLabel}
           copiedLabel={codeBlockCopiedLabel}
           downloadLabel={codeBlockDownloadLabel}
+          scrollRegionAriaLabel={codeBlockScrollRegionAriaLabel}
           containerClassName={cn.codeBlockContainer}
           headerClassName={cn.codeBlockHeader}
           codeClassName={cn.codeFont}
@@ -514,7 +535,7 @@ const buildMarkdownComponents = (
       target="_blank"
       rel="noopener noreferrer"
       className={mergeClasses(
-        'decoration-current/60 break-words underline underline-offset-2 hover:decoration-current focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2',
+        'wrap-break-word underline decoration-current/60 underline-offset-2 hover:decoration-current focus-visible:outline-1 focus-visible:outline-offset-2',
         styles.link,
         cn.link,
       )}
@@ -582,7 +603,7 @@ const buildMarkdownComponents = (
     <th
       scope="col"
       className={mergeClasses(
-        'sticky top-0 z-[2] max-w-96 whitespace-normal break-words px-3 py-2.5 text-start',
+        'sticky top-0 z-2 max-w-96 px-3 py-2.5 text-start wrap-break-word whitespace-normal',
         getTableCellAlignClass(node),
         tableStyles.rowDivider,
         tableStyles.tableHeaderCell,
@@ -597,7 +618,7 @@ const buildMarkdownComponents = (
   td: ({ children, node }) => (
     <td
       className={mergeClasses(
-        'max-w-96 whitespace-normal px-3 py-[7px] align-top [overflow-wrap:anywhere]',
+        'max-w-96 px-3 py-[7px] align-top wrap-anywhere whitespace-normal',
         getTableCellAlignClass(node),
         tableStyles.rowDivider,
         cn.tableBodyCell,
@@ -620,6 +641,7 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
     components,
     urlTransform,
     rehypePlugins = EMPTY_REHYPE_PLUGINS,
+    isRawHtmlEnabled = true,
     thinkingLabel = 'Thinking',
     codeBlockCopyLabel,
     codeBlockCopiedLabel,
@@ -631,6 +653,7 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
     tableOnOpenInCanvas,
     tableScrollRegionAriaLabel,
     mathScrollRegionAriaLabel,
+    codeBlockScrollRegionAriaLabel,
   }) => {
     const displayedContent = useStreamedMarkdownContent(
       content,
@@ -681,17 +704,20 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
 
     /*
      * Pipeline order matters: raw HTML is re-parsed first, KaTeX (once loaded)
-     * turns math spans into MathML, and sanitization runs last over everything
-     * both passes produced.
+     * turns math spans into MathML, sanitization runs over everything both
+     * passes produced, and space runs are then preserved on the sanitized tree.
+     * With raw HTML disabled, raw nodes become literal text instead of being
+     * re-parsed.
      */
     const effectiveRehypePlugins = useMemo(
       () => [
-        ...preKatexRehypePlugins,
+        ...(isRawHtmlEnabled ? preKatexRehypePlugins : rawAsTextRehypePlugins),
         ...(katexPlugin ? [katexPlugin] : []),
         sanitizeRehypePlugin,
+        rehypePreserveSpaces,
         ...rehypePlugins,
       ],
-      [katexPlugin, rehypePlugins],
+      [isRawHtmlEnabled, katexPlugin, rehypePlugins],
     );
 
     const cssVars = buildCssVars({
@@ -704,6 +730,8 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
       '--cm-h6-text': colors?.headingSixText,
       '--cm-code-inline-bg': colors?.inlineCodeBackground,
       '--cm-code-inline-text': colors?.inlineCodeText,
+      '--cm-math-scrollbar': colors?.mathScrollbar,
+      '--cm-math-focus': colors?.mathFocus,
     });
 
     const effectiveUrlTransform = useMemo(
@@ -724,6 +752,7 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
           tableOnOpenInCanvas,
           tableScrollRegionAriaLabel,
           mathScrollRegionAriaLabel,
+          codeBlockScrollRegionAriaLabel,
         }),
         ...defaultMarkdownComponents,
         ...components,
@@ -740,6 +769,7 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
         tableOnOpenInCanvas,
         tableScrollRegionAriaLabel,
         mathScrollRegionAriaLabel,
+        codeBlockScrollRegionAriaLabel,
         components,
       ],
     );
@@ -748,8 +778,13 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
       return <ThinkingShimmer label={thinkingLabel} colors={colors} />;
     }
 
+    /* Inherited by every element, so long unbreakable tokens (e.g. URLs) wrap
+     * instead of widening the message and causing a horizontal scrollbar. */
     return (
-      <div style={cssVars} className={containerClassName}>
+      <div
+        style={cssVars}
+        className={mergeClasses('wrap-anywhere', containerClassName)}
+      >
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={effectiveRehypePlugins}

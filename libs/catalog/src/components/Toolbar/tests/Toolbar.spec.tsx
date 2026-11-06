@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CATALOG_CLASS } from '../../../constants/public-class-names';
@@ -61,6 +61,8 @@ vi.mock('@epam/ai-dial-ui-kit', async (importOriginal) => ({
 }));
 
 vi.mock('@tabler/icons-react', () => ({
+  IconAdjustmentsHorizontal: () => null,
+  IconChevronRight: () => null,
   IconFilter: () => null,
   IconX: () => null,
   IconChevronDown: () => null,
@@ -101,6 +103,15 @@ describe('Toolbar', () => {
 
     expect(screen.getByLabelText('breadcrumb')).toBeTruthy();
     expect(screen.queryByText('Browse')).toBeNull();
+  });
+
+  it('exposes the search input through searchInputRef', () => {
+    const searchInputRef = React.createRef<HTMLInputElement>();
+    renderToolbar({ searchPlaceholder: 'Search', searchInputRef });
+
+    expect(searchInputRef.current).toBe(
+      within(screen.getByRole('search')).getByLabelText('Search'),
+    );
   });
 });
 

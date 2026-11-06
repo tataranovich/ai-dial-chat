@@ -1,6 +1,7 @@
 import { AttachmentType, RequestStatus } from '@epam/ai-dial-chat-shared';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SendOnEnter } from '../../../models/Input';
 import { EditMessageInput } from '../EditMessageInput';
 
 describe('EditMessageInput — external pendingDropFiles', () => {
@@ -279,5 +280,66 @@ describe('EditMessageInput — attachment click label', () => {
     expect(
       screen.queryByRole('button', { name: 'Download attachment' }),
     ).toBeNull();
+  });
+});
+
+describe('EditMessageInput — markdown source', () => {
+  it('pre-fills the textarea with the raw markdown source of the message', () => {
+    const source = '```ts\nconst x = 1;\n```\n\n**bold**';
+    render(
+      <EditMessageInput onCancel={vi.fn()} onSave={vi.fn()} message={source} />,
+    );
+
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(
+      source,
+    );
+  });
+});
+
+describe('EditMessageInput — send shortcut', () => {
+  it('submits on bare Enter by default', () => {
+    const onSave = vi.fn();
+    render(
+      <EditMessageInput message="hello" onCancel={vi.fn()} onSave={onSave} />,
+    );
+
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+
+    expect(onSave).toHaveBeenCalledWith('hello', [], []);
+  });
+
+  it('does not submit on bare Enter when sendOnEnter is MetaEnter', () => {
+    const onSave = vi.fn();
+    render(
+      <EditMessageInput
+        message="hello"
+        sendOnEnter={SendOnEnter.MetaEnter}
+        onCancel={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('submits on Ctrl/⌘+Enter when sendOnEnter is MetaEnter', () => {
+    const onSave = vi.fn();
+    render(
+      <EditMessageInput
+        message="hello"
+        sendOnEnter={SendOnEnter.MetaEnter}
+        onCancel={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole('textbox'), {
+      key: 'Enter',
+      ctrlKey: true,
+    });
+
+    expect(onSave).toHaveBeenCalledWith('hello', [], []);
   });
 });

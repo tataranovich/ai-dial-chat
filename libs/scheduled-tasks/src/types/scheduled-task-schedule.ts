@@ -10,4 +10,6 @@ export enum ScheduledTaskRepeat {
   Weekly = 'weekly',
   /** Task runs every month on `dayOfMonth` at the specified `time`. */
   Monthly = 'monthly',
+  /** Task runs every week on each of `daysOfWeek` at the specified `time`. */
+  Custom = 'custom',
 }

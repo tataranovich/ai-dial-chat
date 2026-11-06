@@ -29,6 +29,7 @@ export const CardGrid: FC<CardGridProps> = memo(
     isFullWidth = false,
     featuredChipStyle,
     markdownLabels,
+    activeTab,
   }) => {
     const noResultsTitle = titles?.noResultsTitle ?? 'No results';
     const featuredLabel = titles?.featuredLabel ?? 'Featured';
@@ -39,6 +40,7 @@ export const CardGrid: FC<CardGridProps> = memo(
     const credentialsBadgeLoggedOutLabel =
       titles?.credentialsBadgeLoggedOutLabel ??
       'Authorize to use this toolset.';
+    const noFolderLabel = titles?.noFolderLabel ?? 'No folder';
 
     const { containerRef, startRow, endRow, columnCount, totalHeight } =
       useScrollVirtualizer(items.length, { isFullWidth });
@@ -56,9 +58,11 @@ export const CardGrid: FC<CardGridProps> = memo(
         removeFromFavoritesAriaLabel,
         selectedItemId,
         credentialsBadgeLoggedOutLabel,
+        noFolderLabel,
         isReadonly,
         featuredChipStyle,
         markdownLabels,
+        activeTab,
       }),
       [
         items,
@@ -72,9 +76,11 @@ export const CardGrid: FC<CardGridProps> = memo(
         removeFromFavoritesAriaLabel,
         selectedItemId,
         credentialsBadgeLoggedOutLabel,
+        noFolderLabel,
         isReadonly,
         featuredChipStyle,
         markdownLabels,
+        activeTab,
       ],
     );
 
@@ -93,7 +99,7 @@ export const CardGrid: FC<CardGridProps> = memo(
             <div
               key={i}
               className={mergeClasses(
-                'rounded-md border p-4',
+                'rounded-md border p-3',
                 styles.skeletonCard,
               )}
               style={{ height: CARD_HEIGHT }}
@@ -114,7 +120,10 @@ export const CardGrid: FC<CardGridProps> = memo(
     if (items.length === 0) {
       return (
         <div className="flex size-full flex-col items-center justify-center">
-          <PanelEmptyState label={noResultsTitle} />
+          <PanelEmptyState
+            label={noResultsTitle}
+            description={titles?.noResultsDescription}
+          />
         </div>
       );
     }

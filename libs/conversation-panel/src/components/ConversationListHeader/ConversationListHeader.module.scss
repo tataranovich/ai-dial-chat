@@ -1,0 +1,24 @@
+/* The title reads secondary at rest and primary under keyboard focus. */
+.title {
+  color: var(--cp-list-header-title, var(--text-secondary, #57647a));
+
+  &:hover {
+    color: var(--cp-list-header-title, var(--text-secondary, #57647a));
+  }
+
+  &:focus-visible {
+    color: var(--cp-list-header-title-focus, var(--text-primary, #161b2d));
+  }
+}
+
+.filterValue {
+  color: var(--cp-list-header-filter-value, var(--text-secondary, #57647a));
+}
+
+/* Marks the filter trigger while an origin or type filter is applied. */
+.filterIndicator {
+  background-color: var(
+    --cp-list-header-filter-indicator,
+    var(--text-accent, #1d4ed8)
+  );
+}

@@ -1,10 +1,13 @@
 import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
 import {
+  CaptionText,
   DIAL_KIT_ICON_STROKE,
+  ErrorText,
   Input,
   LinkButton,
   NeutralButton,
   Spinner,
+  LiveRegion,
 } from '@epam/ai-dial-ui-kit';
 import { IconKey } from '@tabler/icons-react';
 import { FC, useCallback, useState } from 'react';
@@ -12,6 +15,7 @@ import type { CatalogItem } from '../../../../models/catalog-item';
 import type {
   ItemDetailsColors,
   ItemDetailsTexts,
+  ItemDetailsTypography,
 } from '../../../../models/item-details-props';
 import {
   CredentialsLevel,
@@ -23,12 +27,12 @@ import styles from './CredentialsApiKeyOverlay.module.scss';
 const SPINNER_SIZE = 16;
 
 /** Props for {@link CredentialsApiKeyOverlay}. */
-interface CredentialsApiKeyOverlayProps {
+export interface CredentialsApiKeyOverlayProps {
   /** Item the popover manages the API key for. */
   item: CatalogItem;
-  /** Credentials slot this popover manages. Always `User` — this is the personal, non-admin API-key popover. */
+  /** Credentials slot this popover manages: `User` for a public toolset, `Global` (the owner's own key) for a private one. */
   level: CredentialsLevel;
-  /** Current sign-in status of the personal API key. */
+  /** Current sign-in status of the API key at `level`. */
   status: CredentialStatus | undefined;
   /** Already-formatted relative time since the key was added (e.g. `'3 weeks ago'`), shown as support text once signed in. */
   apiKeyAddedWhen?: string;
@@ -53,7 +57,9 @@ interface CredentialsApiKeyOverlayProps {
    * panel, so it sets the vars it reads on its own root.
    */
   colors?: ItemDetailsColors;
-  /** CSS class applied to the "Delete" action. Defaults to `'text-error'`. */
+  /** Typography class overrides; reads `credentialsOverlayTitleClassName`, `credentialsHintClassName` and `credentialsErrorClassName`. */
+  typography?: ItemDetailsTypography;
+  /** CSS class merged onto the "Delete" action; its color comes from `colors.credentialsDeleteActionText`. */
   deleteActionClassName?: string;
 }
 
@@ -69,8 +75,14 @@ export const CredentialsApiKeyOverlay: FC<CredentialsApiKeyOverlayProps> = ({
   onClose,
   texts,
   colors,
-  deleteActionClassName = 'text-error',
+  typography,
+  deleteActionClassName,
 }) => {
+  const {
+    credentialsOverlayTitleClassName = 'dial-small-semi-text',
+    credentialsHintClassName = 'dial-caption-text',
+    credentialsErrorClassName = 'dial-caption-text',
+  } = typography ?? {};
   const [apiKey, setApiKey] = useState('');
   const [hasEmptyKeyError, setHasEmptyKeyError] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -117,6 +129,7 @@ export const CredentialsApiKeyOverlay: FC<CredentialsApiKeyOverlayProps> = ({
     texts?.personalApiKeyAddedMessage ?? 'Personal key has been added';
   const inputId = `catalog-item-${item.id}-${level}-api-key`;
   const headerHintId = `${inputId}-header-hint`;
+  const emptyKeyErrorId = `${inputId}-empty-key-error`;
   const headerHint = apiKeyHeader
     ? (
         texts?.apiKeyHeaderHint ??
@@ -137,12 +150,13 @@ export const CredentialsApiKeyOverlay: FC<CredentialsApiKeyOverlayProps> = ({
     '--cat-cred-card-icon': colors?.credentialsCardIcon,
     '--cat-cred-card-title-text': colors?.credentialsCardTitleText,
     '--cat-cred-card-description-text': colors?.credentialsCardDescriptionText,
+    '--cat-cred-delete-action-text': colors?.credentialsDeleteActionText,
   });
 
   return (
     <div className="flex w-[418px] flex-col" style={cssVars}>
       <div className="flex items-center gap-2 px-4 py-3">
-        <span className="dial-small-semi-text">{title}</span>
+        <span className={credentialsOverlayTitleClassName}>{title}</span>
       </div>
       <div className={mergeClasses('mx-4 h-px', styles.divider)} />
 
@@ -151,7 +165,14 @@ export const CredentialsApiKeyOverlay: FC<CredentialsApiKeyOverlayProps> = ({
           <div className="flex items-end gap-2">
             <Input
               id={inputId}
-              aria-describedby={headerHint ? headerHintId : undefined}
+              aria-describedby={
+                [
+                  headerHint ? headerHintId : undefined,
+                  hasEmptyKeyError ? emptyKeyErrorId : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(' ') || undefined
+              }
               type="password"
               autoComplete="current-password"
               value={apiKey}
@@ -177,53 +198,58 @@ export const CredentialsApiKeyOverlay: FC<CredentialsApiKeyOverlayProps> = ({
            * The header hint and the error are rendered as siblings below the
            * input+button row, not through Input's own `caption`/`error` props,
            * so the button never shifts when they appear — only the space below
-           * the row grows. Input's `caption` also carries no id to describe the
-           * field by and is announced as an alert; this hint is static.
+           * the row grows. The hint keeps `headerHintId`, which the field's
+           * `aria-describedby` points at.
            */}
-          {headerHint && (
-            <span
-              id={headerHintId}
-              className={mergeClasses('dial-caption-text', styles.hint)}
-            >
-              {headerHint}
-            </span>
-          )}
+          <CaptionText
+            id={headerHintId}
+            text={headerHint}
+            className={mergeClasses(credentialsHintClassName, styles.hint)}
+          />
           {hasEmptyKeyError && (
-            <span className="dial-caption-text text-error">
-              {emptyKeyErrorMessage}
-            </span>
+            <ErrorText
+              id={emptyKeyErrorId}
+              className={credentialsErrorClassName}
+              text={emptyKeyErrorMessage}
+            />
           )}
         </div>
       )}
 
-      {isSignedIn && (
-        <div className="animate-fadeIn px-4 py-3.5">
-          <CredentialsInfoCard
-            icon={
-              <IconKey size={20} aria-hidden stroke={DIAL_KIT_ICON_STROKE} />
-            }
-            title={addedMessage}
-            description={addedWhenLabel}
-            action={
-              <LinkButton
-                label={isDeleting ? undefined : deleteLabel}
-                aria-label={isDeleting ? deletingStatusLabel : undefined}
-                iconBefore={
-                  isDeleting ? (
-                    <Spinner
-                      size={SPINNER_SIZE}
-                      ariaLabel={deletingStatusLabel}
-                    />
-                  ) : undefined
-                }
-                className={deleteActionClassName}
-                onClick={handleDelete}
-                disabled={isDeleting}
-              />
-            }
-          />
-        </div>
-      )}
+      {/* Mounted before the key card appears, so the card is announced once the key is added. */}
+      <LiveRegion>
+        {isSignedIn && (
+          <div className="animate-fadeIn px-4 py-3.5">
+            <CredentialsInfoCard
+              icon={
+                <IconKey size={20} aria-hidden stroke={DIAL_KIT_ICON_STROKE} />
+              }
+              title={addedMessage}
+              description={addedWhenLabel}
+              action={
+                <LinkButton
+                  label={isDeleting ? undefined : deleteLabel}
+                  aria-label={isDeleting ? deletingStatusLabel : undefined}
+                  iconBefore={
+                    isDeleting ? (
+                      <Spinner
+                        size={SPINNER_SIZE}
+                        ariaLabel={deletingStatusLabel}
+                      />
+                    ) : undefined
+                  }
+                  className={mergeClasses(
+                    styles.deleteAction,
+                    deleteActionClassName,
+                  )}
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                />
+              }
+            />
+          </div>
+        )}
+      </LiveRegion>
     </div>
   );
 };

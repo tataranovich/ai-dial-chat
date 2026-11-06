@@ -27,10 +27,6 @@ import {
   LOCALE_CODE_VALIDATION_MESSAGE,
 } from '../../common/validators/locale-code.pattern';
 import { IsValidResourceReference } from '../../common/validators/resource-reference.validator';
-import {
-  SEMVER_VERSION_PATTERN,
-  SEMVER_VERSION_VALIDATION_MESSAGE,
-} from '../../common/validators/semver-version.pattern';
 
 /*
  * General-step (and, optionally, Settings-step) update body. `type` is
@@ -65,10 +61,18 @@ export class UpdateApplicationBodyDto {
     example: 'files/6FEup.../uploads/2026-06/icon.png',
     description:
       'An absolute https?:// URL, or a DIAL file id (files/{bucket}/{path}) ' +
-      'picked through the file manager.',
+      'picked through the file manager. An empty string removes the stored ' +
+      'icon; omit the field (or send null) to keep it.',
   })
   @IsString()
   @IsOptional()
+  /*
+   * `''` is the explicit "remove the icon" signal (see
+   * `ApplicationsService.updateApplication`), so it skips the
+   * resource-reference check; any other string must still be a valid
+   * reference.
+   */
+  @ValidateIf((body: UpdateApplicationBodyDto) => body.iconUrl !== '')
   @IsValidResourceReference()
   iconUrl?: string;
 
@@ -81,8 +85,9 @@ export class UpdateApplicationBodyDto {
   @ApiPropertyOptional({ example: '1.0.0' })
   @IsString()
   @IsOptional()
-  @Matches(SEMVER_VERSION_PATTERN, {
-    message: SEMVER_VERSION_VALIDATION_MESSAGE,
+  @Matches(/^[a-zA-Z0-9._-]+$/, {
+    message:
+      'version must contain only letters, digits, dots, underscores, and dashes',
   })
   version?: string;
 

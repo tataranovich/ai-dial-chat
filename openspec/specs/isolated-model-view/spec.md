@@ -8,7 +8,7 @@
 
 ### Requirement: `isolated-model-id` query param drives a temporary isolated view
 
-`TODO: remove in next release.` A new context, `IsolatedModelViewContext` (`apps/chat/src/context/IsolatedModelViewContext.tsx`), SHALL be mounted (as `IsolatedModelViewProvider`) in `apps/chat/src/main.tsx` inside `BrowserRouter`, `UiFeaturesProvider` and `DeploymentsProvider` (it needs `useUiFeatures()` and `useDeployments()`), and SHALL expose `useIsolatedModelView(): { isActive: boolean; isNotFound: boolean; resolvedDeploymentId: string | null }` via a `useIsolatedModelView` hook. The file SHALL carry a `TODO: remove in next release.` header block comment.
+`TODO: remove in next release.` A new context, `IsolatedModelViewContext` (`apps/chat/src/context/IsolatedModelViewContext.tsx`), SHALL be mounted (as `IsolatedModelViewProvider`) in `apps/chat/src/AppRoot.tsx` inside the data router, `UiFeaturesProvider` and `DeploymentsProvider` (it needs `useUiFeatures()` and `useDeployments()`), and SHALL expose `useIsolatedModelView(): { isActive: boolean; isNotFound: boolean; resolvedDeploymentId: string | null }` via a `useIsolatedModelView` hook. The file SHALL carry a `TODO: remove in next release.` header block comment.
 
 On mount, the provider SHALL read the `isolated-model-id` query parameter once from `window.location.search` (a lazy `useState` initializer, not a reactive `useLocation()` read), so isolated view stays active for the rest of the tab's lifetime even after the first message navigates to `/conversations/<id>`, which has no such param. When absent or empty, `isActive`, `isNotFound` SHALL both be `false` and `resolvedDeploymentId` SHALL be `null`; every other requirement below SHALL be a no-op. When present and non-empty, `isActive` SHALL be `true` and the provider SHALL resolve the value against `useDeployments().items` via the existing `findDeploymentByIdOrReference` helper, exposing the match's `id` as `resolvedDeploymentId`. `isNotFound` SHALL be `true` only once `useDeployments()` has finished its initial load and no matching item was found; while deployments are still loading, `isNotFound` SHALL remain `false`.
 
@@ -45,22 +45,6 @@ On mount, the provider SHALL read the `isolated-model-id` query parameter once f
 #### Scenario: Override still applies when the id never resolves
 - **WHEN** isolated view is active and the id does not resolve to any deployment (`isNotFound: true`)
 - **THEN** the forced feature set is still applied — the not-found screen also renders without navigation or the conversations panel
-
-### Requirement: Isolated view hides the entire navigation component, not just the mobile sheet
-
-`TODO: remove in next release.` The `ui-feature-toggles` `hide-navigation-menu` key only ever governs the mobile hamburger button and `NavigationSheet` — its own requirement states it "SHALL NOT affect the desktop navigation rail." Since isolated view's old behavior hid navigation unconditionally on every viewport, `apps/chat/src/app/app.tsx` SHALL NOT render `<Navigation />` at all (desktop rail and mobile sheet both) whenever `useIsolatedModelView().isActive` is `true`, regardless of whether the id has resolved yet. This is a direct conditional render at the `<Navigation />` call site, not a new `OverlayFeature` key, since adding a permanent wire-protocol value for a temporary shim is out of proportion to the need.
-
-#### Scenario: Desktop rail is absent
-- **WHEN** isolated view is active and the viewport is desktop-width
-- **THEN** `Navigation` (including its logo, nav items, and user-menu footer) does not render at all
-
-#### Scenario: Mobile sheet and its trigger are absent
-- **WHEN** isolated view is active and the viewport is mobile-width
-- **THEN** no hamburger button or `NavigationSheet` renders (subsumes what `hide-navigation-menu` alone would have covered)
-
-#### Scenario: Navigation is hidden even before the deployment resolves
-- **WHEN** isolated view is active (`isActive: true`) but the deployment has not resolved yet
-- **THEN** `Navigation` still does not render — hiding it does not wait for resolution
 
 ### Requirement: Root route preselects the pinned deployment and shows a not-found state when unresolved
 
@@ -99,3 +83,41 @@ While `isActive` is `true` and `isNotFound` is `true`, `ConversationRoute` SHALL
 #### Scenario: Non-isolated conversation creation is unaffected
 - **WHEN** isolated view is not active
 - **THEN** `handleCreateConversation`/`handleStarterSelect` behave exactly as before this change — no rename call is made
+
+### Requirement: Isolated view hides the navigation and keeps the chats
+
+`TODO: remove in next release.` `SidebarNavigation` SHALL render the conversation block alone, without navigation items, the user menu or the Usage link, whenever `useIsolatedModelView().isActive` is `true`, regardless of whether the id has resolved yet. On mobile that is what the forced `hide-navigation-menu` already produces; on desktop `SidebarNavigation` reads `useIsolatedModelView()` itself, not a new `OverlayFeature` key, since adding a permanent wire-protocol value for a temporary shim is out of proportion to the need.
+
+#### Scenario: Desktop sidebar keeps only the chats
+- **WHEN** isolated view is active and the viewport is desktop-width
+- **THEN** `SidebarNavigation` renders its logo and the conversation block, with no nav items, user menu or Usage link
+
+#### Scenario: Mobile drawer holds the chats alone
+- **WHEN** isolated view is active and the viewport is mobile-width
+- **THEN** the header toggle opens a drawer that holds the conversation block and nothing else
+
+#### Scenario: Navigation is hidden even before the deployment resolves
+- **WHEN** isolated view is active (`isActive: true`) but the deployment has not resolved yet
+- **THEN** `SidebarNavigation` still shows the chats alone — dropping the navigation does not wait for resolution
+
+### Requirement: deployment-id is the non-isolating replacement and isolated view takes precedence
+
+The temporary `isolated-model-id` parameter (`TODO: remove in next release.`) is superseded for preselection by `deployment-id`, which selects a deployment without isolating the view (see the `url-entity-preselection` capability). The two parameters are independent: `IsolatedModelViewContext` SHALL keep reading only `isolated-model-id`, and `deployment-id` SHALL NOT activate isolated view or apply the isolated UI-feature override.
+
+When both are present on `/`, isolated view SHALL win: the pinned deployment is selected by the isolated branch, and the URL preselection does nothing — `deployment-id` is neither applied nor reported through any notification (including for an unknown id), and every URL parameter is left in the URL. Because isolated view disables the `skills` and `prompts` UI features, `skill-id` and `prompt-id` are likewise ignored while it is active. This combination is unsupported and exists only until isolated view is removed.
+
+#### Scenario: deployment-id does not activate isolated view
+
+- **WHEN** the URL is `/?deployment-id=<id>` without `isolated-model-id`
+- **THEN** `useIsolatedModelView()` returns `{ isActive: false, isNotFound: false, resolvedDeploymentId: null }` and navigation and agent picker stay visible
+
+#### Scenario: Both parameters present with a known deployment-id
+
+- **WHEN** the URL is `/?isolated-model-id=a&deployment-id=b` and both name known deployments
+- **THEN** deployment `a` is selected in isolated view and `b` is ignored
+- **AND** the URL is left as it is
+
+#### Scenario: Both parameters present with an unknown deployment-id
+
+- **WHEN** the URL is `/?isolated-model-id=a&deployment-id=missing`
+- **THEN** deployment `a` is selected and no "deployment not found" notification is shown

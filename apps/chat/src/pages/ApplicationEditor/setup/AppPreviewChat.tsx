@@ -4,6 +4,7 @@ import type {
 } from '@epam/ai-dial-chat-api-client';
 import {
   attachmentsToDtos,
+  DEFAULT_CHAT_SETTINGS,
   findDeploymentByIdOrReference,
   getApiErrorDetails,
   getConversationPath,
@@ -53,6 +54,7 @@ import { useSkillSelectorOverlay } from '../../../components/SkillSelector/useSk
 import StarterButtons from '../../../components/StarterButtons/StarterButtons';
 import {
   AppsEditorI18nKeys,
+  BasicI18nKeys,
   ButtonsI18nKeys,
   ChatI18nKeys,
   RateI18nKeys,
@@ -436,11 +438,7 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
 
       const createFromStarter = async () => {
         try {
-          await handleCreateConversation(text, [], {
-            responseFormat: ResponseFormat.Markdown,
-            systemPrompt: '',
-            temperature: 0.5,
-          });
+          await handleCreateConversation(text, [], DEFAULT_CHAT_SETTINGS);
         } catch (err) {
           const { message: errorMessage, traceId } =
             await getApiErrorDetails(err);
@@ -563,7 +561,7 @@ const AppPreviewChat: FC<Props> = ({ appId, appDisplayName, appIconUrl }) => {
         aria-label={t(AppsEditorI18nKeys.PreviewChatAriaLabel)}
         className="flex size-full items-center justify-center"
       >
-        <Spinner />
+        <Spinner ariaLabel={t(BasicI18nKeys.Loading)} />
       </div>
     );
   }

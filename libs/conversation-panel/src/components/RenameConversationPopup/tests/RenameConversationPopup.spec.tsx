@@ -16,7 +16,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RenameConversationPopupLabels } from '../../../models/rename-conversation-popup';
 import { RenameConversationPopup } from '../RenameConversationPopup';
 
-vi.mock('@epam/ai-dial-ui-kit', () => ({
+vi.mock('@epam/ai-dial-ui-kit', async () => ({
+  /* The real live region: a hand-rolled stub would hide its always-mounted markup. */
+  ...(await vi
+    .importActual<typeof import('@epam/ai-dial-ui-kit')>('@epam/ai-dial-ui-kit')
+    .then(({ LiveRegion, LiveRegionElement, LiveRegionPoliteness }) => ({
+      LiveRegion,
+      LiveRegionElement,
+      LiveRegionPoliteness,
+    }))),
   DIAL_KIT_ICON_STROKE: 1.5,
   PopupSize: { Sm: 'sm' },
   ButtonVariant: { Primary: 'primary', Neutral: 'neutral' },
@@ -73,15 +81,20 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       <input
         ref={inputRef}
         aria-label="Conversation title"
+        aria-describedby={error ? 'input-error' : undefined}
         value={value ?? ''}
         placeholder={placeholder}
         onChange={(e) => onChange?.(e.target.value)}
         onKeyDown={onKeyDown}
       />
-      {error && <p role="alert">{error}</p>}
+      {error && <p id="input-error">{error}</p>}
     </>
   ),
-  Spinner: () => <span role="status">Loading</span>,
+  Spinner: ({ ariaLabel }: { ariaLabel?: string }) => (
+    <span role="status" aria-label={ariaLabel ?? 'Loading'}>
+      Loading
+    </span>
+  ),
   DIAL_ICON_SIZE: { SM: 18, MD: 20 },
   GhostIconButton: ({
     icon,
@@ -203,7 +216,7 @@ describe('RenameConversationPopup', () => {
 
   it('replaces the fields and actions with a loader while isSaving is true', () => {
     render(<RenameConversationPopup {...DEFAULT_PROPS} isSaving={true} />);
-    expect(screen.getByRole('status')).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Saving' })).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(
       screen.queryByRole('button', { name: DEFAULT_LABELS.saveLabel }),
@@ -211,6 +224,36 @@ describe('RenameConversationPopup', () => {
     expect(
       screen.queryByRole('button', { name: DEFAULT_LABELS.cancelLabel }),
     ).toBeNull();
+  });
+
+  it('names the saving spinner with labels.savingLabel', () => {
+    render(
+      <RenameConversationPopup
+        {...DEFAULT_PROPS}
+        labels={{ ...DEFAULT_LABELS, savingLabel: 'Enregistrement' }}
+        isSaving={true}
+      />,
+    );
+    expect(screen.getByRole('status', { name: 'Enregistrement' })).toBeTruthy();
+  });
+
+  it('keeps the failure alert mounted while saving and fills it when the save fails', () => {
+    const { rerender } = render(
+      <RenameConversationPopup {...DEFAULT_PROPS} isSaving={true} />,
+    );
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toBe('');
+
+    rerender(
+      <RenameConversationPopup
+        {...DEFAULT_PROPS}
+        isSaving={false}
+        error="Failed to rename"
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toBe(alert);
+    expect(alert.textContent).toBe('Failed to rename');
   });
 
   it('Save button is enabled when value differs from currentTitle', async () => {
@@ -287,9 +330,9 @@ describe('RenameConversationPopup', () => {
   it('shows byte-length validation error when title exceeds 255 UTF-8 bytes', () => {
     render(<RenameConversationPopup {...DEFAULT_PROPS} currentTitle="" />);
     fireEvent.change(getInput(), { target: { value: 'a'.repeat(256) } });
-    expect(screen.getByRole('alert').textContent).toContain(
-      DEFAULT_LABELS.nameTooLongError,
-    );
+    expect(getInput().getAttribute('aria-describedby')).toBe('input-error');
+    expect(screen.getByText(DEFAULT_LABELS.nameTooLongError)).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toBe('');
   });
 
   it('byte-length error takes precedence over the error prop', () => {
@@ -301,12 +344,9 @@ describe('RenameConversationPopup', () => {
       />,
     );
     fireEvent.change(getInput(), { target: { value: 'a'.repeat(256) } });
-    expect(screen.getByRole('alert').textContent).toContain(
-      DEFAULT_LABELS.nameTooLongError,
-    );
-    expect(screen.getByRole('alert').textContent).not.toContain(
-      'API error message',
-    );
+    expect(getInput().getAttribute('aria-describedby')).toBe('input-error');
+    expect(screen.getByText(DEFAULT_LABELS.nameTooLongError)).toBeTruthy();
+    expect(screen.queryByText('API error message')).toBeNull();
   });
 
   it('does not render when isOpen is false', () => {

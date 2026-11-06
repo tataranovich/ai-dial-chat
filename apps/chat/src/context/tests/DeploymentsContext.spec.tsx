@@ -197,6 +197,19 @@ describe('DeploymentsContext', () => {
     });
   });
 
+  it('requests chat, MCP and custom-viewer deployments so viewer-only applications are listed', async () => {
+    const { result } = renderHook(() => useDeployments(), {
+      wrapper: DeploymentsProvider,
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(mockGetDeployments).toHaveBeenCalledWith([
+      'chat',
+      'mcp',
+      'custom_ui',
+    ]);
+  });
+
   it('sets selectedItemId to first item on successful load', async () => {
     const { result } = renderHook(() => useDeployments(), {
       wrapper: DeploymentsProvider,
@@ -243,9 +256,9 @@ describe('DeploymentsContext', () => {
         displayName: 'Z Agent',
         type: 'model' as const,
       };
-      const pgAgent = {
-        id: 'pg-agent',
-        displayName: 'PG Agent',
+      const mAgent = {
+        id: 'm-agent',
+        displayName: 'M Agent',
         type: 'model' as const,
       };
       const aAgent = {
@@ -254,9 +267,9 @@ describe('DeploymentsContext', () => {
         type: 'model' as const,
       };
       mockGetDeployments.mockResolvedValueOnce({
-        deployments: [zAgent, pgAgent, aAgent],
+        deployments: [zAgent, mAgent, aAgent],
       });
-      contextMocks.defaultDeploymentId = 'pg-agent';
+      contextMocks.defaultDeploymentId = 'm-agent';
 
       const { result } = renderHook(() => useDeployments(), {
         wrapper: DeploymentsProvider,
@@ -264,7 +277,7 @@ describe('DeploymentsContext', () => {
 
       await waitFor(() =>
         expect(result.current.items.map((item) => item.id)).toEqual([
-          'pg-agent',
+          'm-agent',
           'a-agent',
           'z-agent',
         ]),
@@ -732,6 +745,55 @@ describe('DeploymentsContext', () => {
     // State should not have updated after unmount (no error thrown)
     expect(result.current.isLoading).toBe(true);
     expect(result.current.items).toEqual([]);
+  });
+
+  describe('conversation restored before the catalog loads (#9275)', () => {
+    const loopAgent = {
+      id: 'applications/bucket/My%20Loop%20Agent__1.0',
+      reference: 'loop-agent-ref',
+      displayName: 'My Loop Agent',
+      type: 'application' as const,
+    };
+
+    const renderWithPendingCatalog = () => {
+      let resolveDeployments: (value: { deployments: unknown[] }) => void;
+      const pending = new Promise<{ deployments: unknown[] }>((resolve) => {
+        resolveDeployments = resolve;
+      });
+      mockGetDeployments.mockReturnValueOnce(
+        pending as ReturnType<typeof deploymentsApi.getDeployments>,
+      );
+      const view = renderHook(() => useDeployments(), {
+        wrapper: DeploymentsProvider,
+      });
+      const resolveCatalog = async () => {
+        await act(async () => {
+          resolveDeployments({ deployments: [mockItem1, loopAgent] });
+          await pending;
+        });
+        await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+      };
+      return { ...view, resolveCatalog };
+    };
+
+    it.each([
+      ['reference', loopAgent.reference],
+      ['raw, unencoded id', 'applications/bucket/My Loop Agent__1.0'],
+      ['catalog id', loopAgent.id],
+    ])(
+      'keeps the conversation agent addressed by its %s instead of falling back to the default',
+      async (_label, storedId) => {
+        contextMocks.defaultDeploymentId = mockItem1.id;
+        const { result, resolveCatalog } = renderWithPendingCatalog();
+
+        act(() => {
+          result.current.restoreSelectedItemId(storedId);
+        });
+        await resolveCatalog();
+
+        expect(result.current.selectedItemId).toBe(loopAgent.id);
+      },
+    );
   });
 
   it('resets selectedItemId when previously selected id is not in new items', async () => {

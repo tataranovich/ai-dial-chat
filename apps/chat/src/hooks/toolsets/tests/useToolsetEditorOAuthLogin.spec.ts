@@ -5,7 +5,12 @@ import {
   ToolsetCredentialsLevel,
   ToolsetOAuthResultType,
   WithLogin,
+  type ToolsetRedirectState,
 } from '@epam/ai-dial-chat-hooks';
+import {
+  decodeJsonFromBase64,
+  encodeJsonToBase64,
+} from '@epam/ai-dial-chat-shared';
 import {
   ToolsetOAuthLoginStatus,
   type ToolsetAuthFormData,
@@ -40,8 +45,9 @@ const makeFakePopup = () => {
 let capturedPopup: ReturnType<typeof makeFakePopup> | undefined;
 
 const readFlowId = () =>
-  JSON.parse(
-    capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ?? '{}',
+  decodeJsonFromBase64<ToolsetRedirectState>(
+    capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ??
+      encodeJsonToBase64({}),
   ).state as string;
 
 const postOAuthResult = (flowId: string, message: Record<string, unknown>) => {
@@ -59,6 +65,7 @@ const configuredAuth = (): ToolsetAuthFormData => ({
   authorizationEndpoint: 'https://auth.example.com/authorize',
   tokenEndpoint: 'https://auth.example.com/token',
   scopes: [],
+  resource: 'https://mcp.example.com/mcp',
 });
 
 /** OAuth "With Login" with no configured client — relies on Core's dynamic client registration. */
@@ -76,238 +83,355 @@ const runLogin = (
   return { promise: result.current({ auth, ensureSaved }), ensureSaved };
 };
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  capturedPopup = undefined;
-  Object.defineProperty(window, 'location', {
-    configurable: true,
-    value: { origin: 'http://localhost', href: 'http://localhost/' },
-  });
-  Object.defineProperty(window, 'open', {
-    configurable: true,
-    value: vi.fn(() => {
-      capturedPopup = makeFakePopup();
-      return capturedPopup;
-    }),
-  });
-});
-
-describe('useToolsetEditorOAuthLogin — configured client', () => {
-  it('opens a popup carrying the redirect state and navigates it to the authorize URL', async () => {
-    const { promise } = runLogin(configuredAuth());
-    await vi.waitFor(() => expect(capturedPopup).toBeDefined());
-
-    const state = JSON.parse(
-      capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ?? '{}',
-    );
-    expect(state.toolsetId).toBe(TOOLSET_ID);
-    expect(state.credentialsLevel).toBe(ToolsetCredentialsLevel.User);
-    expect(capturedPopup?.location.href).toContain(
-      'https://auth.example.com/authorize',
-    );
-
-    postOAuthResult(readFlowId(), {
-      type: ToolsetOAuthResultType.Success,
-      toolsetId: TOOLSET_ID,
-      credentialsLevel: ToolsetCredentialsLevel.User,
+describe('useToolsetEditorOAuthLogin', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedPopup = undefined;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost', href: 'http://localhost/' },
     });
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.Success,
+    Object.defineProperty(window, 'open', {
+      configurable: true,
+      value: vi.fn(() => {
+        capturedPopup = makeFakePopup();
+        return capturedPopup;
+      }),
     });
   });
 
-  it('reports a cancel without opening a popup when the save was abandoned', async () => {
-    const { promise } = runLogin(
-      configuredAuth(),
-      vi.fn().mockResolvedValue(false),
-    );
+  describe('useToolsetEditorOAuthLogin — configured client', () => {
+    it('opens a popup carrying the redirect state and navigates it to the authorize URL', async () => {
+      const { promise } = runLogin(configuredAuth());
+      await vi.waitFor(() => expect(capturedPopup).toBeDefined());
 
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.Cancelled,
+      const state = decodeJsonFromBase64<ToolsetRedirectState>(
+        capturedPopup?.sessionStorage.getItem(TOOLSET_REDIRECT_STATE_KEY) ??
+          encodeJsonToBase64({}),
+      );
+      expect(state.toolsetId).toBe(TOOLSET_ID);
+      expect(state.credentialsLevel).toBe(ToolsetCredentialsLevel.User);
+      expect(capturedPopup?.location.href).toContain(
+        'https://auth.example.com/authorize',
+      );
+
+      postOAuthResult(readFlowId(), {
+        type: ToolsetOAuthResultType.Success,
+        toolsetId: TOOLSET_ID,
+        credentialsLevel: ToolsetCredentialsLevel.User,
+      });
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Success,
+      });
     });
-    expect(window.open).not.toHaveBeenCalled();
+
+    it('reports a cancel without opening a popup when the save was abandoned', async () => {
+      const { promise } = runLogin(
+        configuredAuth(),
+        vi.fn().mockResolvedValue(false),
+      );
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Cancelled,
+      });
+      expect(window.open).not.toHaveBeenCalled();
+    });
+
+    it('reports an unusable configuration when the authorization endpoint is missing', async () => {
+      const { promise } = runLogin({
+        ...configuredAuth(),
+        authorizationEndpoint: '',
+      });
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.InvalidConfig,
+      });
+      expect(window.open).not.toHaveBeenCalled();
+    });
+
+    it('reports a blocked popup', async () => {
+      vi.mocked(window.open).mockReturnValueOnce(null);
+
+      const { promise } = runLogin(configuredAuth());
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.PopupBlocked,
+      });
+    });
+
+    it('reports a failed authorization', async () => {
+      const { promise } = runLogin(configuredAuth());
+      await vi.waitFor(() => expect(capturedPopup).toBeDefined());
+
+      postOAuthResult(readFlowId(), {
+        type: ToolsetOAuthResultType.Failure,
+        toolsetId: TOOLSET_ID,
+        credentialsLevel: ToolsetCredentialsLevel.User,
+      });
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Failed,
+      });
+    });
+
+    it('recovers a login that completed server-side but was reported as cancelled', async () => {
+      vi.mocked(fetchToolsetAuthSettings).mockResolvedValue({
+        ...configuredAuth(),
+        isLoggedIn: true,
+      });
+
+      const { promise } = runLogin(configuredAuth());
+      await vi.waitFor(() => expect(capturedPopup).toBeDefined());
+      if (capturedPopup) capturedPopup.closed = true;
+      /* A closed popup is noticed when the opener regains focus, not by polling. */
+      window.dispatchEvent(new Event('focus'));
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Success,
+      });
+    });
+
+    it('reports a genuine cancel when the backend confirms no session', async () => {
+      vi.mocked(fetchToolsetAuthSettings).mockResolvedValue(configuredAuth());
+
+      const { promise } = runLogin(configuredAuth());
+      await vi.waitFor(() => expect(capturedPopup).toBeDefined());
+      if (capturedPopup) capturedPopup.closed = true;
+      /* A closed popup is noticed when the opener regains focus, not by polling. */
+      window.dispatchEvent(new Event('focus'));
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Cancelled,
+      });
+    });
   });
 
-  it('reports an unusable configuration when the authorization endpoint is missing', async () => {
-    const { promise } = runLogin({
+  describe('useToolsetEditorOAuthLogin — configured client without a resource', () => {
+    const STORED_RESOURCE = 'https://mcp.example.com/mcp';
+    const blankResourceAuth = (): ToolsetAuthFormData => ({
       ...configuredAuth(),
-      authorizationEndpoint: '',
+      resource: '',
     });
 
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.InvalidConfig,
+    it('opens the popup before saving, then authorizes with the resource Core stored', async () => {
+      let releaseSave: (id: string) => void = () => {
+        /* replaced synchronously below */
+      };
+      const ensureSaved = vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            releaseSave = resolve;
+          }),
+      );
+      vi.mocked(fetchToolsetAuthSettings).mockResolvedValue({
+        ...blankResourceAuth(),
+        clientSecret: undefined,
+        resource: STORED_RESOURCE,
+      });
+
+      const { result } = renderHook(() => useToolsetEditorOAuthLogin());
+      const promise = result.current({
+        auth: blankResourceAuth(),
+        ensureSaved,
+      });
+
+      expect(capturedPopup).toBeDefined();
+      expect(capturedPopup?.location.href).toBe('');
+
+      releaseSave(TOOLSET_ID);
+      await vi.waitFor(() =>
+        expect(capturedPopup?.location.href).toContain('client_id=client-id'),
+      );
+      expect(fetchToolsetAuthSettings).toHaveBeenCalledWith(TOOLSET_ID);
+      expect(
+        new URL(capturedPopup?.location.href ?? '').searchParams.get(
+          'resource',
+        ),
+      ).toBe(STORED_RESOURCE);
+
+      postOAuthResult(readFlowId(), {
+        type: ToolsetOAuthResultType.Success,
+        toolsetId: TOOLSET_ID,
+        credentialsLevel: ToolsetCredentialsLevel.User,
+      });
+
+      /* Only the resource comes back, so the typed client secret survives. */
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Success,
+        auth: { resource: STORED_RESOURCE },
+      });
     });
-    expect(window.open).not.toHaveBeenCalled();
+
+    it('authorizes without a resource when Core stored none', async () => {
+      vi.mocked(fetchToolsetAuthSettings).mockResolvedValue({
+        ...blankResourceAuth(),
+        resource: '',
+      });
+
+      const { promise } = runLogin(blankResourceAuth());
+      await vi.waitFor(() =>
+        expect(capturedPopup?.location.href).toContain('client_id=client-id'),
+      );
+      expect(
+        new URL(capturedPopup?.location.href ?? '').searchParams.has(
+          'resource',
+        ),
+      ).toBe(false);
+
+      postOAuthResult(readFlowId(), {
+        type: ToolsetOAuthResultType.Failure,
+        reason: 'denied',
+      });
+      await expect(promise).resolves.toMatchObject({
+        status: ToolsetOAuthLoginStatus.Failed,
+      });
+    });
+
+    it('closes the popup and reports the trace id when the stored settings cannot be read', async () => {
+      vi.mocked(fetchToolsetAuthSettings).mockRejectedValue(new Error('boom'));
+
+      const { promise } = runLogin(blankResourceAuth());
+
+      await expect(promise).resolves.toMatchObject({
+        status: ToolsetOAuthLoginStatus.Failed,
+      });
+      expect(capturedPopup?.close).toHaveBeenCalledOnce();
+    });
+
+    it('skips the extra read when the resource field is filled', async () => {
+      const { promise } = runLogin(configuredAuth());
+      await vi.waitFor(() =>
+        expect(capturedPopup?.location.href).toContain(
+          'resource=https%3A%2F%2Fmcp.example.com%2Fmcp',
+        ),
+      );
+      expect(fetchToolsetAuthSettings).not.toHaveBeenCalled();
+
+      postOAuthResult(readFlowId(), {
+        type: ToolsetOAuthResultType.Success,
+        toolsetId: TOOLSET_ID,
+        credentialsLevel: ToolsetCredentialsLevel.User,
+      });
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Success,
+      });
+    });
   });
 
-  it('reports a blocked popup', async () => {
-    vi.mocked(window.open).mockReturnValueOnce(null);
+  describe('useToolsetEditorOAuthLogin — dynamic client registration', () => {
+    it('opens the popup before the save resolves, then authorizes with the Core-issued client', async () => {
+      let releaseSave: (id: string) => void = () => {
+        /* replaced synchronously below */
+      };
+      const ensureSaved = vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            releaseSave = resolve;
+          }),
+      );
+      const registeredAuth = {
+        ...configuredAuth(),
+        clientId: 'dcr-client-id',
+      };
+      vi.mocked(fetchToolsetAuthSettings).mockResolvedValue(registeredAuth);
 
-    const { promise } = runLogin(configuredAuth());
+      const { result } = renderHook(() => useToolsetEditorOAuthLogin());
+      const promise = result.current({ auth: dynamicAuth(), ensureSaved });
 
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.PopupBlocked,
+      /* The popup must already exist while the persist call is still pending. */
+      expect(capturedPopup).toBeDefined();
+      expect(capturedPopup?.location.href).toBe('');
+
+      releaseSave(TOOLSET_ID);
+      await vi.waitFor(() =>
+        expect(capturedPopup?.location.href).toContain(
+          'client_id=dcr-client-id',
+        ),
+      );
+
+      postOAuthResult(readFlowId(), {
+        type: ToolsetOAuthResultType.Success,
+        toolsetId: TOOLSET_ID,
+        credentialsLevel: ToolsetCredentialsLevel.User,
+      });
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Success,
+        auth: registeredAuth,
+      });
+    });
+
+    it('closes the popup and reports a cancel when persisting is abandoned', async () => {
+      const { promise } = runLogin(
+        dynamicAuth(),
+        vi.fn().mockResolvedValue(false),
+      );
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.Cancelled,
+      });
+      expect(capturedPopup?.close).toHaveBeenCalledOnce();
+    });
+
+    it('closes the popup and reports a failure when the client cannot be read back', async () => {
+      vi.mocked(fetchToolsetAuthSettings).mockRejectedValue(new Error('boom'));
+
+      const { promise } = runLogin(dynamicAuth());
+
+      await expect(promise).resolves.toMatchObject({
+        status: ToolsetOAuthLoginStatus.Failed,
+      });
+      expect(capturedPopup?.close).toHaveBeenCalledOnce();
+    });
+
+    it('never opens the flow when the popup is blocked, leaving the toolset unsaved', async () => {
+      vi.mocked(window.open).mockReturnValueOnce(null);
+      const ensureSaved = vi.fn();
+
+      const { promise } = runLogin(dynamicAuth(), ensureSaved);
+
+      await expect(promise).resolves.toEqual({
+        status: ToolsetOAuthLoginStatus.PopupBlocked,
+      });
+      expect(ensureSaved).not.toHaveBeenCalled();
+    });
+
+    it('skips the extra read and reuses an already-known client', async () => {
+      const { promise } = runLogin({
+        ...configuredAuth(),
+        withLogin: WithLogin.WithLogin,
+      });
+      await vi.waitFor(() => expect(capturedPopup).toBeDefined());
+
+      expect(fetchToolsetAuthSettings).not.toHaveBeenCalled();
+      expect(capturedPopup?.location.href).toContain(
+        'https://auth.example.com/authorize',
+      );
+
+      postOAuthResult(readFlowId(), {
+        type: ToolsetOAuthResultType.Success,
+        toolsetId: TOOLSET_ID,
+        credentialsLevel: ToolsetCredentialsLevel.User,
+      });
+      await promise;
     });
   });
 
-  it('reports a failed authorization', async () => {
-    const { promise } = runLogin(configuredAuth());
-    await vi.waitFor(() => expect(capturedPopup).toBeDefined());
+  describe('useToolsetEditorOAuthLogin — callback route', () => {
+    it('authorizes against the app-owned callback route', async () => {
+      const { promise } = runLogin(configuredAuth());
+      await vi.waitFor(() => expect(capturedPopup).toBeDefined());
 
-    postOAuthResult(readFlowId(), {
-      type: ToolsetOAuthResultType.Failure,
-      toolsetId: TOOLSET_ID,
-      credentialsLevel: ToolsetCredentialsLevel.User,
+      expect(capturedPopup?.location.href).toContain(
+        encodeURIComponent(ROUTES.ToolsetSignIn),
+      );
+
+      postOAuthResult(readFlowId(), {
+        type: ToolsetOAuthResultType.Success,
+        toolsetId: TOOLSET_ID,
+        credentialsLevel: ToolsetCredentialsLevel.User,
+      });
+      await promise;
     });
-
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.Failed,
-    });
-  });
-
-  it('recovers a login that completed server-side but was reported as cancelled', async () => {
-    vi.mocked(fetchToolsetAuthSettings).mockResolvedValue({
-      ...configuredAuth(),
-      isLoggedIn: true,
-    });
-
-    const { promise } = runLogin(configuredAuth());
-    await vi.waitFor(() => expect(capturedPopup).toBeDefined());
-    if (capturedPopup) capturedPopup.closed = true;
-    /* A closed popup is noticed when the opener regains focus, not by polling. */
-    window.dispatchEvent(new Event('focus'));
-
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.Success,
-    });
-  });
-
-  it('reports a genuine cancel when the backend confirms no session', async () => {
-    vi.mocked(fetchToolsetAuthSettings).mockResolvedValue(configuredAuth());
-
-    const { promise } = runLogin(configuredAuth());
-    await vi.waitFor(() => expect(capturedPopup).toBeDefined());
-    if (capturedPopup) capturedPopup.closed = true;
-    /* A closed popup is noticed when the opener regains focus, not by polling. */
-    window.dispatchEvent(new Event('focus'));
-
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.Cancelled,
-    });
-  });
-});
-
-describe('useToolsetEditorOAuthLogin — dynamic client registration', () => {
-  it('opens the popup before the save resolves, then authorizes with the Core-issued client', async () => {
-    let releaseSave: (id: string) => void = () => {
-      /* replaced synchronously below */
-    };
-    const ensureSaved = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          releaseSave = resolve;
-        }),
-    );
-    const registeredAuth = {
-      ...configuredAuth(),
-      clientId: 'dcr-client-id',
-    };
-    vi.mocked(fetchToolsetAuthSettings).mockResolvedValue(registeredAuth);
-
-    const { result } = renderHook(() => useToolsetEditorOAuthLogin());
-    const promise = result.current({ auth: dynamicAuth(), ensureSaved });
-
-    /* The popup must already exist while the persist call is still pending. */
-    expect(capturedPopup).toBeDefined();
-    expect(capturedPopup?.location.href).toBe('');
-
-    releaseSave(TOOLSET_ID);
-    await vi.waitFor(() =>
-      expect(capturedPopup?.location.href).toContain('client_id=dcr-client-id'),
-    );
-
-    postOAuthResult(readFlowId(), {
-      type: ToolsetOAuthResultType.Success,
-      toolsetId: TOOLSET_ID,
-      credentialsLevel: ToolsetCredentialsLevel.User,
-    });
-
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.Success,
-      auth: registeredAuth,
-    });
-  });
-
-  it('closes the popup and reports a cancel when persisting is abandoned', async () => {
-    const { promise } = runLogin(
-      dynamicAuth(),
-      vi.fn().mockResolvedValue(false),
-    );
-
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.Cancelled,
-    });
-    expect(capturedPopup?.close).toHaveBeenCalledOnce();
-  });
-
-  it('closes the popup and reports a failure when the client cannot be read back', async () => {
-    vi.mocked(fetchToolsetAuthSettings).mockRejectedValue(new Error('boom'));
-
-    const { promise } = runLogin(dynamicAuth());
-
-    await expect(promise).resolves.toMatchObject({
-      status: ToolsetOAuthLoginStatus.Failed,
-    });
-    expect(capturedPopup?.close).toHaveBeenCalledOnce();
-  });
-
-  it('never opens the flow when the popup is blocked, leaving the toolset unsaved', async () => {
-    vi.mocked(window.open).mockReturnValueOnce(null);
-    const ensureSaved = vi.fn();
-
-    const { promise } = runLogin(dynamicAuth(), ensureSaved);
-
-    await expect(promise).resolves.toEqual({
-      status: ToolsetOAuthLoginStatus.PopupBlocked,
-    });
-    expect(ensureSaved).not.toHaveBeenCalled();
-  });
-
-  it('skips the extra read and reuses an already-known client', async () => {
-    const { promise } = runLogin({
-      ...configuredAuth(),
-      withLogin: WithLogin.WithLogin,
-    });
-    await vi.waitFor(() => expect(capturedPopup).toBeDefined());
-
-    expect(fetchToolsetAuthSettings).not.toHaveBeenCalled();
-    expect(capturedPopup?.location.href).toContain(
-      'https://auth.example.com/authorize',
-    );
-
-    postOAuthResult(readFlowId(), {
-      type: ToolsetOAuthResultType.Success,
-      toolsetId: TOOLSET_ID,
-      credentialsLevel: ToolsetCredentialsLevel.User,
-    });
-    await promise;
-  });
-});
-
-describe('useToolsetEditorOAuthLogin — callback route', () => {
-  it('authorizes against the app-owned callback route', async () => {
-    const { promise } = runLogin(configuredAuth());
-    await vi.waitFor(() => expect(capturedPopup).toBeDefined());
-
-    expect(capturedPopup?.location.href).toContain(
-      encodeURIComponent(ROUTES.ToolsetSignIn),
-    );
-
-    postOAuthResult(readFlowId(), {
-      type: ToolsetOAuthResultType.Success,
-      toolsetId: TOOLSET_ID,
-      credentialsLevel: ToolsetCredentialsLevel.User,
-    });
-    await promise;
   });
 });

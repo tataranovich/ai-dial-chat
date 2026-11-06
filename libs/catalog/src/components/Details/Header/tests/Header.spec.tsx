@@ -19,7 +19,38 @@ import {
 import { Header } from '../Header';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  DropdownOverlayRole: { Menu: 'menu', Dialog: 'dialog', None: 'none' },
+  LiveRegionPoliteness: { Polite: 'polite', Assertive: 'assertive' },
+  LiveRegionElement: { Div: 'div', Span: 'span', P: 'p' },
+  LiveRegion: ({
+    politeness = 'polite',
+    visuallyHidden,
+    as: Tag = 'div',
+    atomic,
+    className,
+    children,
+    ...rest
+  }: {
+    politeness?: string;
+    visuallyHidden?: boolean;
+    as?: 'div' | 'span' | 'p';
+    atomic?: boolean;
+  } & React.HTMLAttributes<HTMLElement>) => (
+    <Tag
+      {...rest}
+      role={politeness === 'assertive' ? 'alert' : 'status'}
+      aria-live={politeness as 'polite' | 'assertive'}
+      aria-atomic={atomic}
+      className={visuallyHidden ? 'sr-only' : className}
+    >
+      {children}
+    </Tag>
+  ),
   DIAL_KIT_ICON_STROKE: 1.5,
+  CaptionText: ({ id, text }: { id?: string; text?: string }) =>
+    text ? <span id={id}>{text}</span> : null,
+  ErrorText: ({ text }: { text?: string }) =>
+    text ? <span>{text}</span> : null,
   DIAL_ICON_SIZE: { SM: 16, MD: 20, LG: 24 },
   Spinner: () => <svg />,
   FolderPath: () => <div />,
@@ -117,8 +148,12 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     open,
     onOpenChange,
     renderOverlay,
+    overlayRole,
+    overlayAriaLabel,
   }: {
     children: ReactElement<{ onClick?: () => void }>;
+    overlayRole?: string;
+    overlayAriaLabel?: string;
     items?: Array<{
       key: string;
       label: ReactNode;
@@ -149,7 +184,15 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
               {item.label}
             </button>
           ))}
-        {isOpen && renderOverlay?.()}
+        {isOpen &&
+          renderOverlay &&
+          (overlayRole === 'dialog' ? (
+            <div role="dialog" aria-label={overlayAriaLabel}>
+              {renderOverlay()}
+            </div>
+          ) : (
+            renderOverlay()
+          ))}
       </div>
     );
   },
@@ -175,11 +218,14 @@ vi.mock('@epam/ai-dial-chat-shared', async (importOriginal) => ({
   EntityHeader: ({
     item,
     statusBadge,
+    typeLabel,
   }: {
     item: CatalogItem;
     statusBadge?: ReactNode;
+    typeLabel?: string;
   }) => (
     <div>
+      <span>{typeLabel ?? item.type}</span>
       {item.name}
       {statusBadge}
     </div>
@@ -192,10 +238,16 @@ vi.mock('../ShareButton/ShareButton', () => ({
 }));
 vi.mock('../CredentialsApiKeyOverlay/CredentialsApiKeyOverlay', () => ({
   CredentialsApiKeyOverlay: ({
+    level,
     status,
   }: {
+    level: 'USER' | 'GLOBAL';
     status?: 'SIGNED_IN' | 'SIGNED_OUT' | 'FAILED';
-  }) => <div>{status === 'SIGNED_IN' ? 'Delete' : 'Add'} popover content</div>,
+  }) => (
+    <div>
+      {status === 'SIGNED_IN' ? 'Delete' : 'Add'} {level} popover content
+    </div>
+  ),
 }));
 
 const makeItem = (type: CatalogEntityType): CatalogItem => ({
@@ -225,6 +277,24 @@ const openManageIfPresent = async () => {
 };
 
 describe('Header', () => {
+  it('shows the host-supplied type label for the item type', () => {
+    render(
+      <Header
+        item={makeItem(CatalogEntityType.Toolset)}
+        texts={{ entityTypeLabels: { [CatalogEntityType.Toolset]: 'Toolset' } }}
+      />,
+    );
+
+    expect(screen.getByText('Toolset')).toBeTruthy();
+    expect(screen.queryByText(CatalogEntityType.Toolset)).toBeNull();
+  });
+
+  it('keeps the raw type without a label for it', () => {
+    render(<Header item={makeItem(CatalogEntityType.Model)} />);
+
+    expect(screen.getByText(CatalogEntityType.Model)).toBeTruthy();
+  });
+
   it('renders Use in chat for a Model item', () => {
     render(<Header item={makeItem(CatalogEntityType.Model)} />);
     expect(screen.getByRole('button', { name: 'Use in chat' })).toBeTruthy();
@@ -394,12 +464,12 @@ describe('Header', () => {
   });
 
   /*
-   * [#8691](https://github.com/epam/ai-dial-chat/issues/8691): a published copy under `public/` has no owner-side entries at
-   * all, so its Manage menu is empty until the publish-history lookup that
-   * produces Unpublish resolves — and that lookup is started by reaching for
-   * this very trigger. A hidden trigger left the copy permanently unactionable.
+   * [#9500](https://github.com/epam/ai-dial-chat/issues/9500): a published
+   * copy's history is resolved up front by the panel, so the Manage slot waits
+   * for it rather than showing a speculative trigger that vanishes once the
+   * lookup says the caller may not unpublish.
    */
-  describe('Manage trigger while the unpublish lookup is outstanding', () => {
+  describe('Manage slot while the unpublish lookup is outstanding', () => {
     const renderPublishedCopy = (
       props?: Partial<ComponentProps<typeof Header>>,
     ) =>
@@ -414,18 +484,27 @@ describe('Header', () => {
         />,
       );
 
-    it('renders the trigger for an item the host says is unpublishable', () => {
+    it('renders no trigger for an item the host says is unpublishable', () => {
       renderPublishedCopy();
-      expect(screen.getByRole('button', { name: 'Manage' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
     });
 
-    it('starts the lookup when the trigger is hovered', async () => {
-      const onRequestPublishHistory = vi.fn();
-      renderPublishedCopy({ onRequestPublishHistory });
+    it('withholds the other Manage entries too until the lookup settles', () => {
+      renderPublishedCopy({ onDownload: vi.fn() });
 
-      await userEvent.hover(screen.getByRole('button', { name: 'Manage' }));
+      expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+    });
 
-      expect(onRequestPublishHistory).toHaveBeenCalled();
+    it('shows the remaining entry once the lookup settles with no folder', () => {
+      renderPublishedCopy({
+        onDownload: vi.fn(),
+        isPublishHistoryResolved: true,
+        hasPublishedFolders: false,
+      });
+
+      expect(screen.getByRole('button', { name: 'Download' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Unpublish' })).toBeNull();
     });
 
     it('shows Unpublish once the lookup resolves to a folder', () => {
@@ -694,6 +773,8 @@ describe('Header — Download as primary action', () => {
         onDownload={onDownload}
       />,
     );
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('');
 
     await userEvent.click(screen.getByRole('button', { name: 'Download' }));
 
@@ -702,7 +783,8 @@ describe('Header — Download as primary action', () => {
     }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.getAttribute('aria-busy')).toBe('true');
-    expect(screen.getByRole('status').textContent).toBe('Downloading');
+    expect(screen.getByRole('status')).toBe(status);
+    expect(status.textContent).toBe('Downloading');
 
     resolveDownload();
     await waitFor(() =>
@@ -1413,12 +1495,29 @@ describe('Header', () => {
       expect(onOpenCredentialsManagement).toHaveBeenCalledOnce();
     });
 
-    it('calls onLogin directly at USER level when Log in is clicked', async () => {
+    it('calls onLogin directly at GLOBAL level when Log in is clicked on a private toolset', async () => {
       const onLogin = vi.fn();
       const item = {
         ...makeItem(CatalogEntityType.Toolset),
         credentials: {
           authenticationType: ToolsetAuthenticationType.OAuth,
+          userStatus: CredentialStatus.SignedOut,
+        },
+      };
+      render(<Header item={item} onLogin={onLogin} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Log in' }));
+      expect(onLogin).toHaveBeenCalledWith(item, {
+        level: CredentialsLevel.Global,
+      });
+    });
+
+    it('calls onLogin directly at USER level when Log in is clicked on a public toolset', async () => {
+      const onLogin = vi.fn();
+      const item = {
+        ...makeItem(CatalogEntityType.Toolset),
+        credentials: {
+          authenticationType: ToolsetAuthenticationType.OAuth,
+          isPublic: true,
           userStatus: CredentialStatus.SignedOut,
         },
       };
@@ -1575,7 +1674,25 @@ describe('Header', () => {
       );
       await userEvent.click(screen.getByRole('button', { name: 'API key' }));
       expect(onLogin).not.toHaveBeenCalled();
-      expect(screen.getByText('Add popover content')).toBeTruthy();
+      expect(screen.getByText('Add GLOBAL popover content')).toBeTruthy();
+    });
+
+    it('opens the API key popover as a dialog named by its title', async () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              userStatus: CredentialStatus.SignedOut,
+            },
+          }}
+          onLogin={vi.fn()}
+          texts={{ personalApiKeyPanelTitle: 'Your API key' }}
+        />,
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'API key' }));
+      expect(screen.getByRole('dialog', { name: 'Your API key' })).toBeTruthy();
     });
 
     it('opens the popover showing the delete affordance when already signed in', async () => {
@@ -1594,7 +1711,43 @@ describe('Header', () => {
       await userEvent.click(
         screen.getByRole('button', { name: 'Change API key' }),
       );
-      expect(screen.getByText('Delete popover content')).toBeTruthy();
+      expect(screen.getByText('Delete USER popover content')).toBeTruthy();
+    });
+
+    it("manages the owner's GLOBAL key in the popover of a private toolset signed in globally", async () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              globalStatus: CredentialStatus.SignedIn,
+            },
+          }}
+          onLogout={vi.fn()}
+        />,
+      );
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Change API key' }),
+      );
+      expect(screen.getByText('Delete GLOBAL popover content')).toBeTruthy();
+    });
+
+    it('adds a personal USER key in the popover of a public toolset', async () => {
+      render(
+        <Header
+          item={{
+            ...makeItem(CatalogEntityType.Toolset),
+            credentials: {
+              authenticationType: ToolsetAuthenticationType.ApiKey,
+              isPublic: true,
+            },
+          }}
+          onLogin={vi.fn()}
+        />,
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'API key' }));
+      expect(screen.getByText('Add USER popover content')).toBeTruthy();
     });
 
     it('renders Manage API keys when isManageableByAdmin is true', () => {
@@ -1634,7 +1787,7 @@ describe('Header', () => {
         screen.getByRole('button', { name: 'Manage API keys' }),
       );
       expect(onOpenCredentialsManagement).toHaveBeenCalledOnce();
-      expect(screen.queryByText('Add popover content')).toBeNull();
+      expect(screen.queryByText(/popover content/)).toBeNull();
     });
   });
 
@@ -2031,7 +2184,7 @@ describe('Header — the last action standing', () => {
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
   });
 
-  it('holds the overflow menu for an item whose Unpublish entry resolves lazily', () => {
+  it('holds back the Manage slot for an item whose Unpublish entry is still resolving', () => {
     render(
       <Header
         item={{ ...makeItem(CatalogEntityType.Agent), isMyApp: false }}
@@ -2042,7 +2195,7 @@ describe('Header — the last action standing', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Manage' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
   });
 

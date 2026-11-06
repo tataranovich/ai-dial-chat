@@ -6,12 +6,14 @@ import { AppConfigModule } from '../app-config/app-config.module';
 import { ApplicationSchemasModule } from '../application-schemas/application-schemas.module';
 import { ApplicationsModule } from '../applications/applications.module';
 import { AuthModule } from '../auth/auth.module';
+import { CelebrationsModule } from '../celebrations/celebrations.module';
 import { ChatModule } from '../chat/chat.module';
 import { ClientChannelModule } from '../client-channel/client-channel.module';
 import { MetricsInterceptor } from '../common/interceptors/metrics.interceptor';
 import { validate } from '../config/validation';
 import { ConversationModule } from '../conversations/conversation.module';
 import { CustomApiModule } from '../custom-api/custom-api.module';
+import { DeploymentRouteModule } from '../deployment-route/deployment-route.module';
 import { DeploymentsModule } from '../deployments/deployments.module';
 import { DialCoreModule } from '../dial/dial-core.module';
 import { ExternalServicesModule } from '../external-services/external-services.module';
@@ -19,6 +21,7 @@ import { FilesModule } from '../files/files.module';
 import { HealthController } from '../health/health.controller';
 import { ModelsModule } from '../models/models.module';
 import { OfflineCredentialsModule } from '../offline-credentials/offline-credentials.module';
+import { ProjectsModule } from '../projects/projects.module';
 import { PromptModule } from '../prompts/prompt.module';
 import { PublishModule } from '../publish/publish.module';
 import { RateModule } from '../rate/rate.module';
@@ -63,13 +66,16 @@ import { createAppCacheOptions } from './cache.config';
     RateModule,
     TranscriptionModule,
     ThemesModule,
+    CelebrationsModule,
     ShareModule,
     PublishModule,
     ScheduledTasksModule,
+    ProjectsModule,
     OfflineCredentialsModule,
     SkillsModule,
     TextRefinementModule,
     CustomApiModule,
+    DeploymentRouteModule,
   ],
   controllers: [AppController, HealthController],
   providers: [

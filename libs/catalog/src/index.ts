@@ -11,9 +11,11 @@ export * from './entry-points/mapping';
 export { CodeLanguage } from './types/code-language';
 export { CatalogDetailsTab } from './types/detail-tab';
 export { CatalogLimitStatus } from './models/item-details-data';
+export { CatalogPricingUnit } from './types/pricing-unit';
 export { DetailsConfirmationKind } from './types/details-confirmation';
 export { DeploymentSize } from './types/deployment-icon-size';
 export { CatalogViewMode } from './types/view-mode';
+export { CatalogSelectionMode } from './types/selection-mode';
 export { LimitRowLayout } from './types/limit-row-layout';
 export {
   CatalogContentNodeType,
@@ -25,12 +27,14 @@ export type {
   CatalogCreateSearch,
   CatalogEmptyStateContext,
   CatalogProps,
+  CatalogTabCreateMenu,
   CatalogTitles,
 } from './models/catalog-props';
 export type {
   CatalogColors,
   CatalogStyles,
   CatalogTypography,
+  CreateMenuColors,
 } from './models/catalog-styles';
 export type { EndpointOption } from './models/item-details-data';
 export type {
@@ -56,6 +60,7 @@ export type {
   ToolAnnotation,
   ToolDefinition,
   ToolInputParam,
+  ToolsLabels,
   UsageLimitGroup,
   UsageLimitProgressRow,
   UsageLimitRow,
@@ -80,6 +85,7 @@ export { Catalog } from './components/Catalog/Catalog';
 
 export { Toolbar } from './components/Toolbar/Toolbar';
 export type {
+  BrowseSettingsSheetLabels,
   ToolbarColors,
   ToolbarProps,
   ToolbarStyles,
@@ -116,6 +122,7 @@ export type {
 export { ListView } from './components/ListView/ListView';
 export type {
   ListViewColors,
+  ListViewHandle,
   ListViewProps,
   ListViewStyles,
   ListViewTypography,
@@ -130,6 +137,27 @@ export type { FavoriteCardProps } from './components/Favorites/FavoriteCard';
 
 export { Filter } from './components/Filter/Filter';
 export type { FilterColors, FilterProps } from './components/Filter/Filter';
+export { CatalogPickerModal } from './components/CatalogPickerModal/CatalogPickerModal';
+export { AddOnCatalogModal } from './components/AddOnCatalogModal/AddOnCatalogModal';
+export type {
+  AddOnCatalogListProps,
+  AddOnCatalogModalLabels,
+  AddOnCatalogModalProps,
+} from './components/AddOnCatalogModal/AddOnCatalogModal';
+export { AddOnListItem } from './components/AddOnListItem/AddOnListItem';
+export type {
+  AddOnListItemColors,
+  AddOnListItemLabels,
+  AddOnListItemProps,
+} from './components/AddOnListItem/AddOnListItem';
+export { useListRemoveFocus } from './utils/use-list-remove-focus';
+export type {
+  CatalogPickerListProps,
+  CatalogPickerModalColors,
+  CatalogPickerModalLabels,
+  CatalogPickerModalProps,
+} from './components/CatalogPickerModal/CatalogPickerModal';
+export { CatalogLoadStatus } from './types/load-status';
 
 export { TopicTag } from './components/TopicTag/TopicTag';
 export type {
@@ -149,6 +177,32 @@ export type { ContentTabProps } from './components/Details/TabsContent/Content';
 export { LimitsTab } from './components/Details/TabsContent/Limits/Limits';
 export type { LimitsTabColors, LimitsTabProps } from './models/limits-props';
 
+// The remaining details tabs, for hosts that render a catalog item's details
+// in their own surface instead of `DetailsPanel`. Public names follow the
+// `ContentTab`/`LimitsTab` convention; the internal components keep theirs.
+export { AboutTab } from './components/Details/TabsContent/About';
+export type { AboutTabProps } from './components/Details/TabsContent/About';
+export { Overview as OverviewTab } from './components/Details/TabsContent/Overview';
+export type { OverviewProps as OverviewTabProps } from './components/Details/TabsContent/Overview';
+export { Pricing as PricingTab } from './components/Details/TabsContent/Pricing';
+export type { PricingProps as PricingTabProps } from './components/Details/TabsContent/Pricing';
+export { Tools as ToolsTab } from './components/Details/TabsContent/Tools/Tools';
+export type { ToolsProps as ToolsTabProps } from './components/Details/TabsContent/Tools/Tools';
+
+// The Connect tab, the details header and the toolset credentials views, for
+// the same hosts. `ApiTab` follows the tab naming; `DetailsHeader` avoids a
+// bare `Header` at the package root.
+export { ApiDetails as ApiTab } from './components/Details/ApiDetails';
+export type { ApiDetailsProps as ApiTabProps } from './components/Details/ApiDetails';
+export { Header as DetailsHeader } from './components/Details/Header/Header';
+export type { HeaderProps as DetailsHeaderProps } from './components/Details/Header/Header';
+export { CredentialsBanner } from './components/Details/Credentials/CredentialsBanner/CredentialsBanner';
+export type { CredentialsBannerProps } from './components/Details/Credentials/CredentialsBanner/CredentialsBanner';
+export { CredentialsApiKeyOverlay } from './components/Details/Header/CredentialsApiKeyOverlay/CredentialsApiKeyOverlay';
+export type { CredentialsApiKeyOverlayProps } from './components/Details/Header/CredentialsApiKeyOverlay/CredentialsApiKeyOverlay';
+export { CredentialsManagementPanel } from './components/Details/Credentials/CredentialsManagementPanel/CredentialsManagementPanel';
+export type { CredentialsManagementPanelProps } from './components/Details/Credentials/CredentialsManagementPanel/CredentialsManagementPanel';
+
 export { DetailsPanel } from './components/Details/DetailsPanel';
 
 export { AppIdentity } from './components/AppIdentity/AppIdentity';
@@ -160,6 +214,13 @@ export type {
 } from './models/app-identity-styles';
 export { CATALOG_CLASS } from './constants/public-class-names';
 export { DeploymentSelectorField } from './components/DeploymentSelectorField/DeploymentSelectorField';
+export { DeploymentSelectorPanel } from './components/DeploymentSelectorPanel/DeploymentSelectorPanel';
+export type {
+  DeploymentSelectorPanelColors,
+  DeploymentSelectorPanelLabels,
+  DeploymentSelectorPanelProps,
+} from './models/deployment-selector-panel';
+export { DeploymentSelectorLayout } from './types/deployment-selector-layout';
 export type {
   DeploymentSelectorDisplayRecord,
   DeploymentSelectorExtraOption,
@@ -173,4 +234,13 @@ export type {
   ApplicationCredentialLoginParams,
   ApplicationCredentialsProps,
   ApplicationCredentialsTexts,
+  ApplicationCredentialsTypography,
 } from './models/application-credentials';
+
+export { SigninInterruptDialog } from './components/SigninInterruptDialog/SigninInterruptDialog';
+export type {
+  SigninInterruptDialogColors,
+  SigninInterruptDialogLabels,
+  SigninInterruptDialogProps,
+  SigninInterruptDialogRow,
+} from './models/signin-interrupt-dialog';

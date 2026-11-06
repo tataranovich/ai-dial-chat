@@ -10,7 +10,58 @@ import { ScheduledTaskRepeat } from '../../../types/scheduled-task-schedule';
 import { ScheduledTaskCreateForm } from '../ScheduledTaskCreateForm';
 
 vi.mock('@epam/ai-dial-ui-kit', () => ({
+  LiveRegionPoliteness: { Polite: 'polite', Assertive: 'assertive' },
+  LiveRegionElement: { Div: 'div', Span: 'span', P: 'p' },
+  LiveRegion: ({
+    politeness = 'polite',
+    visuallyHidden,
+    as: Tag = 'div',
+    atomic,
+    className,
+    children,
+    ...rest
+  }: {
+    politeness?: string;
+    visuallyHidden?: boolean;
+    as?: 'div' | 'span' | 'p';
+    atomic?: boolean;
+  } & React.HTMLAttributes<HTMLElement>) => (
+    <Tag
+      {...rest}
+      role={politeness === 'assertive' ? 'alert' : 'status'}
+      aria-live={politeness as 'polite' | 'assertive'}
+      aria-atomic={atomic}
+      className={visuallyHidden ? 'sr-only' : className}
+    >
+      {children}
+    </Tag>
+  ),
   DIAL_KIT_ICON_STROKE: 1.5,
+  ButtonVariant: { Primary: 'primary', Neutral: 'neutral' },
+  ButtonAppearance: { Solid: 'solid' },
+  ErrorText: ({
+    text,
+    id,
+    announce,
+  }: {
+    text?: string;
+    id?: string;
+    announce?: string;
+  }) => {
+    const node = text ? <span id={id}>{text}</span> : null;
+    return announce ? (
+      <span
+        role={announce === 'assertive' ? 'alert' : 'status'}
+        aria-live={announce as 'polite' | 'assertive'}
+        aria-atomic
+      >
+        {node}
+      </span>
+    ) : (
+      node
+    );
+  },
+  CaptionText: ({ text }: { text?: string }) => (text ? <p>{text}</p> : null),
   Input: ({
     labelProps,
     value,
@@ -134,7 +185,12 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     disabled,
     showTimezone,
     minDate,
+    mode,
+    invalid,
+    ariaDescribedBy,
   }: {
+    invalid?: boolean;
+    ariaDescribedBy?: string;
     id?: string;
     labelProps?: { label: ReactNode; required?: boolean };
     value?: Date | string | null;
@@ -144,6 +200,7 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
     disabled?: boolean;
     showTimezone?: boolean;
     minDate?: Date;
+    mode?: string;
   }) => (
     /* The timezone hint renders outside the label, mirroring the kit's
        trailing-edge adornment, so it does not pollute the input's
@@ -161,8 +218,11 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
           onChange={(e) => onChange(e.target.value || null)}
           onBlur={onBlur}
           disabled={disabled}
+          aria-invalid={invalid || undefined}
+          aria-describedby={ariaDescribedBy}
         />
       </label>
+      {mode === 'datetime' && <span>isDateTimeMode</span>}
       {showTimezone && <span>(GMT+00:00) (UTC) UTC</span>}
       {minDate && <span>hasMinDate</span>}
     </>
@@ -196,6 +256,32 @@ vi.mock('@epam/ai-dial-ui-kit', () => ({
       </select>
       {error && <span>{error}</span>}
     </label>
+  ),
+  Button: ({
+    label,
+    variant,
+    className,
+    disabled,
+    onClick,
+    ...rest
+  }: {
+    label?: ReactNode;
+    variant?: string;
+    className?: string;
+    disabled?: boolean;
+    onClick?: () => void;
+    'aria-label'?: string;
+    'aria-pressed'?: boolean;
+  }) => (
+    <button
+      type="button"
+      className={className}
+      disabled={disabled}
+      onClick={onClick}
+      {...rest}
+    >
+      {label}
+    </button>
   ),
   Spinner: () => <div>Loading</div>,
   Label: ({
@@ -260,10 +346,10 @@ const buildFormProps = (
     detailsSectionTitle: 'Details',
     detailsSectionSubtitle: 'Basic info about this scheduled task',
     configurationSectionTitle: 'Configuration',
-    configurationSectionSubtitle: 'Write custom instructions',
     displayNameLabel: 'Name',
     displayNameRequired: 'Name is required',
-    runAtLabel: 'Run at',
+    runAtLabel: 'Date and time',
+    runAtPlaceholder: 'Pick date and time',
     timeLabel: 'Time',
     timeInvalidLabel: 'Enter a valid time',
     repeatLabel: 'Repeat',
@@ -273,10 +359,21 @@ const buildFormProps = (
       { key: ScheduledTaskRepeat.Daily, label: 'Daily' },
       { key: ScheduledTaskRepeat.Weekly, label: 'Weekly' },
       { key: ScheduledTaskRepeat.Monthly, label: 'Monthly' },
+      { key: ScheduledTaskRepeat.Custom, label: 'Custom' },
     ],
-    dayOfWeekLabel: 'Day of week',
+    dayOfWeekLabel: 'Day',
     dayOfMonthLabel: 'Day of month',
     minuteLabel: 'Minute',
+    daysOfWeekLabel: 'Days',
+    customDayOptions: [
+      { value: '0', shortLabel: 'M', fullName: 'Monday' },
+      { value: '1', shortLabel: 'T', fullName: 'Tuesday' },
+      { value: '2', shortLabel: 'W', fullName: 'Wednesday' },
+      { value: '3', shortLabel: 'T', fullName: 'Thursday' },
+      { value: '4', shortLabel: 'F', fullName: 'Friday' },
+      { value: '5', shortLabel: 'S', fullName: 'Saturday' },
+      { value: '6', shortLabel: 'S', fullName: 'Sunday' },
+    ],
     startDateLabel: 'Start date',
     startDatePlaceholder: 'Pick start date',
     endDateLabel: 'End date',
@@ -348,6 +445,27 @@ describe('ScheduledTaskCreateForm', () => {
         .disabled,
     ).toBe(true);
   });
+  it('keeps the skill error live region mounted while the error clears and returns', async () => {
+    const { rerender } = await renderForm({
+      errors: { skillUrls: 'Unsupported' },
+    });
+    /* Walk up from the error text to the kit live region that wraps it. */
+    // eslint-disable-next-line testing-library/no-node-access -- see above
+    const region = screen.getByText('Unsupported').closest('[aria-live]');
+    expect(region?.getAttribute('aria-live')).toBe('polite');
+
+    rerender(<ScheduledTaskCreateForm {...buildFormProps({ errors: {} })} />);
+    expect(region?.isConnected).toBe(true);
+    expect(region?.textContent).toBe('');
+
+    rerender(
+      <ScheduledTaskCreateForm
+        {...buildFormProps({ errors: { skillUrls: 'Unsupported' } })}
+      />,
+    );
+    expect(region?.textContent).toBe('Unsupported');
+  });
+
   it('renders the action pair in both the header and the mobile sticky footer', async () => {
     await renderForm();
 
@@ -485,6 +603,296 @@ describe('ScheduledTaskCreateForm', () => {
     expect(getSaveButtons().every((button) => !button.disabled)).toBe(true);
   });
 
+  describe('ScheduledTaskCreateForm — repeat-switch boundary handling', () => {
+    const user = userEvent.setup();
+
+    const selectRepeat = async (value: ScheduledTaskRepeat) => {
+      await user.selectOptions(
+        screen.getByLabelText('Repeat') as HTMLSelectElement,
+        value,
+      );
+    };
+
+    it('keeps both boundaries when switching from Hourly to a day-based repeat', async () => {
+      const onFieldChange = vi.fn();
+      await renderForm({
+        onFieldChange,
+        values: {
+          ...baseValues,
+          displayName: 'Task',
+          modelId: 'gpt-4o',
+          prompt: 'Summarize',
+          repeat: ScheduledTaskRepeat.Hourly,
+          minute: '30',
+          startDate: '2026-09-22',
+          endDate: '2026-09-23',
+        },
+      });
+      onFieldChange.mockClear();
+
+      await selectRepeat(ScheduledTaskRepeat.Daily);
+
+      expect(onFieldChange).toHaveBeenCalledWith(
+        'repeat',
+        ScheduledTaskRepeat.Daily,
+      );
+      expect(onFieldChange).not.toHaveBeenCalledWith(
+        'startDate',
+        expect.anything(),
+      );
+      expect(onFieldChange).not.toHaveBeenCalledWith(
+        'endDate',
+        expect.anything(),
+      );
+    });
+
+    it('keeps both boundaries when switching to Hourly', async () => {
+      const onFieldChange = vi.fn();
+      await renderForm({
+        onFieldChange,
+        values: {
+          ...baseValues,
+          displayName: 'Task',
+          modelId: 'gpt-4o',
+          prompt: 'Summarize',
+          startDate: '2026-09-22',
+          endDate: '2026-09-23',
+        },
+      });
+      onFieldChange.mockClear();
+
+      await selectRepeat(ScheduledTaskRepeat.Hourly);
+
+      expect(onFieldChange).toHaveBeenCalledWith(
+        'repeat',
+        ScheduledTaskRepeat.Hourly,
+      );
+      expect(onFieldChange).not.toHaveBeenCalledWith(
+        'startDate',
+        expect.anything(),
+      );
+      expect(onFieldChange).not.toHaveBeenCalledWith(
+        'endDate',
+        expect.anything(),
+      );
+    });
+
+    it('leaves boundaries untouched when switching between day-based repeats', async () => {
+      const onFieldChange = vi.fn();
+      await renderForm({
+        onFieldChange,
+        values: {
+          ...baseValues,
+          displayName: 'Task',
+          modelId: 'gpt-4o',
+          prompt: 'Summarize',
+          startDate: '2026-09-22',
+          endDate: '2026-09-23',
+        },
+      });
+      onFieldChange.mockClear();
+
+      await selectRepeat(ScheduledTaskRepeat.Weekly);
+
+      expect(onFieldChange).toHaveBeenCalledWith(
+        'repeat',
+        ScheduledTaskRepeat.Weekly,
+      );
+      expect(onFieldChange).not.toHaveBeenCalledWith(
+        'startDate',
+        expect.anything(),
+      );
+      expect(onFieldChange).not.toHaveBeenCalledWith(
+        'endDate',
+        expect.anything(),
+      );
+    });
+
+    it('emits only the repeat change when no boundary is set', async () => {
+      const onFieldChange = vi.fn();
+      await renderForm({
+        onFieldChange,
+        values: {
+          ...baseValues,
+          displayName: 'Task',
+          modelId: 'gpt-4o',
+          prompt: 'Summarize',
+        },
+      });
+      onFieldChange.mockClear();
+
+      await selectRepeat(ScheduledTaskRepeat.Hourly);
+
+      expect(onFieldChange).toHaveBeenCalledOnce();
+      expect(onFieldChange).toHaveBeenCalledWith(
+        'repeat',
+        ScheduledTaskRepeat.Hourly,
+      );
+    });
+
+    it('keeps both boundaries when switching to Custom', async () => {
+      const onFieldChange = vi.fn();
+      await renderForm({
+        onFieldChange,
+        values: {
+          ...baseValues,
+          displayName: 'Task',
+          modelId: 'gpt-4o',
+          prompt: 'Summarize',
+          startDate: '2026-09-22',
+          endDate: '2026-09-23',
+        },
+      });
+      onFieldChange.mockClear();
+
+      await selectRepeat(ScheduledTaskRepeat.Custom);
+
+      expect(onFieldChange).toHaveBeenCalledOnce();
+      expect(onFieldChange).toHaveBeenCalledWith(
+        'repeat',
+        ScheduledTaskRepeat.Custom,
+      );
+    });
+
+    it('keeps both boundaries when switching from Custom to a day-based repeat', async () => {
+      const onFieldChange = vi.fn();
+      await renderForm({
+        onFieldChange,
+        values: {
+          ...baseValues,
+          displayName: 'Task',
+          modelId: 'gpt-4o',
+          prompt: 'Summarize',
+          repeat: ScheduledTaskRepeat.Custom,
+          daysOfWeek: ['0'],
+          startDate: '2026-09-22',
+          endDate: '2026-09-23',
+        },
+      });
+      onFieldChange.mockClear();
+
+      await selectRepeat(ScheduledTaskRepeat.Daily);
+
+      expect(onFieldChange).toHaveBeenCalledOnce();
+      expect(onFieldChange).toHaveBeenCalledWith(
+        'repeat',
+        ScheduledTaskRepeat.Daily,
+      );
+    });
+  });
+
+  describe('ScheduledTaskCreateForm — custom repeat', () => {
+    const user = userEvent.setup();
+
+    const customValues: ScheduledTaskCreateFormValues = {
+      ...baseValues,
+      displayName: 'Task',
+      modelId: 'gpt-4o',
+      prompt: 'Summarize',
+      repeat: ScheduledTaskRepeat.Custom,
+      daysOfWeek: ['0'],
+    };
+
+    it('renders the Time field, a labeled day button row and the boundary pickers in that order', async () => {
+      await renderForm({ values: customValues });
+
+      expect(screen.queryByLabelText('Every')).toBeNull();
+      expect(screen.getByText('Days *')).toBeTruthy();
+      expect(screen.getByRole('group', { name: 'Days *' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Monday' })).toBeTruthy();
+
+      /* The day row sits below the Time field and above the boundaries. */
+      const timeField = screen.getByLabelText('Time *');
+      const dayRow = screen.getByRole('group', { name: 'Days *' });
+      const startDate = screen.getByLabelText('Start date');
+      expect(screen.getByLabelText('End date')).toBeTruthy();
+      expect(timeField.compareDocumentPosition(dayRow)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      expect(dayRow.compareDocumentPosition(startDate)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    });
+
+    it('adds a day in APScheduler convention and keeps the list sorted Monday first', async () => {
+      const onFieldChange = vi.fn();
+      await renderForm({
+        onFieldChange,
+        values: { ...customValues, daysOfWeek: ['4'] },
+      });
+
+      const friday = screen.getByRole('button', { name: 'Friday' });
+      expect(friday.getAttribute('aria-pressed')).toBe('true');
+      /* 40x40px circular: the fixed width plus the round corners. */
+      expect(friday.className).toContain('w-10');
+      expect(friday.className).toContain('rounded-full');
+      expect(
+        screen
+          .getByRole('button', { name: 'Monday' })
+          .getAttribute('aria-pressed'),
+      ).toBe('false');
+
+      await user.click(screen.getByRole('button', { name: 'Monday' }));
+
+      expect(onFieldChange).toHaveBeenCalledWith('daysOfWeek', ['0', '4']);
+    });
+
+    it('removes a selected day but keeps the only selected day', async () => {
+      const onFieldChange = vi.fn();
+      const view = await renderForm({
+        onFieldChange,
+        values: { ...customValues, daysOfWeek: ['0', '2'] },
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Wednesday' }));
+      expect(onFieldChange).toHaveBeenCalledWith('daysOfWeek', ['0']);
+
+      view.rerender(
+        <ScheduledTaskCreateForm
+          {...buildFormProps({ onFieldChange, values: customValues })}
+        />,
+      );
+      onFieldChange.mockClear();
+      await user.click(screen.getByRole('button', { name: 'Monday' }));
+      expect(onFieldChange).not.toHaveBeenCalled();
+    });
+
+    it('disables Save until a custom day is selected', async () => {
+      const values = { ...customValues, daysOfWeek: [] };
+      const view = await renderForm({ values });
+      expect(getSaveButtons().every((button) => button.disabled)).toBe(true);
+
+      /* A selected day re-enables Save (the host updates values.daysOfWeek). */
+      view.rerender(
+        <ScheduledTaskCreateForm
+          {...buildFormProps({ values: { ...values, daysOfWeek: ['0'] } })}
+        />,
+      );
+      expect(getSaveButtons().every((button) => !button.disabled)).toBe(true);
+    });
+
+    it('renders the days-of-week error below the day row', async () => {
+      await renderForm({
+        values: { ...customValues, daysOfWeek: [] },
+        errors: { daysOfWeek: 'Select at least one day' },
+      });
+
+      const error = screen.getByText('Select at least one day');
+      expect(
+        screen
+          .getByRole('button', { name: 'Monday' })
+          .getAttribute('aria-describedby'),
+      ).toBe(error.id);
+    });
+
+    it('uses only logical direction utilities on the day row', async () => {
+      await renderForm({ values: customValues });
+
+      const dayRow = screen.getByRole('group', { name: 'Days *' });
+      expect(dayRow.className).not.toMatch(/\b(ml|mr|pl|pr|left|right)-/);
+    });
+  });
+
   it('disables Save while the shown time field is empty', async () => {
     const validValues = {
       ...baseValues,
@@ -509,6 +917,31 @@ describe('ScheduledTaskCreateForm', () => {
     await renderForm();
 
     expect(screen.getByText('Model or Agent *')).toBeTruthy();
+  });
+
+  it('links the time picker to errors.time through ariaDescribedBy', async () => {
+    await renderForm({ errors: { time: 'Enter a valid time' } });
+
+    const error = screen.getByText('Enter a valid time');
+    const input = screen.getByLabelText(/^Time/);
+    expect(input.getAttribute('aria-describedby')).toBe(error.id);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('links the day-of-week picker to errors.dayOfWeek through ariaDescribedBy', async () => {
+    await renderForm({
+      values: {
+        ...baseValues,
+        repeat: ScheduledTaskRepeat.Weekly,
+        dayOfWeek: '0',
+      },
+      errors: { dayOfWeek: 'Choose a day' },
+    });
+
+    const error = screen.getByText('Choose a day');
+    expect(screen.getByLabelText(/^Day/).getAttribute('aria-describedby')).toBe(
+      error.id,
+    );
   });
 
   it('renders errors.modelId below the modelSelector slot', async () => {
@@ -548,6 +981,18 @@ describe('ScheduledTaskCreateForm', () => {
     expect(
       (screen.getByLabelText('Description') as HTMLTextAreaElement).maxLength,
     ).toBe(500);
+  });
+
+  it('shows the description counter even when the description is empty', async () => {
+    await renderForm({ values: { ...baseValues, description: '' } });
+
+    expect(screen.getByText('0/500')).toBeTruthy();
+  });
+
+  it('counts the description characters', async () => {
+    await renderForm({ values: { ...baseValues, description: 'abc' } });
+
+    expect(screen.getByText('3/500')).toBeTruthy();
   });
 
   it('calls onFieldChange when the description changes', async () => {
@@ -617,7 +1062,10 @@ describe('ScheduledTaskCreateForm', () => {
     getSaveButtons().forEach((button) =>
       expect(button.getAttribute('aria-busy')).toBe('true'),
     );
-    expect(screen.getByRole('status').textContent).toBe('Saving');
+    /* The skill-error live region is a status region too; it stays empty here. */
+    expect(
+      screen.getAllByRole('status').map((region) => region.textContent),
+    ).toContain('Saving');
   });
 
   it('leaves Save disabled but not busy when the form is merely incomplete', async () => {
@@ -627,7 +1075,9 @@ describe('ScheduledTaskCreateForm', () => {
       expect(button.disabled).toBe(true);
       expect(button.getAttribute('aria-busy')).toBe('false');
     });
-    expect(screen.getByRole('status').textContent).toBe('');
+    expect(
+      screen.getAllByRole('status').map((region) => region.textContent),
+    ).not.toContain('Saving');
   });
 
   it('names the Instructions editor through a real label association', async () => {
@@ -729,7 +1179,7 @@ describe('ScheduledTaskCreateForm', () => {
       values: { ...baseValues, repeat: ScheduledTaskRepeat.OneTime },
     });
 
-    expect(screen.getByText('Run at *')).toBeTruthy();
+    expect(screen.getByText('Date and time *')).toBeTruthy();
     expect(screen.queryByText('Time *')).toBeNull();
   });
 
@@ -739,9 +1189,9 @@ describe('ScheduledTaskCreateForm', () => {
     });
 
     expect(screen.queryByText('Time *')).toBeNull();
-    expect(screen.queryByText('Day of week *')).toBeNull();
+    expect(screen.queryByText('Day *')).toBeNull();
     expect(screen.queryByText('Day of month')).toBeNull();
-    expect(screen.queryByText('Run at *')).toBeNull();
+    expect(screen.queryByText('Date and time *')).toBeNull();
   });
 
   it('renders the Minute field only when repeat is hourly', async () => {
@@ -781,13 +1231,46 @@ describe('ScheduledTaskCreateForm', () => {
     expect(screen.getByText('Enter a valid minute')).toBeTruthy();
   });
 
-  it('renders start-date/end-date pickers when repeat is hourly', async () => {
+  it('renders date-only boundary pickers when repeat is hourly', async () => {
     await renderForm({
       values: { ...baseValues, repeat: ScheduledTaskRepeat.Hourly },
     });
 
     expect(screen.getByText('Start date')).toBeTruthy();
     expect(screen.getByText('End date')).toBeTruthy();
+    expect(screen.queryByText('isDateTimeMode')).toBeNull();
+  });
+
+  it('writes date-only boundaries when the hourly pickers change', async () => {
+    const onFieldChange = vi.fn();
+    await renderForm({
+      onFieldChange,
+      values: { ...baseValues, repeat: ScheduledTaskRepeat.Hourly },
+    });
+
+    fireEvent.change(screen.getByLabelText('Start date'), {
+      target: { value: '2027-06-15' },
+    });
+    fireEvent.change(screen.getByLabelText('End date'), {
+      target: { value: '2027-06-20' },
+    });
+
+    expect(onFieldChange).toHaveBeenCalledWith('startDate', '2027-06-15');
+    expect(onFieldChange).toHaveBeenCalledWith('endDate', '2027-06-20');
+  });
+
+  it('writes date-only boundaries when a day-based repeat picker changes', async () => {
+    const onFieldChange = vi.fn();
+    await renderForm({
+      onFieldChange,
+      values: { ...baseValues, repeat: ScheduledTaskRepeat.Daily },
+    });
+
+    fireEvent.change(screen.getByLabelText('Start date'), {
+      target: { value: '2027-06-15' },
+    });
+
+    expect(onFieldChange).toHaveBeenCalledWith('startDate', '2027-06-15');
   });
 
   it('renders the lib-owned time field only for time-based repeats', async () => {
@@ -822,8 +1305,79 @@ describe('ScheduledTaskCreateForm', () => {
       values: { ...baseValues, repeat: ScheduledTaskRepeat.Weekly },
     });
 
-    expect(screen.getByText('Day of week *')).toBeTruthy();
+    expect(screen.getByText('Day *')).toBeTruthy();
     expect(screen.queryByText('Day of month')).toBeNull();
+  });
+
+  it('disables Save when repeat is oneTime and the run-at value is empty', async () => {
+    const oneTimeValues = {
+      ...baseValues,
+      displayName: 'One-shot report',
+      modelId: 'gpt-4o',
+      prompt: 'Summarize the news',
+      repeat: ScheduledTaskRepeat.OneTime,
+    };
+    const { rerender } = await renderForm({ values: oneTimeValues });
+
+    expect(getSaveButtons()[0].disabled).toBe(true);
+
+    rerender(
+      <ScheduledTaskCreateForm
+        {...buildFormProps({
+          values: { ...oneTimeValues, runAt: '2027-06-15T09:30' },
+        })}
+      />,
+    );
+
+    expect(getSaveButtons()[0].disabled).toBe(false);
+  });
+
+  it('blocks Save while the host checks availability or reports a model error', async () => {
+    const values = {
+      ...baseValues,
+      displayName: 'Report',
+      modelId: 'gpt-4o',
+      prompt: 'Report',
+      repeat: ScheduledTaskRepeat.OneTime,
+      runAt: '2027-06-15T09:30',
+    };
+    const { rerender } = await renderForm({ values, isSubmitDisabled: true });
+    expect(getSaveButtons()[0].disabled).toBe(true);
+    rerender(
+      <ScheduledTaskCreateForm
+        {...buildFormProps({ values, errors: { modelId: 'Unavailable' } })}
+      />,
+    );
+    expect(getSaveButtons()[0].disabled).toBe(true);
+    rerender(<ScheduledTaskCreateForm {...buildFormProps({ values })} />);
+    expect(getSaveButtons()[0].disabled).toBe(false);
+  });
+
+  it('disables Save while a submit-time run-at error is set', async () => {
+    await renderForm({
+      values: {
+        ...baseValues,
+        displayName: 'One-shot report',
+        modelId: 'gpt-4o',
+        prompt: 'Summarize the news',
+        repeat: ScheduledTaskRepeat.OneTime,
+        runAt: '2020-06-15T09:30',
+      },
+      errors: { runAt: 'Choose a future date and time' },
+    });
+
+    expect(getSaveButtons()[0].disabled).toBe(true);
+  });
+
+  it('disables the run-at picker while submitting', async () => {
+    await renderForm({
+      values: { ...baseValues, repeat: ScheduledTaskRepeat.OneTime },
+      isSubmitting: true,
+    });
+
+    expect(
+      (screen.getByLabelText('Date and time *') as HTMLInputElement).disabled,
+    ).toBe(true);
   });
 
   it('calls onFieldChange when the once Run at calendar changes', async () => {
@@ -833,7 +1387,7 @@ describe('ScheduledTaskCreateForm', () => {
       values: { ...baseValues, repeat: ScheduledTaskRepeat.OneTime },
     });
 
-    await userEvent.type(screen.getByLabelText('Run at *'), 'x');
+    await userEvent.type(screen.getByLabelText('Date and time *'), 'x');
 
     expect(onFieldChange).toHaveBeenCalledWith('runAt', '');
   });
@@ -845,7 +1399,7 @@ describe('ScheduledTaskCreateForm', () => {
       values: { ...baseValues, repeat: ScheduledTaskRepeat.Weekly },
     });
 
-    await userEvent.type(screen.getByLabelText('Day of week *'), '1');
+    await userEvent.type(screen.getByLabelText('Day *'), '1');
 
     expect(onFieldChange).toHaveBeenCalledWith('dayOfWeek', '0');
   });

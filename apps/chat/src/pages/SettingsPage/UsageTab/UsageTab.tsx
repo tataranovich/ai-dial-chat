@@ -1,10 +1,10 @@
-import { useUsageData } from '@epam/ai-dial-chat-hooks';
+import { formatUsageResetTime, useUsageData } from '@epam/ai-dial-chat-hooks';
 import {
   mapOverallCostLimitsToPeriodStatuses,
   mapUsageDataToDashboard,
   mapUserUsageToModelLimits,
 } from '@epam/ai-dial-chat-hooks/usage';
-import { Spinner } from '@epam/ai-dial-ui-kit';
+import { Spinner, LiveRegion, LiveRegionElement } from '@epam/ai-dial-ui-kit';
 import {
   ModelLimitsSection,
   UsageLimitCardGroup,
@@ -26,7 +26,6 @@ import { useLanguage } from '../../../hooks/language/useLanguage';
 import { getUserUsage } from '../../../server-api/user-limits';
 import { resolveCatalogIconUrl } from '../../../utils/icon-path';
 import { resolveLocalizedText } from '../../../utils/locale';
-import { formatUsageResetTime } from '../../../utils/usage-reset-time';
 
 /*
  * Small grace period so DIAL Core has rolled the window over before the
@@ -42,6 +41,7 @@ const RESET_SETTLE_MS = 5_000;
  */
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
+/** The Usage page: period cost-limit cards and the model limits table. */
 const UsageTab: FC = () => {
   const { t } = useTranslation() as {
     t: (s: string, params?: Record<string, unknown>) => string;
@@ -251,17 +251,18 @@ const UsageTab: FC = () => {
 
   return (
     <div className="flex size-full min-h-0 flex-col">
-      <div className="flex flex-col gap-2 px-8 py-3">
-        <h2 className="dial-h1-text m-0 text-primary">
+      {/* The page header is 16px above and below a 40px title row. */}
+      <div className="flex flex-col gap-0.5 px-8 py-4">
+        <h1 className="dial-h1-text m-0 flex min-h-10 items-center text-primary">
           {t(UsageI18nKeys.PageTitle)}
-        </h2>
+        </h1>
         <p className="dial-small-text m-0 text-secondary">
           {t(UsageI18nKeys.PageDescription)}
         </p>
       </div>
-      <p role="status" aria-live="polite" className="sr-only">
+      <LiveRegion visuallyHidden as={LiveRegionElement.P}>
         {statusMessage}
-      </p>
+      </LiveRegion>
       <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-8 py-4">
         {isLoading ? (
           <div className="flex flex-1 items-center justify-center" aria-hidden>

@@ -70,6 +70,15 @@ export const useConversationScroll = <T>({
   const anchorScrollTopRef = useRef<number | null>(null);
   /* Last-known "at bottom" state, kept current by updateScrollButtonVisibility — see `openspec/changes/archive/2026-09-30-mcp-apps-support/design.md` D25. */
   const wasAtBottomRef = useRef(true);
+  /*
+   * Set by the bottom scroll on a history load or message-count change and kept
+   * until the user scrolls up, a turn starts, or the conversation changes.
+   * Scroll events fired mid-way through the smooth
+   * scroll report "not at bottom", so `wasAtBottomRef` alone would stop the
+   * content observer from following content that grows meanwhile.
+   */
+  const isFollowingBottomRef = useRef(false);
+  const lastScrollTopRef = useRef(0);
 
   /*
    * Message DOM nodes keyed by index, used to anchor the acted-on message
@@ -270,19 +279,25 @@ export const useConversationScroll = <T>({
 
     if (conversationChanged) {
       clearSpacer();
+      isFollowingBottomRef.current = false;
     }
 
     const anchorIndex = pendingAnchorIndexRef.current;
     if (anchorIndex != null && messageRefsMap.current.has(anchorIndex)) {
       pendingAnchorIndexRef.current = null;
+      isFollowingBottomRef.current = false;
       scrollMessageToTopWithReservation(anchorIndex);
       commitObservedScrollState();
       return;
     }
 
-    if (isAssistantTyping) return;
+    if (isAssistantTyping) {
+      isFollowingBottomRef.current = false;
+      return;
+    }
 
     if (lengthChanged || conversationChanged) {
+      isFollowingBottomRef.current = true;
       scrollToBottom(false);
     }
 
@@ -308,6 +323,17 @@ export const useConversationScroll = <T>({
   }, [isAssistantTyping, clearSettledSpacerIfPossible]);
 
   const handleScroll = useCallback(() => {
+    const container = containerRef.current;
+    if (container) {
+      // A smooth scroll to the bottom only moves down; moving up means the user took over.
+      if (
+        container.scrollTop <
+        lastScrollTopRef.current - SCROLL_CLAMP_TOLERANCE
+      ) {
+        isFollowingBottomRef.current = false;
+      }
+      lastScrollTopRef.current = container.scrollTop;
+    }
     clampScrollToVisibleContent();
     clearSettledSpacerIfPossible();
     updateScrollButtonVisibility();
@@ -327,22 +353,25 @@ export const useConversationScroll = <T>({
   }, [handleScroll]);
 
   /*
-   * Streaming grows content without firing a native scroll event. Observe
-   * content size so the button reflects newly hidden content below the fold.
+   * Streaming grows content and a growing sibling (the message input) shrinks
+   * the scroller, both without firing a native scroll event. Observe both so
+   * the bottom stays followed and the button reflects content below the fold.
    */
   useEffect(() => {
+    const container = containerRef.current;
     const content = contentRef.current;
     if (!content) return;
     const observer = new ResizeObserver(() => {
       /*
-       * Follows a still-at-bottom viewport down when content grows outside
-       * an active turn (e.g. an MCP app preview finishing its async
-       * load/resize) — see `openspec/changes/archive/2026-09-30-mcp-apps-support/design.md` D25. Skipped while the spacer owns
+       * Follows a still-at-bottom viewport down when content grows, or the
+       * viewport shrinks, outside an active turn (e.g. an MCP app preview
+       * finishing its async load/resize) — see `openspec/changes/archive/2026-09-30-mcp-apps-support/design.md` D25. Skipped while the spacer owns
        * scroll position (an in-progress turn is anchored to its own top,
        * not to the bottom).
        */
       const shouldFollowToBottom =
-        wasAtBottomRef.current && !isSpacerActiveRef.current;
+        (wasAtBottomRef.current || isFollowingBottomRef.current) &&
+        !isSpacerActiveRef.current;
       clampScrollToVisibleContent();
       if (shouldFollowToBottom) {
         scrollToBottom(true);
@@ -351,6 +380,7 @@ export const useConversationScroll = <T>({
       updateScrollButtonVisibility();
     });
     observer.observe(content);
+    if (container) observer.observe(container);
     return () => observer.disconnect();
   }, [
     clampScrollToVisibleContent,

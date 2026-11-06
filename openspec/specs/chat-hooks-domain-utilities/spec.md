@@ -67,11 +67,19 @@ Every file among `announcement-message.ts`, `application-schema.ts`, `browser-ti
 
 ### Requirement: Locale utilities move; `PRIMARY_LOCALE` and the one i18n-touching function stay app-owned
 
-`@epam/ai-dial-chat-hooks` SHALL export `toBaseLocale`, `appendLocaleCode`, `composeLocalePayload`, `decomposeLocalizedFields`, and `buildAdditionalLocaleOptions` from `apps/chat/src/utils/locale.ts`. `resolveLocalizedText` SHALL be exported with an additional required `primaryLocale: string` parameter (in place of the module-level `PRIMARY_LOCALE` constant it read internally), and `buildAdditionalLocaleOptions` SHALL take `additionalLocaleCodes: string[]` and `primaryLocale: string` as explicit parameters in place of the module-level `ADDITIONAL_CONTENT_LOCALE_CODES`/`PRIMARY_LOCALE` constants it read internally. `PRIMARY_LOCALE` (derived from the host-owned `SUPPORTED_LANGUAGES`/`useLanguage` hook, which libs must not import per the no-i18n-in-libs rule) and `buildLocaleFieldLabels` (the only export that calls `t()`) SHALL remain in `apps/chat/src/utils/locale.ts`, which SHALL re-export `resolveLocalizedText`/`buildAdditionalLocaleOptions` as thin wrappers that supply `PRIMARY_LOCALE` (and, for the latter, `ADDITIONAL_CONTENT_LOCALE_CODES`) automatically, so every existing 2-arg/0-arg app call site is unchanged.
+`@epam/ai-dial-chat-hooks` SHALL export `toBaseLocale`, `appendLocaleCode`, `composeLocalePayload`, `decomposeLocalizedFields`, and `buildAdditionalLocaleOptions` from `apps/chat/src/utils/locale.ts`. `resolveLocalizedText` SHALL be exported with an additional required `primaryLocale: string` parameter (in place of the module-level `PRIMARY_LOCALE` constant it read internally). `buildAdditionalLocaleOptions` SHALL take `additionalLocaleCodes: string[]` and `primaryLocale: string` as explicit parameters, plus an optional third parameter `formatLabel?: (code: string) => string` that defaults to `code.toUpperCase()` and supplies each option's `label`. The lib SHALL NOT resolve language names itself and SHALL NOT read configuration; codes and the label resolver both come from the host. `PRIMARY_LOCALE` (derived from the host-owned `SUPPORTED_LANGUAGES`/`useLanguage` hook, which libs must not import per the no-i18n-in-libs rule) and `buildLocaleFieldLabels` (the only export that calls `t()`) SHALL remain in `apps/chat/src/utils/locale.ts`. That file SHALL re-export `resolveLocalizedText` as a thin wrapper that supplies `PRIMARY_LOCALE`. It SHALL re-export `buildAdditionalLocaleOptions` as a one-argument wrapper `buildAdditionalLocaleOptions(codes)` that supplies `PRIMARY_LOCALE` and the app's `getLocaleDisplayName`. The codes come from `AppConfigContext` (see `content-locale-configuration`); the former module constant `ADDITIONAL_CONTENT_LOCALE_CODES` no longer exists.
 
 #### Scenario: Every non-i18n locale consumer resolves the moved export with unchanged behavior
 - **WHEN** `apps/chat/src/components/ConversationPanel/ConversationPanelView.tsx` (or any of the other current consumers) calls `resolveLocalizedText(value, activeLocale)` via the app-owned wrapper in `apps/chat/src/utils/locale.ts`
 - **THEN** it resolves through `@epam/ai-dial-chat-hooks`'s `resolveLocalizedText(value, activeLocale, PRIMARY_LOCALE)` with identical behavior to the pre-move implementation
+
+#### Scenario: Option labels default to the uppercased code
+- **WHEN** `buildAdditionalLocaleOptions(['de', 'en'], 'en')` is called without `formatLabel`
+- **THEN** it returns `[{ code: 'de', label: 'DE' }]`
+
+#### Scenario: A host-supplied label resolver names each option
+- **WHEN** `buildAdditionalLocaleOptions(['de'], 'en', (code) => code + '!')` is called
+- **THEN** it returns `[{ code: 'de', label: 'de!' }]`
 
 ### Requirement: Catalog entity/prompt/skill mapping utilities inject their i18n label resolution
 
@@ -112,9 +120,9 @@ Every file among `announcement-message.ts`, `application-schema.ts`, `browser-ti
 - **WHEN** `apps/chat` calls `emitToolsetLoginSuccess<ToolsetCredentialsLevel>(detail)` and a subscriber calls `subscribeToolsetLoginSuccess<ToolsetCredentialsLevel>(listener)`
 - **THEN** the listener receives the exact `detail` object that was emitted, typed as `ToolsetCredentialsLevel`
 
-### Requirement: `file-download.ts` splits into a pure destination resolver and an app-owned DOM trigger
+### Requirement: Download destination resolution and browser download execution are public library operations
 
-`@epam/ai-dial-chat-hooks` SHALL export `prepareDownloadDestination` and the `DownloadDestinationType` it resolves to, reproducing `apps/chat/src/utils/file-download.ts`'s current decision logic exactly. `triggerBrowserDownload` (which creates and clicks a DOM `<a>` element) SHALL remain in `apps/chat/src/utils/file-download.ts`, which exports only `triggerBrowserDownload` and does not re-export `prepareDownloadDestination`.
+`@epam/ai-dial-chat-hooks` SHALL export `prepareDownloadDestination` and `DownloadDestinationType` with the existing destination-selection behavior. `triggerBrowserDownload` SHALL be exported by `@epam/ai-dial-chat-hooks/utils` from `libs/chat-hooks/src/files/browser-download.ts`; app consumers SHALL import it directly rather than through an app re-export.
 
 #### Scenario: Consumers import the resolver from the package
 - **WHEN** `apps/chat/src/components/DialFileManagerShell/useDialFileManagerHostOptions.ts` wires the file manager's download destination
@@ -130,8 +138,12 @@ Every file among `announcement-message.ts`, `application-schema.ts`, `browser-ti
 
 ### Requirement: Host-owned `apps/chat/src/utils/` files are unaffected
 
-`conversation-id-match.ts`, `conversation-stream-transport.ts`, `entity-notification.ts`, `favorites.ts`, `icon-path.ts`, `local-storage.ts`, `apply-theme-colors.ts`, `map-scheduled-task-dto.ts`, `map-scheduled-task-run-dto.ts`, `scheduled-task-form-validation.ts`, `signin-interrupt.ts`, `toolsets.ts`, and `attachment-network-error-notification.tsx` SHALL NOT be modified by this change, since each either touches host-owned integration state directly or has its translated output as its entire purpose with nothing left to extract. `map-deployment-limits-to-catalog.ts`, `map-usage-data-to-dashboard.ts`, and `map-user-usage-to-model-limits.ts` are not host-owned: they live in `libs/chat-hooks/src/catalog/map-deployment-limits-to-catalog.ts` and `libs/chat-hooks/src/usage/` (under the `AGENTS.md` fourth library-isolation exception) and are exported from `@epam/ai-dial-chat-hooks`.
+`conversation-id-match.ts`, `conversation-stream-transport.ts`, `entity-notification.ts`, `favorites.ts`, `icon-path.ts`, `local-storage.ts`, `apply-theme-colors.ts`, `scheduled-task-form-validation.ts`, `toolsets.ts`, and `attachment-network-error-notification.tsx` SHALL NOT be modified by this change, since each either touches host-owned integration state directly or has its translated output as its entire purpose with nothing left to extract. The sign-in interrupt row resolvers are not host-owned: they live in `libs/chat-hooks/src/signin-interrupt/signin-row-info.ts` (see `toolset-signin-interrupt`), taking the active and primary locale as parameters. `map-deployment-limits-to-catalog.ts`, `map-usage-data-to-dashboard.ts`, and `map-user-usage-to-model-limits.ts` are not host-owned: they live in `libs/chat-hooks/src/catalog/map-deployment-limits-to-catalog.ts` and `libs/chat-hooks/src/usage/` (under the `AGENTS.md` fourth library-isolation exception) and are exported from `@epam/ai-dial-chat-hooks`. `apps/chat/src/utils/map-scheduled-task-dto.ts` and `apps/chat/src/utils/map-scheduled-task-run-dto.ts` SHALL remain in the app only as translated adapters over `libs/chat-hooks/src/scheduled-task/scheduled-task-display.ts` (see `chat-hooks-scheduled-task-display`): they build formatter objects from `t()` and `ScheduledTasksI18nKeys`, map the lib's delete-error kind to a key, and supply the app's `conversationIdsMatch`, while every DTO-driven rule lives in the lib.
 
 #### Scenario: No host-owned file is imported by `@epam/ai-dial-chat-hooks`
 - **WHEN** `libs/chat-hooks/src/**` is inspected
-- **THEN** it contains no import of any of the listed host-owned files
+- **THEN** it contains no import of any of the listed host-owned files, nor of `apps/chat/src/utils/map-scheduled-task-dto.ts` or `apps/chat/src/utils/map-scheduled-task-run-dto.ts`
+
+#### Scenario: The scheduled-task adapters hold no DTO-driven rule
+- **WHEN** `apps/chat/src/utils/map-scheduled-task-dto.ts` and `apps/chat/src/utils/map-scheduled-task-run-dto.ts` are inspected
+- **THEN** neither switches on a trigger description kind, maps an upstream run status, splits a duration into units, compares calendar days, or classifies an HTTP status — each delegates to an export of `@epam/ai-dial-chat-hooks`

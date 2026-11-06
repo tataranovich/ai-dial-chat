@@ -59,19 +59,21 @@ describe what happens to a legacy deployment's variables. The source of truth is
 
 ### Renamed or re-shaped
 
-| Legacy                      | 1.0                                                        | Notes                                                                                                                                    |
-| --------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `DIAL_API_HOST`             | `DIAL_CORE_URL`                                            | Internal URL, never exposed to browsers.                                                                                                 |
-| `NEXTAUTH_SECRET`           | `AUTH_SESSION_SECRET`                                      | Must be 64 hex characters (32 bytes) — generate a new one rather than reusing the old.                                                   |
-| `NEXTAUTH_URL`              | `AUTH_CALLBACK_BASE_URL`                                   | Public base URL of the **API**, used to build OIDC redirect URIs. The callback path changed too — see [Authentication](#authentication). |
-| `APP_BASE_ORIGIN`           | `CORS_ORIGIN`                                              | Origin of the browser application; also used by the CSRF origin check. Defaults to `AUTH_CALLBACK_BASE_URL` when not set.                |
-| `IS_IFRAME`                 | `OVERLAY_ENABLED`                                          | `ALLOWED_IFRAME_ORIGINS` keeps its name and now also gates incoming `postMessage`.                                                       |
-| `ENABLED_FEATURES`          | `ENABLED_UI_FEATURES`                                      | Same replace semantics; several flag names changed — see below.                                                                          |
-| `THEMES_CONFIG_HOST`        | `THEMES_CONFIG_URL`                                        | Add `THEMES_SERVICE_TIMEOUT_MS` if 5 s is too tight.                                                                                     |
-| `DEFAULT_MODEL`             | `DEFAULT_DEPLOYMENT`                                       | Deployment id shown to users with no persisted selection.                                                                                |
-| `HIDDEN_ENTITY_TAG`         | `HIDDEN_ENTITY_TAGS`                                       | Now plural, comma-separated.                                                                                                             |
-| `PUBLICATION_FILTERS`       | `PUBLICATION_FILTER_SOURCES`                               | —                                                                                                                                        |
-| `ANNOUNCEMENT_HTML_MESSAGE` | kept, or `ANNOUNCEMENT_TITLE` + `ANNOUNCEMENT_DESCRIPTION` | The legacy variable still works; the structured form is opt-in.                                                                          |
+| Legacy                      | 1.0                                                        | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DIAL_API_HOST`             | `DIAL_CORE_URL`                                            | Internal URL, never exposed to browsers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `NEXTAUTH_SECRET`           | `AUTH_SESSION_SECRET`                                      | Must be 64 hex characters (32 bytes) — generate a new one rather than reusing the old.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `NEXTAUTH_URL`              | `AUTH_CALLBACK_BASE_URL`                                   | Public base URL of the **API**, used to build OIDC redirect URIs. The callback path changed too — see [Authentication](#authentication).                                                                                                                                                                                                                                                                                                                                                                                               |
+| `APP_BASE_ORIGIN`           | `CORS_ORIGIN`                                              | Origin of the browser application; also used by the CSRF origin check. Defaults to `AUTH_CALLBACK_BASE_URL` when not set.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `IS_IFRAME`                 | `OVERLAY_ENABLED`                                          | `ALLOWED_IFRAME_ORIGINS` keeps its name and now also gates incoming `postMessage`.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ENABLED_FEATURES`          | `ENABLED_UI_FEATURES`                                      | Same replace semantics; several flag names changed — see below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `THEMES_CONFIG_HOST`        | `THEMES_CONFIG_URL`                                        | Add `THEMES_SERVICE_TIMEOUT_MS` if 5 s is too tight.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `DEFAULT_MODEL`             | `DEFAULT_DEPLOYMENT`                                       | Deployment id shown to users with no persisted selection.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `HIDDEN_ENTITY_TAG`         | `HIDDEN_ENTITY_TAGS`                                       | Now plural, comma-separated.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `PUBLICATION_FILTERS`       | `PUBLICATION_FILTER_SOURCES`                               | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `ANNOUNCEMENT_HTML_MESSAGE` | kept, or `ANNOUNCEMENT_TITLE` + `ANNOUNCEMENT_DESCRIPTION` | The legacy variable still works; the structured form is opt-in.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `AVAILABLE_LOCALES`         | `ADDITIONAL_CONTENT_LOCALES`                               | Content locales only: the translation targets offered for a toolset's or application's Name/Description. UI languages are no longer configured here, and the primary locale is always `en`. The legacy variable is still read, with a startup deprecation warning, while the new one is absent. 0.x took its primary locale from the first entry, so on a deployment whose first entry was not `en`, primary Name/Description values were stored under that locale; check that content before upgrading, because 1.0 reads `en` first. |
+| `PROXY_LANGUAGE_HEADER`     | none — fixed `X-Lang` header                               | Legacy named the outbound language header (default `accept-language` since #8377); 1.0 always sends the UI language as `X-Lang` and has no variable for it. DIAL Core reads it through its own `PROXY_LANGUAGE_HEADER` setting, which deployments must point at `X-Lang`.                                                                                                                                                                                                                                                              |
 
 ### Carried over unchanged
 
@@ -124,17 +126,16 @@ other value leaves it off. Legacy turned it on for any non-empty value, so
 
 ### Dropped with no replacement
 
-| Legacy variables                                                                                                                                                                                                                                                                    | Why                                                                                                                                                           |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_DEFAULT_SYSTEM_PROMPT`, `NEXT_PUBLIC_DEFAULT_TEMPERATURE`, `NEXT_PUBLIC_RESOURCE_MAX_SEGMENT_BYTES`, `NEXT_PUBLIC_STAGE_CONTENT_LIMIT`, `APP_BASE_PATH`                                                                                        | The frontend reads no environment variables at all in 1.0.                                                                                                    |
-| `AUTH_FORCE_STRICT`, `AUTH_ADDITIONAL_PARAMS`, `AUTH_TEST_TOKEN`, `ALLOW_TOKEN_IN_SESSION`, `SHOW_TOKEN_SUB`, `ALLOW_OPEN_SIGNIN_PAGE_IN_IFRAME`                                                                                                                                    | Auth moved server-side; the browser never holds a token. Same-window login in an iframe is now a per-provider overlay option instead of a global switch.      |
-| `ALLOWED_IFRAME_SOURCES`, `ALLOWED_SCRIPT_SOURCES`                                                                                                                                                                                                                                  | CSP is managed by `helmet` in `chat-api`.                                                                                                                     |
-| `STORAGE_TYPE`                                                                                                                                                                                                                                                                      | DIAL Core is the only storage backend.                                                                                                                        |
-| `AVAILABLE_LOCALES`                                                                                                                                                                                                                                                                 | The locale set is not a deployment variable. English is the default, and adding a locale is a code change — locale JSON plus registration in the i18n config. |
-| `THEME_DEFAULT_ID`                                                                                                                                                                                                                                                                  | The default is light, then the user's stored choice.                                                                                                          |
-| `RECENT_MODELS_IDS`, `TOPICS`, `MAX_PROMPT_TOKENS_DEFAULT_PERCENT`, `MAX_PROMPT_TOKENS_DEFAULT_VALUE`, `ATTACHMENT_TYPES_EXPANDED`, `ATTACHMENT_TYPES_BORDERLESS`, `ATTACHMENT_TYPES_WITHOUT_TITLE`, `CODE_GENERATION_WARNING`, `CODE_EDITOR_PYTHON_VERSIONS`, `WIDGETS_SCHEMA_IDS` | The corresponding UI or behaviour has no successor yet. `FEATURED_MODEL_IDS` covers the catalog's featured list, which is not the same as recent models.      |
-| `REPORT_ISSUE_CODE`, `REQUEST_API_KEY_CODE`, `TMS_URL`, `ISSUE_URL`, `AZURE_FUNCTIONS_API_HOST`                                                                                                                                                                                     | The report-an-issue and request-API-key dialogs were not migrated.                                                                                            |
-| `QUICK_APPS_HOST`, `QUICK_APPS_MODEL`, `QUICK_APPS_SCHEMA_ID`, `EXTERNAL_APPS_SCHEMA_ID`, `CODE_APPS_ROLES`                                                                                                                                                                         | Application authoring is configured differently; `DEV_QUICKAPPS_EDITOR_URL` is the only remaining QuickApps knob.                                             |
+| Legacy variables                                                                                                                                                                                                                                                                    | Why                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_DEFAULT_SYSTEM_PROMPT`, `NEXT_PUBLIC_DEFAULT_TEMPERATURE`, `NEXT_PUBLIC_RESOURCE_MAX_SEGMENT_BYTES`, `NEXT_PUBLIC_STAGE_CONTENT_LIMIT`, `APP_BASE_PATH`                                                                                        | The frontend reads no environment variables at all in 1.0.                                                                                               |
+| `AUTH_FORCE_STRICT`, `AUTH_ADDITIONAL_PARAMS`, `AUTH_TEST_TOKEN`, `ALLOW_TOKEN_IN_SESSION`, `SHOW_TOKEN_SUB`, `ALLOW_OPEN_SIGNIN_PAGE_IN_IFRAME`                                                                                                                                    | Auth moved server-side; the browser never holds a token. Same-window login in an iframe is now a per-provider overlay option instead of a global switch. |
+| `ALLOWED_IFRAME_SOURCES`, `ALLOWED_SCRIPT_SOURCES`                                                                                                                                                                                                                                  | CSP is managed by `helmet` in `chat-api`.                                                                                                                |
+| `STORAGE_TYPE`                                                                                                                                                                                                                                                                      | DIAL Core is the only storage backend.                                                                                                                   |
+| `THEME_DEFAULT_ID`                                                                                                                                                                                                                                                                  | The default is light, then the user's stored choice.                                                                                                     |
+| `RECENT_MODELS_IDS`, `TOPICS`, `MAX_PROMPT_TOKENS_DEFAULT_PERCENT`, `MAX_PROMPT_TOKENS_DEFAULT_VALUE`, `ATTACHMENT_TYPES_EXPANDED`, `ATTACHMENT_TYPES_BORDERLESS`, `ATTACHMENT_TYPES_WITHOUT_TITLE`, `CODE_GENERATION_WARNING`, `CODE_EDITOR_PYTHON_VERSIONS`, `WIDGETS_SCHEMA_IDS` | The corresponding UI or behaviour has no successor yet. `FEATURED_MODEL_IDS` covers the catalog's featured list, which is not the same as recent models. |
+| `REPORT_ISSUE_CODE`, `REQUEST_API_KEY_CODE`, `TMS_URL`, `ISSUE_URL`, `AZURE_FUNCTIONS_API_HOST`                                                                                                                                                                                     | The report-an-issue and request-API-key dialogs were not migrated.                                                                                       |
+| `QUICK_APPS_HOST`, `QUICK_APPS_MODEL`, `QUICK_APPS_SCHEMA_ID`, `EXTERNAL_APPS_SCHEMA_ID`, `CODE_APPS_ROLES`                                                                                                                                                                         | Application authoring is configured differently; `DEV_QUICKAPPS_EDITOR_URL` is the only remaining QuickApps knob.                                        |
 
 ### Worth setting in 1.0
 
@@ -261,6 +262,46 @@ complete list of the 41 supported flags and which are on by default — are in t
 [Chat Overlay Migration Guide § Migrate UI feature flags](chat-overlay-migration-guide.md#6-migrate-ui-feature-flags).
 They apply to a plain deployment too, not only to embedded ones.
 
+### Role-restricted creation
+
+Legacy `ENABLED_FEATURES_ROLES` mapped UI flags to the roles allowed to see
+them. It has no rename in 1.0, and neither it nor `ENABLED_UI_FEATURES_ROLES`
+is read: `ENABLED_UI_FEATURES` is the same for every user. Do not copy a legacy
+role map into a new variable as-is.
+
+Where a legacy rule only meant "these roles may create such entities", it
+moves to `CATALOG_CREATION_ROLES`, a creation-only policy that leaves browsing,
+using and editing existing entities alone (see
+[Catalog creation roles](../apps/chat-api/README.md#catalog-creation-roles)).
+Translate each rule by what it restricted, for example:
+
+```json
+// Legacy ENABLED_FEATURES_ROLES (simplified)
+{ "custom-applications": ["app-authors"] }
+```
+
+```json
+// CATALOG_CREATION_ROLES
+{
+  "types": {
+    "schema-app": ["app-authors"],
+    "custom-app": ["app-authors"]
+  },
+  "schemas": {
+    "https://example.test/schemas/runner-A": ["team-A"]
+  }
+}
+```
+
+- `custom-applications` → `types.schema-app`: runner-based applications.
+- Add `types.custom-app` only when schema-less custom applications should be
+  restricted as well.
+- Restrict individual runners under `schemas`, keyed by their **exact** schema
+  id; a display name does not match.
+- Legacy flags for other UI surfaces (sharing, publishing, settings, …) have no
+  mapping in this policy. They stay global through `ENABLED_UI_FEATURES` or an
+  overlay host's `enabledFeatures`.
+
 ## Themes
 
 The themes service and the `config.json` shape are unchanged, but the CSS
@@ -283,6 +324,23 @@ shapes, and the feature-flag set all changed.
 [Chat Overlay Migration Guide](chat-overlay-migration-guide.md) is the complete
 path, and `apps/chat-overlay-sandbox` is a ready-made host page for verifying an
 integration against a real deployment before touching your own.
+
+## Custom Viewers
+
+Applications configured with `viewer_url` or `dial:applicationTypeViewerUrl`
+keep working without changes to their DIAL Core configuration. On the chat side:
+
+- Move the viewer origin from `ALLOWED_IFRAME_SOURCES` (dropped) to
+  `ALLOWED_IFRAME_ORIGINS`.
+- The `playback` query parameter is no longer sent; 1.0 has no playback mode.
+- The viewer title — and with it the `<title>/` message namespace — is the
+  display name as configured, no longer localised. A viewer whose `appName`
+  matched a translated title must switch to the configured one.
+- From `CREATED_CONVERSATION_SUCCESS` and `UPDATED_CONVERSATION_SUCCESS` only
+  `payload.conversation.id` is read; the chat reloads the conversation itself.
+- The iframe sandbox no longer allows forms, popups, downloads or presentation.
+
+[Custom Viewers](custom-viewers.md) has the full contract.
 
 ## User data
 
@@ -333,5 +391,6 @@ though not through the overlay API.
 - [Chat API](../apps/chat-api/README.md#environment-variables) — the full variable reference for 1.0
 - [Chat Overlay Migration Guide](chat-overlay-migration-guide.md) — embedding and UI feature flags
 - [Theme Customization](theme-customization.md) — theming and legacy theme migration
+- [Custom Viewers](custom-viewers.md) — application viewers in 1.0
 - [Architecture](architecture.md) — how 1.0 is put together
 - [Auth subsystem](./auth/) — OIDC, session cookie, refresh, logout

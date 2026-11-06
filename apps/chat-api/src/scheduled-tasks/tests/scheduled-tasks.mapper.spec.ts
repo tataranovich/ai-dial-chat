@@ -141,11 +141,11 @@ describe('toUpstreamSchedulePayload', () => {
         url: 'http://dial-core/openai',
         api_version: DIAL_API_VERSION,
         create_conversation: true,
-        stream: false,
         extra_headers: {},
         retry: null,
         timeout: null,
         payload: {
+          stream: true,
           messages: [{ role: 'user', content: 'Summarize my inbox' }],
           model: 'gpt-4.1-mini-2025-04-14',
         },
@@ -171,12 +171,12 @@ describe('toUpstreamSchedulePayload', () => {
     expect(upstream.trigger).toEqual({
       cron: { fields: { minute: '0', hour: '*' } },
     });
-    expect(upstream.properties.stream).toBe(false);
+    expect(upstream.properties.payload.stream).toBe(true);
     expect(upstream.properties.create_conversation).toBe(true);
     expect(upstream.properties.extra_headers).toEqual({});
     expect(upstream.properties.retry).toBeNull();
     expect(upstream.properties.timeout).toBeNull();
-    expect(upstream.properties.payload).not.toHaveProperty('stream');
+    expect(upstream.properties).not.toHaveProperty('stream');
   });
 
   it('rejects a trigger with both date and cron', () => {
@@ -404,6 +404,31 @@ describe('fromUpstreamSchedule', () => {
       isActive: false,
       isDeleted: false,
     });
+  });
+
+  it('maps top-level model from a list item', () => {
+    const upstream: UpstreamScheduleResponse = {
+      id: 'sched_list',
+      display_name: 'Listed',
+      trigger: {},
+      trigger_type: 'cron',
+      model: 'gpt-4.1-mini-2025-04-14',
+    };
+
+    expect(fromUpstreamSchedule(upstream).model).toBe(
+      'gpt-4.1-mini-2025-04-14',
+    );
+  });
+
+  it('falls back to properties.payload.model when top-level model is absent', () => {
+    const upstream: UpstreamScheduleResponse = {
+      id: 'sched_get',
+      display_name: 'Fetched',
+      trigger: { date: '2026-07-24T09:00:00.000Z' },
+      properties: { payload: { model: 'gpt-4o' } },
+    };
+
+    expect(fromUpstreamSchedule(upstream).model).toBe('gpt-4o');
   });
 
   it('maps next_run_time and created_at when present', () => {
@@ -743,6 +768,48 @@ describe('fromUpstreamRun', () => {
 
     expect(result).toMatchObject({ resultStage: 'credentials' });
     expect(result).not.toHaveProperty('result');
+  });
+
+  it('maps result.error_text to errorText without exposing the rest of result', () => {
+    const result = fromUpstreamRun({
+      ...baseUpstreamRun,
+      status: 'error',
+      result: {
+        stage: 'credentials',
+        error_text: 'schedule lookup failed: timeout',
+        credentials_response: { status: 403, body: 'secret' },
+      },
+    });
+
+    expect(result).toMatchObject({
+      resultStage: 'credentials',
+      errorText: 'schedule lookup failed: timeout',
+    });
+    expect(result).not.toHaveProperty('credentials_response');
+  });
+
+  it('trims error_text and caps it at 1000 characters', () => {
+    const result = fromUpstreamRun({
+      ...baseUpstreamRun,
+      status: 'error',
+      result: { error_text: `  ${'x'.repeat(1500)}  ` },
+    });
+
+    expect(result.errorText).toBe('x'.repeat(1000));
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { error_text: null },
+    { error_text: 42 },
+    { error_text: '' },
+    { error_text: '   ' },
+  ])('omits a missing, non-string or blank error_text %#', (result) => {
+    expect(
+      fromUpstreamRun({ ...baseUpstreamRun, status: 'error', result }),
+    ).not.toHaveProperty('errorText');
   });
 
   it.each([undefined, null, {}, { stage: null }, { stage: 42 }])(

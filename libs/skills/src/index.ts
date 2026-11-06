@@ -10,6 +10,7 @@ export { useSkillSelectorOverlay } from './hooks/useSkillSelectorOverlay/useSkil
 export { buildFavoriteSkillItem } from './models/favorite-skill-item';
 export { matchSkillMentions } from './utils/skill-mention-matching';
 export { getSkillFallbackName } from './utils/skill-url';
+export { buildSkillSelectorOptions } from './utils/skill-selector-options';
 export {
   diffTextChange,
   findMentionAtCaret,
@@ -18,6 +19,7 @@ export {
 } from './utils/skill-mention-tracking';
 export type {
   ChatSkillDetailsTrigger,
+  ChatSkillColors,
   ChatSkillLabels,
   ChatSkillProps,
 } from './models/chat-skill-props';
@@ -36,7 +38,10 @@ export type {
 } from './models/skill-archive-upload-dialog-props';
 export type { SkillCatalogModalProps } from './models/skill-catalog-modal-props';
 export type { SkillDetailsSidePanelProps } from './models/skill-details-side-panel-props';
-export type { SkillInfoTooltipContentProps } from './models/skill-info-tooltip-content-props';
+export type {
+  SkillInfoTooltipContentColors,
+  SkillInfoTooltipContentProps,
+} from './models/skill-info-tooltip-content-props';
 export type { SkillMentionAnchor } from './models/skill-mention-anchor';
 export type {
   SkillDetailsPanelComponentProps,

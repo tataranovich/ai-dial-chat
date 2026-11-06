@@ -45,7 +45,7 @@ export class DeploymentsController {
     required: false,
     type: Boolean,
     description:
-      'Bypass the short server-side deployments list cache and refresh from DIAL Core',
+      'Bypass the short server-side deployments list cache and refresh from DIAL Core.',
   })
   @ApiDialCoreErrors()
   @ApiResponse({ status: 200, type: DeploymentsResponseDto })
@@ -69,10 +69,7 @@ export class DeploymentsController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { sub, at, bucket, claims } = req.user as SessionUser;
-    res.setHeader(
-      'Cache-Control',
-      query.refresh ? 'private, no-store' : 'private, max-age=30',
-    );
+    res.setHeader('Cache-Control', 'private, no-store');
     return this.deploymentsService.listDeployments(
       sub,
       at,
@@ -157,6 +154,51 @@ export class DeploymentsController {
   getDeploymentLimits(@Req() req: Request, @Param() params: GetDeploymentDto) {
     const { at } = req.user as SessionUser;
     return this.deploymentsService.getDeploymentLimits(params.deployment, at);
+  }
+
+  @Get(':deployment/usage')
+  @Header('Cache-Control', 'private, no-store')
+  @ApiOperation({
+    operationId: 'getDeploymentUsage',
+    summary: 'Get deployment attributed usage',
+    description:
+      "Returns a single deployment's own usage. Token and request stats are the same as on " +
+      "/limits, but cost stats are this deployment's own direct plus aggregated spend against " +
+      "DIAL Core's unlimited sentinel, not the caller's account-wide budget. " +
+      "Proxies GET /v1/deployments/{deployment_name}/usage using the caller's session access token. " +
+      'Not cached — every request hits DIAL Core for real-time usage data.',
+  })
+  @ApiDialCoreErrors()
+  @ApiResponse({
+    status: 200,
+    description: 'Successfully retrieved deployment usage',
+    type: DeploymentLimitsResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid deployment identifier' })
+  @ApiResponse({
+    status: 401,
+    description: 'Not authenticated — valid session cookie required',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Caller lacks permission to access deployment usage',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Deployment not found or not visible to the caller',
+  })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  @ApiResponse({
+    status: 502,
+    description: 'DIAL Core returned an error response',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'DIAL Core is unavailable or timed out',
+  })
+  getDeploymentUsage(@Req() req: Request, @Param() params: GetDeploymentDto) {
+    const { at } = req.user as SessionUser;
+    return this.deploymentsService.getDeploymentUsage(params.deployment, at);
   }
 
   @Get(':deployment/details')

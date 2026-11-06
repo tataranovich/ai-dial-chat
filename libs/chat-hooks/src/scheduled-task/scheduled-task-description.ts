@@ -17,6 +17,8 @@ export interface ScheduledTaskTriggerDescription {
   kind: ScheduledTaskTriggerDescriptionKind;
   time?: string;
   dayOfWeek?: string;
+  /** Every display-timezone weekday of a `Weekly` description, Monday first; `dayOfWeek` is its first entry. */
+  daysOfWeek?: string[];
   dayOfMonth?: string;
   intervalMinutes?: number;
   date?: Date;
@@ -113,18 +115,22 @@ export const describeScheduledTaskTrigger = (
     'saturday',
     'sunday',
   ];
-  const namedWeekday = rawWeekday
-    ? weekdayNames.findIndex(
-        (name) =>
-          name === rawWeekday.toLowerCase() ||
-          name.slice(0, 3) === rawWeekday.toLowerCase(),
-      )
-    : -1;
-  const weekday = namedWeekday >= 0 ? String(namedWeekday) : rawWeekday;
+  /* A comma list of weekdays (the Custom repeat) is described like Weekly,
+   * one entry per day; ranges and steps keep the raw-expression kind. */
+  const weekdays = (rawWeekday?.split(',') ?? []).map((entry) => {
+    const namedWeekday = weekdayNames.findIndex(
+      (name) =>
+        name === entry.toLowerCase() ||
+        name.slice(0, 3) === entry.toLowerCase(),
+    );
+    return namedWeekday >= 0 ? String(namedWeekday) : entry;
+  });
+  const weekday = weekdays[0];
   if (
     (day && weekday) ||
     (day && !isLastDayOfMonth && !/^\d+$/.test(day)) ||
-    (weekday && !/^\d+$/.test(weekday))
+    weekdays.some((entry) => !/^[0-6]$/.test(entry)) ||
+    new Set(weekdays).size !== weekdays.length
   )
     return custom();
   const everyHour = hour == null || hour === '*';
@@ -180,11 +186,16 @@ export const describeScheduledTaskTrigger = (
     return result(ScheduledTaskTriggerDescriptionKind.Hourly, {
       time: part('minute'),
     });
-  if (weekday)
+  if (weekday) {
+    const daysOfWeek = weekdays
+      .map((entry) => String((Number(entry) + dayShift + 7) % 7))
+      .sort((a, b) => Number(a) - Number(b));
     return result(ScheduledTaskTriggerDescriptionKind.Weekly, {
       time,
-      dayOfWeek: String((Number(weekday) + dayShift + 7) % 7),
+      dayOfWeek: daysOfWeek[0],
+      daysOfWeek,
     });
+  }
   if (isLastDayOfMonth)
     return dayShift === 1
       ? result(ScheduledTaskTriggerDescriptionKind.Monthly, {

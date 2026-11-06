@@ -2,6 +2,8 @@ import type { components } from '@epam/ai-dial-typescript-sdk';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   BadGatewayException,
+  BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -11,6 +13,10 @@ import {
   handleDialFetchError,
   mapDialHttpStatus,
 } from '../common/dial/dial-error.mapper';
+import type {
+  ResourceFoldersResponseDto,
+  ResourceIdResponseDto,
+} from '../common/dto/resource-folder.dto';
 import { isQuickAppSchema } from '../common/utils/application-schema';
 import { getBearerAuthHeaders } from '../common/utils/auth-header';
 import {
@@ -21,11 +27,23 @@ import {
   parseDialApplicationResource,
   type DialApplicationResource,
 } from '../common/utils/dial-application-resource';
+import {
+  DialResourceType,
+  assertOwnBucket,
+  buildFolderResourcePath,
+  getResourceLeaf,
+  listDialResourceFolders,
+  transferDialResource,
+} from '../common/utils/dial-resource-transfer';
 import { encodeDialResourcePath } from '../common/utils/encode-dial-path';
 import { DeploymentsService } from '../deployments/deployments.service';
 import { DeploymentsDetailsService } from '../deployments/details/deployments-details.service';
 import { withCachedDialRequest } from '../dial/cached-dial-request.helper';
 import { DialClientService } from '../dial/dial-client.service';
+import type {
+  CommitApplicationVersionDto,
+  ForkApplicationVersionDto,
+} from './dto/application-version.dto';
 import type { ApplicationsResponseDto } from './dto/application.dto';
 import type {
   CreateApplicationBodyDto,
@@ -38,6 +56,25 @@ import type {
 import { hoistApplicationFields } from './utils/application-body-mapping';
 
 type DialApplication = components['schemas']['Application'];
+
+/*
+ * How many storage paths a create-only request tries before giving up with
+ * 409: the original `name__version`, then `name-2__version` up to this count.
+ */
+const MAX_CREATE_PATH_ATTEMPTS = 20;
+
+/** Separates an application's name from its version in its storage path. */
+const APPLICATION_VERSION_SEPARATOR = '__';
+
+/** Storage path of the `attempt`-th (1-based) create-only candidate. */
+const buildApplicationPath = (
+  name: string,
+  version: string,
+  attempt: number,
+): string => {
+  const baseName = attempt === 1 ? name : `${name}-${attempt}`;
+  return `${baseName}${APPLICATION_VERSION_SEPARATOR}${version}`;
+};
 
 @Injectable()
 export class ApplicationsService {
@@ -137,8 +174,6 @@ export class ApplicationsService {
       }
 
       const version = body.version ?? '1.0.0';
-      const appPath = `${body.name}__${version}`;
-      const encodedPath = encodeURIComponent(appPath);
 
       const {
         endpoint,
@@ -146,7 +181,9 @@ export class ApplicationsService {
         inputAttachmentTypes,
         maxInputAttachments,
         remainingProperties,
-      } = hoistApplicationFields(body.applicationProperties);
+      } = body.preserveApplicationProperties
+        ? { remainingProperties: body.applicationProperties ?? {} }
+        : hoistApplicationFields(body.applicationProperties);
 
       const { displayName, description } = composeLocalizedFields(
         body.name,
@@ -167,8 +204,9 @@ export class ApplicationsService {
       if (body.topics != null && body.topics.length > 0)
         dialBody.descriptionKeywords = body.topics;
       if (endpoint != null) dialBody.endpoint = endpoint;
-      if (features != null)
-        dialBody.features = features as (typeof dialBody)['features'];
+      const effectiveFeatures = body.features ?? features;
+      if (effectiveFeatures != null)
+        dialBody.features = effectiveFeatures as (typeof dialBody)['features'];
       /*
        * Quick App creation has no `skills_supported` UI control in chat (unlike
        * the Admin app, which exposes one), so a chat-created Quick App would
@@ -178,28 +216,60 @@ export class ApplicationsService {
        * Quick App — a deliberate coupling of generic application-write logic
        * to Quick-App-specific business rules, accepted as the least-bad of
        * those three options.
+       *
+       * `system_prompt_supported` is also written as `false` on creation only:
+       * DIAL Core treats an unset flag as supported, so without it the chat
+       * shows the system prompt field for a Quick App whose prompt is owned by
+       * its orchestrator config. Updates leave it untouched. Explicit top-level
+       * `features` are stored as supplied (e.g. copied from a template that
+       * leaves the flag unset), so the default applies only without them.
        */
       if (isQuickAppSchema(body.type)) {
         dialBody.features = {
+          ...(body.features == null ? { system_prompt_supported: false } : {}),
           ...dialBody.features,
           skills_supported: true,
         } as (typeof dialBody)['features'];
       }
-      if (inputAttachmentTypes != null)
-        dialBody.inputAttachmentTypes = inputAttachmentTypes;
-      if (maxInputAttachments != null)
-        dialBody.maxInputAttachments = maxInputAttachments;
+      const attachmentTypes = body.inputAttachmentTypes ?? inputAttachmentTypes;
+      const attachmentLimit = body.maxInputAttachments ?? maxInputAttachments;
+      if (attachmentTypes != null)
+        dialBody.inputAttachmentTypes = attachmentTypes;
+      if (attachmentLimit != null)
+        dialBody.maxInputAttachments = attachmentLimit;
 
-      const response = await this.dialClient.client.saveCustomApplication(
-        bucket,
-        encodedPath,
-        {
-          headers: authHeaders,
-          body: dialBody,
-        },
-      );
-
-      if (response.error) {
+      /*
+       * The storage path is derived from the name at creation and never
+       * follows a later rename, so a path can be held by an app the user now
+       * sees under another name. Instead of rejecting a name nothing visible
+       * owns, a create-only request moves on to the next free path; each try
+       * is still atomic via `If-None-Match`, so no existing app is overwritten.
+       */
+      const maxAttempts = body.createOnly ? MAX_CREATE_PATH_ATTEMPTS : 1;
+      let appPath = '';
+      let encodedPath = '';
+      for (let attempt = 1; ; attempt++) {
+        appPath = buildApplicationPath(body.name, version, attempt);
+        encodedPath = buildFolderResourcePath(
+          body.folderPath ?? '',
+          encodeURIComponent(appPath),
+        );
+        const response = await this.dialClient.client.saveCustomApplication(
+          bucket,
+          encodedPath,
+          {
+            headers: {
+              ...authHeaders,
+              ...(body.createOnly ? { 'If-None-Match': '*' } : {}),
+            },
+            body: dialBody,
+          },
+        );
+        if (!response.error) break;
+        if (body.createOnly && response.response.status === 412) {
+          if (attempt < maxAttempts) continue;
+          throw new ConflictException('Application name already taken');
+        }
         return mapDialHttpStatus(
           response.response.status,
           'create application',
@@ -288,7 +358,13 @@ export class ApplicationsService {
       };
       if (description != null)
         mergedBody.description = description as unknown as string;
-      if (body.iconUrl != null) mergedBody.iconUrl = body.iconUrl;
+      /*
+       * An empty `iconUrl` is an explicit clear: the key is dropped from the
+       * merged body so the fully replaced resource no longer carries an icon.
+       * Omitted or `null` keeps the stored icon, like every other field here.
+       */
+      if (body.iconUrl === '') delete mergedBody.iconUrl;
+      else if (body.iconUrl != null) mergedBody.iconUrl = body.iconUrl;
       if (body.topics != null && body.topics.length > 0) {
         mergedBody.descriptionKeywords = body.topics;
       }
@@ -444,5 +520,343 @@ export class ApplicationsService {
         `Deleted application ${applicationName} but failed to invalidate list caches (sub: ${userSub}): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * Resolves `applicationName` to a resource in the caller's own bucket.
+   * Moving or versioning someone else's application is never a personal
+   * folder operation, even where a share grants write access.
+   */
+  private async resolveOwnApplication(
+    authHeaders: ReturnType<typeof getBearerAuthHeaders>,
+    applicationName: string,
+  ): Promise<DialApplicationResource> {
+    const bucket = await this.getUserBucket(authHeaders, 'get user bucket');
+    const resource = parseDialApplicationResource(applicationName) ?? {
+      bucket,
+      path: encodeDialResourcePath(applicationName),
+    };
+    assertOwnBucket(resource, bucket);
+    return resource;
+  }
+
+  /*
+   * The DIAL Core write already succeeded — a cache-layer hiccup must not turn
+   * it into an error response, so it is logged and swallowed. The details
+   * cache is keyed by application id, so every id the write touched is
+   * cleared to keep a re-opened editor from loading stale configuration.
+   */
+  private async invalidateAfterWrite(
+    userSub: string,
+    applicationIds: string[],
+    context: string,
+  ): Promise<void> {
+    try {
+      await this.cacheManager.del(`applications:list:${userSub}`);
+      await this.deploymentsService.invalidateListCache(userSub);
+      for (const id of applicationIds) {
+        await this.deploymentsDetailsService.invalidateDetailsCache(
+          userSub,
+          id,
+        );
+      }
+    } catch (err) {
+      handleDialFetchError(
+        err,
+        `invalidate caches after ${context} (sub: ${userSub})`,
+        this.logger,
+        0,
+        { swallow: true },
+      );
+    }
+  }
+
+  private async readApplication(
+    authHeaders: ReturnType<typeof getBearerAuthHeaders>,
+    resource: DialApplicationResource,
+    context: string,
+  ): Promise<{ body: DialApplication; etag: string | undefined }> {
+    const response = await this.dialClient.client.getCustomApplication(
+      resource.bucket,
+      resource.path,
+      { headers: authHeaders },
+    );
+    if (response.error) {
+      return mapDialHttpStatus(response.response.status, context, this.logger);
+    }
+    return {
+      body: response.data as DialApplication,
+      etag: response.response.headers?.get('etag') ?? undefined,
+    };
+  }
+
+  private async writeApplication(
+    authHeaders: ReturnType<typeof getBearerAuthHeaders>,
+    resource: DialApplicationResource,
+    body: DialApplication,
+    context: string,
+    ifMatch?: string,
+  ): Promise<void> {
+    const response = await this.dialClient.client.saveCustomApplication(
+      resource.bucket,
+      resource.path,
+      {
+        headers: {
+          ...authHeaders,
+          ...(ifMatch ? { 'If-Match': ifMatch } : {}),
+        },
+        body,
+      },
+    );
+    if (!response.error) return;
+    if (response.response.status === 412) {
+      this.logger.warn(`DIAL Core returned 412 for ${context}`);
+      throw new ConflictException(
+        'The application changed while it was being saved',
+      );
+    }
+    return mapDialHttpStatus(response.response.status, context, this.logger);
+  }
+
+  async listApplicationFolders(
+    accessToken: string,
+    folderPath: string,
+  ): Promise<ResourceFoldersResponseDto> {
+    const authHeaders = getBearerAuthHeaders(accessToken);
+    try {
+      const bucket = await this.getUserBucket(authHeaders, 'get user bucket');
+      const folders = await listDialResourceFolders(
+        this.dialClient.client,
+        DialResourceType.Applications,
+        authHeaders,
+        bucket,
+        folderPath,
+        this.logger,
+      );
+      return { folders };
+    } catch (err) {
+      return handleDialFetchError(
+        err,
+        'list application folders',
+        this.logger,
+        0,
+      );
+    }
+  }
+
+  async moveApplication(
+    userSub: string,
+    accessToken: string,
+    applicationName: string,
+    folderPath: string,
+  ): Promise<ResourceIdResponseDto> {
+    const authHeaders = getBearerAuthHeaders(accessToken);
+    const context = `move application "${applicationName}"`;
+    let destination: DialApplicationResource;
+    try {
+      const source = await this.resolveOwnApplication(
+        authHeaders,
+        applicationName,
+      );
+      destination = {
+        bucket: source.bucket,
+        path: buildFolderResourcePath(folderPath, getResourceLeaf(source.path)),
+      };
+      if (destination.path !== source.path) {
+        await transferDialResource({
+          client: this.dialClient.client,
+          operation: 'moveResource',
+          type: DialResourceType.Applications,
+          headers: authHeaders,
+          source,
+          destination,
+          context,
+          logger: this.logger,
+        });
+      }
+    } catch (err) {
+      return handleDialFetchError(err, context, this.logger, 0);
+    }
+
+    const id = `applications/${destination.bucket}/${destination.path}`;
+    await this.invalidateAfterWrite(userSub, [applicationName, id], context);
+    return { id };
+  }
+
+  /**
+   * Copies the stored application to `{folderPath}/{name}__{version}` and
+   * stamps the copy with `version`. The copy is the pre-edit snapshot a
+   * Quick App save-as-new-version starts from: the embedded editor then saves
+   * its edits to the source and {@link commitApplicationVersion} swaps the
+   * two bodies, so the edits end up in the new version only.
+   */
+  async forkApplicationVersion(
+    userSub: string,
+    accessToken: string,
+    applicationName: string,
+    body: ForkApplicationVersionDto,
+  ): Promise<ResourceIdResponseDto> {
+    const authHeaders = getBearerAuthHeaders(accessToken);
+    const context = `fork application "${applicationName}"`;
+    let snapshot: DialApplicationResource;
+    try {
+      const source = await this.resolveOwnApplication(
+        authHeaders,
+        applicationName,
+      );
+      // The name itself may contain the separator; the version follows the last one.
+      const leaf = getResourceLeaf(source.path);
+      const separatorIndex = leaf.lastIndexOf(APPLICATION_VERSION_SEPARATOR);
+      const baseName =
+        separatorIndex === -1 ? leaf : leaf.slice(0, separatorIndex);
+      snapshot = {
+        bucket: source.bucket,
+        path: buildFolderResourcePath(
+          body.folderPath,
+          `${baseName}${APPLICATION_VERSION_SEPARATOR}${encodeURIComponent(body.version)}`,
+        ),
+      };
+      await transferDialResource({
+        client: this.dialClient.client,
+        operation: 'copyResource',
+        type: DialResourceType.Applications,
+        headers: authHeaders,
+        source,
+        destination: snapshot,
+        context,
+        logger: this.logger,
+      });
+
+      try {
+        const { body: copied, etag } = await this.readApplication(
+          authHeaders,
+          snapshot,
+          context,
+        );
+        await this.writeApplication(
+          authHeaders,
+          snapshot,
+          { ...copied, displayVersion: body.version },
+          context,
+          etag,
+        );
+      } catch (err) {
+        // A copy still carrying the old version is never left behind.
+        await this.dialClient.client
+          .deleteCustomApplication(snapshot.bucket, snapshot.path, {
+            headers: authHeaders,
+          })
+          .catch(() => undefined);
+        throw err;
+      }
+    } catch (err) {
+      return handleDialFetchError(err, context, this.logger, 0);
+    }
+
+    const id = `applications/${snapshot.bucket}/${snapshot.path}`;
+    await this.invalidateAfterWrite(userSub, [id], context);
+    return { id };
+  }
+
+  /*
+   * Best-effort undo of the first commit write. If it fails too, the edits
+   * are in both the source and the snapshot — duplicated, never lost.
+   */
+  private async rollbackSnapshot(
+    authHeaders: ReturnType<typeof getBearerAuthHeaders>,
+    snapshot: DialApplicationResource,
+    preEditBody: DialApplication,
+    context: string,
+  ): Promise<void> {
+    try {
+      await this.writeApplication(
+        authHeaders,
+        snapshot,
+        preEditBody,
+        `${context} (rollback)`,
+      );
+    } catch (err) {
+      handleDialFetchError(err, `${context} (rollback)`, this.logger, 0, {
+        swallow: true,
+      });
+    }
+  }
+
+  /**
+   * Swaps the bodies of the source application and its forked snapshot,
+   * each keeping its own `displayVersion`: the snapshot gets the edits the
+   * source was saved with, and the source gets back the pre-edit body the
+   * snapshot preserved. The snapshot is written first, so the edits are
+   * stored in the new version before the source is overwritten; if
+   * restoring the source then fails, the snapshot is rolled back and the
+   * edits stay in the source. Either way a failure never loses the edits.
+   * Both writes are conditional on the ETags read here, so a concurrent
+   * change answers 409.
+   */
+  async commitApplicationVersion(
+    userSub: string,
+    accessToken: string,
+    applicationName: string,
+    body: CommitApplicationVersionDto,
+  ): Promise<ResourceIdResponseDto> {
+    const authHeaders = getBearerAuthHeaders(accessToken);
+    const context = `commit application version "${applicationName}"`;
+    try {
+      const source = await this.resolveOwnApplication(
+        authHeaders,
+        applicationName,
+      );
+      const snapshot = parseDialApplicationResource(body.snapshotId);
+      if (snapshot == null) {
+        throw new BadRequestException(
+          'snapshotId must be a full applications/{bucket}/{path} id',
+        );
+      }
+      assertOwnBucket(snapshot, source.bucket);
+
+      const [sourceState, snapshotState] = await Promise.all([
+        this.readApplication(authHeaders, source, context),
+        this.readApplication(authHeaders, snapshot, context),
+      ]);
+      await this.writeApplication(
+        authHeaders,
+        snapshot,
+        {
+          ...sourceState.body,
+          displayVersion: snapshotState.body.displayVersion,
+        },
+        context,
+        snapshotState.etag,
+      );
+      try {
+        await this.writeApplication(
+          authHeaders,
+          source,
+          {
+            ...snapshotState.body,
+            displayVersion: sourceState.body.displayVersion,
+          },
+          context,
+          sourceState.etag,
+        );
+      } catch (err) {
+        await this.rollbackSnapshot(
+          authHeaders,
+          snapshot,
+          snapshotState.body,
+          context,
+        );
+        throw err;
+      }
+    } catch (err) {
+      return handleDialFetchError(err, context, this.logger, 0);
+    }
+
+    await this.invalidateAfterWrite(
+      userSub,
+      [applicationName, body.snapshotId],
+      context,
+    );
+    return { id: body.snapshotId };
   }
 }

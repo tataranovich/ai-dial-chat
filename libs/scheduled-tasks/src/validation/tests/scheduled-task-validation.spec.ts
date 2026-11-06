@@ -99,6 +99,59 @@ describe('validateScheduledTaskFormValues', () => {
     ).toBe(ScheduledTaskValidationErrorCode.DayOfMonthInvalid);
   });
 
+  it('requires at least one day and a valid time for a custom repeat', () => {
+    expect(
+      validateScheduledTaskFormValues(
+        {
+          ...values,
+          repeat: ScheduledTaskRepeat.Custom,
+          daysOfWeek: [],
+          time: '',
+        },
+        { now },
+      ),
+    ).toEqual({
+      daysOfWeek: ScheduledTaskValidationErrorCode.DaysOfWeekInvalid,
+      time: ScheduledTaskValidationErrorCode.TimeInvalid,
+    });
+  });
+
+  it('accepts one or several distinct custom days', () => {
+    for (const daysOfWeek of [['3'], ['0', '2', '4']]) {
+      expect(
+        validateScheduledTaskFormValues(
+          { ...values, repeat: ScheduledTaskRepeat.Custom, daysOfWeek },
+          { now },
+        ),
+      ).toEqual({});
+    }
+  });
+
+  it('rejects unknown or repeated custom days', () => {
+    for (const daysOfWeek of [['7'], ['1', '1']]) {
+      expect(
+        validateScheduledTaskFormValues(
+          { ...values, repeat: ScheduledTaskRepeat.Custom, daysOfWeek },
+          { now },
+        ).daysOfWeek,
+      ).toBe(ScheduledTaskValidationErrorCode.DaysOfWeekInvalid);
+    }
+  });
+
+  it('checks only the single weekday for a weekly repeat', () => {
+    expect(
+      validateScheduledTaskFormValues(
+        {
+          ...values,
+          repeat: ScheduledTaskRepeat.Weekly,
+          dayOfWeek: '0',
+          daysOfWeek: [],
+        },
+        { now },
+      ),
+    ).toEqual({});
+  });
+
   it('uses the injected clock and validates only active fields', () => {
     expect(
       validateScheduledTaskFormValues(
@@ -208,5 +261,54 @@ describe('validateScheduledTaskFormValues', () => {
         { now: localNow, originalEndDate: '2026-09-21' },
       ),
     ).toEqual({ endDate: ScheduledTaskValidationErrorCode.EndDateInPast });
+  });
+
+  it('accepts date-only window boundaries for an hourly repeat', () => {
+    const localNow = new Date(2026, 8, 22, 10, 0);
+
+    expect(
+      validateScheduledTaskFormValues(
+        {
+          ...values,
+          repeat: ScheduledTaskRepeat.Hourly,
+          minute: '5',
+          startDate: '2026-09-22',
+          endDate: '2026-09-23',
+        },
+        { now: localNow },
+      ),
+    ).toEqual({});
+  });
+
+  it('rejects an hourly boundary on an earlier day', () => {
+    const localNow = new Date(2026, 8, 22, 10, 0);
+
+    expect(
+      validateScheduledTaskFormValues(
+        {
+          ...values,
+          repeat: ScheduledTaskRepeat.Hourly,
+          minute: '5',
+          startDate: '2026-09-21',
+        },
+        { now: localNow },
+      ),
+    ).toEqual({ startDate: ScheduledTaskValidationErrorCode.StartDateInPast });
+  });
+
+  it('rejects a time-carrying boundary, which is not a whole day', () => {
+    const localNow = new Date(2026, 8, 22, 10, 0);
+
+    expect(
+      validateScheduledTaskFormValues(
+        {
+          ...values,
+          repeat: ScheduledTaskRepeat.Hourly,
+          minute: '5',
+          endDate: '2026-09-23T18:30',
+        },
+        { now: localNow },
+      ),
+    ).toEqual({ endDate: ScheduledTaskValidationErrorCode.EndDateInvalid });
   });
 });

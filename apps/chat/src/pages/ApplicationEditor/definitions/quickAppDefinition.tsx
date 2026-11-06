@@ -2,12 +2,14 @@ import {
   SEMVER_VERSION_PATTERN,
   type DeploymentCreationFormValues,
 } from '@epam/ai-dial-builder-form';
+import { CatalogCreationType } from '@epam/ai-dial-chat-api-client';
 import { isQuickAppSchema } from '@epam/ai-dial-chat-hooks';
 import {
   AppsEditorI18nKeys,
   BasicI18nKeys,
 } from '../../../constants/translation-keys';
 import type {
+  ApplicationCreateOptions,
   ApplicationEditorContext,
   EmptyApplicationSetup,
 } from '../../../models/application-editor';
@@ -21,14 +23,17 @@ import { NotifiableEntity } from '../../../types/entity-notification';
 import {
   defineApplicationEditor,
   resolveSchemaNotificationTarget,
+  toFolderPathField,
 } from '../../../utils/application-editor';
 import QuickAppPreview from '../setup/QuickAppPreview';
 import QuickAppSetup from '../setup/QuickAppSetup';
 import {
-  SCHEMA_APP_EMPTY_METADATA,
+  SCHEMA_APP_DEFAULT_METADATA,
   getSchemaAppMetadataLabelOverrides,
   getSchemaAppTitle,
+  getSchemaAppTypeName,
   getSchemaId,
+  getVersionLockedInEditMode,
   toLocaleFields,
 } from './schemaDefinitionHelpers';
 
@@ -57,6 +62,7 @@ const create = async (
   metadata: DeploymentCreationFormValues,
   _setup: EmptyApplicationSetup,
   ctx: ApplicationEditorContext,
+  options?: ApplicationCreateOptions,
 ) => {
   const schemaId = getSchemaId(ctx);
   const applicationProperties = isQuickAppSchema({ id: schemaId })
@@ -77,6 +83,7 @@ const create = async (
     topics: metadata.topics.length > 0 ? metadata.topics : undefined,
     applicationProperties,
     ...toLocaleFields(metadata),
+    ...toFolderPathField(options),
   });
   return { id: result.id };
 };
@@ -85,6 +92,7 @@ const create = async (
 export const quickAppDefinition =
   defineApplicationEditor<EmptyApplicationSetup>({
     kind: ApplicationEditorKind.QuickApp,
+    creationType: CatalogCreationType.SchemaApp,
     notifiableEntity: NotifiableEntity.QuickApp,
     getNotificationTarget: resolveSchemaNotificationTarget,
     createStrategy: ApplicationCreateStrategy.MetadataFirst,
@@ -105,7 +113,7 @@ export const quickAppDefinition =
       validateVersionPattern: SEMVER_VERSION_PATTERN,
     },
     getMetadataLabelOverrides: getSchemaAppMetadataLabelOverrides,
-    defaultMetadata: SCHEMA_APP_EMPTY_METADATA,
+    defaultMetadata: SCHEMA_APP_DEFAULT_METADATA,
     defaultSetup: EMPTY_SETUP,
     validateSetup: () => ({}),
     Setup: QuickAppSetup,
@@ -113,4 +121,6 @@ export const quickAppDefinition =
     Preview: QuickAppPreview,
     isPreviewAvailable,
     create,
+    savePanel: { getTypeLabel: getSchemaAppTypeName },
+    getMetadataFieldState: getVersionLockedInEditMode,
   });

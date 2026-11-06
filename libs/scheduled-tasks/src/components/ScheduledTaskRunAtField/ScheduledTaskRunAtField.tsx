@@ -1,36 +1,54 @@
-import { mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  mergeClasses,
+  useControlErrorAssociation,
+} from '@epam/ai-dial-chat-shared';
 import {
   Calendar,
   CalendarMode,
+  type CalendarTimeFieldRenderProps,
   type CalendarValue,
+  ErrorText,
+  LiveRegionPoliteness,
 } from '@epam/ai-dial-ui-kit';
-import { useRef, type FC } from 'react';
+import { useId, useRef, type FC } from 'react';
 import {
   calendarValueToRunAt,
   runAtToCalendarValue,
 } from '../../utils/calendar-value';
+import { ScheduledTaskRunAtTimeField } from '../ScheduledTaskRunAtTimeField/ScheduledTaskRunAtTimeField';
 import styles from './ScheduledTaskRunAtField.module.scss';
 
 export interface ScheduledTaskRunAtFieldProps {
   /** Label rendered above the picker by the kit Calendar. */
   label: string;
+  /** Placeholder shown in the picker when unset. */
+  placeholder: string;
   /** Current `datetime-local`-style value (`YYYY-MM-DDTHH:mm`), empty when unset. */
   value: string;
   /** Called with the next `datetime-local`-style value. */
   onChange: (value: string) => void;
-  /** Submit-time validation error rendered under the picker. */
+  /** Disables the picker, e.g. while the form is submitting. */
+  disabled?: boolean;
+  /** Submit-time validation error rendered under the picker, associated with it via `aria-describedby` and announced through the kit `ErrorText` `announce` live region, mounted before the error arrives. */
   error?: string;
-  /** CSS class applied to the error text. Defaults to `'dial-small-text'`. */
+  /** CSS class applied to the error text. Defaults to `'dial-tiny-text'`. */
   errorClassName?: string;
 }
+
+/** Footer time control of the date-time popover. */
+const renderTimeField = (props: CalendarTimeFieldRenderProps) => (
+  <ScheduledTaskRunAtTimeField {...props} />
+);
 
 /** One-shot "run at" date-time picker for the create/edit form: the kit's masked `Calendar` whose earliest selectable moment is pinned at mount, and the submit-time error below it. */
 export const ScheduledTaskRunAtField: FC<ScheduledTaskRunAtFieldProps> = ({
   label,
+  placeholder,
   value,
   onChange,
+  disabled,
   error,
-  errorClassName = 'dial-small-text',
+  errorClassName = 'dial-tiny-text',
 }) => {
   /* Pinned at mount through a ref — `useMemo` is only a performance hint
    * React may discard, and the earliest selectable moment must stay fixed for
@@ -39,6 +57,13 @@ export const ScheduledTaskRunAtField: FC<ScheduledTaskRunAtFieldProps> = ({
 
   const handleCalendarChange = (next: CalendarValue) =>
     onChange(calendarValueToRunAt(next));
+
+  const errorId = useId();
+  useControlErrorAssociation(
+    () => document.getElementById('scheduled-task-run-at'),
+    errorId,
+    Boolean(error),
+  );
 
   return (
     <div className="flex flex-col gap-1">
@@ -49,11 +74,18 @@ export const ScheduledTaskRunAtField: FC<ScheduledTaskRunAtFieldProps> = ({
         onChange={handleCalendarChange}
         minDate={minDate}
         labelProps={{ label, required: true }}
+        placeholder={placeholder}
         invalid={Boolean(error)}
+        disabled={disabled}
+        renderTimeField={renderTimeField}
       />
-      {error && (
-        <p className={mergeClasses(errorClassName, styles.error)}>{error}</p>
-      )}
+      {/* Mounted before the error arrives, so it is announced; out of the column gap while empty. */}
+      <ErrorText
+        announce={LiveRegionPoliteness.Assertive}
+        id={errorId}
+        className={mergeClasses(errorClassName, styles.error)}
+        text={error ?? ''}
+      />
     </div>
   );
 };

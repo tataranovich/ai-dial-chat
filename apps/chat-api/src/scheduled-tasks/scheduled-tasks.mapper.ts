@@ -38,11 +38,11 @@ interface UpstreamSchedulePayload {
     url: string;
     api_version: string;
     create_conversation: true;
-    stream: false;
     extra_headers: Record<string, never>;
     retry: null;
     timeout: null;
     payload: {
+      stream: true;
       messages: {
         role: 'user';
         content: string;
@@ -70,6 +70,12 @@ export interface UpstreamScheduleResponse {
   service_id?: string;
   created_by?: string;
   description?: string;
+  /*
+   * List items expose the model as a top-level field (no nested
+   * `properties`); GET/create/update responses carry it under
+   * `properties.payload.model` — see `fromUpstreamSchedule`.
+   */
+  model?: string;
   is_deleted?: boolean;
   properties?: {
     payload?: {
@@ -154,11 +160,11 @@ export const toUpstreamSchedulePayload = (
     url: buildScheduledTaskChatCompletionUrl(dialCoreUrl),
     api_version: dialApiVersion,
     create_conversation: true,
-    stream: false,
     extra_headers: {},
     retry: null,
     timeout: null,
     payload: {
+      stream: true,
       messages: [
         {
           role: 'user',
@@ -240,7 +246,7 @@ export const fromUpstreamSchedule = (
   serviceId: upstream.service_id,
   createdBy: upstream.created_by,
   description: upstream.description,
-  model: upstream.properties?.payload?.model,
+  model: upstream.model ?? upstream.properties?.payload?.model,
   prompt: upstream.properties?.payload?.messages?.[0]?.content,
   skillUrls:
     upstream.properties?.payload?.messages?.[0]?.custom_content?.skills?.map(
@@ -254,8 +260,13 @@ export interface UpstreamScheduleRun {
   start_time: string;
   end_time?: string | null;
   conversation_id?: string | null;
-  result?: ({ stage?: unknown } & Record<string, unknown>) | null;
+  result?:
+    | ({ stage?: unknown; error_text?: unknown } & Record<string, unknown>)
+    | null;
 }
+
+/* Scheduler's error_text is a raw exception string; cap what reaches the client. */
+const RUN_ERROR_TEXT_MAX_LENGTH = 1000;
 
 const UPSTREAM_RUN_STATUS_MAP: Record<string, ScheduledTaskRunStatus> = {
   success: ScheduledTaskRunStatus.Success,
@@ -279,6 +290,11 @@ export const fromUpstreamRun = (
   upstream: UpstreamScheduleRun,
 ): ScheduledTaskRunDto => {
   const resultStage = upstream.result?.stage;
+  const rawErrorText = upstream.result?.error_text;
+  const errorText =
+    typeof rawErrorText === 'string'
+      ? rawErrorText.trim().slice(0, RUN_ERROR_TEXT_MAX_LENGTH)
+      : undefined;
 
   return {
     id: upstream.id,
@@ -292,5 +308,60 @@ export const fromUpstreamRun = (
     ),
     conversationId: upstream.conversation_id ?? undefined,
     ...(typeof resultStage === 'string' ? { resultStage } : {}),
+    ...(errorText ? { errorText } : {}),
+  };
+};
+
+/*
+ * The DIAL Scheduler list endpoint returns a paginated envelope
+ * (`{ count, limit, offset, results, next, previous }`), not a bare array
+ * or an `{ items }` wrapper — `results` is checked first since it's the
+ * shape confirmed against a live instance; `items`/array are kept as
+ * fallbacks in case a future Scheduler version changes the envelope.
+ */
+export const extractScheduleListItems = (
+  result: UpstreamScheduleResponse,
+): UpstreamScheduleResponse[] => {
+  if (Array.isArray(result)) {
+    return result as unknown as UpstreamScheduleResponse[];
+  }
+  const envelope = result as unknown as {
+    results?: UpstreamScheduleResponse[];
+    items?: UpstreamScheduleResponse[];
+  };
+  return envelope.results ?? envelope.items ?? [];
+};
+
+/*
+ * Only present when the upstream response is the paginated envelope
+ * (`{ count, limit, offset, results, next, previous }`); a bare array or
+ * an `{ items }` fallback shape has none of these, so every field stays
+ * `undefined` in that case.
+ */
+export const extractScheduleListPagination = (
+  result: UpstreamScheduleResponse,
+): {
+  count?: number;
+  limit?: number;
+  offset?: number;
+  next?: string | null;
+  previous?: string | null;
+} => {
+  if (Array.isArray(result)) {
+    return {};
+  }
+  const envelope = result as unknown as {
+    count?: number;
+    limit?: number;
+    offset?: number;
+    next?: string | null;
+    previous?: string | null;
+  };
+  return {
+    count: envelope.count,
+    limit: envelope.limit,
+    offset: envelope.offset,
+    next: envelope.next,
+    previous: envelope.previous,
   };
 };

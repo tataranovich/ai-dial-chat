@@ -72,36 +72,41 @@ This repository SHALL NOT assume the embedded editor honors those fields. Until 
 
 ### Requirement: Editing General step fields persists the changes on Save & Exit
 
-In edit mode (an `appId` is known, whether from the URL or from an in-place create in this session), metadata edits SHALL be held in memory and persisted only when the user clicks **Save**.
+In edit mode (an `appId` is known, whether from the URL or from an in-place create in this session), metadata edits SHALL be held in memory and persisted only when the user confirms **Save** in the Save panel (see the `resource-save-panel` capability). Clicking the editor's Save opens that panel. The Version field SHALL be read-only in edit mode (`MetadataForm` `isVersionReadOnly`), and a version change happens only through the panel's "Save as new version".
 
-When Save is clicked, the editor SHALL do the following:
+When the panel's save writes to the current app (keep version, or step 2 of a new-version save), the editor SHALL do the following:
 
-- It SHALL always include the current metadata values (name, description, icon URL, topics and `display_version`) as a `general` payload on the `TriggerSave` message posted to the embedded Setup editor. The embedded editor persists them as part of the single save it already performs.
+- It SHALL always include the current metadata values (name, description, icon URL, topics and `display_version`) as a `general` payload on the `TriggerSave` message posted to the embedded Setup editor, for both Save and Preview. The embedded editor persists them as part of the single save it already performs and is the single writer: the host makes no follow-up `updateApplication` request.
 - The `general` payload SHALL NOT include an `intro` property or the backend `version` field.
-- After the embedded editor reports `SaveSuccess`, `QuickAppSetup` SHALL make one follow-up `updateApplication` request (`reassertSkillsSupport`) carrying the current name, description, icon URL, topics and `locales`/`primaryLocale` (never `display_version`, `version` or `application_properties`), so the backend force-sets `features.skills_supported` (see `applications-write-api`); the save counts as successful only once that request finishes. The same follow-up runs after the `TriggerSave` issued for Preview.
 - The `general` payload SHALL NOT alter the application's setup configuration (`application_properties`, including orchestrator/tool set state) or its `version`.
 
-Triggering Preview SHALL NOT include a `general` payload.
-
 #### Scenario: Save forwards edited metadata to the embedded editor
-- **WHEN** a user edits Topic, Description, Icon, Name or Version of an existing Quick App and clicks Save
-- **THEN** the `TriggerSave` message includes a `general` payload carrying the edited values (with no `intro` property), and the host's only own request is the follow-up `updateApplication` skills-support reassertion
+- **WHEN** a user edits Topic, Description, Icon or Name of an existing Quick App, clicks Save, and confirms "Keep version" in the panel
+- **THEN** the `TriggerSave` message includes a `general` payload carrying the edited values (with no `intro` property), and the host makes no `updateApplication` request of its own
 
 #### Scenario: Save still forwards metadata when it is unchanged
-- **WHEN** a user clicks Save without editing any metadata field
-- **THEN** the `TriggerSave` message still includes a `general` payload carrying the current values, followed by the same `updateApplication` skills-support reassertion
+- **WHEN** a user confirms the panel's Save without editing any metadata field
+- **THEN** the `TriggerSave` message still includes a `general` payload carrying the current values
 
 #### Scenario: Save after an in-place create forwards metadata
-- **WHEN** a user creates a Quick App in this session, edits its Description in the Metadata section and clicks Save
+- **WHEN** a user creates a Quick App in this session, edits its Description in the Metadata section, clicks Save and confirms the panel
 - **THEN** the `TriggerSave` message includes a `general` payload carrying the edited Description
 
-#### Scenario: Preview does not forward metadata
+#### Scenario: Preview forwards metadata
 - **WHEN** a user triggers Preview
-- **THEN** the `TriggerSave` message posted to the embedded editor has no `general` payload
+- **THEN** the `TriggerSave` message posted to the embedded editor includes the same `general` payload as Save, the Save panel does not open, and the host makes no `updateApplication` request after `SaveSuccess`
 
 #### Scenario: Save does not affect setup configuration or version
 - **WHEN** metadata edits are forwarded on Save for an app that already has orchestrator or tool set configuration, or a `version`
 - **THEN** that configuration and version are unchanged after the save completes
+
+#### Scenario: Version is read-only in edit mode
+- **WHEN** a user opens an existing Quick App in the editor
+- **THEN** the Version field is read-only and its tooltip says that versions are changed with "Save as new version"
+
+#### Scenario: Version is editable on create
+- **WHEN** a user creates a new Quick App
+- **THEN** the Version field is editable, as before
 
 ### Requirement: SaveSuccess reports whether persisted data changed
 
@@ -157,10 +162,12 @@ calling it). `QuickAppSetup` (`apps/chat/src/pages/ApplicationEditor/setup/Quick
 
 In edit mode, the **Save** button and the **Preview** action SHALL be disabled until the Setup section's embedded editor has signaled it is ready to save (`AppsEditorEvent.ReadyToSave`). That editor runs in an iframe and communicates over `postMessage`.
 
-- **Readiness signals.** `ReadyToSave` is distinct from `AppsEditorEvent.ReadyToInteract`. `ReadyToInteract` only indicates that the iframe's UI has rendered, and it continues to control the loading-spinner overlay independently. `ReadyToSave` SHALL indicate that the embedded editor has finished loading and validating its own application model, so a save is safe.
+- **Readiness signals.** `ReadyToSave` is distinct from `AppsEditorEvent.ReadyToInteract`. `ReadyToInteract` only indicates that the iframe's UI has rendered, and it continues to control the loading-spinner overlay independently. `ReadyToSave` SHALL indicate that the embedded editor has finished loading and validating its own application model, so a save is safe. `AppEditorIframe` SHALL receive these signals through `AppsEditorHost` from `@epam/ai-dial-visualizer-connector`, with the expected sender window, origin, and application namespace checked. Uppercase visualizer `READY` / `READY_TO_INTERACT` messages SHALL NOT substitute for editor readiness.
 - **Save timeout.** A save or preview that receives no `SaveSuccess`/`SaveError` within a bounded timeout SHALL time out, reset the loading state and surface an error.
 - **Readiness timeout.** If `ReadyToSave` never arrives within a bounded readiness timeout after the Setup editor mounts, the system SHALL surface an inline error explaining that the editor did not report readiness.
-- **Logged out.** The embedded editor MAY instead post `LoggedOut`. In that case the host SHALL NOT surface the readiness-timeout error, while or after `LoggedOut` is received, and SHALL clear an instance of it already shown. Save and Preview SHALL remain disabled.
+- **Readiness recovery.** `QuickAppSetup` SHALL keep the readiness-timeout error separate from save failures and clear it when `ReadyToSave` arrives, including after the timeout. Each new iframe load reported by `AppEditorIframe` (mount, URL change, or explicit Reload) SHALL clear the previous readiness-timeout error and start a fresh bounded wait, even if the previous load never became ready. These readiness transitions SHALL NOT clear or replace an existing save failure. Re-rendering without a new iframe load SHALL NOT restart the wait.
+- **Form validity.** The embedded editor posts `VALIDITY_STATE` with `{ isValid }` (separate from its `DIRTY_STATE`) whenever its form's validity changes, including `{ isValid: false }` on mount when the form starts invalid (e.g. blank Instructions). While `isValid` is `false`, Save and Preview SHALL be disabled, as before `ReadyToSave`. The host SHALL accept the message only from the embedded editor's window, SHALL treat the form as valid until told otherwise, and SHALL reset to valid when the iframe reloads for a different app or schema.
+- **Logged out.** The embedded editor MAY instead post `LoggedOut`. In that case the host SHALL revoke any previous save readiness, SHALL NOT surface the readiness-timeout error while the editor remains logged out, and SHALL clear an instance of it already shown. Save and Preview SHALL remain disabled. A later `ReadyToSave` SHALL clear the logged-out state and restore readiness subject to form validity, without requiring an iframe reload.
 
 In create mode, before the app exists, the Create button is not gated by readiness, and Preview is disabled.
 
@@ -172,9 +179,21 @@ In create mode, before the app exists, the Create button is not gated by readine
 - **WHEN** the readiness timeout has already surfaced the "not ready" error and the iframe then posts `LoggedOut`
 - **THEN** the "not ready" error is cleared
 
+#### Scenario: Login recovery restores readiness without reloading
+- **WHEN** the same iframe posts `LoggedOut` and later `ReadyToSave`
+- **THEN** the host clears its logged-out state and enables Save and Preview if the form is valid
+
+#### Scenario: Logout revokes previously granted readiness
+- **WHEN** the same iframe posts `ReadyToSave` and later `LoggedOut`
+- **THEN** Save and Preview become disabled again
+
 #### Scenario: Save is disabled before the Setup editor is ready to save
 - **WHEN** in edit mode the iframe has not yet sent `ReadyToSave`
 - **THEN** the Save button is disabled and cannot trigger a save
+
+#### Scenario: An invalid form disables Save and Preview
+- **WHEN** the iframe has sent `ReadyToSave` and then `VALIDITY_STATE` with `isValid: false`
+- **THEN** Save and Preview are disabled, and re-enable once the iframe sends `VALIDITY_STATE` with `isValid: true`
 
 #### Scenario: Preview is disabled before the Setup editor is ready to save
 - **WHEN** the iframe has not yet sent `ReadyToSave`
@@ -199,6 +218,19 @@ In create mode, before the app exists, the Create button is not gated by readine
 #### Scenario: A Setup editor that never signals readiness surfaces an error
 - **WHEN** the iframe has not sent `ReadyToSave` within the bounded readiness timeout after mounting
 - **THEN** an inline error explaining that the editor did not report readiness is shown, distinct from the save-timeout error
+
+#### Scenario: Late readiness clears the timeout error
+- **WHEN** the readiness timeout has surfaced the "not ready" error and the iframe then posts `ReadyToSave`
+- **THEN** that error disappears without a page reload
+
+#### Scenario: Reloading an editor that never became ready starts a fresh wait
+- **WHEN** a new iframe load starts before `ReadyToSave` has arrived for the previous load
+- **THEN** the previous readiness-timeout error and deadline are cleared
+- **AND** the new load receives the full readiness timeout before a new "not ready" error can appear
+
+#### Scenario: Readiness recovery preserves a save failure
+- **WHEN** a save failure is displayed and the iframe reports readiness or starts a new load
+- **THEN** the save failure remains displayed independently of the readiness-timeout state
 
 #### Scenario: Create is not gated by iframe readiness
 - **WHEN** the editor is in create mode with no `appId`

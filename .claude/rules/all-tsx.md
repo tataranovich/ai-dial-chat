@@ -12,6 +12,31 @@ alwaysApply: false
 
 Always prefer Tailwind utility classes over inline `style` props. Use the `style` prop only for dynamic computed values (e.g., pixel values from JS measurements, CSS custom properties set by user overrides) that cannot be expressed as static Tailwind classes.
 
+## Canonical Tailwind v4 classes
+
+The workspace runs Tailwind v4. v3 spellings still compile, but
+`tailwindcss/enforces-canonical-classname` is an `error`, so lint fails on
+them. Write the v4 form from the start:
+
+| v3 spelling (lint error)                                          | v4 canonical                                           |
+| ----------------------------------------------------------------- | ------------------------------------------------------ |
+| `flex-shrink-0` / `flex-grow`                                     | `shrink-0` / `grow`                                    |
+| `break-words`                                                     | `wrap-break-word`                                      |
+| `[overflow-wrap:anywhere]`                                        | `wrap-anywhere`                                        |
+| `start-*` / `end-*` / `-end-*`                                    | `inset-s-*` / `inset-e-*` / `-inset-e-*`               |
+| `!h-1` (leading `!`)                                              | `h-1!` (trailing `!`)                                  |
+| `z-[70]`, `max-w-[22rem]`                                         | `z-70`, `max-w-88` (scale value)                       |
+| `w-[var(--x)]`, `h-[var(--x,232px)]`                              | `w-(--x)`, `h-(--x,232px)`                             |
+| `[&>*]:flex-1`                                                    | `*:flex-1`                                             |
+| `group-has-[:focus-visible]/x:`                                   | `group-has-focus-visible/x:`                           |
+| `-translate-y-[3px]`                                              | `translate-y-[-3px]`                                   |
+| `[container-type:inline-size]`                                    | `@container`                                           |
+| `[overflow:clip]`, `[text-wrap:pretty]`, `[field-sizing:content]` | `overflow-clip`, `text-pretty`, `field-sizing-content` |
+| `[gap:0.04em]` (arbitrary property)                               | `gap-[0.04em]` (arbitrary value)                       |
+
+The rule's message names the replacement for anything not listed, and
+`npm exec nx lint <project> -- --fix` rewrites it.
+
 ## Conditional class composition
 
 Compose conditional classes with `mergeClasses` — not template-literal concatenation, string interpolation, or array `.join(' ')`.
@@ -24,11 +49,13 @@ className={[nameClassName, styles.nameText].join(' ')}
 className={mergeClasses(nameClassName, styles.nameText)}
 ```
 
+Call `mergeClasses` during render, never at module scope. A module-level `const ROW_CLASS = mergeClasses(…)` runs on import, so every test file that mocks the package exporting it fails to load before a single assertion runs — three `apps/chat` suites broke this way. Keep module constants as plain strings and merge them in JSX.
+
 ## Component-First Development
 
 **Always prefer UI kit components over raw HTML elements.** Before reaching for native `<button>`, `<input>`, `<select>`, or other HTML elements:
 
-1. **Look for a UI kit component** — check if a suitable component exists for your use case using the `@epam/ai-dial-ui-kit` MCP tools (`searchEntity` / `getEntityDetails`).
+1. **Look for a UI kit component** — check if a suitable component exists for your use case using the `@epam/ai-dial-ui-kit` MCP tools (`searchEntity` / `getEntityDetails`). Use those tools for **every** kit lookup — never `grep`/`glob` the package, which misses type information and examples.
 2. **Use raw elements only as last resort** — if and only if no UI kit component meets the requirements, use native HTML (and document why).
 
 ### Always use generation 2.0 kit components
@@ -59,6 +86,21 @@ import {
 `searchEntity` ranks 2.0 results first, and a 1.0 result carries an explicit "Use instead" pointer — follow it. When migrating an existing `Dial*` call site, confirm the 2.0 prop signature with `getEntityDetails("component", "<Name>")` first; props are not always identical between generations.
 
 ````
+
+### `Dropdown` overlay roles
+
+A `Dropdown` overlay is `role="menu"` by default, and the trigger gets `aria-haspopup="menu"`. That is right only for `items` or a `renderOverlay` made of menu items. Set `overlayRole` whenever `renderOverlay` holds anything else:
+
+- a panel of free-form content, or menu rows plus a footer of buttons (Clear/Apply) — `overlayRole={DropdownOverlayRole.Dialog}` with `overlayAriaLabel` (or `overlayAriaLabelledBy`); keep `role="menu"` on a wrapper around the menu rows only;
+- content that already carries its own role (a card with `role="dialog"`) — `overlayRole={DropdownOverlayRole.None}`.
+
+Do not re-implement Escape or focus return in an overlay's `onKeyDown`: the kit closes on Escape and returns focus to the trigger (`returnFocus` defaults to `true`). A custom roving-tabindex handler takes `optionArrowNavigation={false}` so the kit's arrow keys do not fight it. The kit's arrow-key navigation is on only for the default menu role: a `Dialog` or `None` overlay whose content is a listbox or menu rows that rely on it needs an explicit `optionArrowNavigation`, or keyboard users silently lose it (`DeploymentSelectorField` is the reference). Do not hardcode `aria-haspopup` on the trigger; it follows `overlayRole`, and a value on the trigger overrides the kit's.
+
+### `Spinner` inside a named element
+
+`Spinner` is a status region named `'Loading'` (English) unless it gets `ariaLabel`. Inside an element that already names the state — a `role="progressbar"` with `aria-label`, a button with its own label, a `LiveRegion` carrying the localised text — wrap it in `<span aria-hidden>`; otherwise pass `ariaLabel` from a `*Labels` prop (an app passes `t()`, e.g. `t(BasicI18nKeys.Loading)`).
+
+In a test against the real kit, the name sits on the spinner's inner `role="img"` element, not on its `role="status"` wrapper — query `getByRole('img', { name })`. A test that mocks `Spinner` must forward `ariaLabel`, or it cannot prove the name.
 
 ## Semantic HTML
 
@@ -125,16 +167,27 @@ Two exceptions, and only these two:
 - **Filled glyphs** (`Icon*Filled`) — Tabler drops the `stroke` prop for the
   filled set, so passing it is dead code. Leave it off.
 - **Empty-state illustrations** — a 48px+ illustration above an empty-state
-  message stays at `stroke={1}`; 1.5 reads as a fence at that size. The kit
-  makes the same exception for its own `NoDataContent`, which draws a generic
-  document mark by default; `PanelEmptyState` forwards an optional `icon` to
-  replace it with a feature illustration.
+  message stays at `stroke={1}`; 1.5 reads as a fence at that size. Prefer
+  not to pass one at all: the kit's `NoDataContent` (and `PanelEmptyState`,
+  which wraps it) draws the shared Patterns 2.0 empty-state illustration by
+  default, so every empty list looks the same.
 
 The border half of the same scale is plain Tailwind: `border` (1px) for
 controls, standalone dividers and table frames, `border-2` for active/selected
 highlighting, and `0.5px solid` in a stylesheet for dividers **inside** a table.
 A named `borderWidth` token cannot work — `borderColor` already owns `warning`,
 `error` and friends, so `border-warning` would set a width and a colour at once.
+
+## UI kit upgrades and breaking changes
+
+When a kit upgrade breaks a build or a prop disappears:
+
+1. Find the target release: the installed `@epam/ai-dial-ui-kit` version in `package.json`; a dev version (`x.y.z-dev.N`) maps to the next release (`0.11.0.18` → `0.11.0`).
+2. Read the `### Breaking Changes` entries between the previous and target release in `node_modules/@epam/ai-dial-ui-kit/dist/CHANGELOG.md`.
+3. Follow the migration guides in `node_modules/@epam/ai-dial-ui-kit/dist/migration-guides/<version>/`.
+4. Confirm the current prop signature with `getEntityDetails("component", "<Name>")` before applying the fix.
+
+The MCP server (`node_modules/@epam/ai-dial-ui-kit/dist/mcp-server.cjs`) reads the kit manifest once, at startup. After bumping the kit in a running session, reconnect it (`/mcp` → `ai-dial-ui-kit`) before trusting a "not found" — a stale process still answers for the previous version.
 
 ## aria-label values go through i18n
 

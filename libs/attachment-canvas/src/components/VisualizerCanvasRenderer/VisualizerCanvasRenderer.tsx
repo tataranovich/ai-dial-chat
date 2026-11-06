@@ -3,39 +3,22 @@ import {
   type CustomVisualizerData,
   mergeClasses,
 } from '@epam/ai-dial-chat-shared';
+import {
+  DIAL_KIT_ICON_STROKE,
+  LiveRegion,
+  Spinner,
+} from '@epam/ai-dial-ui-kit';
 /*
- * Host drives the iframe via published `@epam/ai-dial-visualizer-connector`
- * (+ `@epam/ai-dial-shared` for the request enum). A later follow-up may port
- * those packages into this monorepo — see checklist below.
- *
- * Migration checklist:
- * 1. Port `VisualizerConnector` into `libs/visualizer-connector` with
- *    peerDep `@epam/ai-dial-chat-shared` (not `@epam/ai-dial-shared`).
- * 2. Port `ChatVisualizerConnector` into `libs/chat-visualizer-connector`
- *    for third-party authors; publish from this monorepo.
- * 3. Keep wire values (`SEND_VISUALIZE_DATA`, `READY`, …) identical.
- *    Align enum member names with host conventions (PascalCase
- *    `SendVisualizeData`) — npm `@epam/ai-dial-shared` uses camelCase
- *    (`sendVisualizeData`).
- * 4. Drop `hostDomain` from the constructor call below if the ported
- *    `VisualizerConnectorOptions` no longer requires it (npm type requires
- *    it; runtime currently ignores it).
- * 5. Carry forward security/hygiene fixes not present in the published package:
- *    - idempotent `destroy()` (`isDestroyed` guard; README promises no-op)
- *    - strict origin equality in `ChatVisualizerConnector` (not `startsWith`)
- *    - sandbox `allow-same-origin`+`allow-scripts` rationale comment/spec
- * 6. Remove root deps / attachment-canvas peers for
- *    `@epam/ai-dial-visualizer-connector` and `@epam/ai-dial-shared`.
- * 7. Point this file at workspace `@epam/ai-dial-visualizer-connector` and
- *    `@epam/ai-dial-chat-shared` for the request enum.
- * 8. Update `openspec/specs/custom-visualizers/spec.md` accordingly.
+ * Host side of the custom-visualizer protocol, ported from the npm 0.48.0
+ * release into `libs/visualizer-connector`. Visualizer authors still consume
+ * the iframe-side `@epam/ai-dial-chat-visualizer-connector` from npm; porting
+ * it is a separate follow-up.
  */
 import {
+  VisualizerConnector,
   VisualizerConnectorEvents,
   VisualizerConnectorRequests,
-} from '@epam/ai-dial-shared';
-import { DIAL_KIT_ICON_STROKE, Spinner } from '@epam/ai-dial-ui-kit';
-import { VisualizerConnector } from '@epam/ai-dial-visualizer-connector';
+} from '@epam/ai-dial-visualizer-connector';
 import { IconAlertTriangle } from '@tabler/icons-react';
 import { type FC, useEffect, useRef, useState } from 'react';
 import type {
@@ -50,7 +33,7 @@ import styles from './VisualizerCanvasRenderer.module.scss';
 export interface VisualizerCanvasRendererProps {
   /** Visualizer content to render. A single-attachment payload is delivered with `SEND_VISUALIZE_DATA`, a grouped one with `SEND_GROUPED_VISUALIZE_DATA`. */
   content: VisualizerCanvasContent | GroupedVisualizerCanvasContent;
-  /** Text shown alongside the spinner while the handshake/data delivery is pending. Omitted by default (spinner only). */
+  /** Text shown and used as the spinner's name while data delivery is pending. Omitted by default (spinner only). */
   loadingLabel?: string;
   /** Message shown when the visualizer fails to receive its data. Defaults to `'Failed to load visualizer'`. */
   errorLabel?: string;
@@ -112,12 +95,8 @@ export const VisualizerCanvasRenderer: FC<VisualizerCanvasRendererProps> = ({
 
     setStatus(RendererStatus.Loading);
 
-    /* `hostDomain` is required by the published VisualizerConnectorOptions
-     * type but unused at runtime in the current development package — pass
-     * the page origin for type compatibility. */
     const connector = new VisualizerConnector(hostElement, {
       domain: url,
-      hostDomain: window.location.origin,
       visualizerName,
       requestTimeout,
     });
@@ -127,7 +106,7 @@ export const VisualizerCanvasRenderer: FC<VisualizerCanvasRendererProps> = ({
     /* Always subscribed, so the host turning the callback on or off never
      * remounts the iframe; without a callback the message is dropped. */
     const unsubscribeSendMessage = connector.subscribe(
-      `${visualizerName}/${VisualizerConnectorEvents.sendMessage}`,
+      `${visualizerName}/${VisualizerConnectorEvents.SendMessage}`,
       (payload) => {
         const message = getVisualizerMessageContent(payload);
         if (message != null) {
@@ -146,7 +125,7 @@ export const VisualizerCanvasRenderer: FC<VisualizerCanvasRendererProps> = ({
 
       if (payload.type === AttachmentContentType.GroupedVisualizer) {
         await connector.send(
-          VisualizerConnectorRequests.sendGroupedVisualizeData,
+          VisualizerConnectorRequests.SendGroupedVisualizeData,
           {
             attachments: payload.attachments,
             layout: payload.layout,
@@ -159,7 +138,7 @@ export const VisualizerCanvasRenderer: FC<VisualizerCanvasRendererProps> = ({
           ...(typeof data === 'object' && data !== null ? data : {}),
         };
 
-        await connector.send(VisualizerConnectorRequests.sendVisualizeData, {
+        await connector.send(VisualizerConnectorRequests.SendVisualizeData, {
           mimeType,
           visualizerData,
         });
@@ -216,14 +195,22 @@ export const VisualizerCanvasRenderer: FC<VisualizerCanvasRendererProps> = ({
             styles.loadingOverlay,
           )}
         >
-          <Spinner />
+          <Spinner ariaLabel={loadingLabel} />
           {loadingLabel && (
-            <p className={mergeClasses('text-center', styles.statusLabel)}>
+            /* The spinner already carries the label as its accessible name. */
+            <p
+              aria-hidden
+              className={mergeClasses('text-center', styles.statusLabel)}
+            >
               {loadingLabel}
             </p>
           )}
         </div>
       )}
+      {/* Mounted before the overlay so the failure is announced when it appears. */}
+      <LiveRegion visuallyHidden>
+        {status === RendererStatus.Error && errorLabel}
+      </LiveRegion>
       {status === RendererStatus.Error && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
           <IconAlertTriangle
@@ -233,7 +220,7 @@ export const VisualizerCanvasRenderer: FC<VisualizerCanvasRendererProps> = ({
             className={styles.errorIcon}
           />
           <p
-            role="alert"
+            aria-hidden
             className={mergeClasses('text-center', styles.statusLabel)}
           >
             {errorLabel}

@@ -8,6 +8,7 @@ import { getBearerAuthHeaders } from '../common/utils/auth-header';
 import { parseDialApplicationResource } from '../common/utils/dial-application-resource';
 import { encodeDialResourcePath } from '../common/utils/encode-dial-path';
 import { DialClientService } from '../dial/dial-client.service';
+import type { ExternalServiceDefinitionBodyDto } from './dto/external-service-definition.dto';
 import type {
   ApplicationExternalServiceDto,
   ExternalServiceLogoutBodyDto,
@@ -17,6 +18,7 @@ import type {
 import {
   mapDialExternalServiceToDto,
   toDialExternalServiceAppId,
+  toDialExternalServiceDefinition,
   toDialExternalServiceSigninBody,
   toDialExternalServiceSignoutBody,
 } from './external-services.mapper';
@@ -34,15 +36,19 @@ export class ExternalServicesService {
 
   constructor(private readonly dialClient: DialClientService) {}
 
-  /** Reads public application metadata; the management listing excludes inline services for ordinary users. */
+  /** Reads public application metadata; the management listing excludes inline services for ordinary users. An optional `signal` cancels the upstream read. */
   async listExternalServices(
     accessToken: string,
     appId: string,
+    signal?: AbortSignal,
   ): Promise<ApplicationExternalServiceDto[]> {
     try {
       const response = await this.dialClient.client.getApplication(
         encodeDialResourcePath(appId),
-        { headers: getBearerAuthHeaders(accessToken) },
+        {
+          headers: getBearerAuthHeaders(accessToken),
+          ...(signal != null && { signal }),
+        },
       );
       if (response.error) {
         return mapDialHttpStatus(
@@ -69,10 +75,12 @@ export class ExternalServicesService {
     }
   }
 
+  /** Reads one external service's metadata; an optional `signal` cancels the upstream read and its fallbacks. */
   async getExternalService(
     accessToken: string,
     appId: string,
     serviceId: string,
+    signal?: AbortSignal,
   ): Promise<GetExternalServiceResponseDto> {
     const authHeaders = getBearerAuthHeaders(accessToken);
     this.logger.debug(
@@ -83,7 +91,7 @@ export class ExternalServicesService {
       const response = await this.dialClient.client.getExternalService(
         toDialExternalServiceAppId(appId),
         serviceId,
-        { headers: authHeaders },
+        { headers: authHeaders, ...(signal != null && { signal }) },
       );
       this.logger.debug(
         `DIAL Core external service "${serviceId}" (app "${appId}"): display_name="${response.data?.display_name}" auth_type="${response.data?.auth_settings?.authentication_type}"`,
@@ -108,6 +116,7 @@ export class ExternalServicesService {
             const services = await this.listExternalServices(
               accessToken,
               appId,
+              signal,
             );
             const service = services.find(
               (candidate) => candidate.id === serviceId,
@@ -122,6 +131,7 @@ export class ExternalServicesService {
             authHeaders,
             appId,
             serviceId,
+            signal,
           );
           if (fallback) {
             return fallback;
@@ -161,6 +171,7 @@ export class ExternalServicesService {
     authHeaders: ReturnType<typeof getBearerAuthHeaders>,
     appId: string,
     serviceId: string,
+    signal?: AbortSignal,
   ): Promise<GetExternalServiceResponseDto | undefined> {
     const resource = parseDialApplicationResource(
       appId.startsWith('applications/') ? appId : `applications/${appId}`,
@@ -173,7 +184,7 @@ export class ExternalServicesService {
       const response = await this.dialClient.client.getCustomApplication(
         resource.bucket,
         resource.path,
-        { headers: authHeaders },
+        { headers: authHeaders, ...(signal != null && { signal }) },
       );
       if (response.error) {
         return undefined;
@@ -284,6 +295,86 @@ export class ExternalServicesService {
       return handleDialFetchError(
         err,
         `sign out external service "${serviceId}"`,
+        this.logger,
+        0,
+      );
+    }
+  }
+
+  /**
+   * Declares (or replaces) one external service on the application, through Core's
+   * `PUT /v1/applications/{appId}/external-services/{id}`. The definition can carry an OAuth
+   * `client_secret`, so only the service id and its authentication type are logged.
+   */
+  async putExternalService(
+    accessToken: string,
+    appId: string,
+    serviceId: string,
+    body: ExternalServiceDefinitionBodyDto,
+  ): Promise<GetExternalServiceResponseDto> {
+    this.logger.debug(
+      `Declaring external service "${serviceId}" (app "${appId}"): ${body.authSettings.authenticationType}`,
+    );
+    try {
+      const response = await this.dialClient.client.putExternalService(
+        toDialExternalServiceAppId(appId),
+        serviceId,
+        {
+          headers: getBearerAuthHeaders(accessToken),
+          body: toDialExternalServiceDefinition(body),
+        },
+      );
+      if (response.error) {
+        return mapDialHttpStatus(
+          response.response.status,
+          `declare external service "${serviceId}"`,
+          this.logger,
+          response.error,
+          extractDialErrorMessage(response.error),
+        );
+      }
+      return mapDialExternalServiceToDto(response.data ?? {});
+    } catch (err) {
+      return handleDialFetchError(
+        err,
+        `declare external service "${serviceId}"`,
+        this.logger,
+        0,
+      );
+    }
+  }
+
+  /**
+   * Removes one external service from the application. Core purges its application-level credentials
+   * with it. A Core 404 (already gone) is the state a removal wants, so it is success.
+   */
+  async deleteExternalService(
+    accessToken: string,
+    appId: string,
+    serviceId: string,
+  ): Promise<void> {
+    this.logger.debug(
+      `Removing external service "${serviceId}" (app "${appId}")`,
+    );
+    try {
+      const response = await this.dialClient.client.deleteExternalService(
+        toDialExternalServiceAppId(appId),
+        serviceId,
+        { headers: getBearerAuthHeaders(accessToken) },
+      );
+      if (response.error && response.response.status !== 404) {
+        return mapDialHttpStatus(
+          response.response.status,
+          `remove external service "${serviceId}"`,
+          this.logger,
+          response.error,
+          extractDialErrorMessage(response.error),
+        );
+      }
+    } catch (err) {
+      return handleDialFetchError(
+        err,
+        `remove external service "${serviceId}"`,
         this.logger,
         0,
       );

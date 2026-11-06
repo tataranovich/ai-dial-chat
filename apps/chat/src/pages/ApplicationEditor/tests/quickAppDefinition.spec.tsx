@@ -1,19 +1,32 @@
-import { NotificationVariant } from '@epam/ai-dial-ui-kit';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { CatalogCreationType } from '@epam/ai-dial-chat-api-client';
+import {
+  isResourceCreateAdapter,
+  type ResourceSaveAdapter,
+  ResourceSaveOutcome,
+  type ResourceSaveResult,
+} from '@epam/ai-dial-chat-hooks';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { forwardRef, useImperativeHandle } from 'react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { forwardRef, useImperativeHandle, useState } from 'react';
+import { Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ApplicationEditorI18nKeys,
   AppsEditorI18nKeys,
   BasicI18nKeys,
   ButtonsI18nKeys,
+  CatalogI18nKeys,
   EditorI18nKeys,
+  UnsavedChangesI18nKeys,
 } from '../../../constants/translation-keys';
 import * as DeploymentsContextModule from '../../../context/DeploymentsContext';
 import { useNotification } from '../../../context/NotificationContext';
+import {
+  resetCatalogCreationState,
+  setCatalogCreationState,
+} from '../../../context/tests/catalog-creation-state';
 import { createNotificationContextValue } from '../../../context/tests/notification-context-mock';
+import { renderWithLeaveGuard } from '../../../hooks/unsaved-changes/tests/render-with-leave-guard';
 import {
   createApplication,
   updateApplication,
@@ -25,6 +38,7 @@ import {
   NotifiableEntity,
 } from '../../../types/entity-notification';
 import { ROUTES } from '../../../types/routes';
+import { UserConfigStatus } from '../../../types/user-config-status';
 import ApplicationEditorPage from '../ApplicationEditorPage';
 
 interface IframeStubProps {
@@ -32,6 +46,7 @@ interface IframeStubProps {
   onSaveSuccess?: (hasChanges: boolean) => void;
   onSaveError?: (error: string) => void;
   onReadyChange?: (isReady: boolean) => void;
+  onDirtyChange?: (isDirty: boolean) => void;
 }
 
 /* Records every render of the embedded-editor stub, so tests can play the iframe's messages. */
@@ -39,9 +54,17 @@ const captureIframeProps = vi.fn<(props: IframeStubProps) => void>();
 const getIframeProps = () => captureIframeProps.mock.lastCall?.[0];
 const mockTriggerSave = vi.fn<(general?: TriggerSaveGeneralPayload) => void>();
 
-vi.mock('../../../context/AppConfigContext', () => ({
-  useAppConfig: () => ({ status: 'ready', config: {} }),
-}));
+vi.mock('../../../context/AppConfigContext', async () => {
+  const { useCatalogCreationState } =
+    await import('../../../context/tests/catalog-creation-state');
+  return {
+    useAppConfig: () => ({
+      status: 'ready',
+      config: { additionalContentLocales: [] },
+      ...useCatalogCreationState(),
+    }),
+  };
+});
 vi.mock('../setup/AppEditorIframe', () => ({
   default: forwardRef(function AppEditorIframeStub(
     props: IframeStubProps,
@@ -58,7 +81,47 @@ vi.mock('../setup/AppPreviewChat', () => ({
 vi.mock('../../../server-api/applications', () => ({
   createApplication: vi.fn(),
   updateApplication: vi.fn(),
+  deleteApplication: vi.fn(),
+  listApplicationFolders: vi.fn(),
 }));
+vi.mock(
+  '../../../components/ResourceSavePanelContainer/ResourceSavePanelContainer',
+  () => ({
+    default: (props: {
+      isOpen: boolean;
+      adapter: ResourceSaveAdapter;
+      onSaved: (result: ResourceSaveResult | { outcome: string }) => void;
+    }) => {
+      mockSavePanelProps(props);
+      const [createError, setCreateError] = useState('');
+      /* A create adapter runs the real create into the root folder, the way the panel does. */
+      const handleFinish = async () => {
+        if (!isResourceCreateAdapter(props.adapter)) {
+          props.onSaved({ outcome: 'saved' });
+          return;
+        }
+        try {
+          const { id } = await props.adapter.createIn([]);
+          props.onSaved({
+            outcome: ResourceSaveOutcome.Saved,
+            savedId: id,
+            isCreated: true,
+            isNewVersion: false,
+            isPublished: false,
+          });
+        } catch {
+          setCreateError('Create failed');
+        }
+      };
+      return props.isOpen ? (
+        <div role="dialog" aria-label="Save panel">
+          <button onClick={handleFinish}>Finish save</button>
+          <p>{createError}</p>
+        </div>
+      ) : null;
+    },
+  }),
+);
 vi.mock('../../../context/DeploymentsContext');
 vi.mock('../../../context/NotificationContext');
 vi.mock('../../../context/auth/UserContext', () => ({
@@ -75,6 +138,7 @@ vi.mock(
 );
 
 const mockShowNotification = vi.fn();
+const mockSavePanelProps = vi.fn();
 const mockRefetchDeployments = vi.fn();
 const mockNotifyOperationSuccess = vi.fn();
 
@@ -90,25 +154,25 @@ const LocationProbe = () => {
   return <output>{`location:${location.search}`}</output>;
 };
 
-/* Extracted so a test can `rerender` the identical tree after changing a mock's return value. */
-const buildTree = (search: string) => (
-  <MemoryRouter initialEntries={[`${ROUTES.AppsEditor}?${search}`]}>
-    <Routes>
-      <Route
-        path={ROUTES.AppsEditor}
-        element={
-          <>
-            <ApplicationEditorPage kind={ApplicationEditorKind.QuickApp} />
-            <LocationProbe />
-          </>
-        }
-      />
-      <Route path={ROUTES.Catalog} element={<div>Catalog</div>} />
-    </Routes>
-  </MemoryRouter>
+/* A factory, so a test can re-render the identical tree after changing a mock's return value. */
+const buildRoutes = () => (
+  <Routes>
+    <Route
+      path={ROUTES.AppsEditor}
+      element={
+        <>
+          <ApplicationEditorPage kind={ApplicationEditorKind.QuickApp} />
+          <LocationProbe />
+        </>
+      }
+    />
+    <Route path={ROUTES.Catalog} element={<div>Catalog</div>} />
+    <Route path={ROUTES.FileManager} element={<div>Files</div>} />
+  </Routes>
 );
 
-const renderPage = (search: string) => render(buildTree(search));
+const renderPage = (search: string) =>
+  renderWithLeaveGuard(buildRoutes, [`${ROUTES.AppsEditor}?${search}`]);
 
 /* The layout renders its actions in the header and again in the mobile bar; take the header copy. */
 const getAction = (name: string) =>
@@ -118,6 +182,20 @@ const queryAction = (name: string) =>
 const getNameInput = () =>
   screen.getByLabelText(EditorI18nKeys.NameLabel, { exact: false });
 
+/* The editor keeps its alert region mounted, so "no alert" means every region is empty. */
+const alertText = () =>
+  screen
+    .queryAllByRole('alert')
+    .map((region) => region.textContent)
+    .join('');
+
+/* Create opens the Save panel; the stub's Finish save runs the create adapter. */
+const createThroughPanel = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.click(getAction(ButtonsI18nKeys.Create));
+  await screen.findByRole('dialog', { name: 'Save panel' });
+  await user.click(screen.getByRole('button', { name: 'Finish save' }));
+};
+
 const createSearch = `schema=${SCHEMA.id}`;
 const editSearch = `${createSearch}&appId=${encodeURIComponent(APP_ID)}`;
 
@@ -126,6 +204,7 @@ describe('ApplicationEditorPage — quick app', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCatalogCreationState();
     mockRefetchDeployments.mockResolvedValue(undefined);
     vi.mocked(createApplication).mockResolvedValue({ id: APP_ID } as never);
     vi.mocked(updateApplication).mockResolvedValue({ id: APP_ID } as never);
@@ -159,6 +238,16 @@ describe('ApplicationEditorPage — quick app', () => {
       expect(getAction(ButtonsI18nKeys.Create).disabled).toBe(false);
     });
 
+    it('opens with version 1.0.0 and an empty name', () => {
+      renderPage(createSearch);
+
+      expect(
+        (screen.getByLabelText(EditorI18nKeys.VersionLabel) as HTMLInputElement)
+          .value,
+      ).toBe('1.0.0');
+      expect((getNameInput() as HTMLInputElement).value).toBe('');
+    });
+
     it('blocks the request and shows the required error for an empty name', async () => {
       renderPage(createSearch);
 
@@ -172,6 +261,7 @@ describe('ApplicationEditorPage — quick app', () => {
       renderPage(createSearch);
 
       await user.type(getNameInput(), 'Bad/name');
+      await user.clear(screen.getByLabelText(EditorI18nKeys.VersionLabel));
       await user.type(
         screen.getByLabelText(EditorI18nKeys.VersionLabel),
         'v1-beta',
@@ -181,21 +271,35 @@ describe('ApplicationEditorPage — quick app', () => {
       expect(
         screen.getByText(AppsEditorI18nKeys.GeneralFormNameInvalid),
       ).toBeTruthy();
-      expect(screen.getByText(EditorI18nKeys.VersionInvalid)).toBeTruthy();
+      expect(
+        screen.getByText(AppsEditorI18nKeys.GeneralFormVersionInvalid),
+      ).toBeTruthy();
       expect(createApplication).not.toHaveBeenCalled();
     });
 
-    it('creates the app with seeded properties, confirms it and switches to edit mode in place', async () => {
-      const { rerender } = renderPage(createSearch);
+    it('creates the app with seeded properties through the Save panel and switches to edit mode in place', async () => {
+      const { rerenderRoutes } = renderPage(createSearch);
 
       await user.type(getNameInput(), 'My App');
       await user.click(getAction(ButtonsI18nKeys.Create));
 
+      expect(
+        await screen.findByRole('dialog', { name: 'Save panel' }),
+      ).toBeTruthy();
+      expect(mockSavePanelProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ isOpen: true, canPublish: false }),
+      );
+      expect(createApplication).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole('button', { name: 'Finish save' }));
+
       await screen.findByText(`embedded-editor-${APP_ID}`);
+      expect(screen.queryByRole('dialog', { name: 'Save panel' })).toBeNull();
       expect(createApplication).toHaveBeenCalledWith(
         expect.objectContaining({
           name: 'My App',
           type: SCHEMA.id,
+          version: '1.0.0',
           applicationProperties: {
             orchestrator: {
               system_prompt: { type: 'custom', variables: {}, content: '' },
@@ -205,11 +309,8 @@ describe('ApplicationEditorPage — quick app', () => {
           },
         }),
       );
-      expect(mockNotifyOperationSuccess).toHaveBeenCalledWith(
-        NotifiableEntity.QuickApp,
-        EntityOperation.Created,
-        { name: 'My App' },
-      );
+      /* The panel confirms the create; the editor adds no second notification. */
+      expect(mockNotifyOperationSuccess).not.toHaveBeenCalled();
       expect(
         screen.getByText(new RegExp(`appId=${encodeURIComponent(APP_ID)}`)),
       ).toBeTruthy();
@@ -245,27 +346,163 @@ describe('ApplicationEditorPage — quick app', () => {
       } as unknown as ReturnType<
         typeof DeploymentsContextModule.useDeployments
       >);
-      rerender(buildTree(createSearch));
+      rerenderRoutes();
 
       expect((getNameInput() as HTMLInputElement).value).toBe('My App');
     });
 
-    it('raises an error notification and stays on the page when create fails', async () => {
+    it('stays in create mode with the panel showing the error when create fails', async () => {
       vi.mocked(createApplication).mockRejectedValue(new Error(''));
       renderPage(createSearch);
 
       await user.type(getNameInput(), 'My App');
+      await createThroughPanel(user);
+
+      expect(await screen.findByText('Create failed')).toBeTruthy();
+      expect(screen.getByRole('dialog', { name: 'Save panel' })).toBeTruthy();
+      expect(screen.queryByText(/embedded-editor-/)).toBeNull();
+      expect(screen.getByText(`location:?${createSearch}`)).toBeTruthy();
+      expect(mockNotifyOperationSuccess).not.toHaveBeenCalled();
+      expect(mockShowNotification).not.toHaveBeenCalled();
+      expect((getNameInput() as HTMLInputElement).value).toBe('My App');
+    });
+
+    it('leaves a 409 create conflict to the panel and shows no inline name conflict', async () => {
+      /* Shape thrown by the generated client: a ResponseError carrying `response`. */
+      vi.mocked(createApplication).mockRejectedValue({
+        response: {
+          status: 409,
+          json: () =>
+            Promise.resolve({ message: 'Application name already taken' }),
+        },
+      });
+      renderPage(createSearch);
+
+      await user.type(getNameInput(), 'My App');
+      await createThroughPanel(user);
+
+      expect(await screen.findByText('Create failed')).toBeTruthy();
+      expect(
+        screen.queryByText(AppsEditorI18nKeys.ErrorNameConflict),
+      ).toBeNull();
+      expect(screen.queryByText(/embedded-editor-/)).toBeNull();
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: AppsEditorI18nKeys.CreateTitle,
+        }),
+      ).toBeTruthy();
+    });
+  });
+
+  describe('creation permissions', () => {
+    const ALL_TYPES = Object.values(CatalogCreationType);
+    const denySchema = () =>
+      setCatalogCreationState({
+        allowedTypes: ALL_TYPES,
+        restrictedSchemaIds: [SCHEMA.id],
+      });
+
+    it('shows the denied state for a restricted schema and sends no create request', () => {
+      denySchema();
+      renderPage(createSearch);
+
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: CatalogI18nKeys.CreationDenied,
+        }),
+      ).toBeTruthy();
+      expect(screen.queryByLabelText(EditorI18nKeys.NameLabel)).toBeNull();
+      expect(createApplication).not.toHaveBeenCalled();
+    });
+
+    it('shows the denied state when the schema-app type is denied', () => {
+      setCatalogCreationState({
+        allowedTypes: [CatalogCreationType.CustomApp],
+        restrictedSchemaIds: [],
+      });
+      renderPage(createSearch);
+
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: CatalogI18nKeys.CreationDenied,
+        }),
+      ).toBeTruthy();
+    });
+
+    it('shows the pending state while permissions load', () => {
+      setCatalogCreationState(null, UserConfigStatus.Loading);
+      renderPage(createSearch);
+
+      expect(
+        screen.getByRole('img', { name: CatalogI18nKeys.CreationLoading }),
+      ).toBeTruthy();
+      expect(screen.queryByLabelText(EditorI18nKeys.NameLabel)).toBeNull();
+    });
+
+    it.each([
+      ['no schema parameter', ''],
+      ['an unknown schema id', 'schema=https%3A%2F%2Fexample.com%2Funknown'],
+      ['the custom-app schema id', 'schema=custom_app'],
+    ])('shows the unavailable state for %s', (_label, search) => {
+      renderPage(search);
+
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: CatalogI18nKeys.CreationUnavailable,
+        }),
+      ).toBeTruthy();
+      expect(createApplication).not.toHaveBeenCalled();
+    });
+
+    it('does not resolve the schema by its display name', () => {
+      renderPage(`schema=${SCHEMA.displayName}`);
+
+      expect(
+        screen.getByRole('heading', {
+          level: 1,
+          name: CatalogI18nKeys.CreationUnavailable,
+        }),
+      ).toBeTruthy();
+    });
+
+    it('blocks the create request when permission is lost while the form is open', async () => {
+      renderPage(createSearch);
+      await user.type(getNameInput(), 'My App');
+
+      act(() => denySchema());
       await user.click(getAction(ButtonsI18nKeys.Create));
 
-      await waitFor(() =>
-        expect(mockShowNotification).toHaveBeenCalledWith(
-          expect.objectContaining({
-            variant: NotificationVariant.Error,
-            message: AppsEditorI18nKeys.ErrorCreateFailed,
-          }),
-        ),
+      expect(createApplication).not.toHaveBeenCalled();
+      expect(mockShowNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ message: CatalogI18nKeys.CreationDenied }),
       );
-      expect(screen.queryByText(/embedded-editor-/)).toBeNull();
+      expect((getNameInput() as HTMLInputElement).value).toBe('My App');
+    });
+
+    it('continues in edit mode after a metadata-first create even if creation is then denied', async () => {
+      renderPage(createSearch);
+      await user.type(getNameInput(), 'My App');
+      await createThroughPanel(user);
+      await screen.findByText(`embedded-editor-${APP_ID}`);
+
+      act(() => denySchema());
+
+      expect(alertText()).toBe('');
+      expect(getAction(ButtonsI18nKeys.Save)).toBeTruthy();
+      expect(createApplication).toHaveBeenCalledOnce();
+    });
+
+    it('opens an existing app of a restricted schema for editing', () => {
+      denySchema();
+      renderPage(editSearch);
+
+      expect(alertText()).toBe('');
+      expect(getAction(ButtonsI18nKeys.Save)).toBeTruthy();
+      expect(screen.getByText(`embedded-editor-${APP_ID}`)).toBeTruthy();
     });
   });
 
@@ -281,7 +518,7 @@ describe('ApplicationEditorPage — quick app', () => {
        * above) must recover the persisted name once the deployments list
        * resolves — this is the one case where a reseed is desired.
        */
-      const { rerender } = renderPage(editSearch);
+      const { rerenderRoutes } = renderPage(editSearch);
 
       expect((getNameInput() as HTMLInputElement).value).toBe('');
 
@@ -293,7 +530,7 @@ describe('ApplicationEditorPage — quick app', () => {
       } as unknown as ReturnType<
         typeof DeploymentsContextModule.useDeployments
       >);
-      rerender(buildTree(editSearch));
+      rerenderRoutes();
 
       expect((getNameInput() as HTMLInputElement).value).toBe('My App');
     });
@@ -312,13 +549,9 @@ describe('ApplicationEditorPage — quick app', () => {
       expect(getAction(BasicI18nKeys.Preview).disabled).toBe(false);
     });
 
-    it('forwards the Metadata to the embedded editor on Save, reasserts, confirms and exits', async () => {
+    it('forwards the Metadata to the embedded editor on Save, confirms and exits', async () => {
       renderPage(editSearch);
       await typeName();
-      await user.type(
-        screen.getByLabelText(EditorI18nKeys.VersionLabel),
-        '2.0.0',
-      );
       act(() => getIframeProps()?.onReadyChange?.(true));
 
       await user.click(getAction(ButtonsI18nKeys.Save));
@@ -326,23 +559,81 @@ describe('ApplicationEditorPage — quick app', () => {
       await waitFor(() => expect(mockTriggerSave).toHaveBeenCalledOnce());
       const general = mockTriggerSave.mock.calls[0][0];
       expect(general).toEqual(
-        expect.objectContaining({ name: 'My App', display_version: '2.0.0' }),
+        expect.objectContaining({ name: 'My App', display_version: '1.0.0' }),
       );
       expect(general).not.toHaveProperty('version');
 
       act(() => getIframeProps()?.onSaveSuccess?.(false));
 
       await screen.findByText('Catalog');
-      expect(updateApplication).toHaveBeenCalledWith(
-        APP_ID,
-        expect.objectContaining({ name: 'My App' }),
-      );
+      expect(updateApplication).not.toHaveBeenCalled();
       expect(mockRefetchDeployments).toHaveBeenCalled();
       expect(mockNotifyOperationSuccess).toHaveBeenCalledWith(
         NotifiableEntity.QuickApp,
         EntityOperation.Edited,
         { name: 'My App' },
       );
+    });
+
+    it('renders the Version read-only while editing', () => {
+      renderPage(editSearch);
+      expect(
+        (screen.getByLabelText(EditorI18nKeys.VersionLabel) as HTMLInputElement)
+          .readOnly,
+      ).toBe(true);
+    });
+
+    it('keeps the Version editable on create', () => {
+      renderPage(createSearch);
+      expect(
+        (screen.getByLabelText(EditorI18nKeys.VersionLabel) as HTMLInputElement)
+          .readOnly,
+      ).toBe(false);
+    });
+
+    describe('Save panel for an own application', () => {
+      beforeEach(() => {
+        vi.mocked(DeploymentsContextModule.useDeployments).mockReturnValue({
+          schemas: [SCHEMA],
+          items: [{ id: APP_ID, displayName: 'My App', isMy: true }],
+          isLoading: false,
+          refetchDeployments: mockRefetchDeployments,
+        } as unknown as ReturnType<
+          typeof DeploymentsContextModule.useDeployments
+        >);
+      });
+
+      it('opens the Save panel instead of saving', async () => {
+        renderPage(editSearch);
+        act(() => getIframeProps()?.onReadyChange?.(true));
+
+        await user.click(getAction(ButtonsI18nKeys.Save));
+
+        expect(
+          await screen.findByRole('dialog', { name: 'Save panel' }),
+        ).toBeTruthy();
+        expect(mockSavePanelProps).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            isOpen: true,
+            resourceId: APP_ID,
+            currentFolderPath: [],
+            typeLabel: SCHEMA.displayName,
+          }),
+        );
+        expect(mockTriggerSave).not.toHaveBeenCalled();
+      });
+
+      it('leaves for the Catalog once the panel has saved', async () => {
+        renderPage(editSearch);
+        act(() => getIframeProps()?.onReadyChange?.(true));
+        await user.click(getAction(ButtonsI18nKeys.Save));
+        await screen.findByRole('dialog', { name: 'Save panel' });
+
+        await user.click(screen.getByRole('button', { name: 'Finish save' }));
+
+        await screen.findByText('Catalog');
+        expect(mockRefetchDeployments).toHaveBeenCalled();
+      });
     });
 
     it('shows the embedded editor’s save error inline and stays on the page', async () => {
@@ -401,14 +692,17 @@ describe('ApplicationEditorPage — quick app', () => {
       ).toBe(false);
     });
 
-    it('opens a full-page preview after a save without Metadata and hides the editor', async () => {
+    it('opens a full-page preview after a save with Metadata and hides the editor', async () => {
       renderPage(editSearch);
       await typeName();
       act(() => getIframeProps()?.onReadyChange?.(true));
 
       const backToSetup = await enterPreview();
 
-      expect(mockTriggerSave).toHaveBeenCalledWith(undefined);
+      expect(mockTriggerSave).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'My App' }),
+      );
+      expect(updateApplication).not.toHaveBeenCalled();
       expect(mockRefetchDeployments).toHaveBeenCalled();
       expect(mockNotifyOperationSuccess).not.toHaveBeenCalled();
       expect(screen.getByText('preview-chat')).toBeTruthy();
@@ -421,7 +715,11 @@ describe('ApplicationEditorPage — quick app', () => {
           name: AppsEditorI18nKeys.EditTitle,
         }),
       ).toBeNull();
-      expect(backToSetup.matches(':focus')).toBe(true);
+      /*
+       * The preview opens after the save promise settles outside `act`, so the
+       * passive focus effect can run after `findByRole` has already resolved.
+       */
+      await waitFor(() => expect(backToSetup.matches(':focus')).toBe(true));
     });
 
     it('returns to the same embedded editor on Back to setup and focuses Preview', async () => {
@@ -457,6 +755,42 @@ describe('ApplicationEditorPage — quick app', () => {
         }),
       ).toBeTruthy();
       expect(screen.getByText(`embedded-editor-${APP_ID}`)).toBeTruthy();
+    });
+  });
+
+  describe('leave guard', () => {
+    it('asks before leaving while the embedded editor reports unsaved edits', async () => {
+      const user = userEvent.setup({ delay: null });
+      const { router } = renderPage(editSearch);
+      act(() => getIframeProps()?.onDirtyChange?.(true));
+
+      await act(() => router.navigate(ROUTES.FileManager));
+
+      expect(
+        screen.getByRole('dialog', { name: UnsavedChangesI18nKeys.Title }),
+      ).toBeTruthy();
+      expect(router.state.location.pathname).toBe(ROUTES.AppsEditor);
+
+      await user.click(
+        screen.getByRole('button', {
+          name: UnsavedChangesI18nKeys.ConfirmLabel,
+        }),
+      );
+
+      expect(await screen.findByText('Files')).toBeTruthy();
+      expect(updateApplication).not.toHaveBeenCalled();
+      expect(mockTriggerSave).not.toHaveBeenCalled();
+    });
+
+    it('leaves without the dialog once the embedded editor reports clean again', async () => {
+      const { router } = renderPage(editSearch);
+      act(() => getIframeProps()?.onDirtyChange?.(true));
+      act(() => getIframeProps()?.onDirtyChange?.(false));
+
+      await act(() => router.navigate(ROUTES.FileManager));
+
+      expect(await screen.findByText('Files')).toBeTruthy();
+      expect(screen.queryByRole('dialog')).toBeNull();
     });
   });
 });

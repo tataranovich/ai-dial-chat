@@ -1,6 +1,10 @@
-import { buildCssVars, mergeClasses } from '@epam/ai-dial-chat-shared';
+import {
+  buildCssVars,
+  mergeClasses,
+  useIsMobile,
+} from '@epam/ai-dial-chat-shared';
 import { CardShell, FolderPath, Highlight } from '@epam/ai-dial-ui-kit';
-import type { FC, KeyboardEvent } from 'react';
+import type { FC } from 'react';
 import { SCHEDULED_TASKS_CLASS } from '../../constants/public-class-names';
 import type { ScheduledTaskCardProps } from '../../models/scheduled-task-card-props';
 import { ScheduledTaskStatus } from '../../types/scheduled-task-status';
@@ -14,8 +18,12 @@ import styles from './ScheduledTaskCard.module.scss';
  * resolved status is paused/completed — via `getScheduledTaskStatus`), and
  * location breadcrumb. Renders on the shared `CardShell` from
  * `@epam/ai-dial-ui-kit` (radius, padding, shadow, hover lift), the same
- * shell the Catalog browse card uses. The card has a fixed height; a long
- * description is clamped with an ellipsis, and the status pill (plus the
+ * shell the Catalog browse card uses. From the desktop breakpoint up the card
+ * has a fixed height and a one-line title; below it the card sizes to its
+ * content with a two-line title. A long description is clamped with an
+ * ellipsis (three lines on desktop, two below) — values too long to break at
+ * a space (a long URL and the like) wrap inside the card instead of
+ * stretching it past its grid track — and the status pill (plus the
  * location breadcrumb, when present) is pinned to the bottom regardless of
  * description length.
  */
@@ -27,16 +35,17 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
   styles: cardStyles,
   className,
 }) => {
-  const newBadgeLabel = labels?.newBadgeLabel ?? 'NEW';
+  /* `Highlight` takes a numeric `maxLines`, so the two-line mobile title
+   * branches in JS rather than CSS. */
+  const isMobile = useIsMobile();
+  const newBadgeLabel = item.newBadgeLabel ?? labels?.newBadgeLabel ?? 'NEW';
   const pausedBadgeLabel = labels?.pausedBadgeLabel ?? 'Paused';
   const completedBadgeLabel = labels?.completedBadgeLabel ?? 'Completed';
 
   const { colors, typography } = cardStyles ?? {};
   const titleClassName = typography?.titleClassName ?? 'dial-body-semi-text';
   const descriptionClassName =
-    typography?.descriptionClassName ?? 'dial-small-text';
-  const descriptionSizeClassName =
-    typography?.descriptionSizeClassName ?? 'dial-tiny-text';
+    typography?.descriptionClassName ?? 'dial-small-paragraph-text';
   const scheduleLabelClassName =
     typography?.scheduleLabelClassName ?? 'dial-tiny-text';
   const pausedBadgeClassName =
@@ -97,41 +106,54 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
     '--stc-completed-bg': colors?.completedBadgeBackground,
     '--stc-completed-border': colors?.completedBadgeBorder,
     '--stc-completed-text': colors?.completedBadgeText,
+    '--stc-focus-outline': colors?.focusOutline,
   });
 
-  const cardClickProps = onCardClick
-    ? {
-        tabIndex: 0,
-        onClick: () => onCardClick(item.id),
-        onKeyDown: (event: KeyboardEvent) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onCardClick(item.id);
-          }
-        },
-      }
-    : {};
+  const title = (
+    <Highlight
+      text={item.displayName}
+      query={searchQuery}
+      maxLines={isMobile ? 2 : 1}
+      className={mergeClasses(
+        titleClassName,
+        styles.title,
+        onCardClick && styles.aboveButton,
+      )}
+    />
+  );
 
+  /* `CardShell` renders an `<article>`, which may not take `role="button"`
+   * (axe `aria-allowed-role`), so a clickable card is a stretched button: the
+   * title's `<button>` covers the card through its `::after`. */
   return (
     <CardShell
-      role={onCardClick ? 'button' : 'group'}
       aria-label={item.displayName}
       style={cssVars}
       className={mergeClasses(
-        'h-[var(--st-card-height,232px)]',
-        onCardClick && 'cursor-pointer',
+        /* min-w-0 lets the card shrink below its content's min-content width
+         * inside its grid track, so an unbreakable description value wraps
+         * instead of stretching the card past the grid. */
+        'h-(--st-card-height,232px) min-w-0',
+        styles.card,
+        onCardClick &&
+          'relative has-focus-visible:translate-y-[-3px] has-focus-visible:shadow-lg motion-reduce:has-focus-visible:translate-y-0',
+        onCardClick && styles.interactive,
         className,
         SCHEDULED_TASKS_CLASS.card,
       )}
-      {...cardClickProps}
     >
-      <div className="flex min-w-0 shrink-0 items-center gap-2">
-        <Highlight
-          text={item.displayName}
-          query={searchQuery}
-          maxLines={1}
-          className={mergeClasses(titleClassName, styles.title)}
-        />
+      <div className="flex min-w-0 shrink-0 items-start gap-2 desktop:items-center">
+        {onCardClick ? (
+          <button
+            type="button"
+            onClick={() => onCardClick(item.id)}
+            className={mergeClasses('min-w-0 text-start', styles.cardButton)}
+          >
+            {title}
+          </button>
+        ) : (
+          title
+        )}
         {item.isNew && (
           <span
             className={mergeClasses(
@@ -146,10 +168,18 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
       </div>
 
       {item.descriptionPreview && (
+        /* min-w-0 + anywhere-wrapping so the clamp truncates with an
+         * ellipsis instead of overflowing the card when the preview
+         * contains a token too long to break at a space (a URL or the
+         * like). Whitespace collapses (the default, no pre-wrap) — the
+         * preview is the raw textarea description, and preserved blank
+         * lines would spend the whole clamp budget before any text. No
+         * flex-1: the clamp hides lines past the ellipsis only while the
+         * box keeps its auto height, and the footer's mt-auto already pins
+         * it to the bottom. */
         <p
           className={mergeClasses(
-            'line-clamp-4 min-h-0 flex-1 overflow-hidden',
-            descriptionSizeClassName,
+            'line-clamp-3 min-h-0 min-w-0 overflow-hidden wrap-anywhere',
             descriptionClassName,
             styles.description,
           )}

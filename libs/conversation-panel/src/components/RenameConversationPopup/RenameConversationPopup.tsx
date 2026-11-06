@@ -9,6 +9,9 @@ import {
   DIAL_KIT_ICON_STROKE,
   GhostIconButton,
   Input,
+  LiveRegion,
+  LiveRegionElement,
+  LiveRegionPoliteness,
   Popup,
   PopupSize,
   Spinner,
@@ -109,11 +112,14 @@ export const RenameConversationPopup: FC<RenameConversationPopupProps> = memo(
       }
     }, [isGenerating, onGenerateWithAi, labels.renameWithAiError]);
 
+    /* A failed save or AI generation interrupts the user; the length check is
+       a field error the input describes on its own. */
+    const failureMessage = generateError ?? error ?? undefined;
     let inputError: string | undefined;
     if (isTooLong) {
       inputError = labels.nameTooLongError;
     } else {
-      inputError = generateError ?? error ?? undefined;
+      inputError = failureMessage;
     }
 
     return (
@@ -137,9 +143,18 @@ export const RenameConversationPopup: FC<RenameConversationPopupProps> = memo(
         }
       >
         <div className={styles?.bodyClassName} style={styles?.cssVars}>
+          {/* Outside the saving switch, so it stays mounted while the save runs
+              and the failure that ends it is announced. */}
+          <LiveRegion
+            politeness={LiveRegionPoliteness.Assertive}
+            visuallyHidden
+            as={LiveRegionElement.Span}
+          >
+            {!isSaving && !isTooLong && failureMessage}
+          </LiveRegion>
           {isSaving ? (
             <div className="h-[120px] px-6 py-4">
-              <Spinner size={50} />
+              <Spinner size={50} ariaLabel={labels.savingLabel ?? 'Saving'} />
             </div>
           ) : (
             <div className="flex items-start gap-2 px-6 py-3">
