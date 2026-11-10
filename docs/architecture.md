@@ -99,8 +99,7 @@ of the workspace default.
 - CI: the `typecheck` job in `.github/workflows/pr.yml` runs
   `nx run-many -t typecheck --all` on every pull request, because the pinned
   reusable workflow this repository delegates most PR checks to
-  (`.github/workflows/node_pr.yml`, whose test job calls
-  `epam/ai-dial-ci/.github/workflows/node_test.yml@4.12.0`) runs `npm run
+  (`epam/ai-dial-ci/.github/workflows/node_pr.yml@4.11.0`) runs `npm run
 format`, `npm run lint --fix` and `npm run test` only — none of those
   typechecks. **Open:** making that check a required status check is a
   branch-protection setting administered outside this repository; the job's
