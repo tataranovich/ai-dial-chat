@@ -58,7 +58,7 @@ on:
       ort-version:
         type: string
         description: ORT version to use
-        default: '92.5.0'
+        default: "92.5.0"
       ort-config-repository:
         type: string
         description: ORT config repository to use
@@ -69,7 +69,7 @@ on:
         default: ${{ vars.ORT_CONFIG_VCS_REVISION || '92.5.0' }}
       docker-build-enabled:
         type: boolean
-        description: 'Enable Docker build'
+        description: "Enable Docker build"
         default: true
       trivy-enabled:
         type: boolean
@@ -82,11 +82,11 @@ on:
       trivy-severity:
         type: string
         description: Severities of vulnerabilities to fail the build
-        default: 'CRITICAL,HIGH'
+        default: "CRITICAL,HIGH"
       trivy-severity-for-sarif:
         type: string
         description: Severities of vulnerabilities in SARIF report
-        default: 'CRITICAL,HIGH'
+        default: "CRITICAL,HIGH"
       trivy-limit-severities-for-sarif:
         type: boolean
         description: By default SARIF format enforces output of all vulnerabilities regardless of configured severities. To override this behavior set this parameter to true and specify desired severities in the `trivy-severity-for-sarif` parameter
@@ -98,7 +98,7 @@ on:
       node-version:
         type: string
         description: NodeJS version to use
-        default: '22'
+        default: "22"
       maximize-build-space:
         type: boolean
         description: Maximize build space by removing unwanted software
@@ -110,11 +110,11 @@ on:
       platforms:
         type: string
         description: Docker build platforms (comma-separated). Each platform is built on its own native runner (supported - linux/amd64, linux/arm64)
-        default: 'linux/amd64'
+        default: "linux/amd64"
       dockerfile-path:
         type: string
         description: Path to the Dockerfile
-        default: 'Dockerfile'
+        default: "Dockerfile"
       filter-version:
         type: string
         description: Operate within versions matched regex
@@ -136,7 +136,7 @@ on:
         description: |
           Docker build arguments (newline-separated list-like string)
           ref: https://github.com/docker/build-push-action#inputs
-        default: ''
+        default: ""
 
 env:
   IMAGE_NAME: ${{ github.repository }}
@@ -250,28 +250,28 @@ jobs:
         uses: nepalevov/maximize-build-space@046c48361370e2f3fa758bd2f10c6ce29109ef62 # v1.1.0
         if: ${{ inputs.maximize-build-space }}
         with:
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-large-packages: 'true'
-          remove-cached-tools: 'true'
-          remove-swapfile: 'true'
-          remove-java: 'true'
-          remove-swift: 'true'
-          remove-julia: 'true'
-          remove-browsers: 'true'
-          remove-cloud-tools: 'true'
-          remove-kubernetes-tools: 'true'
-          remove-powershell: 'true'
-          remove-container-tools: 'true'
-          remove-rust: 'true'
-          remove-python: 'true'
-          remove-node: 'true'
-          remove-go: 'true'
-          remove-ruby: 'true'
-          docker-cleanup: 'true'
-          set-tmpdir: 'true'
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-large-packages: "true"
+          remove-cached-tools: "true"
+          remove-swapfile: "true"
+          remove-java: "true"
+          remove-swift: "true"
+          remove-julia: "true"
+          remove-browsers: "true"
+          remove-cloud-tools: "true"
+          remove-kubernetes-tools: "true"
+          remove-powershell: "true"
+          remove-container-tools: "true"
+          remove-rust: "true"
+          remove-python: "true"
+          remove-node: "true"
+          remove-go: "true"
+          remove-ruby: "true"
+          docker-cleanup: "true"
+          set-tmpdir: "true"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
@@ -279,7 +279,7 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           clean-install: false
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: "https://registry.npmjs.org"
       - name: Set version
         shell: bash
         run: |
@@ -336,9 +336,9 @@ jobs:
         with:
           image-ref: scan/${{ matrix.pair }}:${{ github.sha }}
           format: json
-          exit-code: '0' # Findings are handled by the last "trivy convert" step
+          exit-code: "0" # Findings are handled by the last "trivy convert" step
           output: trivy-results.json
-          ignore-unfixed: 'true'
+          ignore-unfixed: "true"
           vuln-type: os,library
           scanners: vuln,secret
         env:
@@ -486,28 +486,28 @@ jobs:
         uses: nepalevov/maximize-build-space@046c48361370e2f3fa758bd2f10c6ce29109ef62 # v1.1.0
         if: ${{ inputs.maximize-build-space }}
         with:
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-large-packages: 'true'
-          remove-cached-tools: 'true'
-          remove-swapfile: 'true'
-          remove-java: 'true'
-          remove-swift: 'true'
-          remove-julia: 'true'
-          remove-browsers: 'true'
-          remove-cloud-tools: 'true'
-          remove-kubernetes-tools: 'true'
-          remove-powershell: 'true'
-          remove-container-tools: 'true'
-          remove-rust: 'true'
-          remove-python: 'true'
-          remove-node: 'true'
-          remove-go: 'true'
-          remove-ruby: 'true'
-          docker-cleanup: 'true'
-          set-tmpdir: 'true'
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-large-packages: "true"
+          remove-cached-tools: "true"
+          remove-swapfile: "true"
+          remove-java: "true"
+          remove-swift: "true"
+          remove-julia: "true"
+          remove-browsers: "true"
+          remove-cloud-tools: "true"
+          remove-kubernetes-tools: "true"
+          remove-powershell: "true"
+          remove-container-tools: "true"
+          remove-rust: "true"
+          remove-python: "true"
+          remove-node: "true"
+          remove-go: "true"
+          remove-ruby: "true"
+          docker-cleanup: "true"
+          set-tmpdir: "true"
       - uses: epam/ai-dial-ci/actions/generate_release_notes@4.12.0
         with:
           latest-tag: ${{ needs.calculate_version.outputs.latest-stable-tag }}
@@ -520,7 +520,7 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           clean-install: true
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: "https://registry.npmjs.org"
       - name: Set version
         shell: bash
         run: |
@@ -588,7 +588,7 @@ jobs:
           git-user-name: ${{ vars.ACTIONS_BOT_NAME || 'ai-dial-actions' }}
           git-user-email: ${{ vars.ACTIONS_BOT_EMAIL || '149404362+ai-dial-actions@users.noreply.github.com' }}
           tag-version: ${{ needs.calculate_version.outputs.next-version }}
-          changelog-file: '/tmp/my_changelog' # comes from generate_release_notes step; TODO: beautify
+          changelog-file: "/tmp/my_changelog" # comes from generate_release_notes step; TODO: beautify
           draft-stable-releases: ${{ inputs.draft-stable-releases }}
           make-latest: ${{ needs.calculate_version.outputs.is-latest == 'true' }}
           extra-commit-command: |

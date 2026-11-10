@@ -148,8 +148,8 @@ jobs:
       trivy-severity-for-sarif: 'CRITICAL,HIGH,MEDIUM,LOW'
     secrets: inherit
 
-  # Repository-owned: run_tests calls the local .github/workflows/node_pr.yml, whose test job
-  # delegates to epam/ai-dial-ci/.github/workflows/node_test.yml@4.12.0 and whose remaining code_checks job is `npm run test` (Vitest, which strips types
+  # Repository-owned: run_tests calls the local .github/workflows/node_pr.yml (a copy of epam/ai-dial-ci node_pr.yml@4.12.0),
+  # whose remaining code_checks job is `npm run test` (Vitest, which strips types
   # without checking them) — it neither lints nor typechecks. Scope: every project
   # with a `lint`/`typecheck` target. Typecheck runs even when lint fails, so a
   # single PR run reports both.
@@ -179,64 +179,44 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm exec nx run-many -- -t typecheck --all
 
-  # Validates apps/mcp-app-sandbox/Dockerfile builds on every platform (native runners, no QEMU) and
-  # passes the Trivy scan; build-only, no push. node_pr.yml builds one Dockerfile per call, so this
-  # is its own job and runs in parallel with run_tests.
+  # Validates apps/mcp-app-sandbox/Dockerfile builds, mirroring node_pr.yml's own
+  # docker_build job (build-only, no push) since that reusable workflow only builds
+  # one Dockerfile per call. Kept as its own job so it runs in parallel with run_tests.
   docker_build_mcp_app_sandbox:
     name: Build mcp-app-sandbox image (validation only)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    strategy:
-      fail-fast: false # report Trivy results for every platform even if another one failed
-      matrix:
-        # linux/arm64 has no free native runners in private repositories: build only linux/amd64 there
-        include: ${{ fromJSON(github.event.repository.private && '[{"platform":"linux/amd64","runner":"ubuntu-24.04","pair":"linux-amd64"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-24.04","pair":"linux-amd64"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","pair":"linux-arm64"}]') }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     steps:
-      - name: Warn that linux/arm64 is skipped
-        if: ${{ github.event.repository.private && matrix.platform == 'linux/amd64' }}
-        run: echo "::warning::linux/arm64 is not available for private repositories (no free native arm64 runners). Skipping it and building only the remaining platforms."
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           lfs: true
       # HACK: jobs.<job_id>.if does not support hashFiles function, so we check it on the step
       - if: ${{ hashFiles('apps/mcp-app-sandbox/Dockerfile') != '' }}
-        uses: ./.github/actions/docker-scan-build
+        uses: tataranovich/ai-dial-ci/actions/build_docker@main
         with:
-          platform: ${{ matrix.platform }}
-          image-ref: scan/mcp-app-sandbox-${{ matrix.pair }}:${{ github.sha }}
+          image-names: ghcr.io/${{ github.repository }}-mcp-app-sandbox
+          image-tags: test
           dockerfile-path: apps/mcp-app-sandbox/Dockerfile
-          cache-scope: pr-mcp-app-sandbox-${{ matrix.pair }}
-          sarif-category: trivy-mcp-app-sandbox-${{ matrix.pair }}
 
-  # Validates apps/chat-api/Dockerfile (the BFF-only image) the same way as
-  # docker_build_mcp_app_sandbox above.
+  # Validates apps/chat-api/Dockerfile (the BFF-only image) builds, build-only, for the
+  # same reason as docker_build_mcp_app_sandbox above.
   docker_build_bff:
     name: Build BFF image (validation only)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    strategy:
-      fail-fast: false # report Trivy results for every platform even if another one failed
-      matrix:
-        # linux/arm64 has no free native runners in private repositories: build only linux/amd64 there
-        include: ${{ fromJSON(github.event.repository.private && '[{"platform":"linux/amd64","runner":"ubuntu-24.04","pair":"linux-amd64"}]' || '[{"platform":"linux/amd64","runner":"ubuntu-24.04","pair":"linux-amd64"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","pair":"linux-arm64"}]') }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     steps:
-      - name: Warn that linux/arm64 is skipped
-        if: ${{ github.event.repository.private && matrix.platform == 'linux/amd64' }}
-        run: echo "::warning::linux/arm64 is not available for private repositories (no free native arm64 runners). Skipping it and building only the remaining platforms."
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           lfs: true
       # HACK: jobs.<job_id>.if does not support hashFiles function, so we check it on the step
       - if: ${{ hashFiles('apps/chat-api/Dockerfile') != '' }}
-        uses: ./.github/actions/docker-scan-build
+        uses: tataranovich/ai-dial-ci/actions/build_docker@main
         with:
-          platform: ${{ matrix.platform }}
-          image-ref: scan/bff-${{ matrix.pair }}:${{ github.sha }}
+          image-names: ghcr.io/${{ github.repository }}-bff
+          image-tags: test
           dockerfile-path: apps/chat-api/Dockerfile
-          cache-scope: pr-bff-${{ matrix.pair }}
-          sarif-category: trivy-bff-${{ matrix.pair }}
 
   packed_libs:
     # Packed-package checks for the publishable libraries, kept in one job so
