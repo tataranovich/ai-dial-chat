@@ -1,0 +1,234 @@
+# Local variant of epam/ai-dial-ci/.github/workflows/node_pr.yml with the same `workflow_call`
+# interface. The Docker part is reworked: every platform from `platforms` is built (and scanned
+# with Trivy) on its own native runner, in parallel, with no QEMU emulation.
+name: NodeJS PR workflow
+
+on:
+  workflow_call:
+    inputs:
+      bypass-checks:
+        type: boolean
+        description: Do not fail pipeline if checks failed
+        default: false
+      format-checks-enabled:
+        type: boolean
+        description: Enable format_checks
+        default: true
+      format-checks-bypassed:
+        type: boolean
+        description: Do not fail pipeline if format_checks failed
+        default: false
+      style-checks-enabled:
+        type: boolean
+        description: Enable style_checks
+        default: true
+      style-checks-bypassed:
+        type: boolean
+        description: Do not fail pipeline if style_checks failed
+        default: false
+      code-checks-enabled:
+        type: boolean
+        description: Enable code_checks
+        default: true
+      code-checks-bypassed:
+        type: boolean
+        description: Do not fail pipeline if code_checks failed
+        default: false
+      ort-enabled:
+        type: boolean
+        description: Enable ORT scanning
+        default: true
+      ort-bypassed:
+        type: boolean
+        description: Do not fail pipeline if ORT scan failed
+        default: false
+      ort-version:
+        type: string
+        description: ORT version to use
+        default: '92.5.0'
+      ort-config-repository:
+        type: string
+        description: ORT config repository to use
+        default: ${{ vars.ORT_CONFIG_VCS_URL || 'https://github.com/epam/ai-dial-ort-config.git' }}
+      ort-config-revision:
+        type: string
+        description: ORT config revision to use
+        default: ${{ vars.ORT_CONFIG_VCS_REVISION || '92.5.0' }}
+      docker-build-enabled:
+        type: boolean
+        description: 'Enable Docker build'
+        default: true
+      trivy-enabled:
+        type: boolean
+        description: Enable Trivy scanning
+        default: true
+      trivy-bypassed:
+        type: boolean
+        description: Do not fail pipeline if Trivy failed
+        default: false
+      trivy-severity:
+        type: string
+        description: Severities of vulnerabilities to fail the build
+        default: 'CRITICAL,HIGH'
+      trivy-severity-for-sarif:
+        type: string
+        description: 'Severities of vulnerabilities in SARIF report'
+        default: 'CRITICAL,HIGH'
+      trivy-limit-severities-for-sarif:
+        type: boolean
+        description: By default SARIF format enforces output of all vulnerabilities regardless of configured severities. To override this behavior set this parameter to true and specify desired severities in the `trivy-severity-for-sarif` parameter
+        default: true
+      node-version:
+        type: string
+        description: NodeJS version to use
+        default: '22'
+      maximize-build-space:
+        type: boolean
+        description: Maximize build space by removing unwanted software
+        default: false
+      runs-on:
+        type: string
+        description: 'Overrides jobs runs-on settings (json-encoded list)'
+        default: '["ubuntu-24.04"]'
+      platforms:
+        type: string
+        description: 'Docker build platforms (comma-separated). Each platform is built on its own native runner (supported - linux/amd64, linux/arm64)'
+        default: 'linux/amd64'
+      dockerfile-path:
+        type: string
+        description: 'Path to the Dockerfile (default: ./Dockerfile)'
+        default: 'Dockerfile'
+      build-args:
+        type: string
+        description: |
+          Docker build arguments (newline-separated list-like string)
+          ref: https://github.com/docker/build-push-action#inputs
+        default: ''
+
+jobs:
+  test:
+    uses: epam/ai-dial-ci/.github/workflows/node_test.yml@4.12.0
+    with:
+      bypass-checks: ${{ inputs.bypass-checks }}
+      format-checks-enabled: ${{ inputs.format-checks-enabled }}
+      format-checks-bypassed: ${{ inputs.format-checks-bypassed }}
+      style-checks-enabled: ${{ inputs.style-checks-enabled }}
+      style-checks-bypassed: ${{ inputs.style-checks-bypassed }}
+      code-checks-enabled: ${{ inputs.code-checks-enabled }}
+      code-checks-bypassed: ${{ inputs.code-checks-bypassed }}
+      ort-enabled: ${{ inputs.ort-enabled }}
+      ort-bypassed: ${{ inputs.ort-bypassed || contains(github.event.pull_request.labels.*.name, 'ort-bypassed') }}
+      ort-version: ${{ inputs.ort-version }}
+      ort-config-repository: ${{ inputs.ort-config-repository }}
+      ort-config-revision: ${{ inputs.ort-config-revision }}
+      node-version: ${{ inputs.node-version }}
+      runs-on: ${{ inputs.runs-on }}
+
+  # Decides whether the Docker build runs and builds the per-platform matrix.
+  docker_plan:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    outputs:
+      enabled: ${{ steps.plan.outputs.enabled }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      # HACK: jobs.<job_id>.if does not support hashFiles function, so the Dockerfile is checked here
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ inputs.docker-build-enabled }}
+        with:
+          sparse-checkout: ${{ inputs.dockerfile-path }}
+          sparse-checkout-cone-mode: false
+      - name: Plan Docker build
+        id: plan
+        shell: bash
+        env:
+          DOCKER_BUILD_ENABLED: ${{ inputs.docker-build-enabled }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile-path }}
+          PLATFORMS: ${{ inputs.platforms }}
+          RUNS_ON: ${{ inputs.runs-on }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          if [ "$DOCKER_BUILD_ENABLED" != "true" ] || [ ! -f "$DOCKERFILE_PATH" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          matrix='[]'
+          IFS=',' read -ra platforms <<< "$PLATFORMS"
+          for platform in "${platforms[@]}"; do
+            platform="$(echo "$platform" | xargs)"
+            case "$platform" in
+              linux/amd64) runner="$RUNS_ON" ;;
+              linux/arm64)
+                if [ "$REPO_PRIVATE" = "true" ]; then
+                  echo "::warning::linux/arm64 is not available for private repositories (no free native arm64 runners). Skipping it and building only the remaining platforms."
+                  continue
+                fi
+                runner='["ubuntu-24.04-arm"]'
+                ;;
+              *) echo "::error::Unsupported platform '$platform': only linux/amd64 and linux/arm64 have native runners"; exit 1 ;;
+            esac
+            matrix="$(jq -c --arg p "$platform" --arg r "$runner" '. + [{platform: $p, runner: $r, pair: ($p | gsub("/"; "-"))}]' <<< "$matrix")"
+          done
+          if [ "$matrix" = '[]' ]; then
+            echo "::error::No buildable platforms left in '$PLATFORMS' for this repository"
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c '{include: .}' <<< "$matrix")" >> "$GITHUB_OUTPUT"
+
+  # One job per platform on a native runner: build -> Trivy. Validation only, nothing is pushed.
+  docker_build:
+    name: docker_build (${{ matrix.platform }})
+    needs: docker_plan
+    if: ${{ needs.docker_plan.outputs.enabled == 'true' }}
+    strategy:
+      fail-fast: false # report Trivy results for every platform even if another one failed
+      matrix: ${{ fromJSON(needs.docker_plan.outputs.matrix) }}
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    permissions:
+      contents: read
+      security-events: write # upload Trivy SARIF
+    steps:
+      - name: Maximize build space
+        uses: nepalevov/maximize-build-space@046c48361370e2f3fa758bd2f10c6ce29109ef62 # v1.1.0
+        if: ${{ inputs.maximize-build-space }}
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-cached-tools: 'true'
+          remove-swapfile: 'true'
+          remove-java: 'true'
+          remove-swift: 'true'
+          remove-julia: 'true'
+          remove-browsers: 'true'
+          remove-cloud-tools: 'true'
+          remove-kubernetes-tools: 'true'
+          remove-powershell: 'true'
+          remove-container-tools: 'true'
+          remove-rust: 'true'
+          remove-python: 'true'
+          remove-node: 'true'
+          remove-go: 'true'
+          remove-ruby: 'true'
+          docker-cleanup: 'true'
+          set-tmpdir: 'true'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+      - uses: ./.github/actions/docker-scan-build
+        with:
+          platform: ${{ matrix.platform }}
+          image-ref: scan/${{ matrix.pair }}:${{ github.sha }}
+          dockerfile-path: ${{ inputs.dockerfile-path }}
+          build-args: ${{ inputs.build-args }}
+          cache-scope: pr-${{ matrix.pair }}
+          sarif-category: trivy-${{ matrix.pair }}
+          trivy-enabled: ${{ inputs.trivy-enabled }}
+          bypass-checks: ${{ inputs.trivy-bypassed }}
+          trivy-severity: ${{ inputs.trivy-severity }}
+          trivy-severity-for-sarif: ${{ inputs.trivy-severity-for-sarif }}
+          trivy-limit-severities-for-sarif: ${{ inputs.trivy-limit-severities-for-sarif }}

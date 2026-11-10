@@ -1,0 +1,127 @@
+name: Docker scan build
+description: >-
+  Build a Docker image for ONE platform on the current (native) runner and scan it with Trivy.
+  Nothing is pushed. Same Trivy flow as epam/ai-dial-ci/actions/build_docker: JSON scan, SARIF upload,
+  then a table report that fails on findings.
+inputs:
+  platform:
+    description: Docker platform to build (must match the runner architecture, e.g. linux/arm64 on an arm64 runner)
+    required: true
+  image-ref:
+    description: Local image reference used for scanning (e.g. scan/chat-linux-arm64:sha)
+    required: true
+  dockerfile-path:
+    description: Path to the Dockerfile
+    default: 'Dockerfile'
+  build-args:
+    description: |
+      Docker build arguments (newline-separated list-like string)
+      ref: https://github.com/docker/build-push-action#inputs
+    default: ''
+  cache-scope:
+    description: GitHub Actions cache scope for the build (keep unique per image and platform)
+    required: true
+  sarif-category:
+    description: Code scanning category of the uploaded SARIF report (keep unique per image and platform)
+    required: true
+  trivy-enabled:
+    description: Enable Trivy scanning
+    default: 'true'
+  bypass-checks:
+    description: Do not fail pipeline if Trivy failed
+    default: 'false'
+  trivy-severity:
+    description: Severities of vulnerabilities to fail the build
+    default: 'CRITICAL,HIGH'
+  trivy-severity-for-sarif:
+    description: Severities of vulnerabilities in SARIF report
+    default: 'CRITICAL,HIGH'
+  trivy-limit-severities-for-sarif:
+    description: By default SARIF format enforces output of all vulnerabilities regardless of configured severities. To override this behavior set this parameter to true and specify desired severities in the `trivy-severity-for-sarif` parameter
+    default: 'true'
+  trivy-vuln-type:
+    description: Type of vulnerabilities to scan
+    default: 'os,library'
+  trivy-scanners:
+    description: Comma-separated list of what security issues to detect
+    default: 'vuln,secret'
+  trivy-ignore-unfixed:
+    description: Ignore unpatched/unfixed vulnerabilities
+    default: 'true'
+  gpr-username:
+    description: GitHub Package Registry username (for pulling packages from image being built)
+    default: ${{ github.actor }}
+  gpr-password:
+    description: GitHub Package Registry password/token (for pulling packages from image being built)
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+    # Native build, no QEMU. With Trivy disabled the image is still built to validate the Dockerfile.
+    - name: Build image
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      with:
+        context: .
+        file: ${{ inputs.dockerfile-path }}
+        load: ${{ fromJSON(inputs.trivy-enabled) }}
+        platforms: ${{ inputs.platform }}
+        tags: ${{ inputs.image-ref }}
+        build-args: ${{ inputs.build-args }}
+        cache-from: type=gha,scope=${{ inputs.cache-scope }}
+        cache-to: type=gha,scope=${{ inputs.cache-scope }},mode=max
+        secrets: |
+          GPR_USERNAME=${{ inputs.gpr-username }}
+          GPR_PASSWORD=${{ inputs.gpr-password }}
+      env:
+        DOCKER_BUILD_RECORD_UPLOAD: false
+    - name: Run Trivy scanner (JSON output, no fail)
+      id: trivy
+      if: ${{ fromJSON(inputs.trivy-enabled) }} # workaround for composite jobs not being able to pass boolean inputs
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        image-ref: ${{ inputs.image-ref }}
+        format: json
+        exit-code: '0' # Do not fail on findings here, handled in the last "trivy convert" step
+        output: trivy-results.json
+        ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+        vuln-type: ${{ inputs.trivy-vuln-type }}
+        scanners: ${{ inputs.trivy-scanners }}
+      env:
+        CONTINUE_ON_ERROR: ${{ inputs.bypass-checks }} # Hack to use the input below as a boolean
+        TRIVY_DISABLE_VEX_NOTICE: true
+      continue-on-error: ${{ fromJSON(env.CONTINUE_ON_ERROR) }}
+    - name: Generate Trivy report (SARIF)
+      id: trivy-generate-sarif
+      # Do not generate SARIF reports on private repos - GitHub Advanced Security is not enabled
+      # Do not generate SARIF reports for pull requests from forks
+      if: ${{ steps.trivy.outcome == 'success' && !github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name) }}
+      shell: bash
+      run: trivy convert --format sarif --output trivy-results.sarif --exit-code 0 trivy-results.json
+      env:
+        CONTINUE_ON_ERROR: ${{ inputs.bypass-checks }} # Hack to use the input below as a boolean
+        TRIVY_SCANNERS: ${{ inputs.trivy-scanners }}
+        TRIVY_SEVERITY: ${{ fromJSON(inputs.trivy-limit-severities-for-sarif) && inputs.trivy-severity-for-sarif || '' }}
+        TRIVY_DISABLE_VEX_NOTICE: true
+      continue-on-error: ${{ fromJSON(env.CONTINUE_ON_ERROR) }}
+    - name: Upload Trivy report (SARIF)
+      if: ${{ steps.trivy-generate-sarif.outcome == 'success' }}
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+      with:
+        sarif_file: trivy-results.sarif
+        category: ${{ inputs.sarif-category }}
+      env:
+        CONTINUE_ON_ERROR: ${{ inputs.bypass-checks }} # Hack to use the input below as a boolean
+      continue-on-error: ${{ fromJSON(env.CONTINUE_ON_ERROR) }}
+    - name: Generate Trivy report (Table, must fail on findings)
+      if: ${{ steps.trivy.outcome == 'success' }}
+      shell: bash
+      run: trivy convert --format table --exit-code 1 trivy-results.json
+      env:
+        CONTINUE_ON_ERROR: ${{ inputs.bypass-checks }} # Hack to use the input below as a boolean
+        TRIVY_SCANNERS: ${{ inputs.trivy-scanners }}
+        TRIVY_SEVERITY: ${{ inputs.trivy-severity }}
+        TRIVY_DISABLE_VEX_NOTICE: true
+      continue-on-error: ${{ fromJSON(env.CONTINUE_ON_ERROR) }}
