@@ -132,6 +132,8 @@ jobs:
     with:
       node-version: 24
       maximize-build-space: false
+      # Each platform is built and Trivy-scanned on its own native runner (no QEMU).
+      platforms: linux/amd64,linux/arm64
       # node_test.yml runs `npm run format` (prettier --write) and `npm run lint`
       # (nx lint --fix, then prettier --write again): both rewrite files on the
       # runner instead of failing, so neither job can catch a formatting or
@@ -146,7 +148,7 @@ jobs:
       trivy-severity-for-sarif: 'CRITICAL,HIGH,MEDIUM,LOW'
     secrets: inherit
 
-  # Repository-owned: run_tests delegates to epam/ai-dial-ci/.github/workflows/node_pr.yml@4.12.0,
+  # Repository-owned: run_tests calls the local .github/workflows/node_pr.yml (a copy of epam/ai-dial-ci node_pr.yml@4.12.0),
   # whose remaining code_checks job is `npm run test` (Vitest, which strips types
   # without checking them) — it neither lints nor typechecks. Scope: every project
   # with a `lint`/`typecheck` target. Typecheck runs even when lint fails, so a
