@@ -26,6 +26,6 @@ jobs:
       # Disable long running parts
       docker-build-enabled: true
       publish-enabled: false
-      ort-enabled: false
-      code-checks-enabled: false
+      # ort-enabled: false
+      # code-checks-enabled: false
     secrets: inherit
