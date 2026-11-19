@@ -74,3 +74,5 @@ WORKDIR /app
 EXPOSE 5000
 
 CMD ["node", "apps/chat-api/dist/main.js"]
+
+# dummy change 1
